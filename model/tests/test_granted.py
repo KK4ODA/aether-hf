@@ -1996,3 +1996,35 @@ def test_a_disconnect_that_drains_nothing_leaves_at_the_next_opportunity() -> No
     waited = float(left[0].split("closing ")[1].split(" s after")[0])
     assert waited < 15.0, left
     assert sim.overlaps() == []
+
+
+def test_a_session_on_an_echoing_path_starts_below_the_rungs_the_echo_breaks() -> None:
+    """ITU's disturbed NVIS (7 ms) at 500 Hz: the floor carries, rungs 3 and 4 and the OFDM
+    rungs do not, and the floor's SNR reading sits near -3 dB whatever the SNR — what a quiet
+    path at -3 dB reads, where rung 4 is the right start. The caller's first data went there and
+    decoded only on its third copy. The floor's own frames read the path's echo: with it, the
+    call's acceptance keeps the session below the rungs the echo breaks from its first burst
+    on, and the message arrives sooner. Without it, the hazard (ADR-0087)."""
+
+    def refused(frame: SimFrame) -> float:
+        return -40.0 if frame.container is Container.DATA and frame.mode >= 3 else 0.0
+
+    message = bytes(random.Random(5).randrange(256) for _ in range(1000))
+    took = {}
+    for echo in (None, 0.01):
+        a, b = _pair(NARROW)
+        sim = TwoStationSim(a, b, snr_db=-3.0, seed=8, frame_snr_offset=refused, echo=echo)
+        sent = _spy_data(sim, 0)
+        a.connect("KK4XYZ")
+        a.send(message)
+        while sim.delivered(1) != message and sim.t < 1200.0:
+            sim.run(until=sim.t + 5.0)
+        assert sim.delivered(1) == message
+        took[echo] = sim.t
+        data = [[f for f in tx if decode_data(f.payload)[0].kind is DataKind.DATA] for tx in sent]
+        data = [tx for tx in data if tx]
+        if echo is None:
+            assert data[0][0].mode >= 3
+        else:
+            assert max(f.mode for tx in data for f in tx) <= 2
+    assert took[0.01] < took[None]

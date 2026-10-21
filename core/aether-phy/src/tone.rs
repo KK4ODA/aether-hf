@@ -1135,6 +1135,55 @@ pub fn snr_from_es(es_over_n0: f64) -> f64 {
     10.0 * (es_over_n0.max(1e-3) / snr_scale()).log10() - gain_db()
 }
 
+/// How many bins at least a neighbouring symbol's tone must stand from a symbol's own for its
+/// energy there to count as echo ([`echo_share`]): a Doppler spread or a residual offset puts a
+/// tone's energy into the bins beside it, an echo puts the neighbour's tone wherever it is.
+pub const ECHO_SPACING: usize = 2;
+
+/// How much of the neighbouring symbols' tones a symbol window holds, over its own tone's
+/// energy, each less the noise: what an echo spills across the symbol boundaries (ADR-0087).
+///
+/// The tone floor's 40 ms symbols carry a path whose echo smears the fast kinds' 10 ms ones and
+/// outruns OFDM's 5 ms prefix, and the floor's SNR reading cannot tell that path from a quiet
+/// one at a few decibels: it saturates near −3 dB whatever the SNR. An echo puts the previous
+/// symbol's tone at the start of a window and, the timing being on the later ray, the next
+/// symbol's at its end: both sides are counted, so either ray reads the same; only neighbours
+/// [`ECHO_SPACING`] bins or more from the symbol's tone, so a Doppler spread does not; and only
+/// triples of known, heard tones — the sync symbols' and the data symbols' strongest. Only the
+/// floor's own kinds read it (a fast kind's sync blocks alone hold too few triples): `None` for
+/// a fast kind, or a frame that holds no such triple. The model's `tone.echo_share`.
+#[must_use]
+pub fn echo_share(
+    energies: &[f64],
+    layout: &[Option<usize>],
+    kind: &ToneKind,
+    noise: f64,
+) -> Option<f64> {
+    if kind.speed() != 1 {
+        return None;
+    }
+    let tones = TONE.tones;
+    let row = |s: usize| &energies[s * tones..(s + 1) * tones];
+    let heard: Vec<Option<usize>> = layout
+        .iter()
+        .enumerate()
+        .map(|(s, role)| (!silent(row(s))).then(|| role.unwrap_or_else(|| argmax(row(s)))))
+        .collect();
+    let (mut spill, mut own) = (0.0, 0.0);
+    for k in 1..heard.len().saturating_sub(1) {
+        let (Some(a), Some(b), Some(c)) = (heard[k - 1], heard[k], heard[k + 1]) else {
+            continue;
+        };
+        if a == c || a.abs_diff(b) < ECHO_SPACING || c.abs_diff(b) < ECHO_SPACING {
+            continue;
+        }
+        let e = row(k);
+        spill += e[a] + e[c] - 2.0 * noise;
+        own += (e[b] - noise).max(0.0);
+    }
+    (own > 0.0).then(|| spill / own)
+}
+
 /// A tone frame's soft information, ready to decode or to combine.
 #[derive(Debug, Clone)]
 pub struct ToneFrame {
@@ -1146,6 +1195,8 @@ pub struct ToneFrame {
     pub llr: Vec<f64>,
     /// SNR (3 kHz) in the OFDM frames' reference: what this path gives an ordinary frame.
     pub snr_db: f64,
+    /// The frame's [`echo_share`]: what of the path's echo its symbols show.
+    pub echo: Option<f64>,
 }
 
 /// Soft bits and SNR of a frame of `kind` at a known start and carrier offset; `None` if it
@@ -1193,6 +1244,7 @@ pub fn demodulate_with(
         rv,
         llr,
         snr_db: snr_from_es(es),
+        echo: echo_share(&energies, &layout, kind, noise),
     })
 }
 

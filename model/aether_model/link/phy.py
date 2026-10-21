@@ -57,6 +57,10 @@ class SoftFrame(Protocol):
     follows: int | None
     """How many more frames of its burst the frame says follow it (ADR-0041), as the PHY read
     it; ``None`` when the frame cannot say — a tone-floor frame, a control frame."""
+    echo: float | None
+    """What of the path's echo the frame shows (ADR-0087,
+    :func:`~aether_model.phy.tone.echo_share`): read on the tone floor's own kinds, ``None``
+    on every other frame."""
     """Air time of the frame in the receiver's clock (seconds)."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
@@ -109,6 +113,9 @@ class PhyTiming:
     (:attr:`~aether_model.link.rate.RateController.floor_margin_db`): an air whose first rung
     stays productive on a fading path below the learned margin says how far; ``None`` leaves
     the learned margin in charge."""
+    echo_limit: dict[int, float] | None = None
+    """The echo share above which each rung that has one is kept off the ladder (ADR-0087,
+    :attr:`~aether_model.link.rate.RateController.echo_limit`); ``None``: no rung has one."""
     floor_preamble_detect_s: float | None = None
     """:attr:`preamble_detect_s` for the floor's frames: the tone floor announces a frame
     once its first sync block is in and has beaten its neighbours, 0.54 s after it starts,

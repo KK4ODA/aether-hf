@@ -70,6 +70,7 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
     caps = t.data_capacity or {}
     thresholds = t.mode_threshold_db or {}
     controls = t.control_threshold_db
+    echo = t.echo_limit or {}
     return {
         "data_frame_s": bits(t.data_frame_s),
         "control_frame_s": bits(t.control_frame_s),
@@ -87,6 +88,7 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
         else [bits(controls[False]), bits(controls[True])],
         "floor_margin_db": bits(t.floor_margin_db),
         "floor_preamble_detect_s": bits(t.floor_preamble_detect_s),
+        "echo_limit": [bits(echo.get(m)) for m in sorted(thresholds)] if echo else [],
     }
 
 
@@ -183,6 +185,7 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "connect_tries": e.connect_tries,
         "probing": e.probing,
         "peer_snr_db": bits(e.peer_snr_db),
+        "echo": bits(e.echo),
         "identifier_owed": e.identifier_owed,
         "measuring": e.measuring,
         "stats": dict(vars(e.stats)),
@@ -198,6 +201,7 @@ class _Proxy:
         for name in ("container", "mode", "rv", "snr_db", "trusted", "t_start", "t_end", "floor"):
             setattr(self, name, getattr(frame, name))
         self.follows = getattr(frame, "follows", None)
+        self.echo = getattr(frame, "echo", None)
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         payload, out = self._frame.decode(buffer)
@@ -288,6 +292,7 @@ def frame_doc(frame: Any, calls: list[dict[str, Any]]) -> dict[str, Any]:
         "snr_db": bits(frame.snr_db),
         "trusted": frame.trusted,
         "follows": getattr(frame, "follows", None),
+        "echo": bits(getattr(frame, "echo", None)),
         "t_start": bits(frame.t_start),
         "t_end": bits(frame.t_end),
         "decodes": calls,
@@ -948,6 +953,21 @@ def split() -> list[Recorder]:
     return [ra, rb]
 
 
+def echo_path() -> list[Recorder]:
+    """A 500 Hz path whose echo breaks rungs 3 and up, the floor's frames reading it: the call
+    and the acceptance tell both stations, the session starts and stays below the rungs the
+    echo breaks, and data goes both ways (ADR-0087)."""
+    a, b, ra, rb = _pair(NARROW)
+    rng = random.Random(20)
+
+    def refused(frame: TxFrame) -> float:
+        return -40.0 if frame.container is Container.DATA and frame.mode >= 3 else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=-3.0, seed=31, frame_snr_offset=refused, echo=0.01)
+    _exchange(sim, a, b, _message(rng, 700), _message(rng, 120))
+    return [ra, rb]
+
+
 def harq_limit() -> list[Recorder]:
     """Full frames pinned at the top rung, where nothing slower can carry them whole: a block
     goes again and again at its rung, combined until the receiver's limit and started over,
@@ -1069,6 +1089,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "answer-gap": answer_gap,
     "idle-identifier": idle_identifier,
     "rescued-count": rescued_count,
+    "echo-path": echo_path,
 }
 
 

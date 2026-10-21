@@ -79,6 +79,11 @@ def control_thresholds_for(timing: PhyTiming) -> dict[bool, float]:
     return dict(timing.control_threshold_db or CONTROL_THRESHOLD_DB)
 
 
+FLOOR_OWN_RUNGS = (0, 1)
+"""The rungs that go in the tone floor's own kinds, tone-24 and tone-36, on both airs: with its
+control frame, the frames whose whole length is at the floor's 40 ms symbols."""
+
+
 @dataclass
 class SimFrame:
     """A frame as delivered to the receiving engine (implements the SoftFrame protocol).
@@ -114,6 +119,9 @@ class SimFrame:
     """How many frames of its transmission follow it, as sent on a DATA frame (ADR-0068 §2.1):
     a simulated receiver reads it right whenever it detects the frame, unless
     :attr:`TwoStationSim.count_misread` says otherwise."""
+    echo: float | None = None
+    """The path's echo as the frame reads it: :attr:`TwoStationSim.echo` on a frame of the
+    tone floor's own kinds, ``None`` on every other."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         prior = float(buffer) if isinstance(buffer, (int, float)) else 0.0
@@ -188,6 +196,7 @@ class TwoStationSim:
         phantoms_per_min: float = 0.0,
         phantom_trusted: float = 0.05,
         count_misread: float = 0.0,
+        echo: float | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
         self.snr_db = snr_db
@@ -224,6 +233,11 @@ class TwoStationSim:
         SNR it decodes at come from its own stretch of the fade, and the per-mode
         thresholds are then the AWGN table's. Unset, every frame sees the channel SNR and
         the per-class averages of :attr:`thresholds`."""
+        self.echo = echo
+        """The echo share every frame of the tone floor's own kinds reads — its control frame
+        and rungs 0 and 1, the same on both airs (ADR-0087): a dispersive path, to a receiver
+        that can only tell it by its frames. The frames are still judged at :attr:`thresholds`,
+        which the path's echo is a reason to raise. Unset, none reads one."""
         self.unheard = unheard
         """Frames a receiver never detects, preamble or frame: called with the receiver, the
         frame's container and when it started. A fade that lets one kind of frame through and
@@ -285,6 +299,7 @@ class TwoStationSim:
             _threshold=threshold,
             _judge_snr_db=judge_snr_db,
             follows=None if control else frame.follows,
+            echo=self.echo if floor and (control or frame.mode in FLOOR_OWN_RUNGS) else None,
         )
         if (
             self.count_misread > 0.0

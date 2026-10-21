@@ -254,6 +254,10 @@ impl SoftFrame for PhyFrame {
         self.frame.follows()
     }
 
+    fn echo(&self) -> Option<f64> {
+        self.frame.echo()
+    }
+
     fn t_start(&self) -> f64 {
         self.t_start
     }
@@ -706,6 +710,9 @@ pub struct FrameReport {
     /// The sound card's capture reported skipping audio inside the frame: what became of it
     /// says nothing of the path (ADR-0076).
     pub capture_skip: bool,
+    /// What of the path's echo a tone frame of the floor's own kinds showed (ADR-0087); none
+    /// for every other frame.
+    pub echo: Option<f64>,
 }
 
 /// A session's account, kept from the moment it comes up to the moment it ends.
@@ -3587,6 +3594,7 @@ impl<P: Ptt> Station<P> {
                     None
                 },
                 capture_skip: self.capture_skipped_within(span_start, span_end),
+                echo: decoded.frame.echo(),
             };
             self.keep_frame(record, now);
             // A beacon belongs to no session, so it is handled before anything the engine
@@ -3777,6 +3785,7 @@ impl<P: Ptt> Station<P> {
             bandwidth_hz: None,
             follows: frame.follows(),
             capture_skip: false,
+            echo: frame.echo(),
         };
         let span_end =
             span_start + frame.samples(&self.air()) as f64 / self.config.params.fs_baseband;
@@ -5762,6 +5771,12 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         // a tone frame is announced once its first sync block is in and has beaten its
         // neighbours, plus this receiver's own lateness (blanker, filter and a block)
         floor_preamble_detect_s: Some(aether_phy::tone::announce_delay_s(0.1)),
+        // rungs a path's echo breaks, against what the tone floor's frames read of it (ADR-0087)
+        echo_limit: if narrow {
+            aether_link::rate::NARROW_ECHO_LIMIT.to_vec()
+        } else {
+            aether_link::rate::ECHO_LIMIT.to_vec()
+        },
     }
 }
 

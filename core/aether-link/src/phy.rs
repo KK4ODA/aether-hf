@@ -66,6 +66,11 @@ pub trait SoftFrame {
     fn follows(&self) -> Option<u8> {
         None
     }
+    /// What of the path's echo the frame shows (ADR-0087, `aether_phy::tone::echo_share`): read
+    /// on the tone floor's own kinds, `None` on every other frame.
+    fn echo(&self) -> Option<f64> {
+        None
+    }
     /// When the frame started, in the receiver's clock.
     fn t_start(&self) -> f64;
     /// When it finished.
@@ -128,6 +133,10 @@ pub struct PhyTiming {
     /// 0.54 s after it starts, where an ordinary preamble takes 0.12 s. `None`: as
     /// `preamble_detect_s`.
     pub floor_preamble_detect_s: Option<f64>,
+    /// The echo share above which each rung that has one, by mode, is kept off the ladder
+    /// (ADR-0087, [`with_echo_limit`](crate::rate::RateController::with_echo_limit)); empty:
+    /// no rung has one.
+    pub echo_limit: Vec<Option<f64>>,
 }
 
 impl PhyTiming {

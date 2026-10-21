@@ -89,6 +89,11 @@ pub struct FrameRecord {
     /// only when it did.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub capture_skip: bool,
+    /// What of the path's echo a tone frame of the floor's own kinds showed (ADR-0087,
+    /// `aether_phy::tone::echo_share`); absent for every other frame, and from a sidecar
+    /// written before beta.119.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub echo: Option<f64>,
 }
 
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
@@ -891,6 +896,7 @@ mod tests {
             bytes: 144,
             control: None,
             capture_skip: false,
+            echo: None,
         });
         recording.sent(SentRecord {
             t_s: 11.8,

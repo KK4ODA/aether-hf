@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
+from aether_model.frame.modes import NARROW
 from aether_model.link.datagram import body as datagram_body
 from aether_model.link.datagram import fragments, max_payload
 from aether_model.link.frames import (
@@ -43,9 +44,11 @@ from aether_model.link.frames import (
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     CONTROL_THRESHOLD_DB,
+    ECHO_LIMIT,
     FRAME_S,
     NARROW_AWGN_THRESHOLD_DB,
     NARROW_CONTROL_THRESHOLD_DB,
+    NARROW_ECHO_LIMIT,
     NARROW_FRAME_S,
     NARROW_PAYLOAD_BYTES,
     PAYLOAD_BYTES,
@@ -349,6 +352,57 @@ def rate_trace_cases() -> list[dict]:  # type: ignore[type-arg]
     return out
 
 
+def echo_trace_cases() -> list[dict]:  # type: ignore[type-arg]
+    """The 500 Hz controller with its echo limits (ADR-0087), fed the same steps on both sides:
+    a seed from a floor frame, echo readings (a weak one that does not count among them) and
+    bursts; the recommendation, the margin, the SNR and the echo must match."""
+    steps: list[tuple[str, tuple[object, ...]]] = [
+        ("echo", (0.011, -3.0)),
+        ("seed", (-3.0, True)),
+        *[("observe", (-3.0, 6, 0, 2))] * 4,
+        ("echo", (0.05, -9.0)),
+        ("observe", (-2.5, 4, 2, 2)),
+        ("echo", (0.012, -2.8)),
+        *[("observe", (-3.0, 6, 0, 2))] * 6,
+        *[("echo", (0.0002, 8.0)), ("observe", (8.0, 6, 0, None))] * 10,
+        ("echo", (0.02, 6.0)),
+        ("echo", (0.02, 6.0)),
+        *[("observe", (6.0, 6, 0, None))] * 4,
+    ]
+    rc = RateController(
+        thresholds=dict(NARROW_AWGN_THRESHOLD_DB),
+        modes=usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S),
+        floor_modes=NARROW.floor_modes,
+        echo_limit=dict(NARROW_ECHO_LIMIT),
+    )
+    track = []
+    for what, args in steps:
+        if what == "echo":
+            share, snr = args
+            rc.observe_echo(share, snr)  # type: ignore[arg-type]
+        elif what == "seed":
+            snr, lower = args
+            rc.seed(snr, lower_bound=lower)  # type: ignore[arg-type]
+        else:
+            snr, ok, failed, mode = args
+            rc.observe(snr, ok, failed, mode)  # type: ignore[arg-type]
+        track.append(
+            {
+                "recommend": int(rc.recommend()),
+                "margin_db": round(float(rc.margin_db), 9),
+                "snr_db": None if rc.snr_db is None else round(float(rc.snr_db), 9),
+                "echo": None if rc.echo is None else round(float(rc.echo), 12),
+            }
+        )
+    return [
+        {
+            "name": "narrow_echo",
+            "steps": [{"what": what, "args": list(args)} for what, args in steps],
+            "track": track,
+        }
+    ]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default="core/aether-link/tests/data/link_vectors.json")
@@ -386,6 +440,10 @@ def main() -> int:
         "datagram_bodies": datagram_body_cases(),
         "grant_frames": grant_frame_cases(),
         "rate_traces": rate_trace_cases(),
+        "echo_traces": echo_trace_cases(),
+        # the echo share above which each rung is kept off the ladder (ADR-0087), by mode
+        "echo_limits": [ECHO_LIMIT.get(m) for m in sorted(AWGN_THRESHOLD_DB)],
+        "narrow_echo_limits": [NARROW_ECHO_LIMIT.get(m) for m in sorted(NARROW_AWGN_THRESHOLD_DB)],
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

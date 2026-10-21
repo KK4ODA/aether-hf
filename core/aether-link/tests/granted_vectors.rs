@@ -94,6 +94,10 @@ fn timing(doc: &Value) -> PhyTiming {
             .map(|pair| [num(&pair[0]), num(&pair[1])]),
         floor_margin_db: opt(&doc["floor_margin_db"]),
         floor_preamble_detect_s: opt(&doc["floor_preamble_detect_s"]),
+        echo_limit: doc["echo_limit"]
+            .as_array()
+            .map(|limits| limits.iter().map(opt).collect())
+            .unwrap_or_default(),
     }
 }
 
@@ -175,6 +179,7 @@ struct Replayed {
     snr_db: f64,
     trusted: bool,
     follows: Option<u8>,
+    echo: Option<f64>,
     t_start: f64,
     t_end: f64,
     decodes: RefCell<VecDeque<Decode>>,
@@ -206,6 +211,9 @@ impl SoftFrame for Replayed {
     }
     fn follows(&self) -> Option<u8> {
         self.follows
+    }
+    fn echo(&self) -> Option<f64> {
+        self.echo
     }
     fn t_start(&self) -> f64 {
         self.t_start
@@ -263,6 +271,7 @@ impl Replay<'_> {
             snr_db: num(&doc["snr_db"]),
             trusted: doc["trusted"].as_bool().expect("trusted"),
             follows: opt_int(&doc["follows"]).map(|f| u8::try_from(f).expect("follows")),
+            echo: opt(&doc["echo"]),
             t_start: num(&doc["t_start"]),
             t_end: num(&doc["t_end"]),
             decodes: RefCell::new(decodes),
@@ -425,6 +434,11 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         "peer_snr_db",
         close_opt(e.peer_snr_db(), opt(&want["peer_snr_db"])),
         format!("{:?}", e.peer_snr_db()),
+    );
+    check(
+        "echo",
+        close_opt(e.echo(), opt(&want["echo"])),
+        format!("{:?}", e.echo()),
     );
     check(
         "identifier_owed",

@@ -1019,6 +1019,12 @@ class GrantedEngine:
         return self._recommended
 
     @property
+    def echo(self) -> float | None:
+        """The path's echo as the session's frames have read it (ADR-0087), smoothed: what keeps
+        the rungs it breaks off the ladder. ``None`` before any reading."""
+        return self.rate.echo
+
+    @property
     def level(self) -> int:
         """The gap level in use: what a master grants, what a slave asks for."""
         if self.role is Role.MASTER:
@@ -1366,7 +1372,9 @@ class GrantedEngine:
         return max(self.cfg.disc_patience_s, self.cfg.disc_patience_exchanges * self._exchange_s())
 
     def _heard(self, frame: SoftFrame) -> None:
-        """A decoded frame of the session: the link is alive."""
+        """A decoded frame of the session: the link is alive, and what it read of the path's
+        echo goes to the rate controller (ADR-0087) — the call or the acceptance first."""
+        self.rate.observe_echo(frame.echo, frame.snr_db)
         self._heard_db = frame.snr_db
         self._heard_recent = [*self._heard_recent, frame.snr_db][-self.cfg.family_readings :]
         self._heard_at = self.now
@@ -1480,6 +1488,8 @@ class GrantedEngine:
             "floor_modes": self.timing.floor_modes,
             "floor_margin_db": self.timing.floor_margin_db,
         }
+        if self.timing.echo_limit:
+            floor["echo_limit"] = dict(self.timing.echo_limit)  # type: ignore[assignment]
         if thresholds is None:
             return RateController(**{**floor, **self.cfg.rate})  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}

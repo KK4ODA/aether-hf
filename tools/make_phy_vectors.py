@@ -483,7 +483,55 @@ def tone_receive_cases() -> list[dict[str, object]]:
                 "detected_cfo_hz": sync.cfo_hz,
                 "statistic": sync.statistic,
                 "snr_db": frame.snr_db,
+                "echo": frame.echo,
                 "llr": [float(v) for v in frame.llr],
+            }
+        )
+    return out
+
+
+TONE_ECHO_CASES = (
+    (NARROW.tone_control, 56, 0.8, 0.9),
+    (NARROW.tone_data[0], 40, 1.0, 2.1),
+    (NARROW.tone_data[1], 16, 0.6, -1.3),
+    (TONE_NARROW[0], 56, 0.8, 0.9),
+)
+"""A tone frame and its echo ``delay`` samples later (7, 5 and 2 ms at 8 kHz), ``amplitude``
+times as strong and turned by ``phase``: the floor's own kinds read it (ADR-0087), a fast kind
+reads none."""
+
+
+def tone_echo_cases() -> list[dict[str, object]]:
+    """A tone frame on two rays — itself and :data:`TONE_ECHO_CASES`'s echo — turned and with
+    :func:`tone_interference` added, demodulated at its known start and offset: the echo share
+    to a tolerance (``None`` for a fast kind), the SNR to a tolerance."""
+    out = []
+    rng = np.random.default_rng(87)
+    for i, (kind, delay, amp, phase) in enumerate(TONE_ECHO_CASES):
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        lead, cfo = 1600 + 113 * i, 18.75 - 11.5 * i
+        x = tone.burst(kind, payload, 0)
+        n = lead + delay + len(x) + 2000
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y[lead + delay : lead + delay + len(x)] += amp * np.exp(1j * phase) * x
+        y *= np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
+        y += tone_interference(n)
+        frame = tone.demodulate(y, kind, 0, lead, cfo)
+        if kind.speed == 1:
+            assert frame.echo is not None and frame.echo > 0.0, (kind.name, frame.echo)
+        out.append(
+            {
+                "kind": kind.name,
+                "payload": payload.hex(),
+                "delay": delay,
+                "amplitude": amp,
+                "phase": phase,
+                "lead": lead,
+                "cfo_hz": cfo,
+                "n_samples": n,
+                "snr_db": frame.snr_db,
+                "echo": frame.echo,
             }
         )
     return out
@@ -822,6 +870,7 @@ def main() -> int:
         "tone_frames": tone_frame_cases(),
         "tone_receive": tone_receive_cases(),
         "tone_faded": tone_faded_cases(),
+        "tone_echo": tone_echo_cases(),
         "tone_counted_frames": tone_counted_frame_cases(),
         "tone_counted_receive": tone_counted_receive_cases(),
         "tone_after_silence": tone_after_silence_cases(),

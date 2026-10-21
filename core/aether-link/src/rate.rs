@@ -34,6 +34,55 @@ pub const AWGN_THRESHOLD_DB: [f64; 20] = [
     9.9, 13.9, 15.6, 16.9,
 ];
 
+/// The echo share (`aether_phy::tone::echo_share`) above which each rung of the 2 300 Hz
+/// ladder that has one is kept off it (ADR-0087), from `tools/bench_echo.py --limits`
+/// (`bench/baselines/echo.csv`): tone100-153, whose 100-baud symbols a 7 ms echo breaks. A rung
+/// without one is carried on some measured path that reads nearly as much echo as any path that
+/// refuses it. Mirrors the model; the vector test pins it.
+pub const ECHO_LIMIT: [Option<f64>; 20] = [
+    None,
+    None,
+    None,
+    None,
+    None,
+    Some(0.0073),
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+];
+
+/// The 500 Hz ladder's [`ECHO_LIMIT`]: the four-tone kinds' 10 ms symbols at their two higher
+/// code rates, refused by two rays 5 ms apart and carried 4 ms apart. Rung 2 and the OFDM rungs
+/// have none; the climb stops under rung 3 all the same. Mirrors the model.
+pub const NARROW_ECHO_LIMIT: [Option<f64>; 15] = [
+    None,
+    None,
+    None,
+    Some(0.0038),
+    Some(0.0038),
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+];
+
 /// The tone floor's control frame's 10 % FER point on AWGN (ADR-0013,
 /// `bench/baselines/tone_floor.csv`) — the same frame on both airs.
 pub const TONE_CONTROL_THRESHOLD_DB: f64 = -19.5;
@@ -184,6 +233,14 @@ pub struct RateConfig {
     /// an air that does not cap its margin there, where the floor below carries an exchange
     /// better than the rung does once it loses frames.
     pub partial_share: f64,
+    /// How much each echo reading moves the controller's [`echo`](RateController::echo)
+    /// (ADR-0087): a frame's reading spreads by a factor of two or so about its path's, and a
+    /// session's first data goes on one or two of them.
+    pub echo_weight: f64,
+    /// The weakest frame whose echo reading counts: below it the noise in the bins the reading
+    /// weighs is as large as a 4 ms echo's spill, and at those SNRs the rungs an echo refuses
+    /// are not on offer.
+    pub echo_min_snr_db: f64,
 }
 
 impl Default for RateConfig {
@@ -204,6 +261,8 @@ impl Default for RateConfig {
             first_mode_back: 2,
             reseed_margin_db: 3.0,
             partial_share: 0.5,
+            echo_weight: 0.4,
+            echo_min_snr_db: -6.0,
         }
     }
 }
@@ -237,6 +296,11 @@ pub struct RateController {
     /// The seed was a lower bound ([`seed`](Self::seed)): the first clean burst measured on an
     /// ordinary frame seeds again.
     reseed_pending: bool,
+    /// The echo share above which each rung is kept off the ladder, by mode (ADR-0087); empty,
+    /// no rung has one.
+    echo_limit: Vec<Option<f64>>,
+    /// The path's echo as the frames have read it, smoothed ([`observe_echo`](Self::observe_echo)).
+    echo: Option<f64>,
 }
 
 impl Default for RateController {
@@ -266,6 +330,20 @@ impl RateController {
         self.floor_modes = floor_modes;
         self.floor_margin_db = floor_margin_db;
         self
+    }
+
+    /// The same controller with the echo share above which each rung, by mode, is kept off the
+    /// ladder (ADR-0087): [`ECHO_LIMIT`], [`NARROW_ECHO_LIMIT`], `PhyTiming::echo_limit`.
+    #[must_use]
+    pub fn with_echo_limit(mut self, limit: &[Option<f64>]) -> Self {
+        self.echo_limit = limit.to_vec();
+        self
+    }
+
+    /// The path's echo as the frames have read it, smoothed; `None` before any reading.
+    #[must_use]
+    pub fn echo(&self) -> Option<f64> {
+        self.echo
     }
 
     /// How many of the ladder's leading rungs are the floor's.
@@ -324,6 +402,8 @@ impl RateController {
             floor_margin_db: None,
             boundary_failures: 0,
             reseed_pending: false,
+            echo_limit: Vec::new(),
+            echo: None,
         }
     }
 
@@ -355,7 +435,7 @@ impl RateController {
         let ordinary = self.first_ordinary();
         let mut fit = 0;
         for index in 1..self.modes.len() {
-            if self.required(index) > snr_db {
+            if self.required(index) > snr_db || self.echo_out(index) {
                 break;
             }
             fit = index;
@@ -440,6 +520,41 @@ impl RateController {
                 self.smoothed_snr_db
                     .map_or(value, |prev| 0.7 * prev + 0.3 * value),
             );
+        }
+    }
+
+    /// A frame's echo reading (`aether_phy::tone::echo_share`, ADR-0087), read at `snr_db`. The
+    /// tone floor's 40 ms symbols carry a path whose echo smears the fast kinds' 10 ms ones and
+    /// outruns OFDM's 5 ms prefix, and the SNR such a path reads cannot say so: the floor's
+    /// reading saturates near −3 dB whatever the SNR, as a quiet path at −3 dB reads. A
+    /// recommendation the reading now rules out moves to the fastest rung below that it allows
+    /// and the SNR carries.
+    pub fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
+        let Some(share) = share else {
+            return;
+        };
+        if snr_db < self.config.echo_min_snr_db {
+            return;
+        }
+        let w = self.config.echo_weight;
+        self.echo = Some(self.echo.map_or(share, |prev| (1.0 - w) * prev + w * share));
+        if !self.echo_out(self.index) {
+            return;
+        }
+        self.index = (0..self.index)
+            .rev()
+            .find(|&i| !self.echo_out(i) && (self.fits(i, 0.0) || i == 0))
+            .unwrap_or(0);
+    }
+
+    /// Whether the path's echo keeps the rung at `index` off the ladder.
+    fn echo_out(&self, index: usize) -> bool {
+        match (
+            self.echo_limit.get(self.modes[index]).copied().flatten(),
+            self.echo,
+        ) {
+            (Some(limit), Some(echo)) => echo > limit,
+            _ => false,
         }
     }
 
@@ -545,6 +660,9 @@ impl RateController {
 
     /// Whether the mode at `index` fits under the smoothed SNR with the margin and `extra`.
     fn fits(&self, index: usize, extra_db: f64) -> bool {
+        if self.echo_out(index) {
+            return false;
+        }
         match self.smoothed_snr_db {
             None => index == 0,
             Some(snr) => self.thresholds[self.modes[index]] + self.margin(index) + extra_db <= snr,

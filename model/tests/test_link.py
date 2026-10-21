@@ -483,3 +483,57 @@ def test_margin_decays_freely_before_anything_is_learned() -> None:
     for _ in range(3):
         rc.observe(10.0, ok=6, failed=0, mode=0)
     assert rc.margin_db < RateController().margin_db - 2 * rc.down_step_db
+
+
+def _narrow_echo() -> RateController:
+    from aether_model.frame.modes import NARROW
+    from aether_model.link.rate import (
+        NARROW_AWGN_THRESHOLD_DB,
+        NARROW_ECHO_LIMIT,
+        NARROW_FRAME_S,
+        NARROW_PAYLOAD_BYTES,
+    )
+
+    thresholds = dict(NARROW_AWGN_THRESHOLD_DB)
+    return RateController(
+        thresholds=thresholds,
+        modes=usable_modes(thresholds, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S),
+        floor_modes=NARROW.floor_modes,
+        echo_limit=dict(NARROW_ECHO_LIMIT),
+    )
+
+
+def test_an_echo_keeps_the_rungs_it_breaks_off_the_ladder() -> None:
+    """ADR-0087: a floor reading of -3 dB is a quiet path at -3 dB or ITU's disturbed NVIS at
+    any SNR, and on the second the 500 Hz air's rungs 3 and 4 and its OFDM rungs do not carry.
+    The echo the floor's frames read tells the two apart: the session starts and stays below
+    the rungs the echo breaks, and climbs past them once the echo is gone."""
+    from aether_model.link.rate import NARROW_ECHO_LIMIT
+
+    quiet = _narrow_echo()
+    assert quiet.first_mode(-3.0) == 4
+    rc = _narrow_echo()
+    rc.observe_echo(0.01, -3.0)
+    assert rc.first_mode(-3.0) <= 2
+    rc.seed(-3.0, lower_bound=True)
+    for _ in range(12):
+        rc.observe(-3.0, ok=6, failed=0, mode=rc.recommend())
+        rc.observe_echo(0.01, -3.0)
+        assert all(rc.recommend() < m for m in NARROW_ECHO_LIMIT)
+    for _ in range(12):
+        rc.observe_echo(0.0, 5.0)
+        rc.observe(5.0, ok=6, failed=0, mode=rc.recommend())
+    assert rc.recommend() > min(NARROW_ECHO_LIMIT)
+
+
+def test_an_echo_read_at_once_takes_the_recommendation_down() -> None:
+    """A recommendation the echo rules out does not wait for its frames to fail: the next
+    burst goes at the fastest rung the echo allows and the SNR carries. A weak frame's reading
+    counts for nothing (``echo_min_snr_db``): its noise is as large as a 4 ms echo's spill."""
+    rc = _narrow_echo()
+    rc.seed(-3.0, lower_bound=True)
+    assert rc.recommend() == 4
+    rc.observe_echo(0.05, rc.echo_min_snr_db - 1.0)
+    assert rc.echo is None and rc.recommend() == 4
+    rc.observe_echo(0.01, -3.0)
+    assert rc.recommend() == 2

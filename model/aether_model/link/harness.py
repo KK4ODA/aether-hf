@@ -28,8 +28,10 @@ from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     CONTROL_THRESHOLD_DB,
+    ECHO_LIMIT,
     NARROW_AWGN_THRESHOLD_DB,
     NARROW_CONTROL_THRESHOLD_DB,
+    NARROW_ECHO_LIMIT,
 )
 from aether_model.link.sim import TwoStationSim
 from aether_model.phy import tone
@@ -64,6 +66,9 @@ class RealSoftFrame:
     follows: int | None = None
     """How many frames of its transmission follow it, as its chips or its middle sync block
     carried it (ADR-0068 §2.1); ``None`` for a control frame."""
+    echo: float | None = None
+    """The tone receiver's :func:`~aether_model.phy.tone.echo_share`; ``None`` on an OFDM
+    frame."""
 
     def decode(self, buffer: object | None = None) -> tuple[bytes | None, object]:
         buf = buffer if isinstance(buffer, np.ndarray) else None
@@ -112,6 +117,7 @@ def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) 
         # the wide air's first OFDM rung stays productive on a fading path a decibel above its
         # 10 % point; the narrow air's does not (ADR-0013 §4)
         floor_margin_db=WIDE_FLOOR_MARGIN_DB if wide else None,
+        echo_limit=dict(ECHO_LIMIT if wide else NARROW_ECHO_LIMIT),
     )
 
 
@@ -213,6 +219,7 @@ class PhyBridge:
                 floor=True,
                 _decode=soft.decode,
                 follows=None if ts.kind.control else ts.follows,
+                echo=soft.echo,
             )
         syncs = self.modem.detector.detect(y, max_frames=1)
         if not syncs:

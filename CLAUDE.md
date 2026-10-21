@@ -2042,6 +2042,37 @@ every point (the pipe never strands such a body); the harness, 56 × 2 against b
 `scenarios.csv`'s ranges (the baseline stays). No local run took CI's own course (rung 3 refused
 all session): CI's runner is its test.
 
+**The rate controller on an NVIS path (2026-10-21, P9-16, ADR-0087; the author's "tackle the
+rate controller on the NVIS path"; no wire change, no config key).** On ITU's disturbed NVIS (two
+rays 7 ms apart, 1 Hz) the floor's 40 ms symbols carry and the faster rungs do not: at 500 Hz
+rung 2 decodes about half its frames, rung 3 a tenth, rung 4 none, OFDM a quarter, at any SNR,
+and the floor's reading saturates near −3 dB — what a quiet −3 dB path reads, where rung 4 is
+right. The cost was the start (1 kB 256 s against 206 s held at rung 2; at 4 kB the controller
+already matched rung 2). Now the tone receiver reads the echo on the floor's own kinds
+(`tone.echo_share` / `tone::echo_share`: the neighbouring symbols' tones inside a symbol, both
+sides, two bins or more from its own, over its own, each less the noise; `ECHO_SPACING`; `None`
+for a fast kind; `ToneFrame.echo`, `Received::echo`, `SoftFrame.echo`), the engine feeds every
+decoded session frame to the controller (`_heard`; the call or acceptance first), and
+`RateController.observe_echo` (EWMA `echo_weight` 0.4, frames under `echo_min_snr_db` −6 dB
+ignored) keeps off the rungs whose limit the echo exceeds (`_echo_out` in `_fits` and
+`first_mode`; the climb stops under them). Limits (`ECHO_LIMIT`, `NARROW_ECHO_LIMIT`, through
+`PhyTiming.echo_limit`): 500 Hz rungs 3–4 above 0.0038, 2 300 Hz rung 5 above 0.0073, from
+`tools/bench_echo.py` (`bench/baselines/echo.csv`, 704 points; `--limits`: a rung is refused on a
+path when a slower rung delivers more there at every SNR, the limit the lowest refusing path's
+median echo less a tenth if it stands a quarter above every carrying path's, monotone within a
+family, drawn on ITU-R F.1487's conditions and the 1 Hz delay sweep — the 0.1/10 Hz probes stay in
+the file and would have set 0.0083); `test_bench_tools.py` holds the tables to the CSV. Readings:
+≤ 0.0003 AWGN/Good/Moderate/Poor, 0.0028 at 4 ms, 0.004–0.006 at 5, 0.012 at 7, flutter 0.001–0.0016.
+Real-PHY link bench (`bench_link.run_point` `phy`, continuous): 500 Hz NVIS 1 kB 256/254/253 →
+213/211/210 s at 5/10/15 dB, 4 kB −2.6/−4.0 %; 2 300 Hz 4 kB −8.4/−10.0 %; the fading pipe
+identical (its frames carry no echo), and 72 real-modem sessions on the other ITU paths never
+ruled a rung out (smoothed echo at most 0.0020). The `frame` event and sidecar frame records carry `echo`.
+Vectors: `phy_vectors.json` `tone_receive` echo and `tone_echo`, `link_vectors.json`
+`echo_traces` and the tables, `granted_vectors.json` frames' echo, digests' `echo` and the
+`echo-path` session (appended last so the blob table's indices stay). Found on the way: the data's
+own timing matters (rung 2 at 7 ms 19/20 a quarter of the echo after the first ray, 12/20 at the
+detector's), but a search by the data's energy concentration did no better than the detector.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
