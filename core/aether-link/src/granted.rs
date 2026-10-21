@@ -2168,9 +2168,19 @@ impl GrantedEngine {
         body_len == cap || body_len + 2 <= cap
     }
 
+    /// The rung a stranded frame goes at from now on: the most robust usable rung below
+    /// `from_mode`, in the family of the recommendation `to_mode`, that its body fits
+    /// (ADR-0085). Every data frame of a family is as long as the others, so a slower rung than
+    /// the recommendation costs that frame no air, and the recommendation may name a rung the
+    /// path has never carried.
     fn reencode_target(&self, body_len: usize, from_mode: usize, to_mode: usize) -> Option<usize> {
-        (0..self.timing.data_capacity.len())
-            .find(|&mode| to_mode <= mode && mode < from_mode && self.fits(body_len, mode))
+        let floor = self.timing.is_floor(to_mode);
+        self.rate.modes().iter().copied().find(|&mode| {
+            mode < from_mode
+                && mode < self.timing.data_capacity.len()
+                && self.timing.is_floor(mode) == floor
+                && self.fits(body_len, mode)
+        })
     }
 
     // ── keying ────────────────────────────────────────────────────────
@@ -4524,6 +4534,19 @@ mod tests {
             "the rung must change the controller for this to mean anything"
         );
         assert!((engine.rate.margin_db() - judged_at(9)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_stranded_frame_goes_at_the_most_robust_rung_of_its_new_family() {
+        // ADR-0085, as test_granted.py has it: every data frame of a family is as long as the
+        // others, so the body goes at the most robust usable rung it fits, not the recommendation
+        let engine = GrantedEngine::new("W4ODA", wide(), GrantConfig::default(), 1);
+        assert_eq!(engine.reencode_target(20, 6, 4), Some(1), "tone-36 under the fast tones");
+        // among the OFDM rungs the lowest usable one: rung 6 is beaten and off the ladder
+        assert_eq!(engine.reencode_target(20, 9, 7), Some(7));
+        // never into the floor while the recommendation is an OFDM rung
+        let full = data_capacity(PAYLOAD_BYTES[9]);
+        assert_eq!(engine.reencode_target(full, 9, 7), None);
     }
 
     #[test]

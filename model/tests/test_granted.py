@@ -34,6 +34,7 @@ from aether_model.link.frames import (
     DataKind,
     GrantFrame,
     GrantKind,
+    data_capacity,
     decode_data,
     encode_data,
     level_of,
@@ -1390,6 +1391,35 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
     assert a.stats.headers_elided > 0
     assert sim.delivered(1) == message
     assert sim.overlaps() == []
+
+
+def test_a_stranded_frame_goes_at_the_most_robust_rung_of_its_new_family() -> None:
+    """80m-agc-carrier-outside-500 on ITU NVIS: frames stranded at the first OFDM rung were
+    re-encoded at the recommendation, the floor's top rung — tone4x100-93, whose 10 ms symbols a
+    7 ms echo smears — and spent four more copies there, 86 s of a 300 s budget, where tone-36
+    carried them at once. Every data frame of a family is as long as the others, so the most
+    robust rung the body fits costs the frame no air (ADR-0085)."""
+    a, _ = _pair(NARROW)
+    timing = a.timing
+
+    def body(mode: int) -> int:
+        return data_capacity(timing.capacity(mode))
+
+    floor_top, first_ordinary = timing.floor_modes - 1, timing.floor_modes
+    # a full first-OFDM-rung frame, the recommendation at the floor's top: tone-36, not rung 4
+    target = a._reencode_target(body(first_ordinary), first_ordinary, floor_top)
+    assert target == 1
+    assert timing.data_frame_s_for(target) == timing.data_frame_s_for(floor_top)
+    # among the OFDM rungs, as low as the body fits, whatever rung was recommended
+    assert a._reencode_target(body(first_ordinary), 9, 7) == first_ordinary
+    # never into the floor, five times as long, while the recommendation is an OFDM rung
+    assert a._reencode_target(body(9), 9, 7) is None
+    # and on the wide air the same: tone-36 under the fast tones, and among the OFDM rungs the
+    # lowest on the usable ladder (BPSK 1/5, rung 6, is beaten on both counts and is not)
+    w, _ = _pair(WIDE)
+    assert w._reencode_target(body_len=20, from_mode=w.timing.floor_modes, to_mode=4) == 1
+    assert w.timing.data_frame_s_for(1) == w.timing.data_frame_s_for(4)
+    assert w._reencode_target(body_len=20, from_mode=9, to_mode=7) == 7
 
 
 def _spy_data(sim: TwoStationSim, who: int) -> list[list[TxFrame]]:

@@ -1985,7 +1985,18 @@ better exchange. Link bench (`bench/baselines/link_partial_failures.csv`, `parti
 beta.117): AWGN identical; 500 Hz up to +15 % (1 kB) / +30 % (8 kB), 2 300 Hz +11 % / +59 %; the
 longer the session the more, because the margin used to ratchet up on every partial failure.
 Tried and not built: a per-rung offset (no effect), an exchange-priced ladder (−12 % AWGN 0 dB).
-Open: Poor −6 dB at 1 kB (+0.6 %; a ladder capped at rung 3 would be +7 %).
+Open: Poor −6 dB at 1 kB (+0.6 %; a ladder capped at rung 3 would be +7 %). *ADR-0085* (found
+by the harness A/B, model first, no wire change): `80m-agc-carrier-outside-500`'s own draw (ITU
+NVIS, 10 dB, 500 Hz, `quick`) lost its message in 2 of 8 runs where beta.117 lost 1 in 10.
+Frames stranded at the first OFDM rung were re-encoded at the recommendation, rung 4
+(tone4x100-93, whose 10 ms symbols a 7 ms echo smears), and went four more copies there (86 s).
+Every data frame of a family is the same length, so `_reencode_target` / `reencode_target` now
+take the most robust *usable* rung (`RateController.modes`) of the recommendation's family,
+below the frame's rung, that the body fits: tone-36 for a 22-byte body. Never into the floor
+under an OFDM recommendation. Seed 31: 11 of 12 runs, message median 259 s (beta.117 9 of 10,
+286 s); the link bench identical (the fading pipe seldom strands a frame). Open: a body that fits
+no slower rung (72 bytes at rung 3, which this path decodes 2 in 20) is stranded for good on
+either build; splitting it needs a wire change.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

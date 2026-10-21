@@ -89,3 +89,4 @@ context → decision → alternatives considered → consequences.
 | [0082](0082-the-ofdm-receiver-follows-a-channel-that-moves-within-the-frame.md) | The OFDM receiver follows a channel that moves within the frame | accepted |
 | [0083](0083-a-tone-frame-is-not-refused-for-its-faded-sync-tones.md) | A tone frame is not refused for its faded sync tones | accepted |
 | [0084](0084-a-burst-that-failed-in-part-moves-the-margin-by-its-share.md) | A burst that failed in part moves the margin by its share; thresholds per channel class measured and rejected | accepted |
+| [0085](0085-a-stranded-frame-goes-at-the-most-robust-rung-of-its-new-family.md) | A stranded frame goes at the most robust rung of its new family | accepted |
