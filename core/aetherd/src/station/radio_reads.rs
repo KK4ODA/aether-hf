@@ -108,8 +108,7 @@ impl<P: Ptt> Station<P> {
         }
         if let Some(hz) = readings.dial_hz {
             // fresher than the display's ten-second cadence, and the rules check reads it too
-            self.frequency.value = Some(hz);
-            self.frequency.read_at_s = Some(at);
+            self.read_dial(hz, at);
         }
         let Some(recording) = self.recording.as_mut() else {
             return;

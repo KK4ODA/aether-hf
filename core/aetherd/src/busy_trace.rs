@@ -92,8 +92,11 @@ fn params_for(bandwidth_hz: u32) -> Result<WaveformParams, String> {
 /// Run a recording through the busy detector.
 ///
 /// `expectation` is the recording's sidecar when there is one: the keyed spans are muted, the
-/// frames it found are explained and the decoded ones mark the channel, and its bandwidth is
-/// used unless `bandwidth_hz` says otherwise.
+/// frames it found and the ones it announced are explained and the decoded ones mark the
+/// channel, as the station did, its bandwidth is used unless `bandwidth_hz` says otherwise,
+/// and where it kept what the live detector had learned when the recording began, the trace
+/// takes that over at that moment — a detector that has heard only the recording knows
+/// nothing of the minutes before it (report 14 §7.1).
 ///
 /// # Errors
 /// If the file cannot be read or is not at the modem's rate.
@@ -129,6 +132,9 @@ pub fn trace(
     let mut frames = expectation.map(|e| e.frames.clone()).unwrap_or_default();
     frames.sort_by(|a, b| a.t_s.total_cmp(&b.t_s));
     let mut next_frame = 0;
+    let announcements = expectation.map_or(&[][..], |e| &e.announcements[..]);
+    let mut next_announcement = 0;
+    let mut state = expectation.and_then(|e| e.busy_state.as_ref());
 
     let feed = (FEED_S * rate) as usize;
     let mut rows = Vec::new();
@@ -139,6 +145,10 @@ pub fn trace(
         seen += chunk.len();
         let now = seen as f64 / rate;
         wide.push(chunk);
+        if let Some(live) = state.filter(|s| s.at_s <= now) {
+            busy.restore(live, rate);
+            state = None;
+        }
         if !deaf_at(&muted, t) {
             busy.hear_passband(chunk, rate, now);
         }
@@ -148,6 +158,13 @@ pub fn trace(
             busy.skip(&baseband);
         } else {
             busy.push(&baseband, now);
+        }
+        while let Some(announced) = announcements
+            .get(next_announcement)
+            .filter(|a| a.t_s <= now)
+        {
+            busy.explain(announced.start_s, announced.end_s);
+            next_announcement += 1;
         }
         while let Some(frame) = frames.get(next_frame).filter(|f| f.t_s <= now) {
             if let (Some(start), Some(end)) = (frame.start_s, frame.end_s) {
@@ -320,6 +337,105 @@ impl WideBands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trace_starts_from_the_recorded_state_and_explains_what_was_announced() {
+        // report 14 §7.1: the trace starts from what the live detector had learned when the
+        // recording began, and takes the frames the station announced out of the floor as the
+        // station did
+        let params = aether_phy::waveform::NARROW_500;
+        let config = BusyConfig {
+            fs: params.fs_baseband,
+            passband_hz: params.occupied_bandwidth_hz(),
+            centre_hz: params.centre_hz,
+            ..BusyConfig::default()
+        };
+        // the live detector heard 15 s of louder noise before the recording began at 10 s
+        let mut live = BusyDetector::new(config);
+        let per_block = (config.block_s * config.fs) as usize;
+        let mut now = -5.0;
+        let mut seed = 3u64;
+        while now < 10.5 {
+            now += config.block_s;
+            let block = (0..per_block)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                    let u = (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5;
+                    (0.05 * u, 0.05 * u)
+                })
+                .collect::<Vec<_>>();
+            live.push(&block, now);
+        }
+        assert!(
+            live.floor_db.is_finite(),
+            "the live detector learned no floor"
+        );
+
+        let dir = std::env::temp_dir().join(format!("aether-trace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let mut recording = crate::record::Recording::start(
+            &dir,
+            "trace",
+            48_000,
+            10.0,
+            serde_json::json!({"bandwidth_hz": 500}),
+        )
+        .expect("start");
+        recording.busy_state(live.state(now));
+        let rate = 48_000.0;
+        let audio: Vec<f32> = (0..(4.0 * rate) as usize)
+            .map(|i| {
+                (0.01
+                    * (f64::from(i as u32) * 1.7).sin().signum()
+                    * (f64::from(i as u32) * 0.37).cos()) as f32
+            })
+            .collect();
+        recording.captured(&audio).expect("write");
+        recording.event(
+            12.0,
+            "preamble",
+            "ago 0.300 frame_s 1.000 tone 1 confidence 1.40 heeded 1",
+            "Idle",
+        );
+        let summary = recording.finish(&serde_json::json!({})).expect("finish");
+        let expectation = Expectation::from_sidecar(&summary.sidecar).expect("sidecar");
+        assert!(expectation.busy_state.is_some(), "the state was not kept");
+        assert_eq!(expectation.announcements.len(), 1);
+
+        let rows = trace(&summary.wav, Some(&expectation), Some(500), config).expect("trace");
+        let first = rows.first().expect("rows");
+        assert!(
+            first.note.end_s < 1.0 && (first.floor_db - live.floor_db).abs() < 0.1,
+            "the trace began at {:.2} s with a floor of {:.1} dBFS; the live one was {:.1}",
+            first.note.end_s,
+            first.floor_db,
+            live.floor_db
+        );
+        let framed = |from: f64, to: f64| {
+            rows.iter()
+                .filter(|r| r.note.end_s > from && r.note.end_s < to)
+                .map(|r| r.note.in_frame)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            framed(2.05, 2.65).iter().all(|&f| f),
+            "the announced frame was not explained"
+        );
+        assert!(
+            framed(1.2, 1.6).iter().all(|&f| !f),
+            "blocks before it were"
+        );
+
+        // without the state the trace knows nothing for its first second
+        let bare = Expectation {
+            busy_state: None,
+            ..expectation
+        };
+        let rows = trace(&summary.wav, Some(&bare), Some(500), config).expect("trace");
+        assert!(rows.first().is_none_or(|r| r.note.end_s > 1.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_tone_outside_the_channel_is_measured_outside_it() {

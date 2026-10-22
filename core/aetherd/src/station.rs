@@ -854,6 +854,12 @@ const DIAL_FRESH_S: f64 = 2.0;
 /// answer the fresh question.
 const DIAL_STALE_S: f64 = 15.0;
 
+/// How far the dial must move for the busy detector to learn the band again, Hz
+/// ([`BusyDetector::retune`]). Within a few kilohertz the band's noise and the radio's levels on
+/// quiet are the same, and what changes — the signals in the channel — the floor follows anyway;
+/// another band, or across one, they are not.
+const DIAL_RETUNE_HZ: u64 = 10_000;
+
 /// How often the regulatory ceiling on the link's rungs is worked out again, station time.
 const CEILING_EVERY_S: f64 = 0.5;
 
@@ -1694,11 +1700,31 @@ impl<P: Ptt> Station<P> {
         }
         let answer = self.ptt.inner_mut().frequency_hz();
         self.frequency.next_ask_s = now + if answer.is_some() { 10.0 } else { 60.0 };
-        if answer.is_some() {
-            self.frequency.value = answer;
-            self.frequency.read_at_s = Some(now);
+        if let Some(hz) = answer {
+            self.read_dial(hz, now);
         }
         self.frequency.value
+    }
+
+    /// A reading of the radio's dial, wherever it came from: the display's poll, a tune the radio
+    /// accepted, the rules check or a recording's reads. A move of [`DIAL_RETUNE_HZ`] or more
+    /// tells the busy detector the band is another: WC4Y's detector had learned its levels on
+    /// quiet 20 s before the operator set the dial, and read a cut 24 dB deep where the radio made
+    /// a few (report 14 §7.1).
+    pub(crate) fn read_dial(&mut self, hz: u64, now: f64) {
+        if self
+            .frequency
+            .value
+            .is_some_and(|old| old.abs_diff(hz) >= DIAL_RETUNE_HZ)
+        {
+            self.busy.retune(now);
+            self.note(
+                "dial",
+                &format!("moved to {hz} Hz: the busy detector learns the band again"),
+            );
+        }
+        self.frequency.value = Some(hz);
+        self.frequency.read_at_s = Some(now);
     }
 
     /// The link engine, for a status display.
@@ -2340,9 +2366,9 @@ impl<P: Ptt> Station<P> {
                 other @ crate::ptt::PttError::WatchdogTripped => other.to_string(),
             })?;
         // what the radio now reads, and a fresh reading soon after
-        self.frequency.value = Some(hz);
-        self.frequency.read_at_s = Some(self.now());
-        self.frequency.next_ask_s = self.now() + 2.0;
+        let now = self.now();
+        self.read_dial(hz, now);
+        self.frequency.next_ask_s = now + 2.0;
         self.refresh_ceiling(true);
         self.note("tune", &format!("dial set to {hz} Hz"));
         Ok(())
@@ -2723,6 +2749,8 @@ impl<P: Ptt> Station<P> {
                 &format!("the recording's first seconds were lost: {error}"),
             );
         }
+        // where the busy detector stood, so a trace of the audio can carry on from it
+        recording.busy_state(self.busy.state(self.now()));
         let path = recording.path().to_path_buf();
         self.recording = Some(recording);
         // its S-meter, dial and settings are asked for from the next pass, its marks from 1
@@ -2941,6 +2969,9 @@ impl<P: Ptt> Station<P> {
             self.absorb(&baseband, now);
         }
         self.note_busy_transition(now);
+        if let Some(recording) = &mut self.recording {
+            recording.busy_reading(now, &self.busy.reading(now));
+        }
         self.reservation.channel(now, self.busy.busy(now));
         self.trace_after_release(&baseband, now);
         self.sample_passband(now);
@@ -3376,13 +3407,18 @@ impl<P: Ptt> Station<P> {
         self.tell_engine_latency();
     }
 
-    /// The sound card's capture reported skipping `lost_s` of audio, just now: recorded, and
-    /// remembered so that a frame it fell inside is not trusted (ADR-0076). The capture stream's
-    /// timestamps see about half of such losses (12-two-paths-80m.md §15.2; 13-wc4y-beta111.md
-    /// §5), so the station's clock is not moved by them.
-    pub fn note_capture_skip(&mut self, lost_s: f64) {
+    /// The sound card's capture reported skipping `lost_s` of audio, just now, `padded_s` of it
+    /// put back as silence where it was lost (ADR-0089): recorded, and remembered so that a frame
+    /// it fell inside is not trusted (ADR-0076) — the silence keeps the frame's timing and the
+    /// code carries the symbols lost, but its measurement holds the silence. The capture
+    /// stream's timestamps see about half of such losses (12-two-paths-80m.md §15.2;
+    /// 13-wc4y-beta111.md §5).
+    pub fn note_capture_skip(&mut self, lost_s: f64, padded_s: f64) {
         let now = self.now();
-        self.record_event("capture_skip", &format!("lost {lost_s:.3}"));
+        self.record_event(
+            "capture_skip",
+            &format!("lost {lost_s:.3} padded {padded_s:.3}"),
+        );
         self.capture_skips_at.push_back(now);
         while self
             .capture_skips_at
@@ -5053,8 +5089,7 @@ impl<P: Ptt> Station<P> {
                 .is_none_or(|t| now - t > DIAL_FRESH_S);
             if fresh && stale && !self.transmitting {
                 if let Some(hz) = self.ptt.inner_mut().frequency_hz() {
-                    self.frequency.value = Some(hz);
-                    self.frequency.read_at_s = Some(now);
+                    self.read_dial(hz, now);
                     self.frequency.next_ask_s = now + 10.0;
                 }
             } else if !fresh {
@@ -8981,7 +9016,7 @@ mod tests {
         station.capture(&vec![0.0f32; rate * 3]).expect("capture");
         let now = station.now();
         assert!(!station.capture_skipped_within(now - 2.0, now));
-        station.note_capture_skip(0.048);
+        station.note_capture_skip(0.048, 0.048);
         assert!(station.capture_skipped_within(now - 2.0, now), "inside");
         assert!(
             station.capture_skipped_within(now - 2.0, now - 0.3),
@@ -10669,6 +10704,67 @@ mod tests {
             "the keying test waited for a busy detector that has nothing to say about silence"
         );
         assert_eq!(station.stats.deferred_for_busy, 0);
+    }
+
+    #[test]
+    fn a_move_of_the_dial_to_another_band_starts_the_busy_detector_over() {
+        // report 14 §7.1: the gain reference had learned another frequency's levels on quiet;
+        // the floor and the reference learn again where the radio now is, and a nudge of the
+        // dial is no move
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let rate = station.config.params.audio_rate;
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut hiss = |n: usize| -> Vec<f32> {
+            (0..n)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    ((state >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.02
+                })
+                .collect()
+        };
+        for _ in 0..200 {
+            station.capture(&hiss(rate / 50)).expect("capture");
+        }
+        assert!(
+            station.busy.settled(),
+            "four seconds of noise did not settle the detector"
+        );
+        let now = station.now();
+        station.read_dial(7_074_000, now);
+        station.read_dial(7_076_000, now);
+        assert!(
+            station.busy.settled(),
+            "a nudge of the dial started the detector over"
+        );
+        station.read_dial(3_590_000, now);
+        assert!(
+            !station.busy.settled(),
+            "a move to another band kept what was learned"
+        );
+        assert_eq!(station.frequency.value, Some(3_590_000));
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("dial:moved to 3590000 Hz")),
+            "the move was not said"
+        );
+        for _ in 0..200 {
+            station.capture(&hiss(rate / 50)).expect("capture");
+        }
+        assert!(
+            station.busy.settled(),
+            "it did not listen again after the move"
+        );
     }
 
     #[test]

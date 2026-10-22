@@ -41,7 +41,12 @@ has fallen behind catches up. A daemon that greets with ``AEC2`` is told how muc
 ahead of the pile (``MSG_GAP``), as a sound card's queue tells the run loop, and moves its clock
 past it. ``stall_every_s`` is the mean time between stalls (drawn,
 seeded), ``stall_s`` a length or a ``[shortest, longest]`` range; the command file's
-``stall <who> S`` stalls one now.
+``stall <who> S`` stalls one now. ``skip_every_s`` and ``skip_ms`` (a length or a range) make
+its sound card's capture skip audio, as the mini PC's does (14-wc4y-beta118.md §5): the audio
+never arrives, and the station hears what came either side of it run together — unless it greets
+with ``AEC3``, when it is told how much was lost just before the block that follows
+(``MSG_SKIP``), as a capture callback's timestamps tell it, and puts it back as silence
+(ADR-0089).
 
 The report says when each station was keyed on the air, and every stretch both were — a
 collision, which no recording at either end can show. It splits that time three ways
@@ -93,7 +98,7 @@ TICK = 960
 DEVICE_LATENCY_S = 0.25
 """From the daemon (``audio::DEVICE_LATENCY_S``): played to on the air."""
 
-MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG, MSG_GAP = 1, 2, 3, 4, 5, 6
+MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG, MSG_GAP, MSG_SKIP = 1, 2, 3, 4, 5, 6, 7
 RADIATED_BLOCK = 48
 """Samples a radiated block: 1 ms. A block with any signal in it radiates — a waveform crosses
 zero, a keyed lead or tail of silence is all zeros."""
@@ -371,6 +376,17 @@ class Station:
     # the daemon reads MSG_GAP (it said ``AEC2``): told what a stall dropped, its clock moves
     # on by it, as a sound card's queue tells the run loop
     reads_gaps: bool = False
+    # its capture skipping audio (``skip_every_s``): the samples still to lose, those lost since
+    # the last block went, where each skip began and how long it was; the daemon reads MSG_SKIP
+    # (it said ``AEC3``) as a capture callback's timestamps
+    reads_skips: bool = False
+    skip_every: float = 0.0
+    skip_range: tuple[float, float] = (0.0, 0.0)
+    skip_rng: np.random.Generator | None = None
+    next_skip: int | None = None
+    skip_left: int = 0
+    skip_pending: int = 0
+    skips: list[list[float]] = field(default_factory=list)
     next_stall: int | None = None
     stall_every: float = 0.0
     stall_range: tuple[float, float] = (0.0, 0.0)
@@ -473,9 +489,39 @@ class Station:
                 )
         return self.stall_from <= t < self.stall_until
 
+    def skipped(self, t: int, samples: np.ndarray) -> np.ndarray:
+        """The block heard from air sample ``t``, less what the sound card's capture skipped,
+        drawing the next skip from its ``machine`` when the last has passed."""
+        if self.skip_rng is not None and self.skip_every > 0:
+            if self.next_skip is None:
+                self.next_skip = t + round(self.skip_rng.exponential(self.skip_every) * AUDIO_RATE)
+            if t >= self.next_skip:
+                lo, hi = self.skip_range
+                lost = max(1, round(self.skip_rng.uniform(lo, hi) * AUDIO_RATE))
+                self.skip_left += lost
+                self.skips.append([t / AUDIO_RATE, lost / AUDIO_RATE])
+                self.next_skip = (
+                    t + lost + round(self.skip_rng.exponential(self.skip_every) * AUDIO_RATE)
+                )
+        if not self.skip_left:
+            return samples
+        k = min(self.skip_left, len(samples))
+        self.skip_left -= k
+        self.skip_pending += k
+        return samples[k:]
+
     def deliver(self, clock: int, samples: np.ndarray, stalled: bool) -> None:
         """Send the block heard — or, stalled, keep it; the first block after a stall carries
-        the pile, the newest ``backlog_limit`` of it, as the capture queue keeps it."""
+        the pile, the newest ``backlog_limit`` of it, as the capture queue keeps it. A block the
+        capture skipped all of is not sent: nothing arrives, and nothing is owed."""
+        if not stalled:
+            samples = self.skipped(clock - len(samples), samples)
+            if not len(samples):
+                return
+            if self.skip_pending:
+                if self.reads_skips:
+                    self.sock.sendall(struct.pack("<BQ", MSG_SKIP, self.skip_pending))
+                self.skip_pending = 0
         if stalled:
             self.backlog.append(samples)
             return
@@ -773,6 +819,7 @@ class Server:
                     "radiated": [[round(x, 3) for x in iv] for iv in st.radiated],
                     "stalls": [[round(x, 3) for x in iv] for iv in st.stalls],
                     "stall_dropped_s": round(st.stall_dropped / AUDIO_RATE, 3),
+                    "capture_skips": [[round(x, 3) for x in iv] for iv in st.skips],
                     "deaf_hits_s": {k: seconds(v) for k, v in st.deaf_hits.items()},
                     "transmissions": st.transmissions,
                 }
@@ -802,6 +849,13 @@ def machine(st: Station, spec: dict, seed: int, who: str) -> None:
     st.stall_range = (float(lo), float(hi))
     if st.stall_every > 0:
         st.rng = np.random.default_rng([seed, MACHINE_SEED, sum(map(ord, who))])
+    st.skip_every = float(spec.get("skip_every_s", 0.0))
+    length = spec.get("skip_ms", [20.0, 60.0])
+    lo, hi = (length, length) if isinstance(length, int | float) else length
+    st.skip_range = (float(lo) / 1000.0, float(hi) / 1000.0)
+    if st.skip_every > 0:
+        # a stream of its own, so the stalls' draws stay as they were
+        st.skip_rng = np.random.default_rng([seed, MACHINE_SEED, sum(map(ord, who)), 1])
 
 
 def kernel_queues(server: Server) -> list[str]:
@@ -870,9 +924,10 @@ def accept_station(listener: socket.socket, radios: dict) -> Station:
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     st = Station("?", sock, 0, 0, 0)
     magic = st.read_exact(4)
-    if magic not in (b"AEC1", b"AEC2"):
+    if magic not in (b"AEC1", b"AEC2", b"AEC3"):
         raise SystemExit(f"not a daemon: {magic!r}")
-    st.reads_gaps = magic == b"AEC2"
+    st.reads_gaps = magic in (b"AEC2", b"AEC3")
+    st.reads_skips = magic == b"AEC3"
     rate, length = struct.unpack("<IH", st.read_exact(6))
     if rate != AUDIO_RATE:
         raise SystemExit(f"a daemon at {rate} Hz; the channel runs at {AUDIO_RATE}")

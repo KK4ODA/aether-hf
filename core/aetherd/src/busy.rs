@@ -131,6 +131,7 @@
 //!   sidetone is not occupancy, and letting it into the floor estimate would poison it.
 
 use aether_phy::Complex;
+use serde::{Deserialize, Serialize};
 
 /// Settings for [`BusyDetector`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -299,6 +300,14 @@ pub struct BusyDetector {
     /// When the window last held no signal-free block, if it holds none now: the floor is
     /// held from then, and accepted from everything once the hold has run out.
     held_since: Option<f64>,
+    /// Whether the floor has been learned from evidence since the detector started or the
+    /// dial moved. A first floor nothing has confirmed follows the window instead of being
+    /// held: held, a first estimate taken from a sound card's first blocks kept WC4Y's station
+    /// busy for the first minute after every start (report 14 §7.1).
+    confirmed: bool,
+    /// Audio ending before this is not heard: the capture's first second, and the second after
+    /// the dial moved ([`Self::retune`]). `None` until audio first arrives.
+    listen_from: Option<f64>,
     /// Baseband of the last few blocks, for the periodogram; drained every `SHAPE_BLOCKS`.
     shape_buffer: Vec<Complex>,
     /// The planned transform, `SHAPE_FFT` points.
@@ -323,8 +332,94 @@ pub struct BusyDetector {
     pub last_block: Option<BlockNote>,
 }
 
+/// What a detector has learned, as a recording keeps it: the floor and the window it came from,
+/// the gain it is drawn at, the hold, and the radio's levels on quiet. A recording opens with it
+/// so a trace of the audio ([`crate::busy_trace`]) can carry on from where the live detector
+/// was, rather than from nothing — WC4Y's floor sank to −50 dBFS where a detector that had heard
+/// only the recording drew it at −28, and nothing said why (report 14 §7.1). Times are on the
+/// caller's clock ([`Self::shifted`] moves them).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BusyState {
+    /// When it was taken.
+    pub at_s: f64,
+    /// The floor in its own units ([`BusyDetector`]'s `floor_q`), linear.
+    pub floor_q: f64,
+    /// The gain the floor is drawn at, dB.
+    pub drawn_db: f64,
+    /// Whether evidence has confirmed the floor since the start or the dial's last move.
+    pub confirmed: bool,
+    /// When the window last held no evidence, if it holds none.
+    pub held_since: Option<f64>,
+    /// When the detector began, or begins, to listen.
+    pub listen_from: Option<f64>,
+    /// Until when a signal was measured, a frame explained, the channel busy: `None` is never.
+    pub signal_until: Option<f64>,
+    /// See `signal_until`.
+    pub explained_until: Option<f64>,
+    /// See `signal_until`.
+    pub busy_until: Option<f64>,
+    /// The floor's window, oldest first: `[end, power, gain, flags]`, the flags 1 evidence,
+    /// 2 plain, 4 peaked, 8 in a frame.
+    pub history: Vec<[f64; 4]>,
+    /// The attack's votes, newest last.
+    pub over: Vec<bool>,
+    /// The radio's levels on quiet, dB a bin; empty before the reference has warmed up.
+    pub baseline: Vec<f64>,
+    /// The warm-up's readings so far, while it runs.
+    pub warm: Vec<Vec<f64>>,
+}
+
+impl BusyState {
+    /// The same state on a clock `dt` behind the caller's: a recording's, which starts at zero.
+    #[must_use]
+    pub fn shifted(mut self, dt: f64) -> Self {
+        let back = |t: &mut f64| *t -= dt;
+        back(&mut self.at_s);
+        for t in [
+            &mut self.held_since,
+            &mut self.listen_from,
+            &mut self.signal_until,
+            &mut self.explained_until,
+            &mut self.busy_until,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            back(t);
+        }
+        for block in &mut self.history {
+            back(&mut block[0]);
+        }
+        self
+    }
+}
+
+/// What the detector says at a moment, as a recording keeps it four times a second: the level
+/// and the floor in dBFS, the gain the floor is drawn at and the reference's reading of the
+/// radio's gain in dB, and whether the channel is busy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BusyReading {
+    /// The latest block's level, dBFS.
+    pub level_db: Option<f64>,
+    /// The floor, dBFS.
+    pub floor_db: Option<f64>,
+    /// The gain the floor is drawn at, dB.
+    pub drawn_db: f64,
+    /// The reference's latest reading, dB, unclamped: one over 0 says its levels on quiet are
+    /// another band's.
+    pub gain_db: Option<f64>,
+    /// Busy.
+    pub busy: bool,
+}
+
+/// A time that may be "never".
+fn finite(t: f64) -> Option<f64> {
+    t.is_finite().then_some(t)
+}
+
 /// One block of the floor window.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // four independent verdicts on one block
 struct Block {
     /// Raw power, linear.
     power: f64,
@@ -337,9 +432,18 @@ struct Block {
     plain: bool,
     /// Inside a shape window that read peaked.
     peaked: bool,
+    /// Inside a frame the receiver found, when the block was taken or since
+    /// ([`BusyDetector::explain`]).
+    framed: bool,
     /// When the block ended.
     end: f64,
 }
+
+/// How long after its first audio, or after the dial moved, the detector starts to listen,
+/// seconds. A sound card's capture can begin quieter than it goes on — WC4Y's IC-7300 codec put
+/// first blocks 14–31 dB under the band's — and a radio retuning settles its AGC; a floor or a
+/// level on quiet learned from either is wrong until something corrects it (report 14 §7.1).
+const START_LISTEN_S: f64 = 1.0;
 
 /// A gain this far under 0 dB is a cut: the bins' levels on quiet do not learn from it.
 const CUT_DB: f64 = 3.0;
@@ -426,6 +530,8 @@ impl BusyDetector {
             excess_peak_db: f64::NEG_INFINITY,
             over: std::collections::VecDeque::with_capacity(ATTACK_WINDOW),
             held_since: None,
+            confirmed: false,
+            listen_from: None,
             shape_buffer: Vec::with_capacity(SHAPE_BLOCKS * block_samples),
             fft: rustfft::FftPlanner::new().plan_fft_forward(SHAPE_FFT),
             peaked: [false, false],
@@ -559,6 +665,7 @@ impl BusyDetector {
             changed |= entry.evidence;
             entry.evidence = false;
             entry.plain = false;
+            entry.framed = true;
         }
         if changed {
             self.refloor();
@@ -623,6 +730,9 @@ impl BusyDetector {
     /// the noise across the radio's whole audio passband follows its gain, whatever a
     /// narrowband signal on top does.
     pub fn hear_passband(&mut self, audio: &[f32], audio_rate: f64, now: f64) {
+        if now <= self.listening_from(now - audio.len() as f64 / audio_rate) {
+            return;
+        }
         let block_s = self.config.block_s;
         let (occupied, heard) = self.channel_bands();
         self.reference
@@ -655,6 +765,127 @@ impl BusyDetector {
         )
     }
 
+    /// What the detector has learned, for a recording ([`BusyState`]).
+    #[must_use]
+    pub fn state(&self, now: f64) -> BusyState {
+        let flags = |b: &Block| {
+            f64::from(
+                u8::from(b.evidence)
+                    | (u8::from(b.plain) << 1)
+                    | (u8::from(b.peaked) << 2)
+                    | (u8::from(b.framed) << 3),
+            )
+        };
+        let (baseline, warm) = self
+            .reference
+            .as_ref()
+            .map_or_else(|| (Vec::new(), Vec::new()), PassbandReference::levels);
+        BusyState {
+            at_s: now,
+            floor_q: self.floor_q,
+            drawn_db: self.drawn_db,
+            confirmed: self.confirmed,
+            held_since: self.held_since,
+            listen_from: self.listen_from,
+            signal_until: finite(self.signal_until),
+            explained_until: finite(self.explained_until),
+            busy_until: finite(self.busy_until),
+            history: self
+                .history
+                .iter()
+                .map(|b| [b.end, b.power, b.gain, flags(b)])
+                .collect(),
+            over: self.over.iter().copied().collect(),
+            baseline,
+            warm,
+        }
+    }
+
+    /// Take over what a live detector had learned ([`Self::state`]), on this detector's clock:
+    /// the trace of a recording, which has heard the same audio up to `state.at_s` but not what
+    /// came before it. `audio_rate` is the radio's audio's, for a gain reference this detector
+    /// has not built yet.
+    pub fn restore(&mut self, state: &BusyState, audio_rate: f64) {
+        let never = |t: Option<f64>| t.unwrap_or(f64::NEG_INFINITY);
+        self.floor_q = state.floor_q;
+        self.drawn_db = state.drawn_db;
+        self.confirmed = state.confirmed;
+        self.held_since = state.held_since;
+        self.listen_from = state.listen_from;
+        self.signal_until = never(state.signal_until);
+        self.explained_until = never(state.explained_until);
+        self.busy_until = never(state.busy_until);
+        self.history = state
+            .history
+            .iter()
+            .map(|&[end, power, gain, flags]| {
+                let bits = flags as u8;
+                Block {
+                    power,
+                    gain,
+                    evidence: bits & 1 != 0,
+                    plain: bits & 2 != 0,
+                    peaked: bits & 4 != 0,
+                    framed: bits & 8 != 0,
+                    end,
+                }
+            })
+            .collect();
+        self.over = state.over.iter().copied().collect();
+        if state.baseline.is_empty() && state.warm.is_empty() {
+            self.reference = None;
+        } else {
+            let block_s = self.config.block_s;
+            let (occupied, heard) = self.channel_bands();
+            self.reference
+                .get_or_insert_with(|| PassbandReference::new(audio_rate, block_s, occupied, heard))
+                .adopt(&state.baseline, &state.warm);
+        }
+        if self.floor_q > 0.0 {
+            let gain = self.history.back().map_or(1.0, |b| b.gain);
+            self.floor_db = 10.0 * (self.floor_q * gain).max(FLOOR).log10();
+        }
+    }
+
+    /// What the detector says now, for a recording ([`BusyReading`]).
+    #[must_use]
+    pub fn reading(&self, now: f64) -> BusyReading {
+        BusyReading {
+            level_db: finite(self.level_db),
+            floor_db: finite(self.floor_db),
+            drawn_db: self.drawn_db,
+            gain_db: self.reference.as_ref().and_then(PassbandReference::latest),
+            busy: self.busy(now),
+        }
+    }
+
+    /// When audio is first heard: [`START_LISTEN_S`] after the first audio, which started at
+    /// `start`.
+    fn listening_from(&mut self, start: f64) -> f64 {
+        *self.listen_from.get_or_insert(start + START_LISTEN_S)
+    }
+
+    /// The radio's dial moved: the band's noise and the radio's levels on quiet are the new
+    /// frequency's, not what was learned. The floor, the gain reference and the attack start
+    /// over, and the second after `now` is not heard. A reference warmed up on another band
+    /// reads every level there as a cut or as more than the radio has: WC4Y's daemon learned
+    /// its levels 20 s before the operator set the dial (report 14 §7.1). A frame's hold and
+    /// its hangover stay: they are about the station heard, not the floor.
+    pub fn retune(&mut self, now: f64) {
+        self.history.clear();
+        self.reference = None;
+        self.drawn_db = 0.0;
+        self.over.clear();
+        self.partial.clear();
+        self.shape_buffer.clear();
+        self.peaked = [false, false];
+        self.held_since = None;
+        self.floor_q = 0.0;
+        self.floor_db = f64::NEG_INFINITY;
+        self.confirmed = false;
+        self.listen_from = Some(now + START_LISTEN_S);
+    }
+
     /// Discard audio captured while this station was transmitting.
     ///
     /// A half-duplex station hears its own sidetone; letting that into the floor estimate
@@ -681,12 +912,16 @@ impl BusyDetector {
         self.partial.extend_from_slice(samples);
         let mut consumed = 0;
         while self.partial.len() - consumed >= self.block_samples {
-            let block = &self.partial[consumed..consumed + self.block_samples];
+            let range = consumed..consumed + self.block_samples;
             consumed += self.block_samples;
             // where this block ended and began, on the caller's clock: `now` is the end of
             // what was fed
             let block_end = now - (self.partial.len() - consumed) as f64 / self.config.fs;
             let block_start = block_end - self.config.block_s;
+            if block_end <= self.listening_from(block_start) {
+                continue;
+            }
+            let block = &self.partial[range];
             let power = block
                 .iter()
                 .map(|&(re, im)| re.mul_add(re, im * im))
@@ -745,6 +980,7 @@ impl BusyDetector {
                 evidence,
                 plain,
                 peaked: peaked_now,
+                framed: in_frame,
                 end: block_end,
             });
             if self.history.len() > self.window_blocks {
@@ -794,6 +1030,7 @@ impl BusyDetector {
         let learned = if let Some(floor) = self.evidence_floor() {
             self.floor_q = floor;
             self.held_since = None;
+            self.confirmed = true;
             true
         } else {
             // No signal-free block in the window: the floor learned before is held — through an
@@ -803,11 +1040,21 @@ impl BusyDetector {
             // can never recover.
             let since = *self.held_since.get_or_insert(now);
             let expired = now - since >= self.config.floor_hold_s;
-            if self.floor_q <= 0.0 || expired {
+            // A window mostly of frames the receiver found is a session — the other station
+            // transmitting, this one deaf in the gaps — and no environment: a slave hears noise
+            // only in gaps that fall in its deafness after its own release or the hangover of
+            // the other's transmission, and at the hold's end its floor became the other
+            // station's signal (report 14 §7.2). The floor holds through it.
+            let framed = self.history.iter().filter(|b| b.framed).count();
+            let session = framed * 2 >= self.history.len();
+            if (self.floor_q <= 0.0 || !self.confirmed || expired) && !session {
+                // the frames' own blocks are no noise, whatever else the window holds; the
+                // first blocks of one not yet announced pass, and one session block in two is
+                // what keeps them from the median
                 let all = median(
                     self.history
                         .iter()
-                        .filter(|b| b.power > SILENCE)
+                        .filter(|b| b.power > SILENCE && !b.framed)
                         .map(|b| b.power / b.gain),
                 );
                 if let Some(all) = all {
@@ -1284,6 +1531,47 @@ impl PassbandReference {
         self.pending.clear();
         self.recent.clear();
         self.raw.clear();
+    }
+
+    /// The levels on quiet and the warm-up so far ([`BusyState`]).
+    fn levels(&self) -> (Vec<f64>, Vec<Vec<f64>>) {
+        (self.baseline.clone(), self.warm.clone())
+    }
+
+    /// Take over a live reference's levels on quiet, or its warm-up, and read the readings kept
+    /// against them. Levels for another number of bins — another rate or block — are not this
+    /// reference's, and are left.
+    fn adopt(&mut self, baseline: &[f64], warm: &[Vec<f64>]) {
+        if !baseline.is_empty() {
+            if baseline.len() != self.bins.len() {
+                return;
+            }
+            self.baseline = baseline.to_vec();
+            self.warm = Vec::new();
+        } else if warm.iter().all(|w| w.len() == self.bins.len()) {
+            self.baseline = Vec::new();
+            self.warm = warm.to_vec();
+        } else {
+            return;
+        }
+        self.raw.clear();
+        let gains: Vec<Option<f64>> = self
+            .readings
+            .iter()
+            .map(|r| {
+                if self.baseline.is_empty() {
+                    None
+                } else {
+                    self.gain_of(&r.levels)
+                }
+            })
+            .collect();
+        for (reading, gain) in self.readings.iter_mut().zip(gains) {
+            reading.gain_db = gain;
+        }
+        if let Some(g) = self.readings.back().and_then(|r| r.gain_db) {
+            self.raw.push_back(g);
+        }
     }
 
     /// The newest gain reading, dB.
@@ -2836,6 +3124,318 @@ mod tests {
         );
     }
 
+    /// A session as a slave's detector hears it (report 14 §7.2, KK4ODA-1 and WC4Y on
+    /// 2026-10-22): the master's transmissions of five 5.36 s frames 10 dB over the noise, each
+    /// announced half a second in and reported at its end; 0.7 s of quiet after each, inside the
+    /// hangover of its busy-by-level (0.80–0.95 s on the air, less the 0.18 s this station keys
+    /// ahead of radiating); this station's 3.43 s answer, then the 0.75 s it is deaf to its own
+    /// tail, the master keying inside it. The highest the floor stood over the noise's own
+    /// through `seconds`, dB, and the longest stretch with no block taken as evidence, seconds.
+    fn a_slaves_session(seconds: f64) -> (f64, f64) {
+        let config = BusyConfig::default();
+        let mut detector = BusyDetector::new(config);
+        let sigma = 0.01;
+        let mut now = feed(&mut detector, 8.0, sigma, 1, 0.0);
+        let noise_floor = detector.floor_db;
+        // frames 10 dB over the noise
+        let signal = sigma * (1.0 + 10.0f64).sqrt();
+        let deaf = |detector: &mut BusyDetector, now: f64, s: f64| {
+            detector.skip(&noise((s * detector.config().fs) as usize, 1.0, 9));
+            now + s
+        };
+        let (mut last_evidence, mut longest, mut highest) = (now, 0.0f64, f64::MIN);
+        let mut seed = 100u64;
+        while now < seconds {
+            for _ in 0..5 {
+                let start = now;
+                let end = start + 5.36;
+                let mut told = false;
+                while now < end {
+                    if !told && now >= start + 0.5 {
+                        detector.explain(start, end);
+                        told = true;
+                    }
+                    seed += 1;
+                    now = feed(&mut detector, config.block_s, signal, seed, now);
+                    if detector.last_block.is_some_and(|b| b.evidence) {
+                        last_evidence = now;
+                    }
+                    longest = longest.max(now - last_evidence);
+                    highest = highest.max(detector.floor_db - noise_floor);
+                }
+                detector.explain(start, end);
+                detector.mark_frame(now + 0.15, 40.0);
+            }
+            seed += 1;
+            now = feed(&mut detector, 0.7, sigma, seed, now);
+            if detector.last_block.is_some_and(|b| b.evidence) {
+                last_evidence = now;
+            }
+            now = deaf(&mut detector, now, 3.43 + 0.75);
+        }
+        (highest, longest)
+    }
+
+    #[test]
+    fn a_slaves_session_leaves_the_floor_at_the_noise() {
+        // report 14 §7.2: the window held no noise for a minute, the hold ran out and the floor
+        // became the other station's signal, 9 dB over the noise, for the rest of the session
+        let (highest, longest) = a_slaves_session(150.0);
+        assert!(
+            longest > 60.0,
+            "the session left noise in the window ({longest:.1} s at most without): the test \
+             does not reach the hold's end"
+        );
+        assert!(
+            highest < 1.0,
+            "the floor took the frames: {highest:.1} dB over the noise at its highest"
+        );
+    }
+
+    /// Busy share of a detector that first hears `quiet_s` of audio `quiet_db` under the noise
+    /// it then hears for 30 s, from `from` seconds on.
+    fn busy_after_a_quiet_start(quiet_s: f64, quiet_db: f64, from: f64) -> f64 {
+        let mut detector = BusyDetector::new(BusyConfig::default());
+        let now = feed(
+            &mut detector,
+            quiet_s,
+            0.01 * 10f64.powf(quiet_db / 20.0),
+            3,
+            0.0,
+        );
+        let block = detector.config().block_s;
+        let per_block = (block * detector.config().fs) as usize;
+        let (mut t, mut busy, mut blocks) = (now, 0usize, 0usize);
+        for index in 0..((30.0 / block) as u64) {
+            t += block;
+            detector.push(&noise(per_block, 0.01, 40 + index), t);
+            if t >= from {
+                blocks += 1;
+                busy += usize::from(detector.busy(t));
+            }
+        }
+        busy as f64 / blocks.max(1) as f64
+    }
+
+    #[test]
+    fn a_capture_that_starts_quiet_does_not_hold_the_channel_busy() {
+        // WC4Y's daemon read busy for the first 61 s after every start: its IC-7300's codec gave
+        // first blocks 14–31 dB under the band's, the floor learned them, and nothing louder was
+        // evidence until the hold ran out (report 14 §7.1). The first second is not heard; and a
+        // first floor no steady block has confirmed follows the window rather than holding
+        for (quiet_s, from) in [(0.3, 2.0), (1.1, 3.0)] {
+            let share = busy_after_a_quiet_start(quiet_s, -15.0, from);
+            assert!(
+                share < 0.01,
+                "{quiet_s} s of quiet at the start left the channel busy {:.0} % after",
+                share * 100.0
+            );
+        }
+        // and a band that really is quiet at the start, then something loud for good, is busy
+        // until the hold says it is the environment
+        let share = busy_after_a_quiet_start(6.0, -15.0, 7.0);
+        assert!(
+            share > 0.5,
+            "a channel 15 dB over the floor it had learned read clear: busy {:.0} %",
+            share * 100.0
+        );
+    }
+
+    /// The radio's audio through an AGC (as [`agc_held_by_a_carrier`]) on a band 14 dB quieter
+    /// until `move_at`, and then on this one — the dial moved, `retune` telling the detector so
+    /// or not — with a carrier outside the 500 Hz channel holding the gain down from 40 to 50 s.
+    /// The busy share from 53 to 70 s, once the AGC has let go.
+    fn busy_after_a_dial_move(retune: bool) -> f64 {
+        let params = aether_phy::waveform::NARROW_500;
+        let rate = params.audio_rate as f64;
+        let mut detector = BusyDetector::new(BusyConfig {
+            fs: params.fs_baseband,
+            passband_hz: params.occupied_bandwidth_hz(),
+            centre_hz: params.centre_hz,
+            ..BusyConfig::default()
+        });
+        let mut front = aether_phy::AudioToBaseband::new(params);
+        let (move_at, on, off) = (10.0, 40.0, 50.0);
+        let sigma = 0.18;
+        let noise_3k = sigma * (3000.0 / (rate / 2.0)).sqrt();
+        let amplitude = noise_3k * 10f64.powf(30.0 / 20.0) * std::f64::consts::SQRT_2;
+        let threshold = noise_3k * 10f64.powf(12.0 / 20.0);
+        let (mut gain_db, mut held) = (0.0f64, 0.0f64);
+        let chunk = (0.02 * rate) as usize;
+        let (mut n, mut seed, mut moved) = (0usize, 1u64, false);
+        let (mut busy, mut blocks) = (0usize, 0usize);
+        while (n as f64) / rate < 70.0 {
+            let samples = noise(chunk, sigma, seed);
+            seed += 2;
+            let mut audio = Vec::with_capacity(chunk);
+            for (re, _) in samples {
+                let t = n as f64 / rate;
+                let band = if t < move_at {
+                    10f64.powf(-14.0 / 20.0)
+                } else {
+                    1.0
+                };
+                let carrier = if (on..off).contains(&t) {
+                    amplitude * (2.0 * std::f64::consts::PI * 700.0 * t).sin()
+                } else {
+                    0.0
+                };
+                let limit = if (on..off).contains(&t) {
+                    20.0 * (threshold / amplitude).log10()
+                } else {
+                    0.0
+                };
+                if limit < gain_db {
+                    (gain_db, held) = (limit, 0.1);
+                } else if held > 0.0 {
+                    held -= 1.0 / rate;
+                } else {
+                    gain_db = (gain_db + 50.0 / rate).min(0.0).min(limit);
+                }
+                audio.push(((re * band + carrier) * 10f64.powf(gain_db / 20.0)) as f32);
+                n += 1;
+            }
+            let now = n as f64 / rate;
+            if retune && !moved && now >= move_at {
+                detector.retune(now);
+                moved = true;
+            }
+            let baseband = front.process(&audio);
+            detector.hear_passband(&audio, rate, now);
+            let is_busy = detector.push(&baseband, now);
+            if now >= 53.0 {
+                blocks += 1;
+                busy += usize::from(is_busy);
+            }
+        }
+        busy as f64 / blocks.max(1) as f64
+    }
+
+    #[test]
+    fn a_dial_move_relearns_the_radios_levels_on_quiet() {
+        // The levels on quiet are learned in the reference's first two seconds and after that
+        // only from uncut readings, a quarter of a decibel a second: a reference warmed up on a
+        // quieter band reads a cut on this one as a smaller one, the floor learns the cut-down
+        // noise, and when the AGC lets go the channel reads busy — ADR-0078's failure, back for
+        // as long as the levels take to catch up (report 14 §7.1)
+        let stale = busy_after_a_dial_move(false);
+        assert!(
+            stale > 0.2,
+            "busy {:.0} % after the AGC let go with the levels on quiet from another band: the \
+             test does not tell",
+            stale * 100.0
+        );
+        let fresh = busy_after_a_dial_move(true);
+        assert!(
+            fresh < 0.01,
+            "the channel read busy {:.0} % after the AGC let go, the dial's move told",
+            fresh * 100.0
+        );
+    }
+
+    /// 70 s of the radio's audio through an AGC, at 48 kHz: noise, and a carrier outside the
+    /// 500 Hz channel holding the gain down 18 dB from 40 to 50 s (as
+    /// [`busy_after_a_dial_move`], on one band).
+    fn audio_under_an_agc() -> Vec<f32> {
+        let rate = aether_phy::waveform::NARROW_500.audio_rate as f64;
+        let (on, off, sigma) = (40.0, 50.0, 0.18);
+        let noise_3k = sigma * (3000.0 / (rate / 2.0)).sqrt();
+        let amplitude = noise_3k * 10f64.powf(30.0 / 20.0) * std::f64::consts::SQRT_2;
+        let limit = 20.0 * (noise_3k * 10f64.powf(12.0 / 20.0) / amplitude).log10();
+        let (mut gain_db, mut held) = (0.0f64, 0.0f64);
+        let total = (70.0 * rate) as usize;
+        let samples = noise(total, sigma, 7);
+        let mut audio = Vec::with_capacity(total);
+        for (n, (re, _)) in samples.into_iter().enumerate() {
+            let t = n as f64 / rate;
+            let carrying = (on..off).contains(&t);
+            let wanted = if carrying { limit } else { 0.0 };
+            if wanted < gain_db {
+                (gain_db, held) = (wanted, 0.1);
+            } else if held > 0.0 {
+                held -= 1.0 / rate;
+            } else {
+                gain_db = (gain_db + 50.0 / rate).min(wanted);
+            }
+            let carrier = if carrying {
+                amplitude * (2.0 * std::f64::consts::PI * 700.0 * t).sin()
+            } else {
+                0.0
+            };
+            audio.push(((re + carrier) * 10f64.powf(gain_db / 20.0)) as f32);
+        }
+        audio
+    }
+
+    fn narrow_detector() -> BusyDetector {
+        let params = aether_phy::waveform::NARROW_500;
+        BusyDetector::new(BusyConfig {
+            fs: params.fs_baseband,
+            passband_hz: params.occupied_bandwidth_hz(),
+            centre_hz: params.centre_hz,
+            ..BusyConfig::default()
+        })
+    }
+
+    #[test]
+    fn a_detector_restored_from_its_state_goes_on_as_the_live_one_did() {
+        // A trace of a recording hears only the recording: WC4Y's live floor sat at −50 dBFS
+        // where a detector that had heard only the audio drew it at −28, and nothing said why
+        // (report 14 §7.1). A recording keeps the state; a detector started from it, through the
+        // sidecar's JSON, carries on as the live one — here from the middle of an AGC's cut,
+        // where one that starts fresh learns the cut-down noise as the floor
+        let params = aether_phy::waveform::NARROW_500;
+        let rate = params.audio_rate as f64;
+        let audio = audio_under_an_agc();
+        let take_at = 45.0;
+        let mut front = aether_phy::AudioToBaseband::new(params);
+        let (mut live, mut restored, mut fresh) =
+            (narrow_detector(), narrow_detector(), narrow_detector());
+        let mut taken = false;
+        let (mut compared, mut differ, mut fresh_busy, mut worst_db) =
+            (0usize, 0usize, 0usize, 0.0f64);
+        for (i, chunk) in audio.chunks((0.02 * rate) as usize).enumerate() {
+            let now = (i + 1) as f64 * 0.02;
+            let baseband = front.process(chunk);
+            live.hear_passband(chunk, rate, now);
+            let live_busy = live.push(&baseband, now);
+            if !taken {
+                if now >= take_at {
+                    let json = serde_json::to_string(&live.state(now)).expect("serialise");
+                    let state: BusyState = serde_json::from_str(&json).expect("deserialise");
+                    restored.restore(&state, rate);
+                    taken = true;
+                }
+                continue;
+            }
+            restored.hear_passband(chunk, rate, now);
+            let restored_busy = restored.push(&baseband, now);
+            fresh.hear_passband(chunk, rate, now);
+            let fresh_is = fresh.push(&baseband, now);
+            if now >= take_at + 1.0 {
+                compared += 1;
+                differ += usize::from(restored_busy != live_busy);
+                worst_db = worst_db.max((restored.floor_db - live.floor_db).abs());
+                if now >= 53.0 {
+                    fresh_busy += usize::from(fresh_is);
+                }
+            }
+        }
+        assert!(
+            fresh_busy > 100,
+            "a detector started under the cut read busy {fresh_busy} times after the AGC let go: \
+             the test does not tell"
+        );
+        assert!(
+            differ * 100 < compared,
+            "the restored detector parted from the live one {differ} times in {compared}"
+        );
+        assert!(
+            worst_db < 1.0,
+            "the restored floor parted from the live one by {worst_db:.1} dB"
+        );
+    }
+
     #[test]
     fn blocks_are_assembled_across_ragged_feeds() {
         // a sound card hands over whatever buffer size it likes, and that must not change
@@ -2843,16 +3443,20 @@ mod tests {
         let quiet = BusyConfig::default();
         let mut whole = BusyDetector::new(quiet);
         let mut ragged = BusyDetector::new(quiet);
+        // past the second the detector does not listen to after it first hears audio
+        let first = noise(12_000, 0.02, 7);
+        whole.push(&first, 1.5);
+        ragged.push(&first, 1.5);
         let samples = noise(8000, 0.02, 8);
 
-        whole.push(&samples, 1.0);
+        whole.push(&samples, 2.5);
         let mut offset = 0;
         for size in [37usize, 512, 1, 999, 128] {
             let end = (offset + size).min(samples.len());
-            ragged.push(&samples[offset..end], 1.0);
+            ragged.push(&samples[offset..end], 2.5);
             offset = end;
         }
-        ragged.push(&samples[offset..], 1.0);
+        ragged.push(&samples[offset..], 2.5);
 
         assert!(
             (whole.level_db - ragged.level_db).abs() < 1e-9,

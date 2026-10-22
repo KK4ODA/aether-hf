@@ -1,0 +1,37 @@
+name = "80m-capture-skips-500"
+description = """80 m at 500 Hz on WC4Y's path of 2026-10-21: WC4Y calls, KK4ODA-1 hears it at
+about −3 dB on a Moderate path, and KK4ODA-1's sound card skips audio, as its mini PC's did — a
+skip of 20–150 ms about every 30 s, four times as often as on its worst evening. A skip inside a
+frame splices the audio either side of it together, and on the day a rung-4 frame was lost that
+way; a build that reads the skip from its capture timestamps puts it back as silence (ADR-0089),
+keeping the frame's timing and the station's clock on the air's. A Test session: it should
+complete, its rates near the same path's without the skips."""
+tags = ["80m", "robustness", "machine"]
+bandwidth = 500
+seconds = 1200
+seed = 63
+
+[stations.a]
+callsign = "WC4Y"
+[stations.b]
+callsign = "KK4ODA"
+[stations.b.machine]
+skip_every_s = 30
+skip_ms = [20, 150]
+
+[path]
+profile = "moderate"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = -3.0
+[path.b_to_a]
+snr_db = -1.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
+max_collisions = 5

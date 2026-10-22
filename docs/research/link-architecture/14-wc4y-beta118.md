@@ -484,6 +484,24 @@ KK4ODA-1's Status tab after the session, against the sidecar:
    save it; starting above it would also skip rung 4, which the transfers measured over 29
    frames.
 
+**Built after the author's go (2026-10-22, "yes to changes 1–6").** Changes 1, 3 and 4 are
+[ADR-0088](../../adr/0088-the-busy-detector-holds-through-a-session-starts-clean-and-is-recorded.md):
+the hold's end takes no floor while half the window is explained frames and leaves them out when
+it does; nothing is heard in the capture's first second; an unconfirmed first floor is not held;
+a dial move of 10 kHz or more starts the detector over; a recording keeps the detector's state
+and its readings at 4 Hz, and `--busy-trace --expect` starts from the state and explains every
+announcement as the station did. Traced again, KK4ODA-1's floor through this session is
+−32.5 dBFS (it was −22.3; the noise −31). Change 2 is
+[ADR-0089](../../adr/0089-a-capture-skip-is-put-back-as-silence.md): a skip of 10 ms to 0.5 s is
+put back as silence in the capture callback. On the harness, with the channel server now able to
+skip a station's capture, a skip every 8 s left 0 of 4 sessions complete with the audio spliced
+and 4 of 4 with the silence put back: the splice puts the station's clock behind the air, and the
+keying gate drops its answers as late. Change 5
+is in the panel's help and the manual. Change 6 was measured and not kept
+([ADR-0090](../../adr/0090-the-header-on-the-floor-after-one-silent-slot-measured-and-not-kept.md)):
+on 112 harness runs the fading paths' silent slots did not move (156 against 156) and their air
+time rose 1.4 %. Change 7 is the author's call.
+
 ## 15. What changed since report 13, on the air
 
 * **ADR-0077, measurement frames**: no leftovers. The DISC went at the last rung's answer.

@@ -13,8 +13,8 @@
 //!
 //! The wire, little-endian:
 //!
-//! * station → server, once: `AEC2` (`AEC1` from a daemon that reads no gap), `u32` sample
-//!   rate, `u16` length, the station's name;
+//! * station → server, once: `AEC3` (`AEC2` from a daemon that reads no skip, `AEC1` from one
+//!   that reads no gap either), `u32` sample rate, `u16` length, the station's name;
 //! * station → server: `2` `u32 n` then `n` `f32` samples to play; `3` ready for the next
 //!   block (the last one has been processed); `4` drop what is queued and not yet played;
 //!   `5` `u32 n` then `n` bytes of UTF-8: the account of the transmission whose samples come
@@ -23,7 +23,10 @@
 //!   played through this block, silence included, as a sound card counts them —, `u64` the
 //!   samples of its queue played so far, `u32 n`, then `n` `f32` samples heard; and, to an
 //!   `AEC2` station, `6` `u64 n` ahead of a block: `n` samples it heard were lost just before
-//!   it, as a capture queue loses its oldest when the loop has fallen behind (a stall).
+//!   it, as a capture queue loses its oldest when the loop has fallen behind (a stall); and, to
+//!   an `AEC3` station, `7` `u64 n` ahead of a block: the sound card's capture skipped `n`
+//!   samples just before it, as its callback's timestamps say, which the station puts back as
+//!   silence as the capture callback does (ADR-0089).
 //!
 //! Nothing here is used on the air: `--channel` is for the harness, and a daemon on it keys
 //! no transmitter.
@@ -51,6 +54,14 @@ pub struct ChannelLink {
     clock: u64,
     /// Samples heard and lost ahead of the blocks taken since `capture_gap` was last asked.
     gap: usize,
+    /// Samples the capture skipped ahead of the next block, as its timestamps would say.
+    skip: usize,
+    /// The last block's length, for the skips' arithmetic.
+    last_len: Option<usize>,
+    /// What the skips came to ([`crate::audio::CaptureSkips`]).
+    skips: crate::audio::CaptureSkips,
+    /// The audio's sample rate.
+    rate: f64,
     /// Human-readable, for the log.
     pub description: String,
 }
@@ -81,7 +92,7 @@ impl ChannelLink {
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(BLOCK_WAIT))?;
         let name = name.as_bytes();
-        let mut hello = b"AEC2".to_vec();
+        let mut hello = b"AEC3".to_vec();
         hello.extend_from_slice(&sample_rate.to_le_bytes());
         hello.extend_from_slice(&u16::try_from(name.len()).unwrap_or(0).to_le_bytes());
         hello.extend_from_slice(&name[..name.len().min(usize::from(u16::MAX))]);
@@ -92,6 +103,10 @@ impl ChannelLink {
             consumed: 0,
             clock: 0,
             gap: 0,
+            skip: 0,
+            last_len: None,
+            skips: crate::audio::CaptureSkips::default(),
+            rate: f64::from(sample_rate),
             description: format!("channel server at {address}, in lockstep"),
         })
     }
@@ -117,11 +132,16 @@ impl ChannelLink {
         };
         let mut head = [0u8; 21];
         stream.read_exact(&mut head[..1])?;
-        // audio lost ahead of the block that follows
-        while head[0] == 6 {
+        // audio lost ahead of the block that follows: by the queue (6) or the capture (7)
+        while head[0] == 6 || head[0] == 7 {
             let mut lost = [0u8; 8];
             stream.read_exact(&mut lost)?;
-            self.gap += usize::try_from(u64::from_le_bytes(lost)).unwrap_or(0);
+            let lost = usize::try_from(u64::from_le_bytes(lost)).unwrap_or(0);
+            if head[0] == 6 {
+                self.gap += lost;
+            } else {
+                self.skip += lost;
+            }
             stream.read_exact(&mut head[..1])?;
         }
         stream.read_exact(&mut head[1..])?;
@@ -157,11 +177,31 @@ impl AudioIo for ChannelLink {
         };
         self.clock = clock;
         self.consumed = consumed.min(self.handed);
-        samples
+        // what the capture skipped, as a callback's timestamps say it: put back as silence before
+        // the block where the skip is one the sound card's capture would put back
+        let skipped = std::mem::take(&mut self.skip);
+        let pad = match self.last_len {
+            Some(last) if skipped > 0 => {
+                let rate = self.rate;
+                self.skips.note((last + skipped) as f64 / rate, last, rate)
+            }
+            _ => 0,
+        };
+        self.last_len = Some(samples.len());
+        if pad == 0 {
+            return samples;
+        }
+        let mut heard = vec![0.0; pad];
+        heard.extend(samples);
+        heard
     }
 
     fn capture_gap(&mut self) -> usize {
         std::mem::take(&mut self.gap)
+    }
+
+    fn capture_skips(&self) -> crate::audio::CaptureSkips {
+        self.skips
     }
 
     fn playback(&mut self, samples: &[f32]) {
@@ -224,14 +264,17 @@ mod tests {
 
     /// Samples the mirror says were lost ahead of its fourth block, as a stall's are.
     const LOST: u64 = 37;
+    /// Samples it says the capture skipped ahead of its fifth: 12.5 ms, a skip put back.
+    const SKIPPED: u64 = 600;
 
     /// A server that plays the station's queue back to it a block later, as a mirror, and
-    /// says [`LOST`] samples went missing ahead of its fourth block.
+    /// says [`LOST`] samples went missing ahead of its fourth block and that the capture
+    /// skipped [`SKIPPED`] ahead of its fifth.
     fn mirror(listener: &TcpListener, blocks: usize, block: usize) -> Vec<f32> {
         let (mut stream, _) = listener.accept().expect("accept");
         let mut hello = [0u8; 10];
         stream.read_exact(&mut hello).expect("hello");
-        assert_eq!(&hello[..4], b"AEC2", "a daemon that reads gaps");
+        assert_eq!(&hello[..4], b"AEC3", "a daemon that reads gaps and skips");
         let name_len = u16::from_le_bytes([hello[8], hello[9]]) as usize;
         let mut name = vec![0u8; name_len];
         stream.read_exact(&mut name).expect("name");
@@ -273,6 +316,10 @@ mod tests {
                 message.push(6u8);
                 message.extend_from_slice(&LOST.to_le_bytes());
             }
+            if index == 4 {
+                message.push(7u8);
+                message.extend_from_slice(&SKIPPED.to_le_bytes());
+            }
             message.push(1u8);
             message.extend_from_slice(&clock.to_le_bytes());
             message.extend_from_slice(&consumed.to_le_bytes());
@@ -309,6 +356,11 @@ mod tests {
         }
         // the loss is said ahead of the block it preceded, once
         assert_eq!(gaps, [0, 0, LOST as usize, 0, 0]);
+        // and the capture's skip is put back as silence before the block it preceded (ADR-0089)
+        assert_eq!(heard.len(), 5 * 100 + SKIPPED as usize);
+        assert!(heard[300..300 + SKIPPED as usize].iter().all(|&s| s == 0.0));
+        let skips = link.capture_skips();
+        assert_eq!((skips.lost, skips.padded), (1, 1));
         // the server played it on its clock, silence and all: four blocks on, all of it gone
         assert_eq!(link.played(), 500);
         assert_eq!(link.queued(), 0);

@@ -116,9 +116,12 @@ to key and a transmission M ms to render` is what the station has learned of its
 computer; it starts its transmissions that much sooner, and says so again only when the times
 change. The diagnostic bundle's `keying` has the recent waits. `audio: the sound card's capture
 skipped N ms of audio, by its own timestamps` means the card's capture timestamps jumped past
-audio that never arrived: the receiver heard the audio either side run together, and a frame
-across it may be lost. The bundle's `audio` counts these, and the recording marks each one
-(`capture_skip`). A recording made with both stations' audio, read with `tools/two_sides.py`,
+audio that never arrived. Aether puts that much silence back where the audio was lost
+(ADR-0089), so the frames after it keep their timing and the station's clock stays on the
+air's; a frame across the gap has lost those milliseconds and may still fail. A jump over half a
+second is taken for the card's clock, not lost audio, and is not put back; the line says so. The
+bundle's `audio` counts these (`capture_padded_ms`: how much was put back), and the recording
+marks each one (`capture_skip`, `lost` and `padded`) and holds the silence. A recording made with both stations' audio, read with `tools/two_sides.py`,
 shows such a loss as a step in the offset between the two recordings.
 
 ## 3. What a session should be

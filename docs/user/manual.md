@@ -366,8 +366,9 @@ from the session.
 
 **Start recording** saves what the radio hears to a file, at 48 kHz, until you press **Stop and
 save**. It works at any time, just listening or during a session, and needs no other station. A
-`.json` file beside the audio says what the modem made of it: every frame, and every change of the
-busy indicator. Type notes first, in the field beside the button: band, frequency, radio settings,
+`.json` file beside the audio says what the modem made of it: every frame, every change of the
+busy indicator, what the busy detector had learned when the recording started, and its readings
+four times a second. Type notes first, in the field beside the button: band, frequency, radio settings,
 the other station. **Open folder** opens the recordings folder. A recording is what a bug report
 about the air should carry: Log tab → **Send files…** sends it.
 
@@ -395,7 +396,11 @@ host program keying the radio gives none of these.
   is the received level over the last two minutes, with this station's transmissions ticked and
   the busy periods shaded. Its dashed line is the busy detector's noise floor. Frames the modem
   finds never count as noise, and the quiet after them does, so in a session the floor stays
-  the band's own and does not climb to the other station's signal.
+  the band's own and does not climb to the other station's signal, however long the session
+  runs. After the modem starts, and after the dial moves 10 kHz or more, the detector listens a
+  second before it learns anything: a sound card can start quieter than it goes on, and a radio
+  settles after a retune. With *wait for a clear channel* on, a call or probe made then waits
+  until the detector has listened, about 3½ seconds.
 - **Counters**: totals since the modem started; **Reset counters** sets them back to zero.
 
 What each reading means is in section 13.
@@ -524,8 +529,8 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 | **Rung / Mode** | Header, Link | The step the data is moving at, with its name and rate on the air: the other station's while you receive, yours while you send, both (*sending / receiving*) when data goes both ways. With no data moving, the rung your station would send at. The low rungs are the tone floor. |
 | **Throughput** | Link, Speed chart | Application bytes both ways over the last 30 seconds, with the session total under it. Data going one way stays below the rate of the rung it went at: acknowledgements, turnarounds and retransmissions take their share. With data going both ways, the total can stand above either line. |
 | **Tuning** | Channel | The carrier offset of the last frame, from your dial. Positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check. In a session the receiver follows a station that is off frequency, so a rig that drifts as it warms stays heard; the log says so, and the receiver goes back to your dial when the session ends. |
-| **Signal above noise** | Channel | The busy detector's reading: the level of its latest 25 ms of audio over its learned noise floor. Frames the modem finds, decoded or not, never count as noise. The floor follows the radio's gain: when its AGC turns everything down for a strong signal, the floor goes down with it and back up with it. |
-| **Receive level** | Channel, Setup step 3 | The sound card's input over the last 3 seconds. Aim for *Good*. It reads a longer window than *Signal above noise*, so the two can differ by a few decibels. |
+| **Signal above noise** | Channel | The busy detector's reading in Aether's channel (500 or 2300 Hz wide): the level of its latest 25 ms of audio over its learned noise floor. The floor is the noise's middle level, so noise alone reads a few decibels either side of 0 dB, and a negative value is noise under the floor. Frames the modem finds, decoded or not, never count as noise. The floor follows the radio's gain: when its AGC turns everything down for a strong signal, the floor goes down with it and back up with it. |
+| **Receive level** | Channel, Setup step 3 | The sound card's whole input over the last 3 seconds: the radio's whole passband, every signal in it included. Aim for *Good*. It measures more than Aether's channel, so it reads higher than the floor under *Signal above noise*: on noise alone a 500 Hz channel holds about 7 dB less than a 2.4 kHz passband. |
 | **Queued** | Channel | Bytes still waiting to be sent. |
 | **Mode confidence** | Diagnostics | How clearly the last frame's mode was read. Below 1.3 is a guess. |
 | **Busy lamp** | Header | The channel carries a signal: the level over the threshold, a narrowband signal's shape, or a frame that decoded. |
@@ -598,7 +603,9 @@ radio's passband beside the channel, such as a busy FT8 segment.
 the RF gain up, switching the attenuator off or a preamp on, raising the radio's USB audio level or moving
 to a noisier band makes all the noise louder at once. Aether reads the louder noise as a signal until
 its floor learns the new level, about a minute. Wait it out, or make such changes before you start
-listening. The other way round (the noise gets quieter) costs nothing.
+listening. The other way round (the noise gets quieter) costs nothing. A move of the dial that
+Aether knows of costs nothing either: when it tunes the radio from the dial list, or reads the dial
+over CAT, rigctld or FLRig, a move of 10 kHz or more starts the busy detector over on the new band.
 
 **Sessions connect but run slowly.** Look at the SNR both ways (SNR and *They hear you at*). A
 lopsided path, where the other station hears you much worse than you hear it, slows every
@@ -606,7 +613,8 @@ exchange. More power, a better antenna or another band helps more than any setti
 Frames table shows many failed frames at good SNR, check the receive level and the drive.
 
 **The log says the sound card's capture skipped some milliseconds.** Your computer or its USB
-audio lost a moment of what the radio sent it. A frame across the gap may not decode, and Aether
+audio lost a moment of what the radio sent it. Aether puts silence back in its place, so
+everything after the gap stays in time. A frame across the gap may still not decode, and Aether
 asks for it again. Once in a session is nothing to act on. If it happens often, close other
 programs, plug the radio into a USB port on the computer itself rather than a hub, and turn off
 USB power saving. Send your files to the project too: these lines are being studied.

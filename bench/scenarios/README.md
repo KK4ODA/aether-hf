@@ -110,7 +110,12 @@ result's `transfers`.
 stalls, drawn from the seed), `stall_s` (a length, or `[shortest, longest]`), `backlog_s` (2, the
 daemon's capture queue). In a stall the station neither hears nor answers; what it queued plays
 on, the newest `backlog_s` of what it heard is kept, and it catches up when the stall ends
-(`channel.json` lists each station's `stalls` and `stall_dropped_s`).
+(`channel.json` lists each station's `stalls` and `stall_dropped_s`). `skip_every_s` (mean seconds
+between skips) and `skip_ms` (a length, or `[shortest, longest]`; 20–60) make its sound card's
+capture skip audio: what fell in a skip never arrives. A build that greets the channel server with
+`AEC3` is told each skip as its capture timestamps would say it and puts it back as silence
+(ADR-0089); an older one hears the audio either side run together (`channel.json`'s
+`capture_skips`, `[start, seconds]`).
 
 **Host programs** (`host = true` at a station): `host a client` attaches a Winlink Express-like
 program to a's host port (its opening line as the bench recorded it), `host b trimode` an RMS

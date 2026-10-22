@@ -147,6 +147,12 @@ pub struct Recording {
     events: Vec<Value>,
     /// What the radio said of itself while recording: its S-meter, its dial, its settings.
     radio: RadioTrack,
+    /// What the busy detector had learned when the recording began ([`crate::busy::BusyState`]).
+    busy_state: Option<crate::busy::BusyState>,
+    /// What it said four times a second: `[t_s, level, floor, drawn, gain, busy]`.
+    busy_readings: Vec<Value>,
+    /// The station clock of the next busy reading kept.
+    next_busy_reading: f64,
     /// Who and what: callsigns, settings, the operator's notes.
     meta: Value,
 }
@@ -241,6 +247,9 @@ impl Recording {
             sent: Vec::new(),
             events: Vec::new(),
             radio: RadioTrack::default(),
+            busy_state: None,
+            busy_readings: Vec::new(),
+            next_busy_reading: f64::NEG_INFINITY,
             meta,
         };
         recording.write_sidecar(None)?;
@@ -350,6 +359,37 @@ impl Recording {
         now_s - self.t0
     }
 
+    /// What the busy detector had learned, taken on the station's clock: kept on the
+    /// recording's, so `--busy-trace` can start from it (report 14 §7.1).
+    pub fn busy_state(&mut self, state: crate::busy::BusyState) {
+        self.busy_state = Some(state.shifted(self.t0));
+    }
+
+    /// What the busy detector says at `now_s`: kept every [`BUSY_READING_EVERY_S`]. The panel
+    /// draws the floor twice a second and the log says only when the state changed; a trace
+    /// set beside these says where it parts from the live detector.
+    pub fn busy_reading(&mut self, now_s: f64, reading: &crate::busy::BusyReading) {
+        if now_s < self.next_busy_reading {
+            return;
+        }
+        // on a beat, so a loop that ticks every 20 ms keeps four a second rather than 3.8; a
+        // pause starts the beat again
+        self.next_busy_reading = if now_s - self.next_busy_reading > BUSY_READING_EVERY_S {
+            now_s + BUSY_READING_EVERY_S
+        } else {
+            self.next_busy_reading + BUSY_READING_EVERY_S
+        };
+        let db = |x: Option<f64>| x.map(|v| (v * 100.0).round() / 100.0);
+        self.busy_readings.push(json!([
+            millis(now_s - self.t0),
+            db(reading.level_db),
+            db(reading.floor_db),
+            db(Some(reading.drawn_db)),
+            db(reading.gain_db),
+            u8::from(reading.busy),
+        ]));
+    }
+
     /// The radio's S-meter at `now_s`, on `scale`.
     pub fn meter(&mut self, now_s: f64, value: f64, scale: &'static str) {
         self.radio.meter_scale.get_or_insert(scale);
@@ -441,6 +481,10 @@ impl Recording {
                 "dial": self.radio.dial,
                 "settings": self.radio.settings,
             },
+            "busy": {
+                "state": self.busy_state,
+                "readings": self.busy_readings,
+            },
             "counters": counters,
         });
         // written beside and renamed over, so a reader never sees half a document
@@ -449,6 +493,10 @@ impl Recording {
         std::fs::rename(&temporary, &self.sidecar)
     }
 }
+
+/// How often a recording keeps what the busy detector says, seconds: four times a second, twice
+/// the panel's rate.
+const BUSY_READING_EVERY_S: f64 = 0.25;
 
 /// A canonical 44-byte header for mono 16-bit PCM.
 fn wav_header(sample_rate: u32, samples: u64) -> [u8; 44] {
@@ -947,6 +995,37 @@ mod tests {
         assert!((sidecar["events"][0]["t_s"].as_f64().unwrap() - 2.0).abs() < 1e-9);
         assert_eq!(sidecar["counters"]["frames_sent"], 3);
         assert!(sidecar["ended"].is_string());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_busy_detector_is_kept_four_times_a_second_with_its_state_at_the_start() {
+        let dir = temp_dir("busy");
+        let mut recording =
+            Recording::start(&dir, "busy", 48_000, 100.0, json!({})).expect("start");
+        let detector = crate::busy::BusyDetector::new(crate::busy::BusyConfig::default());
+        recording.busy_state(detector.state(100.0));
+        for tick in 1..=100 {
+            let now = 100.0 + f64::from(tick) * 0.02;
+            recording.busy_reading(now, &detector.reading(now));
+        }
+        let summary = recording.finish(&json!({})).expect("finish");
+        let sidecar: Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        let readings = sidecar["busy"]["readings"].as_array().expect("readings");
+        assert_eq!(readings.len(), 8, "{readings:?}");
+        assert_eq!(
+            readings[1][0], 0.28,
+            "on the recording's clock, a quarter second apart"
+        );
+        let state: crate::busy::BusyState =
+            serde_json::from_value(sidecar["busy"]["state"].clone()).expect("state");
+        assert!(
+            state.at_s.abs() < 1e-9,
+            "the state is kept on the recording's clock: {}",
+            state.at_s
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
