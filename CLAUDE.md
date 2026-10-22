@@ -2141,6 +2141,18 @@ build the daemon with the start change taken out and check it repeats the old ai
 harness runs: each finished run keeps its `result.json`, so rebuild the CSV from the runs and rerun
 only the missing ones, and never start a second resume of an arm while the first still runs.
 
+**The busy detector: no more patches (the author's decision, 2026-10-22).** It has been patched
+about eight times (beta.17's steady blocks, the spur gate, ADR-0037, ADR-0053, ADR-0076, ADR-0078
+and its amendment, ADR-0088) and is ~1 600 lines with 26 tuning constants, while since granted
+slots its only job is "is someone else on this frequency?" before a call, probe or beacon, and the
+panel's line. ADR-0088 is the last patch: watch the next few sessions (beta.120's recordings carry
+`busy.state` and `busy.readings`; check each report's busy floor against the noise and its clear
+time against the channel). If it needs fixing again, **do not patch it: do the full review** —
+the job in plain words, the simplest design that does it, judged on the recordings and the harness
+before it replaces anything, as ADR-0069 did for the link. And generally, the author's concern:
+simplicity matters, the work must not be piecemeal — a part that needs a third fix gets a review,
+not a patch, and every change says what it removes as well as what it adds.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
