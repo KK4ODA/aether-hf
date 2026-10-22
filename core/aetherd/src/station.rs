@@ -448,7 +448,7 @@ fn burst_limit_s(config: &StationConfig) -> f64 {
 /// audio stays at digital silence for 250-325 ms after the key is released, and eight
 /// blocks of that in a row would have put the busy detector's floor at −78 dBFS. Half a
 /// second covers it with room for a slower rig; the receiver itself still hears throughout.
-const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.5;
+pub(crate) const CAPTURE_LAG_ALLOWANCE_S: f64 = 0.5;
 
 /// Room kept past the sound card's own reported delay before the key comes up: its
 /// report is of the buffer, not the codec and the cable after it (ADR-0038).
