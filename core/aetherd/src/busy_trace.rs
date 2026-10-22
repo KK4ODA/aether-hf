@@ -21,9 +21,12 @@ use crate::replay::Expectation;
 
 /// The audio a live station hands the detector at a time: 20 ms, as the daemon's loop does.
 const FEED_S: f64 = 0.02;
-/// How long a live station stays deaf to its own tail after the key is released: the card
-/// still delivers that much of the transmission.
-const DEAF_AFTER_S: f64 = 0.3;
+/// How long a live station stays deaf to its own tail after the key is released: the card's
+/// latency and the capture's allowance, the sum `Station` uses (every sidecar's `tx_end`
+/// says `deaf_for 0.750`). It was 0.3 s here, which heard 0.45 s of each gap a live station
+/// never hears; in a session those gaps are nearly all the noise there is, and the trace
+/// missed the floor taking the other station's signal (report 14 §7).
+const DEAF_AFTER_S: f64 = crate::audio::DEVICE_LATENCY_S + crate::station::CAPTURE_LAG_ALLOWANCE_S;
 /// The radio's audio passband, for the wide measurements: a 3 kHz SSB filter's.
 const PASSBAND_HZ: (f64, f64) = (200.0, 3000.0);
 /// How far outside Aether's channel the out-of-channel measurement begins, so the channel's
