@@ -2079,6 +2079,26 @@ Vectors: `phy_vectors.json` `tone_receive` echo and `tone_echo`, `link_vectors.j
 own timing matters (rung 2 at 7 ms 19/20 a quarter of the echo after the first ray, 12/20 at the
 detector's), but a search by the data's energy concentration did no better than the detector.
 
+**Step 4's fourth report (2026-10-22, `14-wc4y-beta118.md`):** WC4Y's Test to KK4ODA-1 of
+2026-10-22 00:29Z, 80 m at 500 Hz, beta.118 at both ends, both sides with audio. Complete in
+342.8 s (message 74, file 104 bit/s, both at the new rung 4), no overlap (0.643 s), answers
+87–132 ms after their slots, no ladder leftovers. Found: KK4ODA-1's capture skipped 2 × 28 ms
+inside one of WC4Y's frames, never detected; the loops' clock offset stepped by the loss, and
+**28 ms of silence inserted at each reported skip makes the replay decode the frame** — ADR-0071's
+condition for acting on the skips (change 2: pad them in the capture callback). **KK4ODA-1's busy
+floor sat at WC4Y's signal from 60 s into the session**: a slave's gaps all fall inside its 0.75 s
+deafness after a release or the 0.75 s level hangover, so the window holds no noise, the 60 s hold
+runs out, and `settle_floor` takes the median of every block, explained frames included (change 1:
+do not take it while half the window or more is explained frames; a plain filter fails, since a
+tone frame is announced half a second in; both tried in a scratch build, the report's §7.2).
+`aetherd --busy-trace` had assumed 0.3 s of deafness after a release and could not show it; it now
+uses `DEVICE_LATENCY_S + CAPTURE_LAG_ALLOWANCE_S` (0.75 s, `tx_end`'s `deaf_for`). WC4Y's call
+waited 10.2 s for clear: a third station's FSK (1252/2002 Hz) for 3 s, then 7.6 s on a live floor
+the replay does not reproduce (his live floor sank to −50 dBFS during the probe's answer; his
+daemon starts busy for a minute every time, its gain reference learned before the dial was set) —
+change 3 records the detector's state so a trace can start from it. To replay a sidecar with the
+live explanations, add its heeded `preamble` events as undecoded frames spanning them.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
