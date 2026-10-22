@@ -1,17 +1,17 @@
 # ADR-0087: The tone floor reads the path's echo, and the rungs it breaks stay off the ladder
 
-**Status:** accepted, 2026-10-21. Model first (`echo_share` in
+**Status:** accepted, 2026-10-21. Model first (`echo_share` and `interfered_bins` in
 `model/aether_model/phy/tone.py`; `SoftFrame.echo`, `PhyTiming.echo_limit`,
 `RateController.observe_echo` with `ECHO_LIMIT` and `NARROW_ECHO_LIMIT` in
 `aether_model/link/`; the engine feeds it in `GrantedEngine._heard`), then the port
-(`tone::echo_share`, `Received::echo`, `SoftFrame::echo`, `PhyTiming::echo_limit`,
-`RateController::observe_echo`, `GrantedEngine::heard`, the daemon's `PhyFrame`). Held together
-by `phy_vectors.json` (`tone_receive` carries the echo, `tone_echo` two-ray cases),
-`link_vectors.json` (the tables, an `echo_traces` controller trace) and `granted_vectors.json`
-(every frame's echo, the engine's echo after every input, an `echo-path` session). The limits
-come from `tools/bench_echo.py` (`bench/baselines/echo.csv`), and a test holds them to it. **No
-wire change, no configuration key.** The `frame` event and the sidecars' frame records gain
-`echo`.
+(`tone::echo_share`, `tone::interfered_bins`, `Received::echo`, `SoftFrame::echo`,
+`PhyTiming::echo_limit`, `RateController::observe_echo`, `GrantedEngine::heard`, the daemon's
+`PhyFrame`). Held together by `phy_vectors.json` (`tone_receive` carries the echo, `tone_echo`
+two-ray cases, two of them with a carrier on a tone), `link_vectors.json` (the tables, an
+`echo_traces` controller trace) and `granted_vectors.json` (every frame's echo, the engine's
+echo after every input, an `echo-path` session). The limits come from `tools/bench_echo.py`
+(`bench/baselines/echo.csv`), and a test holds them to it. **No wire change, no configuration
+key.** The `frame` event and the sidecars' frame records gain `echo`.
 
 ## 1. Context
 
@@ -165,16 +165,16 @@ the reading's median / 90th percentile):
 | ITU NVIS at 10 dB, the RTTY 250 Hz off, 500 Hz | 0.0197 / 0.032 | 0.0089 / 0.0125 |
 | ITU NVIS at 10 dB, no RTTY, 500 Hz | 0.0111 / 0.018 | 0.0111 / 0.018 |
 
-On every path without one, from −5 dB up — AWGN, ITU Good, Moderate, Poor, flutter, NVIS, low-
-and high-latitude disturbed, two rays 4–7 ms apart — the highest bin stands at most 0.0097 above
-the median (Good at −5 dB, the 90th percentile), and at 3 dB and up no point loses a bin in more
-than one frame of 24. The exception is ITU high-latitude disturbed (7 ms at 30 Hz), which carries
-nothing (§2): 5 of the 7 frames the detector found there lost a bin. The readings `bench/baselines/echo.csv` holds were taken again with
-the rule, each point with its own seed. Every decode count came out the same, so they are the same
-frames. Ten values moved, in 4 of the 132 rows: three on ITU high-latitude disturbed and the 90th
-percentile of two rays 8 ms apart at 20 dB. The limits did not move. A threshold of 0.005 cleaned the RTTY
-further (0.0003 / 0.0015) but left bins out of up to 14 frames in 24 on NVIS paths without any
-signal in the span.
+On every path without one, from −5 dB up — AWGN, ITU Good, Moderate, Poor, flutter, NVIS, low- and
+high-latitude disturbed, two rays 4–7 ms apart — the highest bin stands at most 0.0097 above the
+median (Good at −5 dB, the 90th percentile), and at 3 dB and up no point loses a bin in more than
+one frame of 24. The exception is ITU high-latitude disturbed (7 ms at 30 Hz), which carries nothing
+(§2): 5 of the 7 frames the detector found there lost a bin. The readings `bench/baselines/echo.csv`
+holds were taken again with the rule, each point with its own seed. Every decode count came out the
+same, so they are the same frames. Ten values moved, in 4 of the 132 rows: three on ITU
+high-latitude disturbed and the 90th percentile of two rays 8 ms apart at 20 dB. The limits did not
+move. A threshold of 0.005 cleaned the RTTY further (0.0003 / 0.0015) but left bins out of up to 14
+frames in 24 on NVIS paths without any signal in the span.
 
 **The link bench through the real modem** (`bench_link.run_point`, `phy` backend, one fade for
 the session; the base arm with the limits off):
@@ -201,9 +201,21 @@ moderate, both airs, at −3, +5 and +15 dB, two seeds each: every one delivered
 ruled out no rung in any of them. The highest smoothed echo any controller held was 0.0020,
 against limits of 0.0038 and 0.0073, so those sessions are beta.118's.
 
-**The scenario harness.** Its first full run, all 56 scenarios × 2 draws against beta.118's code
-on the same draws, passed 112 of 112 with no radiated overlap and found the RTTY case above. The
-run on this build, with `interfered_bins`, is reported in its own commit once it has run.
+**The scenario harness.** The eight scenarios on ITU NVIS, four draws each, against beta.118's
+code on the same draws (the first build of this decision): 32 of 32 pass on both, no radiated
+overlap, air 3 233 → 3 056 s (−5.5 %), the Tests' message rate ×1.35 and file rate ×1.45. Five
+of the eight are 9–11 % shorter. `80m-nvis-evening-500` takes 8 % more air because its Test does
+more: the message goes at 41 bit/s against 29, so the file it sizes is twice as large, and the
+ladder measures five rungs instead of three or four. `80m-agc-carrier-outside-500`'s own draw,
+the one that failed beta.118's CI: 12 of 12 runs, the message a median 213 s (ADR-0086's 266 s).
+
+All 56 scenarios × 2 draws against beta.118's code on the same draws, this build: 112 of 112 pass,
+no radiated overlap, air 15 761 → 15 588 s (−1.1 %); the NVIS eight 6 410 → 6 128 s (−4.4 %); the
+Tests' message and file rates a median ×1.00 and ×1.01 over 15. `tools/scenario_trend.py` finds
+nothing slower or failing more than `bench/baselines/scenarios.csv`, which stays. The first full
+run, before `interfered_bins`, held the RTTY contest's message at 183 bit/s; this build, 310,
+beta.118's. Off NVIS four single frames read just over the 500 Hz limit (0.0039–0.0045 at −4 to +1
+dB), too few to carry the smoothed reading past it.
 
 ## 4. Alternatives
 

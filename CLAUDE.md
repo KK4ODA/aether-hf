@@ -2063,7 +2063,10 @@ ignored) keeps off the rungs whose limit the echo exceeds (`_echo_out` in `_fits
 `first_mode`; the climb stops under them). A triple with a bin another signal holds is left out
 (`interfered_bins`: a bin's energy where no tone of the frame put any, more than `ECHO_QRM_SHARE`
 0.01 of the tones' energy above the median bin's — an echo raises every bin together): the
-harness's RTTY contest had read 0.01–0.18 and held a +12 dB 2 300 Hz path at rung 4. Limits (`ECHO_LIMIT`, `NARROW_ECHO_LIMIT`, through
+harness's RTTY contest had read 0.01–0.18 and held a +12 dB 2 300 Hz path at rung 4. Harness,
+56 × 2 against beta.118's code: 112/112, no radiated overlap, air −1.1 %, the NVIS eight −4.4 %
+(the four-draw NVIS set −5.5 %, Test message ×1.35, file ×1.45), nothing outside the baseline's
+ranges (it stays); seed 31 of `80m-agc-carrier-outside-500` 12/12, message 213 s. Limits (`ECHO_LIMIT`, `NARROW_ECHO_LIMIT`, through
 `PhyTiming.echo_limit`): 500 Hz rungs 3–4 above 0.0038, 2 300 Hz rung 5 above 0.0073, from
 `tools/bench_echo.py` (`bench/baselines/echo.csv`, 704 points; `--limits`: a rung is refused on a
 path when a slower rung delivers more there at every SNR, the limit the lowest refusing path's
