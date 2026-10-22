@@ -139,6 +139,11 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    frames; the Test's ladder leftovers taking a fifth of it; both Morse identifiers at exactly
    20 wpm; and the Status tab checked reading by reading, which found the busy detector learning
    the other station's signal as its noise floor.
+14. [14-wc4y-beta118.md](14-wc4y-beta118.md): Step 4, WC4Y's Test of 2026-10-21 on beta.118,
+   read the same way: still no overlap; the new rung 4 carrying both transfers; a frame
+   KK4ODA-1's sound card lost, recovered by putting the lost audio back as silence; and the busy
+   detector at both ends, where the floor's hold let a session's frames in as noise and the busy
+   trace, deaf too briefly after a release, could not show it.
 
 ## Reproduction
 
