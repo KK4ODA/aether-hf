@@ -15,7 +15,10 @@ long; how fast the noise came back (dB/s, from 90 % to 10 % of the depth); wheth
 caused it was in the channel or outside it (which band's power rose at the onset); what the floor
 did; and how long the channel read busy by level after the gain came back (ADR-0078). When the
 sidecar holds what the radio said of itself — its S-meter, dial and settings — and the operator's
-marks, those are listed too, the S-meter beside each event.
+marks, those are listed too, the S-meter beside each event. And when it holds what the live
+detector said (``busy.readings``, from the beta after 0.2.0-beta.119; the trace starts from the
+detector's state at the recording's start, ADR-0088), it says where the trace's floor and busy
+state parted from the live ones: a trace that matches the live detector explains it.
 
     python tools/floor_trace.py RECORDING.wav [--expect SIDECAR.json] [--bandwidth 500]
                                 [--variant normalised] [--daemon PATH] [--csv OUT] [--svg OUT]
@@ -183,6 +186,59 @@ def radio_report(sidecar: dict, found: list[dict]) -> list[str]:
     return lines
 
 
+PART_DB = 3.0
+"""How far the trace's floor must stand from the live one to count as parted from it."""
+PART_MIN_S = 2.0
+
+
+def live_report(sidecar: dict, tr: dict[str, np.ndarray]) -> list[str]:
+    """The trace against what the live detector said four times a second (the sidecar's
+    ``busy.readings``, ``[t, level, floor, drawn gain, gain reading, busy]``): how closely the
+    floors agree, how often the busy states do, and every stretch of ``PART_MIN_S`` or more where
+    the floors stand ``PART_DB`` apart."""
+    busy = sidecar.get("busy") or {}
+    readings = [r for r in busy.get("readings") or [] if len(r) >= 6 and r[2] is not None]
+    if not readings or not len(tr["t_s"]):
+        return []
+    state = busy.get("state")
+    lines = [
+        f"  live detector: {len(readings)} readings"
+        + (f"; the trace started from its state at {state['at_s']:.1f} s" if state else "")
+    ]
+    t = np.array([r[0] for r in readings], dtype=float)
+    live_floor = np.array([r[2] for r in readings], dtype=float)
+    live_busy = np.array([bool(r[5]) for r in readings])
+    at = np.clip(np.searchsorted(tr["t_s"], t), 0, len(tr["t_s"]) - 1)
+    trace_floor = tr["floor_db"][at]
+    trace_busy = tr["busy"][at] > 0
+    ok = np.isfinite(trace_floor)
+    if not ok.any():
+        return lines
+    gap = np.abs(trace_floor - live_floor)
+    lines.append(
+        f"    floor: the trace within {np.median(gap[ok]):.1f} dB of the live one (median), "
+        f"{PART_DB:.0f} dB or more apart {np.mean(gap[ok] >= PART_DB) * 100:.0f} % of the time; "
+        f"busy agrees {np.mean(trace_busy[ok] == live_busy[ok]) * 100:.0f} %"
+    )
+    parted = ok & (gap >= PART_DB)
+    i = 0
+    while i < len(t):
+        if not parted[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(t) and parted[j + 1]:
+            j += 1
+        if t[j] - t[i] >= PART_MIN_S:
+            lines.append(
+                f"    parted at {t[i]:8.1f} s for {t[j] - t[i]:5.1f} s: live floor "
+                f"{np.median(live_floor[i : j + 1]):.1f}, the trace's "
+                f"{np.median(trace_floor[i : j + 1]):.1f} dBFS"
+            )
+        i = j + 1
+    return lines
+
+
 def write_svg(path: Path, tr: dict[str, np.ndarray], title: str) -> None:
     """Level, floor, the gain reading and busy, on one axis: the gain is drawn from the floor's
     median, so a cut shows as the noise would have gone with it."""
@@ -291,7 +347,8 @@ def main() -> int:
             f"floor {tr['floor_db'][a]:.1f} → {tr['floor_db'][b - 1]:.1f}"
         )
     if expect is not None:
-        for line in radio_report(json.loads(expect.read_text()), found):
+        sidecar = json.loads(expect.read_text())
+        for line in radio_report(sidecar, found) + live_report(sidecar, tr):
             print(line)
     if args.json:
         args.json.write_text(json.dumps(found, indent=1))

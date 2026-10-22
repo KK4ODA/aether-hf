@@ -2101,8 +2101,45 @@ uses `DEVICE_LATENCY_S + CAPTURE_LAG_ALLOWANCE_S` (0.75 s, `tx_end`'s `deaf_for`
 waited 10.2 s for clear: a third station's FSK (1252/2002 Hz) for 3 s, then 7.6 s on a live floor
 the replay does not reproduce (his live floor sank to −50 dBFS during the probe's answer; his
 daemon starts busy for a minute every time, its gain reference learned before the dial was set) —
-change 3 records the detector's state so a trace can start from it. To replay a sidecar with the
-live explanations, add its heeded `preamble` events as undecoded frames spanning them.
+change 3 records the detector's state so a trace can start from it.
+
+**Report 14's changes (2026-10-22, the author's "yes to changes 1–6"; ADR-0088, ADR-0089,
+ADR-0090; no wire change, no configuration key, no schema bump).** *ADR-0088, the busy detector*:
+each window block remembers a frame covered it (`Block::framed`, set by `explain` too), and when no
+block is evidence the floor is **not taken while half the window or more is framed** — a session,
+not the environment — and taken without the framed blocks otherwise; a first floor no evidence has
+confirmed (`confirmed`) is taken again every block, not held a minute; nothing is heard in the
+capture's first second (`START_LISTEN_S`, the floor and the gain reference alike); a dial move of
+10 kHz or more that the station learns of (`Station::read_dial`: `frequency.set`, the display's
+poll, the rules check, a recording's reads) calls `BusyDetector::retune` (window, reference and
+attack cleared, a second unheard, a frame's hold kept). A call or probe after a start or a dial move
+waits about 3.5 s (the second, then `settled`). A recording's sidecar keeps `busy.state`
+(`BusyState` at its start, on its clock) and `busy.readings` (`[t, level, floor, drawn, gain,
+busy]` at 4 Hz on a beat); `aetherd --busy-trace WAV --expect SIDECAR` restores the state at its
+time (`BusyDetector::restore`) and explains every `preamble` announcement as the station did
+(`replay::Announcement`); `tools/floor_trace.py` lists where the trace parts from the live readings
+(`live_report`). KK4ODA-1's session floor, traced: −22.3 → −32.5 dBFS (noise −31). *ADR-0089,
+capture skips put back*: the capture callback pads a forward timestamp jump of 10 ms–0.5 s
+(`PAD_MAX_S`) with zeros before the callback's samples (`capture_into`; `CaptureSkips::note`
+returns the pad; `padded`/`padded_s`); a longer jump or one back stays a report; a frame a skip fell
+inside stays untrusted; recording event `lost x padded y`, bundle `capture_padded_ms`. The harness
+models it: `[stations.<who>.machine] skip_every_s`/`skip_ms`, `MSG_SKIP` (7) to a daemon greeting
+`AEC3`, `channel.json` `capture_skips`; scenario `80m-capture-skips-500`. With a skip every 8 s:
+spliced 0/4 sessions, padded 4/4 — **the splice costs the station's clock, not just the frame**
+(the station falls up to 1.3 s behind the air and the keying gate drops its answers as late).
+*ADR-0090, rejected*: the master's header on the floor after one silent slot instead of two
+(`floor_header_after`, built and reverted) — 56 scenarios × 2 draws, 112/112 both, the fading runs'
+silent slots 156 → 156, their air ×1.014 (Poor ×1.185). Panel and manual: *Signal above noise* is
+in Aether's channel, *Receive level* the radio's whole passband (≈ 7 dB more on noise alone at
+500 Hz); a negative value is noise under the floor. **Harness lesson:** the channel's fading and
+noise are seeded on the air's clock, so a change that moves when a session starts (here the
+listening second: first key 2.75 → 3.75 s) puts every session on another stretch of them — each
+scenario becomes another draw, and per-scenario differences say nothing about the change. Run one
+at a time, a build repeats itself to the tenth of a second; to tell a draw from a behaviour change,
+build the daemon with the start change taken out and check it repeats the old air times
+(ADR-0088 §5: 82.1 and 256.2 s, exactly). The restart of a cloud container stops the detached
+harness runs: each finished run keeps its `result.json`, so rebuild the CSV from the runs and rerun
+only the missing ones, and never start a second resume of an arm while the first still runs.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

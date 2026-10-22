@@ -902,14 +902,15 @@ fn note_audio_losses(
         reported.starved = starved;
         daemon.starved_audio = starved as u64;
     }
-    // what the capture stream's own timestamps say it skipped: they see about half of what is
-    // lost (ADR-0071 §3), so the clock is not moved by them, but a frame one falls inside is not
-    // trusted (ADR-0076). Every one goes to the recording, where it is placed; the log says them
-    // at most every `LOOP_STALL_LOG_INTERVAL`
+    // what the capture stream's own timestamps say it skipped: the capture callback put it back
+    // as silence where it was lost (ADR-0089), and a frame one falls inside is not trusted
+    // (ADR-0076). Every one goes to the recording, where it is placed; the log says them at most
+    // every `LOOP_STALL_LOG_INTERVAL`
     let skips = audio.capture_skips();
     if skips.lost > reported.skips.lost {
         let lost = skips.lost_s - reported.skips.lost_s;
-        station.note_capture_skip(lost);
+        let padded = skips.padded_s - reported.skips.padded_s;
+        station.note_capture_skip(lost, padded);
     }
     if skips.repeated > reported.skips.repeated {
         let repeated = skips.repeated_s - reported.skips.repeated_s;
@@ -928,13 +929,23 @@ fn note_audio_losses(
     reported.skips_said_at = Some(std::time::Instant::now());
     if skips.lost > said.lost {
         let ms = (skips.lost_s - said.lost_s) * 1000.0;
+        let kept_out = ms - (skips.padded_s - said.padded_s) * 1000.0;
+        let put_back = if kept_out < 0.5 {
+            "the receiver heard silence in its place".to_owned()
+        } else {
+            format!(
+                "the receiver heard silence in its place, but for {kept_out:.0} ms in jumps over \
+                 {:.0} ms, which may be the clock and were not put back",
+                aetherd::audio::PAD_MAX_S * 1000.0
+            )
+        };
         daemon.log.record(
             Level::Warn,
             "audio",
             &format!(
-                "the sound card's capture skipped {ms:.0} ms of audio, by its own timestamps: the \
-                 receiver heard the audio either side run together, and a frame across it may be \
-                 lost ({} such skips so far, the largest {:.0} ms)",
+                "the sound card's capture skipped {ms:.0} ms of audio, by its own timestamps: \
+                 {put_back}, and a frame across it may still be lost ({} such skips so far, the \
+                 largest {:.0} ms)",
                 skips.lost,
                 skips.largest_s * 1000.0
             ),

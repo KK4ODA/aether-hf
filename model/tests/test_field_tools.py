@@ -312,3 +312,22 @@ def test_floor_trace_lists_the_radios_readings_and_the_marks() -> None:
     assert "AUTO-MID" in text
     assert "mark 1 carrier in at" in text
     assert floor_trace.radio_report({}, [event]) == []
+
+
+def test_floor_trace_says_where_the_trace_parts_from_the_live_detector() -> None:
+    # ADR-0088: a recording keeps the live detector's readings; where the trace's floor stands
+    # apart from them for a while is what the trace does not explain
+    import numpy as np
+
+    import floor_trace
+
+    t = np.arange(0.0, 20.0, 0.025)
+    floor = np.where((t >= 8.0) & (t < 12.0), -40.0, -30.0)
+    trace = {"t_s": t, "floor_db": floor, "busy": np.zeros_like(t)}
+    readings = [[float(x), -31.0, -30.0, 0.0, None, 0] for x in np.arange(0.0, 20.0, 0.25)]
+    sidecar = {"busy": {"state": {"at_s": 1.5}, "readings": readings}}
+    text = "\n".join(floor_trace.live_report(sidecar, trace))
+    assert "80 readings; the trace started from its state at 1.5 s" in text
+    assert "busy agrees 100 %" in text
+    assert "parted at      8.0 s for   3.8 s: live floor -30.0, the trace's -40.0 dBFS" in text
+    assert floor_trace.live_report({}, trace) == []

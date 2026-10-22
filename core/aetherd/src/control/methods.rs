@@ -1020,6 +1020,8 @@ fn diagnostics<P: Ptt>(
                 "capture_skipped_ms": (daemon.capture_skips.lost_s * 10_000.0).round() / 10.0,
                 "capture_largest_skip_ms":
                     (daemon.capture_skips.largest_s * 10_000.0).round() / 10.0,
+                // put back as silence where it was lost (ADR-0089)
+                "capture_padded_ms": (daemon.capture_skips.padded_s * 10_000.0).round() / 10.0,
                 "capture_repeats": daemon.capture_skips.repeated,
                 "capture_repeated_ms": (daemon.capture_skips.repeated_s * 10_000.0).round() / 10.0,
             }),

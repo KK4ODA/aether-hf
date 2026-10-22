@@ -50,6 +50,42 @@ pub struct CentreMove {
     pub hz: f64,
 }
 
+/// A frame the receiver announced before it could be decoded (`preamble` events): the station
+/// took its span out of the busy detector's evidence at `t_s` (ADR-0076), heeded or not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Announcement {
+    /// When it was announced, in seconds of the recording.
+    pub t_s: f64,
+    /// Where the frame begins.
+    pub start_s: f64,
+    /// Where it ends.
+    pub end_s: f64,
+}
+
+impl Announcement {
+    /// Read a `preamble` event's detail, `ago <s> frame_s <s> …`, announced at `t_s`.
+    fn parse(t_s: f64, detail: &str) -> Option<Self> {
+        let mut words = detail.split_whitespace();
+        let mut ago = None;
+        let mut frame_s = None;
+        while let Some(word) = words.next() {
+            let value = || words.clone().next().and_then(|v| v.parse::<f64>().ok());
+            match word {
+                "ago" => ago = value(),
+                "frame_s" => frame_s = value(),
+                _ => {}
+            }
+        }
+        let start_s = t_s - ago.filter(|a| a.is_finite())?;
+        let end_s = start_s + frame_s.filter(|f| f.is_finite() && *f >= 0.0)?;
+        Some(Self {
+            t_s,
+            start_s,
+            end_s,
+        })
+    }
+}
+
 /// What a sidecar says a replay should reproduce.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Expectation {
@@ -66,6 +102,12 @@ pub struct Expectation {
     /// Where its receiver moved onto, or off, a station off frequency, in order (ADR-0079).
     /// Empty for most recordings.
     pub centres: Vec<CentreMove>,
+    /// The frames it announced before they could be decoded, in order. Empty for a recording
+    /// from before ADR-0037.
+    pub announcements: Vec<Announcement>,
+    /// What its busy detector had learned when the recording began (report 14 §7.1): `None`
+    /// for a recording from before it was kept.
+    pub busy_state: Option<crate::busy::BusyState>,
 }
 
 impl Expectation {
@@ -92,9 +134,19 @@ impl Expectation {
         let mut muted = Vec::new();
         let mut airs = Vec::new();
         let mut centres = Vec::new();
+        let mut announcements = Vec::new();
         let mut keyed_at: Option<f64> = None;
         for event in document["events"].as_array().into_iter().flatten() {
             let t = event["t_s"].as_f64().unwrap_or(0.0);
+            if event["event"] == "preamble" {
+                if let Some(announced) = event["detail"]
+                    .as_str()
+                    .and_then(|detail| Announcement::parse(t, detail))
+                {
+                    announcements.push(announced);
+                }
+                continue;
+            }
             if event["event"] == "rx_offset" {
                 if let Some(hz) = event["detail"]
                     .as_str()
@@ -139,12 +191,17 @@ impl Expectation {
             .as_u64()
             .and_then(|hz| u32::try_from(hz).ok())
             .unwrap_or(2300);
+        // a state this version cannot read is no state: the trace starts from nothing, as it
+        // did before states were kept
+        let busy_state = serde_json::from_value(document["busy"]["state"].clone()).ok();
         Ok(Self {
             frames,
             muted,
             bandwidth_hz,
             airs,
             centres,
+            announcements,
+            busy_state,
         })
     }
 }
@@ -503,6 +560,21 @@ pub fn describe(frame: &FrameRecord) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_announcement_is_read_from_its_event() {
+        let a = Announcement::parse(
+            12.5,
+            "ago 0.300 frame_s 2.160 tone 1 confidence 1.42 heeded 1",
+        )
+        .expect("parsed");
+        assert!(
+            (a.start_s - 12.2).abs() < 1e-9 && (a.end_s - 14.36).abs() < 1e-9,
+            "{a:?}"
+        );
+        assert_eq!(Announcement::parse(1.0, "ago x frame_s 1"), None);
+        assert_eq!(Announcement::parse(1.0, "frame_s 1.0"), None);
+    }
 
     #[test]
     fn a_sidecar_yields_its_frames_and_the_keyed_intervals() {

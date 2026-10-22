@@ -76,6 +76,12 @@ would misplace every slot after it. Once a station's recording shows a skip repo
 `tools/two_sides.py` finds a step in the offset, and none where it does not, the skips can be
 handed to `capture_gap` (`Station::skip_captured`), so the receiver hears a hole and not a splice.
 
+**Amended by ADR-0089 (2026-10-22).** Report 14 had that recording: two skips reported where the
+two sides' offset stepped, and a frame across them that decoded once 28 ms of silence was put back
+at each. A skip of 10 ms to 0.5 s is now put back as silence in the capture callback itself, before
+the samples of the callback whose timestamp jumped, which keeps the receiver and the frame;
+`capture_gap` would have built the receiver again.
+
 ## 4. What stays uncounted
 
 The radios' audio paths, about 65–70 ms at each station on 2026-10-14. One station cannot

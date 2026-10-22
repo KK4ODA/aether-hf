@@ -161,6 +161,10 @@ impl core::error::Error for AudioError {}
 /// quarter of a tone symbol. The losses that made a tone frame slip at the mini PC on
 /// 2026-10-14 were 35 and 40 ms.
 pub const SKIP_MIN_S: f64 = 0.01;
+/// The longest skip put back as silence. The largest the mini PC has reported is 148 ms; a
+/// jump of more than this is more likely a clock that stepped than audio lost, and silence
+/// put in for it would move the station's clock ahead of the air by as much.
+pub const PAD_MAX_S: f64 = 0.5;
 
 /// What a capture stream's own timestamps say of the audio between its callbacks
 /// (ADR-0071 §3; 11-step-4-first-air.md §4.4 and §12, change 2).
@@ -168,11 +172,13 @@ pub const SKIP_MIN_S: f64 = 0.01;
 /// Each callback says when its first sample was captured. The next one's should be that
 /// much later again as the samples it held last time take; a later one means the device's
 /// clock moved past audio that never arrived, an earlier one audio delivered twice. The queue
-/// cannot see either — it counts only what it drops itself — and the receiver hears the audio
+/// cannot see either — it counts only what it drops itself — and the receiver heard the audio
 /// either side spliced together: on 2026-10-14 a tone frame lost that way was never decoded,
-/// and nothing said why. This is a report only: whether the timestamps of a USB codec on
-/// Windows see such a loss at all is what it is for (§14), so the station's clock is not
-/// moved by it.
+/// and nothing said why. A forward jump of [`SKIP_MIN_S`] to [`PAD_MAX_S`] is put back as
+/// silence where it happened, before the callback's samples (ADR-0089): on 2026-10-21 two of
+/// them inside a frame were real losses, the other station's recording agreeing, and the
+/// silence put back there decoded the frame (14-wc4y-beta118.md §5). The station's clock then
+/// stays on the air's. A jump back stays a report.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct CaptureSkips {
     /// Jumps forward: audio the device's clock moved past that never arrived.
@@ -181,6 +187,10 @@ pub struct CaptureSkips {
     pub lost_s: f64,
     /// The largest of them, in seconds.
     pub largest_s: f64,
+    /// Of those, the ones put back as silence: all but any longer than [`PAD_MAX_S`].
+    pub padded: usize,
+    /// What they came to, in seconds.
+    pub padded_s: f64,
     /// Jumps back: audio delivered twice over, or a clock that stepped back.
     pub repeated: usize,
     /// What they came to, in seconds.
@@ -189,20 +199,28 @@ pub struct CaptureSkips {
 
 impl CaptureSkips {
     /// A callback whose first sample was captured `elapsed_s` after the previous callback's,
-    /// which held `frames` frames at `rate` Hz.
-    pub fn note(&mut self, elapsed_s: f64, frames: usize, rate: f64) {
+    /// which held `frames` frames at `rate` Hz. Returns how many frames of silence to put in
+    /// before its samples: the skip, when it is one put back.
+    pub fn note(&mut self, elapsed_s: f64, frames: usize, rate: f64) -> usize {
         if !elapsed_s.is_finite() || rate <= 0.0 {
-            return;
+            return 0;
         }
         let jump = elapsed_s - frames as f64 / rate;
         if jump >= SKIP_MIN_S {
             self.lost += 1;
             self.lost_s += jump;
             self.largest_s = self.largest_s.max(jump);
+            if jump <= PAD_MAX_S {
+                let pad = (jump * rate).round() as usize;
+                self.padded += 1;
+                self.padded_s += pad as f64 / rate;
+                return pad;
+            }
         } else if jump <= -SKIP_MIN_S {
             self.repeated += 1;
             self.repeated_s -= jump;
         }
+        0
     }
 }
 
@@ -306,6 +324,25 @@ fn hold_to_onset(shared: &mut Shared, frames: usize, first_leaves: Instant, rate
 fn push_bounded(queue: &Queue, samples: &[f32], limit: usize) {
     let Ok(mut shared) = queue.lock() else { return };
     push_into(&mut shared, samples, limit);
+}
+
+/// One capture callback into the queue: silence first for what its timestamps say the device
+/// skipped since the last one (`since_last`: how long after the last callback's first sample
+/// its own was captured, and how many frames the last held), then its samples.
+fn capture_into(
+    shared: &mut Shared,
+    mono: &[f32],
+    since_last: Option<(f64, usize)>,
+    rate: f64,
+    limit: usize,
+) {
+    if let Some((elapsed, frames)) = since_last {
+        let pad = shared.skips.note(elapsed, frames, rate);
+        if pad > 0 {
+            push_into(shared, &vec![0.0; pad], limit);
+        }
+    }
+    push_into(shared, mono, limit);
 }
 
 fn push_into(shared: &mut Shared, samples: &[f32], limit: usize) {
@@ -517,12 +554,10 @@ impl SoundCard {
                         return;
                     };
                     let captured_at = info.timestamp().capture;
-                    if let Some((at, frames)) = last {
-                        let elapsed = seconds_between(at, captured_at);
-                        shared.skips.note(elapsed, frames, in_rate);
-                    }
+                    let since_last =
+                        last.map(|(at, frames)| (seconds_between(at, captured_at), frames));
                     last = Some((captured_at, mono.len()));
-                    push_into(&mut shared, &mono, limit);
+                    capture_into(&mut shared, &mono, since_last, in_rate, limit);
                 },
                 |error| eprintln!("aetherd: capture stream: {error}"),
                 None,
@@ -891,6 +926,159 @@ mod tests {
         // a backend's nonsense is no evidence
         skips.note(f64::NAN, 480, rate);
         assert_eq!((skips.lost, skips.repeated), (2, 1));
+        // both losses were put back; a jump of a second is a clock, not audio, and is not
+        assert_eq!(skips.padded, 2);
+        assert_eq!(skips.note(1.01, 480, rate), 0);
+        assert_eq!((skips.lost, skips.padded), (3, 2));
+    }
+
+    #[test]
+    fn a_capture_skip_is_put_back_as_silence_where_the_timestamps_jumped() {
+        // 14-wc4y-beta118.md §5: the gap lies just before the first sample of the callback whose
+        // timestamp jumped, and silence there keeps every later sample where the air put it
+        let rate = 48_000.0;
+        let mut shared = Shared::default();
+        let block = |v: f32| vec![v; 480];
+        capture_into(&mut shared, &block(0.1), None, rate, usize::MAX);
+        capture_into(
+            &mut shared,
+            &block(0.2),
+            Some((0.010, 480)),
+            rate,
+            usize::MAX,
+        );
+        // 28 ms lost between the second callback and the third
+        capture_into(
+            &mut shared,
+            &block(0.3),
+            Some((0.038, 480)),
+            rate,
+            usize::MAX,
+        );
+        let queued: Vec<f32> = shared.samples.iter().copied().collect();
+        assert_eq!(queued.len(), 3 * 480 + 1344);
+        let all = |range: &[f32], v: f32| range.iter().all(|&x| (x - v).abs() < 1e-9);
+        assert!(all(&queued[..480], 0.1));
+        assert!(all(&queued[480..960], 0.2));
+        assert!(all(&queued[960..960 + 1344], 0.0));
+        assert!(all(&queued[960 + 1344..], 0.3));
+        assert_eq!((shared.skips.lost, shared.skips.padded), (1, 1));
+        assert!((shared.skips.padded_s - 0.028).abs() < 1e-9);
+        // audio delivered twice is reported and nothing is taken out
+        capture_into(
+            &mut shared,
+            &block(0.4),
+            Some((-0.005, 480)),
+            rate,
+            usize::MAX,
+        );
+        assert_eq!(shared.samples.len(), 4 * 480 + 1344);
+        assert_eq!(shared.skips.repeated, 1);
+    }
+
+    /// A 500 Hz rung-4 frame (tone4x100-93) as the radio's audio, at `snr_db` against a 3 kHz
+    /// noise bandwidth, between a second of noise either side: the audio, and where the frame
+    /// begins and how long it is, in samples.
+    fn rung_four_audio(snr_db: f64) -> (Vec<f32>, usize, usize) {
+        let narrow = aether_phy::waveform::NARROW_500;
+        let mut modem = aether_phy::Modem::new(narrow, false);
+        let bytes = modem.air().ladder()[4].payload_bytes();
+        let payload: Vec<u8> = (0..bytes).map(|i| (i * 13 % 256) as u8).collect();
+        let frame = modem.rung_burst(&payload, 4, 0).expect("a rung-4 frame");
+        let mut to_audio = aether_phy::BasebandToAudio::new(narrow);
+        let rate = narrow.audio_rate;
+        let mut signal = vec![0.0f32; rate];
+        signal.extend(to_audio.process(&frame));
+        signal.extend(to_audio.flush());
+        let length = signal.len() - rate;
+        signal.extend(vec![0.0f32; rate]);
+        let power = signal.iter().map(|&x| f64::from(x).powi(2)).sum::<f64>() / length as f64;
+        // white noise whose 3 kHz share is `snr_db` under the frame's power
+        let sigma = (power / 10f64.powf(snr_db / 10.0) * (rate as f64 / 2.0) / 3000.0).sqrt();
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut uniform = || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            ((state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        };
+        let audio = signal
+            .iter()
+            .map(|&x| {
+                let g =
+                    (-2.0 * uniform().ln()).sqrt() * (2.0 * std::f64::consts::PI * uniform()).cos();
+                (0.2 * (f64::from(x) + sigma * g)) as f32
+            })
+            .collect();
+        (audio, rate, length)
+    }
+
+    /// What a station's capture queue holds after a device that delivers `audio` in 10 ms
+    /// callbacks loses 28 ms between two of them, a third and two thirds into the frame, with
+    /// timestamps that say so (`timestamps`) or a backend that keeps none.
+    fn captured_with_losses(
+        audio: &[f32],
+        start: usize,
+        length: usize,
+        timestamps: bool,
+    ) -> Vec<f32> {
+        let rate = 48_000.0;
+        let (per_callback, gap) = (480, 1344);
+        let lose = [
+            (start + length / 3) / per_callback,
+            (start + 2 * length / 3) / per_callback,
+        ];
+        let mut shared = Shared::default();
+        let (mut cursor, mut count) = (0usize, 0usize);
+        let mut last: Option<(usize, usize)> = None;
+        while cursor + per_callback <= audio.len() {
+            if lose.contains(&count) {
+                // the device's clock moves past these samples; none of them arrives
+                cursor += gap;
+            }
+            let Some(samples) = audio.get(cursor..cursor + per_callback) else {
+                break;
+            };
+            let since_last = last.map(|(at, frames)| {
+                let elapsed = if timestamps { cursor - at } else { frames };
+                (elapsed as f64 / rate, frames)
+            });
+            last = Some((cursor, samples.len()));
+            capture_into(&mut shared, samples, since_last, rate, usize::MAX);
+            cursor += per_callback;
+            count += 1;
+        }
+        shared.samples.into_iter().collect()
+    }
+
+    #[test]
+    fn a_frame_with_audio_lost_inside_it_decodes_once_the_silence_is_put_back() {
+        // 14-wc4y-beta118.md §5: KK4ODA-1's capture lost 28 ms twice inside a rung-4 frame; the
+        // receiver heard the audio either side spliced together and never detected it. The
+        // callbacks after each gap say where it was, and silence there decodes the frame
+        let narrow = aether_phy::waveform::NARROW_500;
+        let (audio, start, length) = rung_four_audio(0.0);
+        let decoded = |heard: &[f32]| {
+            crate::replay::run(heard, narrow, &[])
+                .iter()
+                .filter(|f| f.decoded && f.mode == 4)
+                .count()
+        };
+        assert_eq!(decoded(&audio), 1, "the frame does not decode whole");
+        let spliced = captured_with_losses(&audio, start, length, false);
+        assert_eq!(
+            decoded(&spliced),
+            0,
+            "the frame decoded spliced: the test does not tell"
+        );
+        let padded = captured_with_losses(&audio, start, length, true);
+        // every sample stands where the air put it: only the last callback's worth is missing
+        assert!(audio.len() - padded.len() < 480, "the clock fell behind");
+        assert_eq!(
+            decoded(&padded),
+            1,
+            "the frame did not decode with the silence put back"
+        );
     }
 
     #[test]

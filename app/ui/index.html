@@ -176,21 +176,25 @@
                 <details class="help-pop push-right" id="channel-help" title="What the channel readings mean">
                   <summary title="What the channel readings mean" aria-label="What the channel readings mean">?</summary>
                   <p>
-                    <strong>Signal above noise</strong> is the busy detector's reading: the level of
-                    its latest 25 ms of audio over its learned noise floor. Frames the modem finds
-                    never count as noise, so in a session the floor stays the band's own.
+                    <strong>Signal above noise</strong> is the busy detector's reading in Aether's
+                    channel (500 or 2300 Hz wide): the level of its latest 25 ms of audio over its
+                    learned noise floor. The floor is the noise's middle level, so noise alone reads
+                    a few decibels either side of 0 dB. A negative value is noise under the floor.
+                    Frames the modem finds never count as noise, so in a session the floor stays the
+                    band's own.
                     <strong>Tuning</strong> is the carrier offset the
                     receiver removed from the last frame — positive means the other station is above
                     your dial; a few hertz is nothing, a hundred is a dial to check. <strong>Receive
-                    level</strong> is the sound card's input over the last 3 seconds, which Setup step
-                    3 helps you set; it is a longer window than the busy detector's, so the two can
-                    differ by a few decibels.
+                    level</strong> is the sound card's whole input over the last 3 seconds: the
+                    radio's whole passband, every signal in it included. Setup step 3 helps you set
+                    it. It measures more than Aether's channel, so it reads higher than the floor: on
+                    noise alone a 500 Hz channel holds about 7 dB less than a 2.4 kHz passband.
                     <strong>Queued</strong> is what is still waiting to be sent.
                   </p>
                 </details>
               </div>
               <div class="tiles" id="readings-channel">
-                <div class="reading tile" title="The busy detector's reading: the level of its latest 25 ms of audio above its noise floor">
+                <div class="reading tile" title="The busy detector's reading in Aether's channel: the level of its latest 25 ms of audio above its noise floor. A negative value is noise under the floor">
                   <div class="label">Signal above noise</div>
                   <div class="value" id="v-excess">—</div>
                   <div class="sub" id="v-floor"></div>
@@ -200,7 +204,7 @@
                   <div class="value" id="v-cfo">—</div>
                   <div class="sub" id="v-cfo-sub">offset of the last frame</div>
                 </div>
-                <div class="reading tile" title="The sound card's input level over the last 3 seconds; Setup step 3 helps you set it">
+                <div class="reading tile" title="The sound card's whole input over the last 3 seconds: the radio's whole passband, so it reads higher than the channel's floor. Setup step 3 helps you set it">
                   <div class="label">Receive level</div>
                   <div class="value" id="v-rx-level">—</div>
                   <div class="sub" id="v-rx-level-sub"></div>
@@ -1413,7 +1417,7 @@
                 <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
                 <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
                 <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rung the data is moving at; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
-                <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of the channel; <strong>Receive level</strong> is the sound card's, which the Setup tab helps you set.</li>
+                <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of Aether's channel; <strong>Receive level</strong> is the sound card's whole input, the radio's whole passband, which the Setup tab helps you set.</li>
                 <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own. <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window. Every <strong>?</strong> opens the explanation for the box it sits in.</li>
               </ul>
             </section>

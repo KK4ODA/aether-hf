@@ -92,3 +92,6 @@ context → decision → alternatives considered → consequences.
 | [0085](0085-a-stranded-frame-goes-at-the-most-robust-rung-of-its-new-family.md) | A stranded frame goes at the most robust rung of its new family | accepted |
 | [0086](0086-a-stuck-frame-goes-in-pieces.md) | A stuck frame goes in pieces: link protocol 11 | accepted |
 | [0087](0087-the-tone-floor-reads-the-paths-echo.md) | The tone floor reads the path's echo, and the rungs it breaks stay off the ladder | accepted |
+| [0088](0088-the-busy-detector-holds-through-a-session-starts-clean-and-is-recorded.md) | The busy detector holds through a session, starts clean, and is recorded | accepted |
+| [0089](0089-a-capture-skip-is-put-back-as-silence.md) | A capture skip is put back as silence | accepted |
+| [0090](0090-the-header-on-the-floor-after-one-silent-slot-measured-and-not-kept.md) | The header on the floor after one silent slot — measured and not kept | rejected |
