@@ -144,6 +144,12 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    KK4ODA-1's sound card lost, recovered by putting the lost audio back as silence; and the busy
    detector at both ends, where the floor's hold let a session's frames in as noise and the busy
    trace, deaf too briefly after a release, could not show it.
+15. [15-wc4y-2300-beta120.md](15-wc4y-2300-beta120.md): Step 4 at 2300 Hz, WC4Y's Test of
+   2026-10-23 on beta.120, the first 2300 Hz session under granted slots: still no overlap in the
+   session; the link held at the first OFDM rung, where a third of the frames were never
+   detected, while every tone frame decoded, and why the rate controller could not see it; a
+   beacon over the other station's closing identifier; a ladder rung credited with the rung
+   before's report; and the busy detector's first session since ADR-0088.
 
 ## Reproduction
 

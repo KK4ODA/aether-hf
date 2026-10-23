@@ -2153,6 +2153,26 @@ before it replaces anything, as ADR-0069 did for the link. And generally, the au
 simplicity matters, the work must not be piecemeal — a part that needs a third fix gets a review,
 not a patch, and every change says what it removes as well as what it adds.
 
+**Step 4 at 2300 Hz (2026-10-23, `15-wc4y-2300-beta120.md`):** WC4Y's Test to KK4ODA-1 of
+2026-10-23 00:52Z, 80 m at 2300 Hz, beta.120 at both ends, both sides with audio — the first
+2300 Hz session on the air under granted slots. Complete (message 55, file 61 bit/s), no overlap,
+answers 89–134 ms after their slots. The link sent at rung 7 (BPSK ⅓) where the floor carried: of
+58 rung-7 frames KK4ODA-1 never detected 20, decoded 7 alone and 9 by combining two to four
+copies; every tone frame decoded alone. KK4ODA-1 recommended rung 7 for 135 s: the 2300 Hz air
+caps rung 7's margin at 1 dB against the floor (`floor_margin_db`, ADR-0013 §4) and leaves it
+only after two failed bursts in a row, a burst HARQ rescued counts as clean, and a frame never
+detected counts for nothing. The link bench's fading pipe, which argued for the cap (ADR-0014 §4),
+detects every frame and adds 3 dB a copy: judge rate control at the floor boundary on the harness.
+Scenario `80m-weak-wide-test-2300` (the draw that repeated it: 80/95 → 173/171 bit/s with the cap
+off). Also found: KK4ODA-1's repeating beacon keyed 10 ms after its own closing identifier, over
+WC4Y's (a beacon or datagram the daemon queues does not ask the engine's closing hold); the ladder
+credited a rung whose slot went silent with the previous rung's report (rung 9 "3/4", really 0/4).
+Busy detector: KK4ODA-1's floor at the noise all session (ADR-0088 held); WC4Y's gain reference
+learned the IC-7300's silent first seconds and read +13…+26 dB all session — no patch, a count
+toward the review. A slave's recommendations can be read after the fact from the master's audio:
+decode its control frames with the model (`Modem.decode_buffer`, `GrantFrame.decode`). Changes
+ranked in its §11, the author's call.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
