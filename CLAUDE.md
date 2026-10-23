@@ -2199,6 +2199,27 @@ previous rung's (WC4Y's rung 9 "3/4"). ADR-0076's no-SNR rule stays for an answe
 report. Granted vectors: `ladder-unheard` and `measure-unread` change, `measure-silent` added.
 *"Held for busy"* (`deferred_for_busy`) counts each transmission held once, not each loop pass.
 
+**The rate controller: no more patches (the author's decision, 2026-10-23).** It has been adjusted
+eleven times (ADR-0007, 0008, 0012, 0013, 0014, 0016, 0020, 0066, 0084, 0087, 0093): thresholds, a
+learned margin, hysteresis, a dwell, a decay schedule, a cap at the floor and its removal, partial
+failures, re-seeding, echo limits. Report 15 showed what it cannot see: a frame never detected
+counts for nothing, a burst rescued by combining counts as clean, and the link bench it was tuned
+on detects every frame and adds 3 dB a copy. ADR-0093 is the last patch. The rule covers
+`rate.py`/`rate.rs` and what the engine feeds it or puts in its place (what counts as a failure or
+a clean burst, the SNR it is given, the first rung, the re-encode and split targets). A defect
+where the code does not do what its ADR says (a crash, the port disagreeing with the model) is
+still fixed as a bug; a change to how it judges a path is the review's. Until then, **more
+sessions, read for the review**: for each rung a session used, the frames sent, never detected,
+decoded alone and decoded by combining, the data per second of air it delivered, and what the
+rungs either side would have delivered on the same trace (`bench_link --replay`, `--rung`). If the
+sessions show it choosing rungs that deliver less than a neighbour would, **do the full review**:
+the job in plain words — pick the rung that delivers the most data per second of air on this path,
+counting a frame never heard as lost — the simplest design that does it, judged on the field
+recordings and the harness, not the link bench's fading pipe, before it replaces anything, as
+ADR-0069 did for the link; it says what it removes. Already owed to it: the frames never detected,
+the rescued bursts, a slave's link timeout on the floor on a dead path (ADR-0093 §3), and Poor
+−6 dB at 1 kB, where a ladder capped at rung 3 would be 7 % faster (ADR-0084).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
