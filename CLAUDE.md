@@ -2170,8 +2170,11 @@ credited a rung whose slot went silent with the previous rung's report (rung 9 "
 Busy detector: KK4ODA-1's floor at the noise all session (ADR-0088 held); WC4Y's gain reference
 learned the IC-7300's silent first seconds and read +13…+26 dB all session — no patch, a count
 toward the review. A slave's recommendations can be read after the fact from the master's audio:
-decode its control frames with the model (`Modem.decode_buffer`, `GrantFrame.decode`). Changes
-ranked in its §11, the author's call.
+decode its control frames with the model (`Modem.decode_buffer`, `GrantFrame.decode`). The
+author's video of VARA HF on the same frequency half an hour later (§5.6, the scope and the
+radio's audio through a phone): three narrow tones at a time hopping across 1.6 kHz, then two
+steady tones — the same idea as Aether's tone rungs, which this path carried. Changes ranked in
+its §11, the author's call.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
