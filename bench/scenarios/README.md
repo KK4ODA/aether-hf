@@ -21,6 +21,9 @@ turnaround_ms = 0           # [radio] turnaround_ms, the radio's own (a daemon o
                             # and up; an older build's file leaves it out)
 wait_for_clear = true
 max_mode = 19               # [radio] max_mode (default 19 at 2300 Hz, 14 at 500 Hz)
+pin_rung = 7                # the station's own data at this rung whatever the other
+                            # recommends (`rate.pin`; `--pin N` does it for every station):
+                            # the rate controller's oracle, `tools/rung_oracle.py`
 [stations.a.radio]          # the radio, as the channel server models it
 tx_delay_ms = 20            # the start of each transmission that never radiates
 rx_recovery_ms = 280        # silence from the receiver after the key comes up

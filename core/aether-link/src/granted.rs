@@ -1666,6 +1666,12 @@ impl GrantedEngine {
         Ok(())
     }
 
+    /// The rung this station's own data is pinned at ([`Self::pin_mode`]), if any.
+    #[must_use]
+    pub const fn pinned_mode(&self) -> Option<usize> {
+        self.pinned
+    }
+
     /// Measure `mode` on the path to the other station (ADR-0077): `frames` frames of filler at
     /// it, in a transmission of their own as soon as all of this station's data is acknowledged
     /// — as many as the transmission holds — never delivered and never sent again. What the
