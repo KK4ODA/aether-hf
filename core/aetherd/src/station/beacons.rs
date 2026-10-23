@@ -115,11 +115,14 @@ impl<P: Ptt> Station<P> {
             );
             return;
         }
+        // and past the engine's closing hold, so the channel is judged once the other station's
+        // closing identifier is over, not in the deafness after this station's own
         let idle = self.engine.state() == State::Idle
             && !self.test_running()
             && !self.engine.probing()
             && self.pending.is_empty()
-            && !self.transmitting;
+            && !self.transmitting
+            && now >= self.engine.hold_until();
         let clear = self.busy.settled() && !self.busy.busy(now);
         if idle && clear {
             match self.beacon(None) {

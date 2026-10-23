@@ -245,13 +245,12 @@ def test_a_seed_from_the_tone_floor_is_a_lower_bound() -> None:
 
 
 def test_the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() -> None:
-    """ADR-0013 §4, ADR-0014: the floor's frames are five times as long as an OFDM frame. A
-    session the SNR puts on the first OFDM rungs does not start on the floor; on an air that
-    caps the first OFDM rung's margin the rung is held against the floor to its threshold
-    plus the cap, however wide the learned margin, and one failed burst there does not leave
-    for the floor — a second in a row does; the climb back asks for the cap and the
-    hysteresis. The first OFDM rung is the first *usable* one: an OFDM mode the floor beats
-    on rate and threshold both is on the ladder and never recommended."""
+    """ADR-0013 §4, ADR-0014: the floor's frames are five times as long as an OFDM frame, so a
+    session the SNR puts on the first OFDM rungs does not start on the floor. The first OFDM
+    rung is the first *usable* one: an OFDM mode the floor beats on rate and threshold both is
+    on the ladder and never recommended. Above the floor the learned margin decides, as between
+    any two rungs: the 2 300 Hz air's cap at 1 dB against the floor held WC4Y's weak path on
+    rung 7 while the floor's top rung decoded every frame (ADR-0093)."""
     rc = RateController()  # the wide ladder: rungs 0–5 are the tone floor
     assert rc.floor_modes == 6 and rc.modes[:6] == list(range(6))
     first = rc.modes[rc._first_ordinary()]
@@ -259,32 +258,18 @@ def test_the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() -> None:
     fits_second = AWGN_THRESHOLD_DB[second] + rc.margin_db + rc.up_hysteresis_db
     assert rc.first_mode(fits_second) == first  # not two steps down, on the floor
     assert rc.first_mode(-12.0) < rc.floor_modes  # nothing above the floor fits: the floor
+    # WC4Y's call read at -0.3 dB: rung 7 at AWGN -3.2 dB needs its margin and the hysteresis
+    assert rc.first_mode(-0.3) < rc.floor_modes
 
-    capped = RateController(floor_margin_db=1.0)
-    capped.seed(AWGN_THRESHOLD_DB[first] + 1.5)
-    capped._index = capped.modes.index(first)
-    capped.margin_db = 8.0  # a fading channel's learned margin
-    snr = capped.snr_db
-    capped.observe(snr, ok=0, failed=6, mode=first)
-    assert capped.recommend() == first  # one lost burst on the capped rung: held
-    capped.observe(snr, ok=0, failed=6, mode=first)
-    assert capped.recommend() < first  # two in a row: the floor
-    for _ in range(3):
-        capped.observe(snr, ok=6, failed=0)
-    assert capped.recommend() < first  # the cap and the hysteresis are not met at that SNR
+    fading = RateController()
+    fading.seed(AWGN_THRESHOLD_DB[first] + 1.5)
+    fading._index = fading.modes.index(first)
+    fading.margin_db = 8.0  # a fading channel's learned margin
+    fading.observe(fading.snr_db, ok=0, failed=6, mode=first)
+    assert fading.recommend() < first  # one lost burst on the first OFDM rung: the floor
     for _ in range(6):
-        capped.observe(
-            AWGN_THRESHOLD_DB[first] + 1.0 + capped.up_hysteresis_db + 0.5, ok=6, failed=0
-        )
-    assert capped.recommend() >= first  # they are here, whatever the learned margin
-
-    # uncapped the learned margin decides, as between any two rungs
-    plain = RateController(floor_margin_db=None)
-    plain.seed(AWGN_THRESHOLD_DB[first] + 1.5)
-    plain._index = plain.modes.index(first)
-    plain.margin_db = 8.0
-    plain.observe(plain.snr_db, ok=0, failed=6, mode=first)
-    assert plain.recommend() < first
+        fading.observe(AWGN_THRESHOLD_DB[first] + 2.5, ok=6, failed=0)
+    assert fading.recommend() < first  # the learned margin keeps it there at that SNR
 
 
 def test_usable_modes_are_pareto_and_sorted() -> None:

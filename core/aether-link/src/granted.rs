@@ -953,9 +953,11 @@ pub struct GrantedEngine {
     /// `measure` bit): the other station keeps the report for it, and whatever that station
     /// holds to combine is of measurement frames, which it drops (ADR-0077).
     measure_out: Option<(usize, usize)>,
-    /// The measurement's answer was not read: the report follows a poll, and the SNR it carries
-    /// is the poll's, not the rung's (ADR-0076).
+    /// The measurement's answer came without its report: the report follows a poll, and the SNR
+    /// it carries is the poll's, not the rung's (ADR-0076).
     measure_unheard: bool,
+    /// The measurement out is a repeat, its first slot silent ([`Self::measurement_unheard`]).
+    measure_again: bool,
     rate: RateController,
     asked: Option<usize>,
     rx_base: u8,
@@ -1046,7 +1048,7 @@ fn rate_controller_for(timing: &PhyTiming, config: RateConfig) -> RateController
         )
     };
     controller
-        .with_floor(timing.floor_modes, timing.floor_margin_db)
+        .with_floor(timing.floor_modes)
         .with_echo_limit(&timing.echo_limit)
 }
 
@@ -1066,6 +1068,7 @@ fn round_even(x: f64) -> i64 {
 impl GrantedEngine {
     /// Build a station.
     #[must_use]
+    #[allow(clippy::too_many_lines)] // the engine's state, a field a line
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
         let rate = rate_controller_for(&timing, config.rate);
@@ -1126,6 +1129,7 @@ impl GrantedEngine {
             measure_ask: None,
             measure_out: None,
             measure_unheard: false,
+            measure_again: false,
             rate,
             asked: None,
             rx_base: 0,
@@ -1193,6 +1197,7 @@ impl GrantedEngine {
         self.measure_ask = None;
         self.measure_out = None;
         self.measure_unheard = false;
+        self.measure_again = false;
         self.rate = rate_controller_for(&self.timing, self.config.rate);
         self.asked = None;
         self.rx_base = 0;
@@ -1387,6 +1392,16 @@ impl GrantedEngine {
     #[must_use]
     pub fn all_acknowledged(&self) -> bool {
         self.tx_queue.is_empty() && self.records.values().all(|r| r.acked)
+    }
+
+    /// The earliest this station starts anything on its own (ADR-0075): after a `DISC_ACK` it
+    /// answered, the latest the other station's closing identifier can end. The engine holds
+    /// its own calls and probes to it; its driver holds what it sends outside the engine, a
+    /// beacon or a datagram — on 2026-10-23 a repeating beacon keyed 10 ms after the slave's
+    /// identifier and covered the master's whole (15-wc4y-2300-beta120.md §3).
+    #[must_use]
+    pub fn hold_until(&self) -> f64 {
+        self.hold_until
     }
 
     /// The tries of the current (or last) call so far.
@@ -1667,6 +1682,7 @@ impl GrantedEngine {
             return Err("a measurement takes at least one frame");
         }
         self.measure_ask = Some((mode, frames));
+        self.measure_again = false;
         if self.role == Role::Slave && self.window.is_some() {
             self.cause = "measure";
             self.try_window();
@@ -3071,7 +3087,7 @@ impl GrantedEngine {
         self.silent += 1;
         self.answered_run = 0;
         if self.measure_out.is_some() {
-            self.measure_unheard = true;
+            self.measurement_unheard();
         }
         if slot.data && self.config.hold_unknown {
             for s in self.unacked() {
@@ -3094,6 +3110,32 @@ impl GrantedEngine {
         if self.silent > self.config.max_retries {
             self.end_session("no response", false);
         }
+    }
+
+    /// A measurement's slot went silent. The other station may have read none of it, not its
+    /// header and not its frames, and then its next answer reports the measurement before:
+    /// WC4Y's rung 9 went into the Test as 3 of 4 decoded on rung 8's report, where KK4ODA-1
+    /// had decoded none of it (15-wc4y-2300-beta120.md §6). This station cannot tell that from
+    /// an answer lost, so the rung is measured again; silent a second time, it is recorded with
+    /// nothing decoded and no SNR.
+    fn measurement_unheard(&mut self) {
+        let Some((mode, sent)) = self.measure_out else {
+            return;
+        };
+        if !self.measure_again {
+            self.measure_again = true;
+            self.ask_again(true);
+            return;
+        }
+        self.measure_out = None;
+        self.measure_again = false;
+        self.measure_unheard = false;
+        self.ladder.push(LadderRung {
+            mode,
+            frames: sent,
+            decoded: 0,
+            snr_db: None,
+        });
     }
 
     fn has_work(&self) -> bool {
@@ -4081,14 +4123,16 @@ impl GrantedEngine {
             if ctl.reports() {
                 self.measure_out = None;
                 let decoded = (0..sent).filter(|&i| ctl.measured(i)).count();
-                // after a silent slot the report is the poll's answer: its frames counted, its
-                // SNR not the rung's (ADR-0076)
+                // a report after an answer that carried none is the poll's answer: its frames
+                // counted, its SNR not the rung's (ADR-0076). After a silent slot the rung is
+                // measured again (`measurement_unheard`)
                 let snr_db = if self.measure_unheard {
                     None
                 } else {
                     ctl.snr_db
                 };
                 self.measure_unheard = false;
+                self.measure_again = false;
                 self.ladder.push(LadderRung {
                     mode,
                     frames: sent,
@@ -4762,7 +4806,6 @@ mod tests {
             floor_control_frame_s: Some(3.2),
             floor_modes: 6,
             control_threshold_db: Some(CONTROL_THRESHOLD_DB),
-            floor_margin_db: Some(1.0),
             floor_preamble_detect_s: Some(0.54),
             echo_limit: Vec::new(),
         }

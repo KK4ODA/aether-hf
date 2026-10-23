@@ -298,7 +298,8 @@ Type the other station's callsign, with its SSID if it uses one, then:
 - **Beacon**: puts your callsign on the air once, on the tone floor, addressed to nobody, so
   anyone listening can report hearing you. The list beside it repeats it every 10, 15, 20, 30 or
   60 minutes while you are at the station. It waits for a clear channel and for any session to
-  finish, and stops when the modem restarts. Aether never beacons under automatic control.
+  finish, including the other station's Morse identifier at its end, and stops when the modem
+  restarts. Aether never beacons under automatic control.
 - **Test session**: the field test (below). The same button stops it.
 
 The line under the buttons reports the last probe, the beacon timer, or the Test's progress.

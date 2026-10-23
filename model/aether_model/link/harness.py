@@ -42,9 +42,6 @@ from aether_model.waveform import WIDE_2300, Bandwidth, WaveformParams
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
 
-WIDE_FLOOR_MARGIN_DB = 1.0
-"""``PhyTiming.floor_margin_db`` of the 2 300 Hz air (ADR-0013 §4, the link bench)."""
-
 
 @dataclass
 class RealSoftFrame:
@@ -114,9 +111,6 @@ def phy_timing(params: WaveformParams = WIDE_2300, start_of_frame: bool = True) 
         floor_control_frame_s=air.tone_control.duration_s,
         floor_modes=air.floor_modes,
         floor_preamble_detect_s=tone.announce_delay_s() if start_of_frame else None,
-        # the wide air's first OFDM rung stays productive on a fading path a decibel above its
-        # 10 % point; the narrow air's does not (ADR-0013 §4)
-        floor_margin_db=WIDE_FLOOR_MARGIN_DB if wide else None,
         echo_limit=dict(ECHO_LIMIT if wide else NARROW_ECHO_LIMIT),
     )
 

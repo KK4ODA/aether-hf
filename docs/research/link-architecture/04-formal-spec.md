@@ -233,8 +233,11 @@ number's place. They take no sequence number, are never delivered and never sent
   acknowledgement is always clear, since `base` is the first sequence number not received, so a
   report is never read as one: it acknowledges nothing at or above `base`.
 * A measurement's slot heard silent steps no rung down (R9): its header always goes, so the
-  silence says the header or the answer was lost. The report then follows the poll's answer, and
-  its SNR is not the rung's.
+  silence says the header or the answer was lost. The measuring station cannot tell which: the
+  other station, if it read nothing of the measurement, still reports the one before. So the
+  measurement is asked again, once; its slot silent a second time, the rung is recorded with
+  nothing decoded and no SNR (ADR-0092). An answer read without a report is followed by a poll,
+  whose answer's report counts the frames, its SNR not the rung's.
 * A measurement the keying gate drops, or cut before any of it could be read, is asked again.
 
 R14 moves no deadline and changes no slot: a measurement transmission is timed, granted and

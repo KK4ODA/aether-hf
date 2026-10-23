@@ -249,10 +249,10 @@ class RateController:
     fading path a lone lost frame is the operating point HARQ pays for, not a cliff: widening
     in full on one frame of six took a 1 kB session on ITU Poor at −6 dB from rung 3 to rung 1
     for its next burst. A burst lost in the main is a failure as before, and so is any on the
-    first OFDM rung of an air that does not cap its margin there (:attr:`floor_margin_db`):
-    the 500 Hz floor below it carries an exchange better than the rung does once it loses
-    frames (a fifth of rung 5's at 0 dB on Moderate and Poor), and holding the rung cost 3 %
-    there."""
+    first OFDM rung (:meth:`_at_edge`): the floor below it carries an exchange better than the
+    rung does once it loses frames — at 500 Hz a fifth of rung 5's at 0 dB on Moderate and Poor,
+    where holding the rung cost 3 %; at 2 300 Hz, on WC4Y's Test of 2026-10-23, rung 7 decoded
+    one frame in eight on its own while every tone frame decoded (ADR-0093)."""
     echo_limit: dict[int, float] = field(default_factory=dict)
     """The echo share above which a rung is kept off the ladder (ADR-0087): the tone floor's
     40 ms symbols carry a path whose echo smears the fast kinds' 10 ms ones and outruns OFDM's
@@ -279,17 +279,9 @@ class RateController:
     floor_modes: int = 6
     """How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013, and
     on the 2 300 Hz air its fast kinds, ADR-0014 — whose frames are five times as long as an
-    OFDM frame: see :meth:`first_mode` and :attr:`floor_margin_db`."""
-    floor_margin_db: float | None = None
-    """The most margin the first OFDM rung is held to against the floor, however wide the
-    learned margin has grown — on an air whose first rung stays productive on a fading path
-    below the margin the learned one would demand (``PhyTiming.floor_margin_db``). The
-    learned margin prices a channel's fading among OFDM rungs a third apart in rate; the floor
-    is a quarter of the rate, and a rung that loses half its frames but gets the rest through
-    with HARQ is still worth twice the floor. The 2 300 Hz air's first rung spreads a frame
-    over 2.3 kHz: on the fading bench, before the floor existed, it carried every session
-    from a decibel above its 10 % point up on every class. The 500 Hz air's has a fifth of
-    that diversity and does not; ``None``, the learned margin, is the rule there."""
+    OFDM frame: see :meth:`first_mode` and :meth:`_at_edge`. The first OFDM rung is held to the
+    learned margin like any other: the 2 300 Hz air capped it at 1 dB against the floor until
+    ADR-0093 (ADR-0013 §4), which held a weak path on a rung that lost most of its frames."""
     thresholds: dict[int, float] = field(default_factory=lambda: dict(AWGN_THRESHOLD_DB))
     modes: list[int] = field(default_factory=usable_modes)
     snr_db: float | None = None
@@ -301,8 +293,6 @@ class RateController:
     _ever_failed: bool = False
     _decay_step_db: float = 0.0
     """The last decay step taken since the failure before, which the next one grows on."""
-    _boundary_failures: int = 0
-    """Failed bursts in a row on the first OFDM rung (:meth:`_step_down`)."""
     _reseed_pending: bool = False
     """The seed was a lower bound (:meth:`seed`): the first clean burst measured on an ordinary
     frame seeds again."""
@@ -351,7 +341,6 @@ class RateController:
             self._decay_step_db = 0.0
             self._step_down()
         elif ok:
-            self._boundary_failures = 0
             self._clean_run += 1
             self._clean_since_decay += 1
             if not self._ever_failed:
@@ -401,14 +390,9 @@ class RateController:
         self.snr_db = self._smoothed
 
     def _at_edge(self) -> bool:
-        """Whether the recommendation is the first OFDM rung of an air whose floor below it
-        holds no margin cap: where a failure, in part or not, goes back to the floor
-        (:attr:`partial_share`)."""
-        return (
-            self.floor_margin_db is None
-            and self.floor_modes > 0
-            and self._index == self._first_ordinary()
-        )
+        """Whether the recommendation is the first OFDM rung, above the floor: where a
+        failure, in part or not, goes back to the floor (:attr:`partial_share`)."""
+        return self.floor_modes > 0 and self._index == self._first_ordinary()
 
     def _widen(self, snr_db: float | None, mode: int | None, share: float = 1.0) -> None:
         """A failed burst is a measurement, not just a nudge: mode ``m`` failing at SNR ``s``
@@ -469,7 +453,7 @@ class RateController:
     def _required(self, index: int) -> float:
         """The SNR a step up to the rung at ``index`` asks for: its threshold, the margin it is
         held to and the hysteresis."""
-        return self.thresholds[self.modes[index]] + self._margin(index) + self.up_hysteresis_db
+        return self.thresholds[self.modes[index]] + self.margin_db + self.up_hysteresis_db
 
     def _first_ordinary(self) -> int:
         """Index in :attr:`modes` of the first rung above the floor."""
@@ -495,33 +479,16 @@ class RateController:
 
     # ── the state machine ─────────────────────────────────────────────
 
-    def _margin(self, index: int) -> float:
-        """The margin a rung is held to: the learned one, capped at :attr:`floor_margin_db`
-        for the first OFDM rung, whose alternative is the floor."""
-        if self.floor_margin_db is not None and index == self._first_ordinary():
-            return min(self.margin_db, self.floor_margin_db)
-        return self.margin_db
-
     def _fits(self, index: int, extra_db: float = 0.0) -> bool:
         if self._echo_out(index):
             return False
         if self.snr_db is None:
             return index == 0
-        return self.thresholds[self.modes[index]] + self._margin(index) + extra_db <= self.snr_db
+        return self.thresholds[self.modes[index]] + self.margin_db + extra_db <= self.snr_db
 
     def _step_down(self) -> None:
         """A failure: fall to the fastest mode the current SNR and margin still support, but
-        always at least one step — a failure at the bottom of the table is still evidence.
-        The one exception is a single failed burst on the first OFDM rung of an air that caps
-        its margin (:attr:`floor_margin_db`) while the SNR still carries the rung: the floor
-        below is a quarter of the rate, so one lost burst is not worth leaving for it; a
-        second one in a row is."""
-        ordinary = self._first_ordinary()
-        at_boundary = self.floor_margin_db is not None and self._index == ordinary
-        self._boundary_failures = self._boundary_failures + 1 if at_boundary else 0
-        if at_boundary and self._boundary_failures < 2 and self._fits(ordinary):
-            return
-        self._boundary_failures = 0
+        always at least one step — a failure at the bottom of the table is still evidence."""
         target = self._index - 1
         for i in range(self._index - 1, -1, -1):
             if self._fits(i):
