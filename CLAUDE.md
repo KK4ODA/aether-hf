@@ -2218,7 +2218,10 @@ counting a frame never heard as lost — the simplest design that does it, judge
 recordings and the harness, not the link bench's fading pipe, before it replaces anything, as
 ADR-0069 did for the link; it says what it removes. Already owed to it: the frames never detected,
 the rescued bursts, a slave's link timeout on the floor on a dead path (ADR-0093 §3), and Poor
-−6 dB at 1 kB, where a ladder capped at rung 3 would be 7 % faster (ADR-0084).
+−6 dB at 1 kB, where a ladder capped at rung 3 would be 7 % faster (ADR-0084). **The review's
+brief is `docs/research/rate-control/00-brief.md`** (written 2026-10-23, after report 16 met the
+rule's condition): gates 0–6, instruments first, criteria registered before the runs, the old
+controller deleted at the end.
 
 **ND1J's two Tests at 500 Hz (2026-10-23, `16-nd1j-500-beta121.md`).** ND1J's Tests to KK4ODA-1
 at 16:04Z and 16:07Z, 80 m, beta.121 at both ends, both sides with audio — at **500 Hz** (his
