@@ -1,0 +1,34 @@
+name = "80m-weak-wide-test-2300"
+description = """80 m at 2300 Hz on WC4Y's path of 2026-10-23 00:52Z
+(docs/research/link-architecture/15-wc4y-2300-beta120.md): the caller is heard at about −2 dB on
+a Moderate path and hears the other station at about −6, so every answer goes on the floor. A
+Test session: the call measured a path the first OFDM rung (BPSK ⅓) fits by the AWGN table with
+its margin capped at 1 dB against the floor (ADR-0013 §5), and the message and the file's first
+frames went there. On the air one frame in three was never detected, the rest took 2.5 copies,
+and the link stayed on the rung for three minutes where the floor's top rung (tone100-153)
+decoded every frame it sent."""
+tags = ["80m", "stress"]
+bandwidth = 2300
+seconds = 1200
+seed = 1023
+
+[stations.a]
+callsign = "WC4Y"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = -2.0
+[path.b_to_a]
+snr_db = -6.0
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
