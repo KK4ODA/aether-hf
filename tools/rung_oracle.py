@@ -47,14 +47,22 @@ SUMMARY_COLUMNS = [
 
 
 def transfer_bps(result: dict[str, Any]) -> float | None:
-    """The first ``message`` step's rate, 0 for one lost; None when the script sent none."""
-    text = str(result.get("transfers") or "")
-    for part in text.split(";"):
+    """The largest ``message`` step's rate — a short first message is mostly the exchange's
+    overhead, whatever the rung — 0 when it was lost; None when the script sent none."""
+    best: tuple[int, float] | None = None
+    for part in str(result.get("transfers") or "").split(";"):
         part = part.strip()
-        if part.startswith("message"):
-            m = TRANSFER.match(part)
-            return float(m[4]) if m else 0.0
-    return None
+        if not part.startswith("message"):
+            continue
+        m = TRANSFER.match(part)
+        if m:
+            size, rate = int(m[2]), float(m[4])
+        else:
+            lost = re.match(r"message (\d+) B lost", part)
+            size, rate = (int(lost[1]) if lost else 0), 0.0
+        if best is None or size > best[0]:
+            best = (size, rate)
+    return None if best is None else best[1]
 
 
 def metric(result: dict[str, Any]) -> float:
