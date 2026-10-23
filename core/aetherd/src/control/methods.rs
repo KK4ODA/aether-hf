@@ -1276,7 +1276,11 @@ fn rate_pin<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>
         Ok(()) => Response::ok(id, json!({ "pinned": rung })),
         Err(reason) => Response::failed(
             id,
-            ApiError::new("bad_params", format!("Cannot pin the rung: {reason}."), false),
+            ApiError::new(
+                "bad_params",
+                format!("Cannot pin the rung: {reason}."),
+                false,
+            ),
         ),
     }
 }
