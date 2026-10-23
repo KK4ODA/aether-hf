@@ -21,11 +21,11 @@ ADR is accepted (the author, 2026-10-23); fixes outside the controller may ship.
   replayed open-loop on the field record.
 * **The oracle exists.** `rate.pin` fixes a station's rung for the benches, the harness pins
   with `pin_rung` or `--pin`, and `tools/rung_oracle.py` runs a scenario at each fixed rung and
-  reports the controller's regret against the best in hindsight (§7). On its first pass (14
-  scenarios, one draw, a coarse set of rungs) a fixed rung in hindsight beat the controller in
-  eleven: by +110 % on a strong Moderate 500 Hz path, +107 % on 15 m flutter, +73 % on 3 kB over
-  AWGN; within 4 % on the air's 2300 Hz path; and the controller beat every fixed rung on the two
-  weakest 500 Hz Tests.
+  reports the controller's regret against the best in hindsight (§7). Over two passes (14
+  scenarios, one draw, 8–11 rungs each, the neighbours of every best among them) a fixed rung in
+  hindsight beat the controller by 17 % or more in eleven: by +110 % on a strong Moderate
+  500 Hz path, +107 % on 15 m flutter, +73 % on 3 kB over AWGN; within 4 % on the air's 2300 Hz
+  path; and the controller beat every fixed rung on the two weakest 500 Hz Tests.
 * **The field record** is nine two-sided sessions (2026-10-14 to 2026-10-23, 500 Hz but one,
   80 m, three testers) and the one-sided ladders of thirteen more (§2).
 * **What the sessions show** (§5): the climb stops below what the ladder decodes (three
@@ -543,44 +543,47 @@ would on the air.
 The controller beats both fixed rungs by a wide margin, as it should at 15 dB AWGN: the best
 fixed rung there is near the top of the ladder.
 
-### 7.3 The first pass
+### 7.3 Two passes, one draw
 
-Fourteen scenarios, one draw each, at a coarse set of rungs. The measure is the largest
-`message` step's rate (a short first message is mostly the exchange's overhead) or, for a Test,
-the file's. *lost* is a run whose message did not arrive within the scenario's limits: a rung too
-slow for the budget (`quick-awgn-2300` runs 240 s of air; a 3000 B message at tone-36 needs 670)
-or too fast for the path.
+Fourteen scenarios, one draw each. The first pass ran a coarse set of rungs (1, 3, 4, 5, 7, 9,
+11, 13 at 500 Hz; 1, 3, 5, 7, 9, 11, 14, 16, 18 at 2300 Hz); the second ran the rungs either
+side of each scenario's best, where the first pass had not. The measure is the largest `message`
+step's rate (a short first message is mostly the exchange's overhead) or, for a Test, the file's.
+*lost* is a run whose message did not arrive within the scenario's limits: a rung too slow for the
+budget (`quick-awgn-2300` runs 240 s of air; a 3000 B message at tone-36 needs 670) or too fast
+for the path; a starred rate is a run whose message arrived but whose reply was lost or whose end
+was not clean.
 
-At 500 Hz, rungs 1, 3, 4, 5, 7, 9, 11 and 13:
-
-| scenario | path | the controller | best fixed rung | regret | by rung, bit/s |
-|---|---|---|---|---|---|
-| `80m-weak-500` | Poor −7 dB, 1000 B | 70 | 3: 82 | +17 % | 1:39 3:82 4:52 5:14 7:16 9:22 11:23 13:22 |
-| `80m-nvis-evening-500` | NVIS 9/4 dB, Test | 41 | 1: 39 | −5 % | 1:39 3:38 4:19 5:14 7:16 9:15 11:24 13:16 |
-| `80m-weak-both-ways-ladder-500` | Good −5/−10 dB, Test | 78 | 4: 70 | −11 % | 1:39 3:55 4:70 5:37 7:25 9:26 11:28 13:30 |
-| `80m-flutter-500` | flutter 8 dB, Test | 129 | 9: 163 | +26 % | 1:41 3:88 4:108 5:92 7:147 9:163 11:114 13:68 |
-| `80m-qsb-dropout-500` | Moderate 8 dB, a dropout, 8000 B | 146 | 11: 198 | +36 % | 1:lost 3:87 4:107 5:82 7:136 9:150 11:198 13:172 |
-| `20m-dx-500` | Moderate 6 dB, 6000 B | 146 | 11: 219 | +50 % | 1:lost 3:95 4:122 5:95 7:146 9:171 11:219 13:201 |
-| `80m-strong-moderate-500` | Moderate 11/5 dB, Test | 151 | 13: 317 | +110 % | 1:lost 3:90 4:117 5:81 7:152 9:163 11:282 13:316 |
-
-At 2300 Hz, rungs 1, 3, 5, 7, 9, 11, 14, 16 and 18:
-
-| scenario | path | the controller | best fixed rung | regret | by rung, bit/s |
-|---|---|---|---|---|---|
-| `80m-weak-wide-test-2300` | Moderate −2/−6 dB, Test (the air's path, report 15) | 167 | 5: 175 | +4 % | 1:37 3:83 5:175 7:108 9:137 11:86 14:73 16:86 18:86 |
-| `40m-good-throughput-2300` | Good 20 dB, 16000 B | 2327 | 18: 2612 | +12 % | 1–7:lost 9:512 11:1041 14:1580 16:2246 18:2612 |
-| `80m-thunderstorm-agc-2300` | Moderate 10 dB, crashes, an AGC, Test | 591 | 14: 826 | +40 % | 1:lost 3:92 5:203 7:178 9:400 11:762 14:826 16:599 18:204 |
-| `20m-polar-path-2300` | high Moderate 12 dB, 2000 B | 198 | 9: 286 | +44 % | 1:45 3:98 5:198 7:148 9:286 11:112 14:95 16:92 18:99 |
-| `20m-dx-moderate-2300` | Moderate 8 dB, 1500 B | 632 | 14: 923 | +46 % | 1:lost 3:98 5:211 7:240 9:500 11:706 14:923 16:706 18:286 |
-| `quick-awgn-2300` | AWGN 15 dB, 3000 B | 1263 | 16: 2182 | +73 % | 1,3:lost 5:209 7:240 9:511 11:1091 14:1600 16:2182 18:1846 |
-| `15m-equatorial-flutter-2300` | flutter 10 dB, 1500 B | 387 | 14: 800 | +107 % | 1:44 3:98 5:211 7:240 9:500 11:632 14:800 16:632 18:lost |
+| scenario | path | the controller | best fixed rung | regret | rungs run | by rung, bit/s |
+|---|---|---|---|---|---|---|
+| `80m-weak-500` | Poor −7 dB, 1000 B | 70 | 3: 82 | +17 % | 9 | 1:39 2:57 3:82 4:52 5:14 7:16 9:22 11:23 13:22 |
+| `80m-nvis-evening-500` | NVIS 9/4 dB, Test | 41 | 1: 39 | −5 % | 10 | 0:24 1:39 2:36 3:38 4:19 5:14 7:16 9:15 11:24 13:16 |
+| `80m-weak-both-ways-ladder-500` | Good −5/−10 dB, Test | 78 | 4: 70 | −11 % | 8 | 1:39 3:55 4:70 5:37 7:25 9:26 11:28 13:30 |
+| `80m-flutter-500` | flutter 8 dB, Test | 129 | 9: 163 | +26 % | 9 | 1:41 3:88 4:108 5:92 7:147 9:163 10:127 11:114 13:68 |
+| `80m-qsb-dropout-500` | Moderate 8 dB, a dropout, 8000 B | 146 | 11: 198 | +36 % | 10 | 1:lost 3:87 4:107 5:82 7:136 9:150 10:190 11:198 12:159 13:172 |
+| `20m-dx-500` | Moderate 6 dB, 6000 B | 146 | 11: 219 | +50 % | 9 | 1:lost 3:95 4:122 5:95 6:126 7:146 9:171 11:219 13:201 |
+| `80m-strong-moderate-500` | Moderate 11/5 dB, Test | 151 | 13: 316 | +110 % | 10 | 1:lost 3:90 4:117 5:81 7:152 9:163 11:282 12:250 13:316 14:252 |
+| `80m-weak-wide-test-2300` | Moderate −2/−6 dB, Test (the air's path, report 15) | 167 | 5: 175 | +4 % | 10 | 1:37 3:83 4:116 5:175 7:108 9:137 11:86 14:73 16:86 18:86 |
+| `40m-good-throughput-2300` | Good 20 dB, 16000 B | 2327 | 19: 2723 | +17 % | 11 | 1–7:lost 9:512 11:1041 14:1580 16:2246 17:2667 18:2612 19:2723 |
+| `80m-thunderstorm-agc-2300` | Moderate 10 dB, crashes, an AGC, Test | 591 | 14: 826 | +40 % | 11 | 1:lost 3:92 5:203 7:178 9:400 11:762 12:738 14:826 15:747 16:599 18:204 |
+| `20m-polar-path-2300` | high Moderate 12 dB, 2000 B | 198 | 9: 286 | +44 % | 11 | 1:45 3:98 5:198 7:148 8:167 9:286 10:96 11:112 14:95 16:92 18:99 |
+| `20m-dx-moderate-2300` | Moderate 8 dB, 1500 B | 632 | 14: 923 | +46 % | 11 | 1:44\* 3:98 5:211 7:240 8:364 9:500 10:750 11:706 14:923 16:706 18:286 |
+| `quick-awgn-2300` | AWGN 15 dB, 3000 B | 1263 | 16: 2182 | +73 % | 11 | 1,3:lost 5:209 7:240 9:511 11:1091 14:1600 15:2000 16:2182 17:1714 18:1846 |
+| `15m-equatorial-flutter-2300` | flutter 10 dB, 1500 B | 387 | 14: 800 | +107 % | 11 | 1:44 3:98 5:211 7:240 9:500 11:632 12:600 14:800 15:667 16:632 18:148\* |
 
 Read with the caution one draw deserves (§8):
 
-* **A fixed rung beat the controller in eleven of fourteen.** On the two weakest 500 Hz Tests
-  the controller beat every fixed rung (−5 %, −11 %): there it moves between the floor's rungs
-  as the path moves, which no fixed rung can. On the air's own 2300 Hz path it was within 4 %
-  of the best rung, which is rung 5: ADR-0093 at work.
+* **A fixed rung beat the controller by 17 % or more in eleven of fourteen.** On the two weakest
+  500 Hz Tests the controller beat every fixed rung (−5 %, −11 %): there it moves between the
+  floor's rungs as the path moves, which no fixed rung can. On the air's own 2300 Hz path it was
+  within 4 % of the best rung, which is rung 5: ADR-0093 at work.
+* **The second pass moved one best**: `40m-good-throughput-2300`'s from rung 18 to the top rung,
+  19 (+12 % → +17 %). The other thirteen held against both neighbours. The neighbours give the
+  paths their shape: a plateau at the top on the stronger paths (`80m-strong-moderate-500` rungs
+  11–14 at 250–316, `80m-thunderstorm-agc-2300` 11–15 at 738–826, `20m-dx-moderate-2300` 10–14 at
+  706–923), one carrying rung with a cliff either side on the fast-fading paths
+  (`20m-polar-path-2300` 8/9/10 at 167/286/96, `80m-flutter-500` 7/9/10 at 147/163/127), and the
+  floor's top rung on the weak ones (`80m-weak-500` 2/3/4 at 57/82/52).
 * **The largest regrets are on the stronger paths and the short sessions**: +110 % on
   `80m-strong-moderate-500` (the file at rungs 7–9 where 13 carried twice as much), +107 % on
   the 15 m flutter, +73 % on 3000 B over AWGN at 15 dB, where the climb from the call's rung to
@@ -592,9 +595,10 @@ Read with the caution one draw deserves (§8):
   (every *lost* above); the oracle knows the path, a controller must find it. The regret says how
   much there is to find, not what a controller should get.
 * **One draw each.** The controller's run and a pinned run are the same seed on different session
-  timings, so each is another draw of the fading (`00-brief.md` §8). A second pass at the rungs
-  either side of each best, and three draws of each, are the next runs; Gate 2's criteria will
-  say how the oracle is read.
+  timings, so each is another draw of the fading (`00-brief.md` §8). Three draws of each are the
+  next runs; Gate 2's criteria will say how the oracle is read. One run of the 141 faulted on the
+  channel server's start-up under load (`channel.port` not written in time) and was run again
+  alone.
 
 ## 8. What this gate did not settle
 
@@ -610,10 +614,9 @@ Read with the caution one draw deserves (§8):
   Outside the controller; it can ship.
 * **The 2300 Hz record** is one session. The air at 2300 Hz is where the floor-to-OFDM choice
   cost the most (§5 item 2) and where the ladder record is thinnest.
-* **The oracle's first pass is one draw at a coarse set of rungs.** Its numbers rank the
-  scenarios and size the gap; they do not yet measure it. Several draws, the rungs either side of
-  each best, and criteria registered before the comparison (Gate 2) come before any candidate is
-  judged on it.
+* **The oracle's two passes are one draw.** Its numbers rank the scenarios and size the gap;
+  they do not yet measure it. Several draws and criteria registered before the comparison
+  (Gate 2) come before any candidate is judged on it.
 
 ## 9. Reproducing
 

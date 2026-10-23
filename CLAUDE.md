@@ -2256,7 +2256,7 @@ counts them, and the sender's-choice rule by the *slowest* rung read. The bench-
 (`Station::pin_rung`, `GrantedEngine::pinned_mode`; spec §4.2), the harness's `pin_rung` /
 `--pin`, and `tools/rung_oracle.py` (every scenario at each fixed rung, the regret against the
 best in hindsight; the measure the largest message's rate or the Test's file rate) are the
-oracle: on the first pass (14 scenarios, one draw, a coarse rung set) a fixed rung beat the
+oracle: over two passes (14 scenarios, one draw, 8–11 rungs each) a fixed rung beat the
 controller in eleven — +110 % on `80m-strong-moderate-500` (rung 13 against the controller's
 7–9), +107 % on `15m-equatorial-flutter-2300`, +73 % on `quick-awgn-2300` (the climb on 3 kB) —
 within 4 % on the air's `80m-weak-wide-test-2300`, and the controller beat every fixed rung on
