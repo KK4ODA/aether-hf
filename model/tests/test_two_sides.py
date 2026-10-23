@@ -285,6 +285,17 @@ def test_a_transmission_is_placed_by_the_frames_recorded_of_it() -> None:
     assert two_sides.transmission_start(k, [heard(5.0, "data", 9)], expected=0.25) is None
 
 
+def test_a_transmission_only_a_phantom_was_recorded_of_is_placed_by_its_key() -> None:
+    heard = two_sides.Heard
+    # the answer's span was taken by a phantom read as a data frame 0.44 s before it
+    phantom = [heard(212.384, "data", 8, decoded=False)]
+    assert two_sides.rf_start_of(None, phantom, expected=212.85) == (212.85, False)
+    # a decoded frame that fits no position still places it, as before
+    decoded = [heard(212.384, "data", 8, decoded=False), heard(212.9, "control", 0)]
+    assert two_sides.rf_start_of(None, decoded, expected=212.85) == (212.9, True)
+    assert two_sides.rf_start_of(212.8, phantom, expected=212.85) == (212.8, True)
+
+
 def test_an_answer_belongs_to_the_last_transmission_before_it() -> None:
     def keying(who: str, key: float, rf: float, frames: float) -> two_sides.Keying:
         return two_sides.Keying(
