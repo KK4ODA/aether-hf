@@ -2245,6 +2245,37 @@ toward its review; no patch). `two_sides.py` had placed that answer on the phant
 7.082 MHz while KK4ODA-1 sat on 3.590 MHz; his FT-710's USB link dropped the moment he first
 keyed (RF into the USB cable).
 
+**The rate controller's review, Gate 0 (2026-10-23; `docs/research/rate-control/00-brief.md`,
+`01-evidence.md`; the author: field builds hold still for rate changes until the decision ADR,
+fixes outside the controller may ship).** The instruments, before any design. `tools/rung_reading.py`
+reads both sidecars of a session into each rung's account — frames sent, never detected,
+failed, decoded alone, delivered by combining (sequence numbers reconstructed from the sends and
+the acknowledgements: the engine's order, the RV sequence, a re-encode starting over and taking
+the transmission's family), the air each rung spent and the data per second of it, the
+recommendations over time, the ladder both ways, the neighbours' measured delivery and the
+regret; a `/4` sidecar is read with the old 500 Hz ladder, `--tree` with the model of the build
+the session ran (a worktree of its tag), `--timeline` lists every transmission. `--replay` runs
+that build's own `RateController` as the engine feeds it: 203 of 203 slave and 129 of 129 master
+recommendations reproduced over the nine two-sided sessions in hand (2026-10-14 … 10-23), once
+four things were right — the engine's own controller (beta.120's cap), re-encodes resetting the
+RVs, phantoms before the first decoded frame of a headerless transmission counted as the engine
+counts them, and the sender's-choice rule by the *slowest* rung read. The bench-only `rate.pin`
+(`Station::pin_rung`, `GrantedEngine::pinned_mode`; spec §4.2), the harness's `pin_rung` /
+`--pin`, and `tools/rung_oracle.py` (every scenario at each fixed rung, the regret against the
+best in hindsight; the measure the largest message's rate or the Test's file rate) are the
+oracle: on the first pass (14 scenarios, one draw, a coarse rung set) a fixed rung beat the
+controller in eleven — +110 % on `80m-strong-moderate-500` (rung 13 against the controller's
+7–9), +107 % on `15m-equatorial-flutter-2300`, +73 % on `quick-awgn-2300` (the climb on 3 kB) —
+within 4 % on the air's `80m-weak-wide-test-2300`, and the controller beat every fixed rung on
+the two weakest 500 Hz Tests. What the sessions show: the climb stops below what the ladder
+decodes (three sessions, 15–77 % left at the top), the first OFDM rungs chosen where the floor's
+top carried more (four sessions, up to 4×), a strong session walked from rung 12 to 5 at steady
++8 … +13 dB readings, a third of rung 7's frames never detected on 2300 Hz; seven of the eleven
+adjustments rested on the fading pipe, four on it alone. The uploads live in `field/inbox/`
+(git-ignored, `python -I`; `fetch_uploads.py get`, one at a time). Owed: `seq` and `combined` on
+the sidecar's records would make the reading exact without reconstruction (outside the
+controller). Next: Gate 1, the survey (`02-survey.md`).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
