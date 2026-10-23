@@ -2165,8 +2165,9 @@ credited a rung whose slot went silent with the previous rung's report (rung 9 "
 Busy detector: KK4ODA-1's floor at the noise all session (ADR-0088 held); WC4Y's gain reference
 learned the IC-7300's silent first seconds and read +13…+26 dB all session — no patch, a count
 toward the review. A slave's recommendations can be read after the fact from the master's audio:
-decode its control frames with the model (`Modem.decode_buffer`, `GrantFrame.decode`). Changes
-ranked in its §11, the author's call.
+decode its control frames with the model (`Modem.decode_buffer`, `GrantFrame.decode`). §5.6:
+rung 7 spread the power over 2.3 kHz at about the noise in each hertz, where the tone rungs put it
+in one tone at a time and every tone frame decoded. Changes ranked in its §11, the author's call.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
