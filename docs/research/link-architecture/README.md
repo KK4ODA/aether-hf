@@ -150,6 +150,13 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    detected, while every tone frame decoded, and why the rate controller could not see it; a
    beacon over the other station's closing identifier; a ladder rung credited with the rung
    before's report; and the busy detector's first session since ADR-0088.
+16. [16-nd1j-500-beta121.md](16-nd1j-500-beta121.md): Step 4, ND1J's two Tests of 2026-10-23
+   at 500 Hz on beta.121, read from both sides and the first read for the rate controller's
+   review: still no overlap; every frame decoded at its first copy; the link settling at
+   rung 11 in one Test and rung 12 in the other at the same readings, below a rung 13 that
+   decoded every frame; a false detection whose span hid an answer; the busy detector's floor
+   at the other station's signal after a bandwidth move; and KQ4SAX calling on 40 m while
+   KK4ODA-1 listened on 80 m.
 
 ## Reproduction
 

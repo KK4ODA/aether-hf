@@ -2213,6 +2213,28 @@ ADR-0069 did for the link; it says what it removes. Already owed to it: the fram
 the rescued bursts, a slave's link timeout on the floor on a dead path (ADR-0093 §3), and Poor
 −6 dB at 1 kB, where a ladder capped at rung 3 would be 7 % faster (ADR-0084).
 
+**ND1J's two Tests at 500 Hz (2026-10-23, `16-nd1j-500-beta121.md`).** ND1J's Tests to KK4ODA-1
+at 16:04Z and 16:07Z, 80 m, beta.121 at both ends, both sides with audio — at **500 Hz** (his
+station runs 500; KK4ODA-1, set to 2300, moved down to answer each). Complete, files at 413 and
+579 bit/s, the fastest 500 Hz Tests yet; no overlap (0.585 s), answers 71–110 ms after their
+slots, every frame detected and decoded at its first copy below rung 14. The first reading under
+the rate controller rule: the controller re-run on KK4ODA-1's readings repeats its answers —
+Test 1 settled at rung 11 and Test 2 at rung 12 at the same 8–10 dB readings, because the call
+read 6.2 against 13.4 dB and climbing needs the next rung's threshold + 1.5 dB minimum margin +
+1.5 dB step-up headroom (9.9 dB for rung 12, 11.8 for 13); rung 13 decoded 12 of 12 on the
+ladders (+13 % over 12, +54 % over 11). With report 15 that meets the rule's condition for the
+review; when is the author's call. `bench_link --replay` on a Test sidecar runs the reverse
+direction's SNR trace (222/229 against 413/579 bit/s): the review's reading takes both sidecars.
+Also found: ND1J's receiver took a noise detection (acquisition 1.04) 0.44 s before KK4ODA-1's
+answer and reserved its span, hiding the answer — one in about 130 answers over five two-sided
+sessions, at the rate the 500 Hz threshold (at the noise maximum) allows; ADR-0092 measured the
+rung again as built; no change yet. KK4ODA-1's busy floor sat at ND1J's signal for most of
+Test 2 after the bandwidth move rebuilt the detector (panel readings only; the second count
+toward its review; no patch). `two_sides.py` had placed that answer on the phantom
+(`rf_start_of` now places a transmission heard only as phantoms by its key). KQ4SAX called on
+7.082 MHz while KK4ODA-1 sat on 3.590 MHz; his FT-710's USB link dropped the moment he first
+keyed (RF into the USB cable).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
