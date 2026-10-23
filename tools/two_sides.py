@@ -379,9 +379,28 @@ def place(a: Side, b: Side, offset: Offset) -> None:
             if heard:
                 expected = k.key + to_a + KEY_LEAD_S + k.latency_s + k.handover_s + RADIO_PATHS_S
                 found = transmission_start(k, heard, expected)
-                rf = found if found is not None else min(h.start for h in heard)
+                rf, measured = rf_start_of(found, heard, expected)
                 k.rf_start = rf
-                k.loop_s = rf - (k.key + to_a) - KEY_LEAD_S - k.latency_s - k.handover_s
+                k.loop_s = (
+                    rf - (k.key + to_a) - KEY_LEAD_S - k.latency_s - k.handover_s
+                    if measured
+                    else None
+                )
+
+
+def rf_start_of(found: float | None, heard: list[Heard], expected: float) -> tuple[float, bool]:
+    """Where a transmission began on a's clock, and whether a recorded frame says so: what
+    :func:`transmission_start` found; else the earliest frame the other station decoded; else
+    the transmission went unheard and is put where its key puts it. A detection that never
+    decoded and fits no frame of it says nothing of where it began: ND1J's receiver reported a
+    phantom 0.44 s before KK4ODA-1's answer, whose span then hid the answer, and taking the
+    phantom's start made the answer 389 ms early (16-nd1j-500-beta121.md §3)."""
+    if found is not None:
+        return found, True
+    decoded = [h.start for h in heard if h.decoded]
+    if decoded:
+        return min(decoded), True
+    return expected, False
 
 
 def gaps(a: Side, b: Side) -> list[tuple[Keying, Keying, float]]:
