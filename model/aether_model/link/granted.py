@@ -709,8 +709,10 @@ class GrantedEngine:
         ``measure`` bit): the other station keeps the report for it, and whatever that station
         holds to combine is of measurement frames, which it drops (ADR-0077)."""
         self._measure_unheard = False
-        """The measurement's answer was not read: the report follows a poll, and the SNR it
-        carries is the poll's, not the rung's (ADR-0076)."""
+        """The measurement's answer came without its report: the report follows a poll, and the
+        SNR it carries is the poll's, not the rung's (ADR-0076)."""
+        self._measure_again = False
+        """The measurement out is a repeat, its first slot silent (:meth:`_measurement_unheard`)."""
         self.rate = self._rate_controller()
         self._asked: int | None = None
         # receiving, either role
@@ -982,6 +984,7 @@ class GrantedEngine:
         if frames < 1:
             raise ValueError("a measurement takes at least one frame")
         self._measure_ask = (mode, frames)
+        self._measure_again = False
         if self.role is Role.SLAVE and self._window is not None:
             self._cause = "measure"
             self._try_window()
@@ -1009,6 +1012,15 @@ class GrantedEngine:
 
     def all_acknowledged(self) -> bool:
         return not self._tx_queue and all(r.acked for r in self._records.values())
+
+    @property
+    def hold_until(self) -> float:
+        """The earliest this station starts anything on its own (ADR-0075): after a DISC_ACK it
+        answered, the latest the other station's closing identifier can end. The engine holds
+        its own calls and probes to it; its driver holds what it sends outside the engine, a
+        beacon or a datagram — on 2026-10-23 a repeating beacon keyed 10 ms after the slave's
+        identifier and covered the master's whole (15-wc4y-2300-beta120.md §3)."""
+        return self._hold_until
 
     @property
     def connected(self) -> bool:
@@ -1484,12 +1496,9 @@ class GrantedEngine:
 
     def _rate_controller(self) -> RateController:
         thresholds = self.timing.mode_threshold_db
-        floor = {
-            "floor_modes": self.timing.floor_modes,
-            "floor_margin_db": self.timing.floor_margin_db,
-        }
+        floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
         if self.timing.echo_limit:
-            floor["echo_limit"] = dict(self.timing.echo_limit)  # type: ignore[assignment]
+            floor["echo_limit"] = dict(self.timing.echo_limit)
         if thresholds is None:
             return RateController(**{**floor, **self.cfg.rate})  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
@@ -2062,7 +2071,7 @@ class GrantedEngine:
         self._silent += 1
         self._answered_run = 0
         if self._measure_out is not None:
-            self._measure_unheard = True
+            self._measurement_unheard()
         if slot.data and self.cfg.hold_unknown:
             for s in self._unacked():
                 self._records[s].unknown = True
@@ -2077,6 +2086,24 @@ class GrantedEngine:
             self.rate.observe(None, 0, 1)
         if self._silent > self.cfg.max_retries:
             self._end_session("no response")
+
+    def _measurement_unheard(self) -> None:
+        """A measurement's slot went silent. The other station may have read none of it, not
+        its header and not its frames, and then its next answer reports the measurement before:
+        WC4Y's rung 9 went into the Test as 3 of 4 decoded on rung 8's report, where KK4ODA-1 had
+        decoded none of it (15-wc4y-2300-beta120.md §6). This station cannot tell that from an
+        answer lost, so the rung is measured again; silent a second time, it is recorded with
+        nothing decoded and no SNR."""
+        assert self._measure_out is not None
+        if not self._measure_again:
+            self._measure_again = True
+            self._ask_again(True)
+            return
+        mode, sent = self._measure_out
+        self._measure_out = None
+        self._measure_again = False
+        self._measure_unheard = False
+        self.ladder.append(LadderRung(mode, sent, 0, None))
 
     def _has_work(self) -> bool:
         return bool(self._tx_queue) or bool(self._unacked()) or self.measuring
@@ -2778,12 +2805,14 @@ class GrantedEngine:
                 mode, sent = self._measure_out
                 self._measure_out = None
                 decoded = sum(1 for i in range(sent) if ctl.measured(i))
-                # after a silent slot the report is the poll's answer: its frames counted, its
-                # SNR not the rung's — WC4Y's rung 8 went into the field log "at -4 dB", the
-                # poll's tone-floor reading, where its frames had arrived at 0 dB
-                # (13-wc4y-beta111.md §10)
+                # a report after an answer that carried none is the poll's answer: its frames
+                # counted, its SNR not the rung's — WC4Y's rung 8 went into the field log
+                # "at -4 dB", the poll's tone-floor reading, where its frames had arrived at 0 dB
+                # (13-wc4y-beta111.md §10). After a silent slot the rung is measured again
+                # (:meth:`_measurement_unheard`)
                 snr = None if self._measure_unheard else ctl.snr_db
                 self._measure_unheard = False
+                self._measure_again = False
                 self.ladder.append(LadderRung(mode, sent, decoded, snr))
             else:
                 self._measure_unheard = True

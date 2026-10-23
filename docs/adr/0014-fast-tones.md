@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-09-24. Model first (`aether_model/frame/modes.py`,
 `aether_model/phy/tone.py`), then the port. Builds on ADR-0013; the link protocol goes to
-version 3.
+version 3. §4's floor boundary (the cap kept) was reversed by ADR-0093 (2026-10-23).
 
 ## 1. Context
 

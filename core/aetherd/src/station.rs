@@ -4256,11 +4256,23 @@ impl<P: Ptt> Station<P> {
     /// what this station starts outside a session — a call, a probe, a beacon, a datagram, the
     /// Morse identifier on its own — and that only while `wait_for_clear` says so; an
     /// identifier on its own waits for busy too, for at most [`OTHER_ID_WAIT_MAX_S`].
+    ///
+    /// A beacon and a datagram also wait out the engine's closing hold, whatever the channel:
+    /// after a `DISC_ACK` this station answered, the other station's closing identifier is still
+    /// to come, keyed on its timer without listening (ADR-0075). The engine holds its own calls
+    /// and probes to it; these go outside the engine. On 2026-10-23 KK4ODA-1's repeating beacon
+    /// keyed 10 ms after its own identifier and covered WC4Y's whole
+    /// (15-wc4y-2300-beta120.md §3).
     fn held_for_busy(&mut self, now: f64) -> bool {
         self.drop_beacons_in_session();
         let Some(next) = self.pending.front() else {
             return true;
         };
+        if matches!(next, Outgoing::Frames(..) | Outgoing::Datagram { .. })
+            && now < self.engine.hold_until() - 1e-9
+        {
+            return true;
+        }
         let in_turn = match next {
             // a transmission of the engine's waits for the channel only when it starts an
             // exchange: a call or a probe, a retry included. Everything else belongs to an
@@ -4287,7 +4299,12 @@ impl<P: Ptt> Station<P> {
         let polite =
             !in_turn && self.config.wait_for_clear && !self.channel_clear(now) && !id_waited_out;
         if !in_turn && (polite || busy_for_id) {
-            self.stats.deferred_for_busy += 1;
+            // once a transmission held, not once a pass of the loop it waits through: WC4Y's
+            // panel read 962 for a call and a probe that waited 2.1 s between them
+            // (15-wc4y-2300-beta120.md §7.2)
+            if self.held_from.is_none() {
+                self.stats.deferred_for_busy += 1;
+            }
             // a call's next try, a probe's wait move with it, or a try fires against a call
             // that has not left yet and the two go out back to back when the channel clears
             if let Some(since) = self.held_since {
@@ -5800,9 +5817,6 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         floor_control_frame_s: Some(air.tone_control().duration_s()),
         floor_modes: air.floor_modes(),
         control_threshold_db: Some(controls),
-        // the wide air's first OFDM rung stays productive on a fading path a decibel above
-        // its 10 % point; the narrow air's does not (ADR-0013 §4)
-        floor_margin_db: (!narrow).then_some(aether_link::rate::WIDE_FLOOR_MARGIN_DB),
         // a tone frame is announced once its first sync block is in and has beaten its
         // neighbours, plus this receiver's own lateness (blanker, filter and a block)
         floor_preamble_detect_s: Some(aether_phy::tone::announce_delay_s(0.1)),
@@ -8794,6 +8808,41 @@ mod tests {
     }
 
     #[test]
+    fn a_beacon_due_at_a_sessions_end_waits_for_the_other_stations_identifier() {
+        // 2026-10-23 (15-wc4y-2300-beta120.md §3): KK4ODA-1's repeating beacon fell due during
+        // WC4Y's Test and keyed 10 ms after its own closing identifier, while WC4Y's was still
+        // to come; WC4Y's went out under it whole. The engine holds the slave's own calls and
+        // probes until the master's identifier is over (ADR-0075); a beacon waits for it too
+        let mut air = Air::new(1.0, 0.0005);
+        air.run(4.0, |_, _| false);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.b.beacon_every(Some(600.0)).expect("a repeating beacon");
+        air.a.send(b"73");
+        air.run(60.0, |_, b| b.received_len() >= 2);
+        let ids = (air.a.stats.cw_ids, air.b.stats.cw_ids);
+        air.a.disconnect();
+        let mut overlap = 0usize;
+        air.run(120.0, |a, b| {
+            if a.transmitting() && b.transmitting() {
+                overlap += 1;
+            }
+            a.quiescent() && b.quiescent() && b.stats.beacons_sent > 0 && !b.beacon_waiting()
+        });
+        assert_eq!(
+            (air.a.stats.cw_ids - ids.0, air.b.stats.cw_ids - ids.1),
+            (1, 1),
+            "each closing identifier once"
+        );
+        assert_eq!(air.b.stats.beacons_sent, 1, "one beacon after the session");
+        assert!(!air.b.beacon_waiting(), "the beacon never went");
+        assert_eq!(
+            overlap, 0,
+            "the beacon was keyed over the other's identifier"
+        );
+    }
+
+    #[test]
     fn an_identifier_no_longer_wanted_is_dropped_not_queued_for_ever() {
         // a probe that led nowhere owes an identifier after SETUP_ID_WAIT_S; the operator of a
         // non-US station turns identification off meanwhile: nothing is keyed, and the station
@@ -10897,7 +10946,10 @@ mod tests {
             );
             station.capture(&loud).expect("capture");
         }
-        assert!(station.stats.deferred_for_busy > 0);
+        assert_eq!(
+            station.stats.deferred_for_busy, 1,
+            "one call held through five passes is one transmission held"
+        );
         assert_eq!(station.stats.transmissions, 0);
     }
 

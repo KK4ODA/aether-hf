@@ -92,7 +92,6 @@ fn timing(doc: &Value) -> PhyTiming {
         control_threshold_db: doc["control_threshold_db"]
             .as_array()
             .map(|pair| [num(&pair[0]), num(&pair[1])]),
-        floor_margin_db: opt(&doc["floor_margin_db"]),
         floor_preamble_detect_s: opt(&doc["floor_preamble_detect_s"]),
         echo_limit: doc["echo_limit"]
             .as_array()

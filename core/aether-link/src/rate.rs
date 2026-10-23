@@ -99,13 +99,6 @@ pub const CONTROL_THRESHOLD_DB: [f64; 2] = [-5.1, TONE_CONTROL_THRESHOLD_DB];
 /// Mirrors the model.
 pub const NARROW_CONTROL_THRESHOLD_DB: [f64; 2] = [-4.5, TONE_CONTROL_THRESHOLD_DB];
 
-/// `PhyTiming::floor_margin_db` of the 2 300 Hz air (ADR-0013 §4, the link bench): its first
-/// OFDM rung spreads a frame over 2.3 kHz and, with HARQ, stays productive on a fading path
-/// a decibel above its 10 % point — held to that against the floor, a quarter of its rate,
-/// however wide the learned margin. The 500 Hz air's first rung has a fifth of that
-/// diversity, and has no cap.
-pub const WIDE_FLOOR_MARGIN_DB: f64 = 1.0;
-
 /// Payload bytes per frame of each rung of the 2 300 Hz ladder.
 pub const PAYLOAD_BYTES: [usize; 20] = [
     24, 36, 51, 75, 105, 153, 26, 46, 70, 95, 144, 193, 217, 291, 291, 389, 438, 585, 658, 732,
@@ -281,18 +274,13 @@ pub struct RateController {
     ever_failed: bool,
     /// The last decay step taken since the failure before, which the next one grows on.
     decay_step_db: f64,
-    /// How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013 —
-    /// whose frames carry a quarter of the first OFDM rung's rate or less. The step across
-    /// that boundary is not a step between neighbours a third apart in rate, which is what
-    /// the learned margin was built for: see [`floor_margin_db`](Self::floor_margin_db).
+    /// How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013, and
+    /// its fast kinds — whose frames are five times as long as an OFDM frame: see
+    /// [`first_mode`](Self::first_mode) and [`at_edge`](Self::at_edge). The first OFDM rung is
+    /// held to the learned margin like any other: the 2 300 Hz air capped it at 1 dB against the
+    /// floor until ADR-0093 (ADR-0013 §4), which held a weak path on a rung that lost most of
+    /// its frames.
     floor_modes: usize,
-    /// The most margin the first OFDM rung is held to against the floor, however wide the
-    /// learned margin has grown, on an air whose first rung stays productive on a fading
-    /// path below it (`PhyTiming::floor_margin_db`); `None` leaves the learned margin in
-    /// charge.
-    floor_margin_db: Option<f64>,
-    /// Failed bursts in a row on the first OFDM rung ([`step_down`](Self::step_down)).
-    boundary_failures: usize,
     /// The seed was a lower bound ([`seed`](Self::seed)): the first clean burst measured on an
     /// ordinary frame seeds again.
     reseed_pending: bool,
@@ -323,12 +311,10 @@ impl RateController {
         Self::for_table_timed(config, &AWGN_THRESHOLD_DB, &PAYLOAD_BYTES, &FRAME_S)
     }
 
-    /// The same controller for an air whose first `floor_modes` rungs are the floor's, the
-    /// first OFDM rung's margin capped at `floor_margin_db` against it (ADR-0013 §4).
+    /// The same controller for an air whose first `floor_modes` rungs are the floor's.
     #[must_use]
-    pub fn with_floor(mut self, floor_modes: usize, floor_margin_db: Option<f64>) -> Self {
+    pub const fn with_floor(mut self, floor_modes: usize) -> Self {
         self.floor_modes = floor_modes;
-        self.floor_margin_db = floor_margin_db;
         self
     }
 
@@ -350,12 +336,6 @@ impl RateController {
     #[must_use]
     pub fn floor_modes(&self) -> usize {
         self.floor_modes
-    }
-
-    /// The cap on the first OFDM rung's margin, if the air has one.
-    #[must_use]
-    pub fn floor_margin_db(&self) -> Option<f64> {
-        self.floor_margin_db
     }
 
     /// Build one for any mode table: its thresholds decide when to step, its payloads
@@ -399,8 +379,6 @@ impl RateController {
             ever_failed: false,
             decay_step_db: 0.0,
             floor_modes: 6,
-            floor_margin_db: None,
-            boundary_failures: 0,
             reseed_pending: false,
             echo_limit: Vec::new(),
             echo: None,
@@ -457,7 +435,7 @@ impl RateController {
     /// The SNR a step up to the rung at `index` asks for: its threshold, the margin it is held
     /// to and the hysteresis.
     fn required(&self, index: usize) -> f64 {
-        self.thresholds[self.modes[index]] + self.margin(index) + self.config.up_hysteresis_db
+        self.thresholds[self.modes[index]] + self.margin_db + self.config.up_hysteresis_db
     }
 
     /// Index in [`modes`](Self::modes) of the first rung above the floor.
@@ -466,15 +444,6 @@ impl RateController {
             .iter()
             .position(|&m| m >= self.floor_modes)
             .unwrap_or(0)
-    }
-
-    /// The margin a rung is held to: the learned one, capped at `floor_margin_db` for the
-    /// first OFDM rung, whose alternative is the floor.
-    fn margin(&self, index: usize) -> f64 {
-        match self.floor_margin_db {
-            Some(cap) if index == self.first_ordinary() => self.margin_db.min(cap),
-            _ => self.margin_db,
-        }
     }
 
     /// Start from a measurement — the connect frame this station decoded — instead of
@@ -615,7 +584,6 @@ impl RateController {
             self.decay_step_db = 0.0;
             self.step_down();
         } else if ok > 0 {
-            self.boundary_failures = 0;
             self.clean_run += 1;
             self.clean_since_decay += 1;
             if !self.ever_failed {
@@ -637,12 +605,10 @@ impl RateController {
         }
     }
 
-    /// Whether the recommendation is the first OFDM rung of an air whose floor below it holds
-    /// no margin cap: where a failure, in part or not, goes back to the floor (ADR-0084).
+    /// Whether the recommendation is the first OFDM rung, above the floor: where a failure, in
+    /// part or not, goes back to the floor (ADR-0084, ADR-0093).
     fn at_edge(&self) -> bool {
-        self.floor_margin_db.is_none()
-            && self.floor_modes > 0
-            && self.index == self.first_ordinary()
+        self.floor_modes > 0 && self.index == self.first_ordinary()
     }
 
     /// A failed burst is a measurement, not just a nudge; one that failed in part moves the
@@ -665,28 +631,13 @@ impl RateController {
         }
         match self.smoothed_snr_db {
             None => index == 0,
-            Some(snr) => self.thresholds[self.modes[index]] + self.margin(index) + extra_db <= snr,
+            Some(snr) => self.thresholds[self.modes[index]] + self.margin_db + extra_db <= snr,
         }
     }
 
     /// A failure: fall to the fastest mode the SNR and margin still support, but always at
-    /// least one step — a failure at the bottom of the table is still evidence. The one
-    /// exception is a single failed burst on the first OFDM rung of an air that caps its
-    /// margin (`floor_margin_db`) while the SNR still carries the rung: the floor below is a
-    /// quarter of the rate, so one lost burst is not worth leaving for it; a second one in a
-    /// row is.
+    /// least one step — a failure at the bottom of the table is still evidence.
     fn step_down(&mut self) {
-        let ordinary = self.first_ordinary();
-        let at_boundary = self.floor_margin_db.is_some() && self.index == ordinary;
-        self.boundary_failures = if at_boundary {
-            self.boundary_failures + 1
-        } else {
-            0
-        };
-        if at_boundary && self.boundary_failures < 2 && self.fits(ordinary, 0.0) {
-            return;
-        }
-        self.boundary_failures = 0;
         let mut target = self.index.saturating_sub(1);
         for candidate in (0..self.index).rev() {
             if self.fits(candidate, 0.0) {
@@ -905,7 +856,7 @@ mod tests {
                 &NARROW_PAYLOAD_BYTES,
                 &NARROW_FRAME_S,
             )
-            .with_floor(aether_phy::modes::NARROW.floor_modes(), None)
+            .with_floor(aether_phy::modes::NARROW.floor_modes())
         };
         let mut rc = narrow();
         for _ in 0..20 {
@@ -993,7 +944,7 @@ mod tests {
             &NARROW_PAYLOAD_BYTES,
             &NARROW_FRAME_S,
         )
-        .with_floor(floor, None);
+        .with_floor(floor);
         let required = |rung: usize| {
             NARROW_AWGN_THRESHOLD_DB[rung] + config.margin_db + config.up_hysteresis_db
         };
@@ -1051,48 +1002,32 @@ mod tests {
             "nothing above the floor fits: the floor"
         );
 
-        let wound = |cap: Option<f64>| {
-            let mut rc = RateController::default().with_floor(6, cap);
-            rc.seed(AWGN_THRESHOLD_DB[first] + 1.5, false);
-            rc.index = rc
-                .modes
-                .iter()
-                .position(|&m| m == first)
-                .expect("the first OFDM rung");
-            rc.margin_db = 8.0; // a fading channel's learned margin
-            rc
-        };
-        let mut capped = wound(Some(1.0));
-        let snr = capped.snr_db();
-        capped.observe(snr, 0, 6, Some(first));
-        assert_eq!(
-            capped.recommend(),
-            first,
-            "one lost burst on the capped rung: held"
-        );
-        capped.observe(snr, 0, 6, Some(first));
-        assert!(capped.recommend() < first, "two in a row: the floor");
-        for _ in 0..3 {
-            capped.observe(snr, 6, 0, None);
-        }
-        assert!(
-            capped.recommend() < first,
-            "the cap and the hysteresis are not met there"
-        );
-        let enough = AWGN_THRESHOLD_DB[first] + 1.0 + config.up_hysteresis_db + 0.5;
-        for _ in 0..6 {
-            capped.observe(Some(enough), 6, 0, None);
-        }
-        assert!(
-            capped.recommend() >= first,
-            "they are here, whatever the learned margin"
-        );
+        // WC4Y's call read at -0.3 dB: rung 7 at AWGN -3.2 dB needs its margin and the
+        // hysteresis, which the 2 300 Hz air's cap at 1 dB had waived (ADR-0093)
+        assert!(rc.first_mode(-0.3) < 6);
 
-        // uncapped the learned margin decides, as between any two rungs
-        let mut plain = wound(None);
-        let snr = plain.snr_db();
-        plain.observe(snr, 0, 6, Some(first));
-        assert!(plain.recommend() < first);
+        // above the floor the learned margin decides, as between any two rungs
+        let mut fading = RateController::default().with_floor(6);
+        fading.seed(AWGN_THRESHOLD_DB[first] + 1.5, false);
+        fading.index = fading
+            .modes
+            .iter()
+            .position(|&m| m == first)
+            .expect("the first OFDM rung");
+        fading.margin_db = 8.0; // a fading channel's learned margin
+        let snr = fading.snr_db();
+        fading.observe(snr, 0, 6, Some(first));
+        assert!(
+            fading.recommend() < first,
+            "one lost burst on the first OFDM rung: the floor"
+        );
+        for _ in 0..6 {
+            fading.observe(Some(AWGN_THRESHOLD_DB[first] + 2.5), 6, 0, None);
+        }
+        assert!(
+            fading.recommend() < first,
+            "the learned margin keeps it there at that SNR"
+        );
     }
 
     #[test]

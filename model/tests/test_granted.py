@@ -49,6 +49,7 @@ from aether_model.link.granted import (
     Event,
     GrantConfig,
     GrantedEngine,
+    LadderRung,
     Role,
     SlotTransmit,
     State,
@@ -681,9 +682,12 @@ def test_frames_whose_answer_went_unheard_are_not_resent_blind(air: str) -> None
         assert bytes(sim.st[1].delivered) == message, "not all of it, in order"
         return a.stats.frames_sent, t
 
-    # four seeds: one transfer is a draw of the bursts, and either rule can be the luckier
-    blind = [run(False, seed) for seed in range(4)]
-    held = [run(True, seed) for seed in range(4)]
+    # eight seeds: one transfer is a draw of the bursts, and either rule can be the luckier.
+    # Four were enough until ADR-0093 let the 2 300 Hz link leave rung 7: then seeds 0-3 tied
+    # to the second at 2 300 Hz (held slower in two), while twelve still gave held 20 % less
+    # time and a quarter fewer frames
+    blind = [run(False, seed) for seed in range(8)]
+    held = [run(True, seed) for seed in range(8)]
     sent = (sum(n for n, _ in blind), sum(n for n, _ in held))
     took = (sum(t for _, t in blind), sum(t for _, t in held))
     assert sent[1] < sent[0], sent
@@ -1947,11 +1951,12 @@ def test_a_measurement_keeps_its_header_whatever_the_rule() -> None:
         assert rungs[0].snr_db is not None  # type: ignore[attr-defined]
 
 
-def test_a_ladder_rung_whose_answer_was_lost_reports_no_snr() -> None:
-    """The measurement's answer lost, the master polls — saying it still waits for the report —
-    and the answer to the poll reports the frames: its SNR is the poll's reading, not the
-    rung's — WC4Y's rung 8 went into the field log "at -4 dB" where its frames had arrived at
-    0 dB (13-wc4y-beta111.md §10). The rung is reported with no SNR (ADR-0076)."""
+def test_a_ladder_rung_whose_answer_was_lost_is_measured_again() -> None:
+    """The measurement's answer lost, its slot is silent. Until 2026-10-23 the master polled and
+    took the answer's report with no SNR (ADR-0076): the report was the measurement's, but the
+    SNR the poll's. A silent slot cannot tell that case from a slave that read nothing of the
+    measurement and reports the one before (15-wc4y-2300-beta120.md §6), so the rung is
+    measured again, and reported from the repeat with the rung's own SNR."""
     lost = [False, False]  # a measurement frame launched; its answer lost
 
     def lose(frame: TxFrame) -> float:
@@ -1969,9 +1974,67 @@ def test_a_ladder_rung_whose_answer_was_lost_reports_no_snr() -> None:
 
     _, sent, silent, rungs = _ladder_rung(10, snr_db=12.0, seed=32, lose=lose)
     assert lost == [True, True] and silent >= 1
-    assert len(_at(sent, 10)) == 1, "the poll carries no data"
-    assert rungs and rungs[0].decoded == rungs[0].frames == 4  # type: ignore[attr-defined]
-    assert rungs[0].snr_db is None  # type: ignore[attr-defined]
+    assert len(_at(sent, 10)) == 2, "measured again"
+    assert len(rungs) == 1, "one rung, reported once"
+    assert rungs[0].decoded == rungs[0].frames == 4  # type: ignore[attr-defined]
+    assert rungs[0].snr_db is not None  # type: ignore[attr-defined]
+
+
+def _two_rungs(lose: Callable[[TxFrame], float]) -> tuple[GrantedEngine, list[LadderRung]]:
+    """Rung 8 measured, then rung 12, on the 2 300 Hz air at 14 dB with ``lose``."""
+    a, b = _pair(WIDE)
+    sim = TwoStationSim(a, b, snr_db=14.0, seed=5, frame_snr_offset=lose)
+    a.connect("KK4XYZ")
+    sim.run(until=20.0)
+    rungs: list[LadderRung] = []
+    for mode in (8, 12):
+        a.measure(mode, 4)
+        sim.run(until=sim.t + 90.0)
+        assert not a.measuring
+        rungs += a.take_ladder()
+    assert a.state is State.CONNECTED
+    assert sim.overlaps() == []
+    return a, rungs
+
+
+def _measurement_headers(lost: Callable[[int], bool]) -> Callable[[TxFrame], float]:
+    """Rung 12's measurement frames never decode; the measurement headers ``lost`` says, by
+    their order (rung 8's is the first), go unread."""
+    seen = [0]
+
+    def lose(frame: TxFrame) -> float:
+        if frame.container is Container.DATA and frame.mode == 12:
+            return -60.0
+        if frame.container is Container.CONTROL:
+            ctl = GrantFrame.decode(frame.payload)
+            if ctl.kind is GrantKind.HEADER and ctl.measure and ctl.count > 0:
+                seen[0] += 1
+                return -60.0 if lost(seen[0]) else 0.0
+        return 0.0
+
+    return lose
+
+
+def test_a_rung_the_slave_never_read_is_not_credited_with_the_rung_before() -> None:
+    """WC4Y's Test of 2026-10-23: KK4ODA-1 missed rung 9's header and decoded none of its
+    frames, the slot went silent, and the next answer repeated rung 8's report, which the master
+    took for rung 9's — "3/4 decoded" for a rung that carried nothing, the Test's highest passed
+    one too high and the ladder a rung too long (15-wc4y-2300-beta120.md §6). The rung is
+    measured again, and its own report is what the ladder records."""
+    _, rungs = _two_rungs(_measurement_headers(lambda n: n == 2))
+    assert [(r.mode, r.frames, r.decoded) for r in rungs] == [(8, 4, 4), (12, 4, 0)]
+    assert rungs[1].snr_db is not None, "the repeat's own report, with the rung's SNR"
+
+
+def test_a_measurement_silent_twice_is_recorded_as_nothing_decoded() -> None:
+    """Measured again and silent again: nothing came back from the rung twice, and whatever
+    report follows may be another rung's. The rung is recorded with nothing decoded and no
+    SNR, and the session goes on."""
+    _, rungs = _two_rungs(_measurement_headers(lambda n: n >= 2))
+    assert [(r.mode, r.frames, r.decoded, r.snr_db) for r in rungs] == [
+        (8, 4, 4, rungs[0].snr_db),
+        (12, 4, 0, None),
+    ]
 
 
 def test_a_disconnect_that_drains_nothing_leaves_at_the_next_opportunity() -> None:

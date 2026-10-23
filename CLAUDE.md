@@ -511,7 +511,8 @@ complete down to −14 dB. Consequences: link protocol version 2 (a call of anot
 ignored, and said so), `max_mode` default 15, the configuration's **schema 2** (its first
 migration: a wide station's `max_mode` +2; profiles go through it), sidecars
 `aether-hf-session/2` (`field_ingest.sidecar_rung` maps `/1`), `PhyTiming.floor_margin_db`
-(1 dB wide, `WIDE_FLOOR_MARGIN_DB`) and the "once" boundary rule, the ISS's ACK wait sized for
+(1 dB wide, `WIDE_FLOOR_MARGIN_DB`) and the "once" boundary rule (both removed by ADR-0093), the
+ISS's ACK wait sized for
 the burst it sent. Port: `aether-phy/src/tone.rs` (codec, detector, `ToneStream`),
 `Received::{Ofdm, Tone}`, the streaming receiver keeps the longest tone frame and announces
 arrivals as `PendingFrame { tone }` (trusted without the OFDM gate); beacons went at
@@ -532,7 +533,8 @@ reading after a station's own silence, with fast data under its end block, passe
 confirmation), and a stronger first block inside an arrival, not at its block positions,
 replaces it. The fading pipe fills an unmeasured rung from its own family's penalty.
 Gate: 5.2/5.5 dB over BPSK ⅕ on Good/Moderate at a higher rate; sessions 2–3× faster from −6
-to −2 dB on the fading classes, nothing slower; the 1 dB floor-boundary cap still pays. Owed:
+to −2 dB on the fading classes, nothing slower; the 1 dB floor-boundary cap still paid on the
+pipe (removed by ADR-0093 on the air's evidence). Owed:
 tone floor and fast tones on the air (beta.52 and beta.53 do not connect: protocol 2 vs 3).
 **P9-10 the 500 Hz middle kinds** (ADR-0015, beta.54; the author's "phase 4 at 500 Hz",
 done before P9-5 on request): `tone4x100-51` and `tone4x100-75` (76 and 112 bit/s) are the
@@ -1980,7 +1982,7 @@ HARQ's operating point is not a 10 % FER point. The cost was the controller's re
 frame of six (the margin 3 → 6 dB, rung 3 → 1). `RateController.partial_share` (0.5): a burst
 that decoded some and lost fewer than half widens the margin by the share lost (the jump's cap
 too), keeps its rung unless the SNR no longer carries it, and resets the clean run; not on the
-first OFDM rung of an air with no floor margin cap (500 Hz, `_at_edge`), where the floor is the
+first OFDM rung (`_at_edge`; the 500 Hz air's only until ADR-0093 made it both airs'), where the floor is the
 better exchange. Link bench (`bench/baselines/link_partial_failures.csv`, `partial_share=0.0` is
 beta.117): AWGN identical; 500 Hz up to +15 % (1 kB) / +30 % (8 kB), 2 300 Hz +11 % / +59 %; the
 longer the session the more, because the margin used to ratchet up on every partial failure.
@@ -2168,6 +2170,27 @@ toward the review. A slave's recommendations can be read after the fact from the
 decode its control frames with the model (`Modem.decode_buffer`, `GrantFrame.decode`). §5.6:
 rung 7 spread the power over 2.3 kHz at about the noise in each hertz, where the tone rungs put it
 in one tone at a time and every tone frame decoded. Changes ranked in its §11, the author's call.
+
+**Report 15's changes 1, 3, 4 and 6 (2026-10-23, the author's "go ahead with 1-4"; no wire
+change, no configuration key, no schema bump; beta.121).** *ADR-0093*: the first OFDM rung is
+held to the learned margin on both airs — the 2 300 Hz air's 1 dB cap against the floor
+(`floor_margin_db`, `WIDE_FLOOR_MARGIN_DB`) and "once" (`_boundary_failures`) are gone, and
+ADR-0084's edge rule (`_at_edge`) is both airs'; a call read at −0.3 dB now starts at rung 5, not
+7. A deletion, model first. The harness judged it, not the link bench (the pipe detects every
+frame and adds 3 dB a copy): `80m-weak-wide-test-2300`'s draw that repeated the air went 80/95 →
+173/171 bit/s, every 2 300 Hz scenario passes, six faster; `40m-closing-identifiers-2300` runs
+about 100 s longer in two draws of three, all in its dead-path ending, where the slave's
+controller is on the floor and its link timeout counts floor exchanges (silence, no overlap).
+`test_frames_whose_answer_went_unheard_are_not_resent_blind` runs eight seeds (four tied at
+2 300 Hz without the cap; twelve give `hold_unknown` 20 % less time). *ADR-0091*: a beacon and a
+datagram wait out the engine's closing hold (`GrantedEngine.hold_until`, model and port;
+`held_for_busy`; `advance_beacons` queues no repeating beacon before it) — KK4ODA-1's repeating
+beacon had keyed 10 ms after its own identifier, over WC4Y's. *ADR-0092*: a measurement whose
+slot went silent is measured again, once (`_measurement_unheard`, `_measure_again`); silent
+twice, the rung is recorded 0 decoded, no SNR — the report after a silent slot may be the
+previous rung's (WC4Y's rung 9 "3/4"). ADR-0076's no-SNR rule stays for an answer without a
+report. Granted vectors: `ladder-unheard` and `measure-unread` change, `measure-silent` added.
+*"Held for busy"* (`deferred_for_busy`) counts each transmission held once, not each loop pass.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -123,11 +123,6 @@ pub struct PhyTiming {
     /// floor) — what a simulated channel judges a control frame by. `None`: the wide air's
     /// ([`crate::rate::CONTROL_THRESHOLD_DB`]).
     pub control_threshold_db: Option<[f64; 2]>,
-    /// The most margin the rate controller holds the first OFDM rung to against the floor
-    /// ([`RateController::floor_margin_db`](crate::rate::RateController::floor_margin_db)):
-    /// an air whose first rung stays productive on a fading path below the learned margin
-    /// says how far; `None` leaves the learned margin in charge.
-    pub floor_margin_db: Option<f64>,
     /// [`preamble_detect_s`](Self::preamble_detect_s) for the floor's frames: the tone floor
     /// announces a frame once its first sync block is in and has beaten its neighbours,
     /// 0.54 s after it starts, where an ordinary preamble takes 0.12 s. `None`: as

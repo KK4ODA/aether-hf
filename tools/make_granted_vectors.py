@@ -86,7 +86,6 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
         "control_threshold_db": None
         if controls is None
         else [bits(controls[False]), bits(controls[True])],
-        "floor_margin_db": bits(t.floor_margin_db),
         "floor_preamble_detect_s": bits(t.floor_preamble_detect_s),
         "echo_limit": [bits(echo.get(m)) for m in sorted(thresholds)] if echo else [],
     }
@@ -742,9 +741,9 @@ def _lose_around_measurement(kind: GrantKind) -> Callable[[TxFrame], float]:
 
 def ladder_unheard() -> list[Recorder]:
     """A ladder rung measured above what the path carries, its answer lost — and then, a second
-    pair, its header lost too: the master polls, saying it still waits for the report, and the
-    slave, which kept to combine what it could not decode, drops it and reports. The rung is
-    reported with no SNR (ADR-0076), the data queued behind it goes after the report, and each
+    pair, its header lost too: the slot is silent, and the master measures the rung again
+    (15-wc4y-2300-beta120.md §6); the slave, which kept to combine what it could not decode,
+    drops it and reports the repeat. The data queued behind it goes after the report, and each
     Test closes with nothing left to drain (``disconnect(drain_s=0)``)."""
     recorders: list[Recorder] = []
     for lose, seeds in ((GrantKind.ANSWER, (51, 52)), (GrantKind.HEADER, (53, 54))):
@@ -763,6 +762,34 @@ def ladder_unheard() -> list[Recorder]:
         sim.run(until=260.0)
         recorders += [ra, rb]
     return recorders
+
+
+def measure_silent() -> list[Recorder]:
+    """A rung of the ladder the slave reads nothing of, twice: every header of its measurement
+    lost and its frames above what the path carries. The first silent slot measures it again;
+    the second records it with nothing decoded and no SNR, and the data queued behind it goes
+    (15-wc4y-2300-beta120.md §6)."""
+    a, b, ra, rb = _pair(WIDE, seeds=(55, 56))
+    rng = random.Random(55)
+
+    def offset(frame: TxFrame) -> float:
+        if frame.container is Container.DATA:
+            return -60.0 if decode_data(frame.payload)[0].kind is DataKind.MEASURE else 0.0
+        ctl = GrantFrame.decode(frame.payload)
+        header = ctl.kind is GrantKind.HEADER and ctl.measure and ctl.count > 0
+        return -60.0 if header else 0.0
+
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=55, frame_snr_offset=offset)
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 600))
+    sim.run(until=90.0)
+    a.measure(WIDE.n_rungs - 1, 4)
+    a.send(_message(rng, 40))
+    sim.run(until=200.0)
+    a.take_ladder()
+    a.disconnect(drain_s=0.0)
+    sim.run(until=300.0)
+    return [ra, rb]
 
 
 def measure_unread() -> list[Recorder]:
@@ -1090,6 +1117,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "idle-identifier": idle_identifier,
     "rescued-count": rescued_count,
     "echo-path": echo_path,
+    "measure-silent": measure_silent,
 }
 
 

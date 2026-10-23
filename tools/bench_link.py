@@ -668,7 +668,7 @@ def replay_sidecar(path: Path, seed: int, rung: Hypothetical | None = None) -> d
 
 def overrides(text: str) -> dict[str, float | int | None]:
     """``key=value,key=value`` as a dict of numbers; ``none`` for a setting that can be
-    absent (``floor_margin_db=none``: the learned margin in charge)."""
+    absent (``ceiling=none``: no ceiling)."""
     out: dict[str, float | int | None] = {}
     for item in text.split(","):
         if item.strip():

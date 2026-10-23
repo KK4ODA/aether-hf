@@ -395,7 +395,10 @@ this one, with the wide air's floor-boundary cap on (as shipped) and off: at 2 3
 −10 to 0 dB every point is faster (two to three times on the fading classes from −6 to −2 dB)
 but −2 dB on AWGN, which ties; nothing is slower elsewhere, and 500 Hz is unchanged. The
 calibration fills an unmeasured rung's fading threshold from its own family's rungs now, and
-`calibrate_fading.py --jobs 4` fits on four processes.
+`calibrate_fading.py --jobs 4` fits on four processes. The cap was removed by ADR-0093
+(2026-10-23) on the air's evidence and the scenario harness's: the pipe hands the receiver every
+frame, detected, and adds 3 dB of combining energy per copy, where on WC4Y's 80 m path a third of
+the first OFDM rung's frames were never detected.
 
 ## The 500 Hz middle kinds (`tone_floor.csv`, `link_narrow_middle.csv`, P9-10 / ADR-0015)
 

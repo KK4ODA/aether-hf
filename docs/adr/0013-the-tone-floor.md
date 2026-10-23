@@ -2,7 +2,9 @@
 
 **Status:** accepted, 2026-09-24. Model first (`aether_model/phy/tone.py`, the ladder in
 `frame/modes.py`), then the port. Supersedes ADR-0009's OFDM floor family, which leaves the
-500 Hz air.
+500 Hz air. §4 item 5's cap on the 2 300 Hz air's first OFDM rung and its "once" rule were
+removed by ADR-0093 (2026-10-23): on the air they held a weak path on a rung that lost most of
+its frames.
 
 ## 1. Context
 

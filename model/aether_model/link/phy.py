@@ -108,11 +108,6 @@ class PhyTiming:
     """The AWGN 10 % points of the air's two control frames, keyed by family (ordinary,
     floor) — what a simulated channel judges a control frame by. ``None``: the wide air's
     (:data:`~aether_model.link.rate.CONTROL_THRESHOLD_DB`)."""
-    floor_margin_db: float | None = None
-    """The most margin the rate controller holds the first OFDM rung to against the floor
-    (:attr:`~aether_model.link.rate.RateController.floor_margin_db`): an air whose first rung
-    stays productive on a fading path below the learned margin says how far; ``None`` leaves
-    the learned margin in charge."""
     echo_limit: dict[int, float] | None = None
     """The echo share above which each rung that has one is kept off the ladder (ADR-0087,
     :attr:`~aether_model.link.rate.RateController.echo_limit`); ``None``: no rung has one."""

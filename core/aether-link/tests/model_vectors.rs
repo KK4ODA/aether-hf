@@ -551,7 +551,7 @@ fn the_rate_controller_reads_the_echo_as_the_model_does() {
             &NARROW_PAYLOAD_BYTES,
             &NARROW_FRAME_S,
         )
-        .with_floor(5, None)
+        .with_floor(5)
         .with_echo_limit(&NARROW_ECHO_LIMIT);
         for (index, (step, want)) in steps.iter().zip(track).enumerate() {
             let args = step["args"].as_array().expect("args");
