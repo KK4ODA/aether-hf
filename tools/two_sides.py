@@ -54,6 +54,7 @@ import wave
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -99,6 +100,9 @@ class Keying:
     loop_s: float | None = None
     sent: list[tuple[str, int, float]] = field(default_factory=list)
     """The frames it carried, in order: kind, rung (0 for a control frame) and air time."""
+    records: list[dict[str, Any]] = field(default_factory=list)
+    """The sidecar's ``sent`` records of those frames, in the same order — what
+    ``tools/rung_reading.py`` reads each frame's redundancy version and payload from."""
 
     @property
     def rf_end(self) -> float | None:
@@ -173,6 +177,7 @@ def keyings(side: Side) -> list[Keying]:
                         (str(s.get("kind")), int(s.get("mode") or 0), frame_s(side.air, s))
                         for s in batch
                     ],
+                    records=list(batch),
                 )
             )
             key = None

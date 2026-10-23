@@ -2865,6 +2865,19 @@ impl<P: Ptt> Station<P> {
         };
     }
 
+    /// Pin this station's own data to `rung` whatever the other station recommends, or unpin
+    /// it: the benches' and the harness's (`tools/session_matrix.py`'s `pin_rung`, the rate
+    /// controller's review: a session run at each fixed rung is the oracle a controller's
+    /// choices are judged against), never the operator's. The other station's recommendation
+    /// still arrives and is what a stranded frame is re-encoded by; a Test's ladder measures
+    /// its own rungs as before.
+    ///
+    /// # Errors
+    /// A rung the ladder running has not.
+    pub fn pin_rung(&mut self, rung: Option<usize>) -> Result<(), &'static str> {
+        self.engine.pin_mode(rung, None)
+    }
+
     /// The recording in progress: its file and how long it is.
     #[must_use]
     pub fn recording(&self) -> Option<(std::path::PathBuf, f64)> {

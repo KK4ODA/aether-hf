@@ -253,6 +253,10 @@ class Run:
     # air standing still, or the runner's own error
     faults: list[str] = field(default_factory=list)
     stalled_at: float | None = None
+    pin: int | None = None
+    """A rung every station's own data is pinned at (``--pin``; a station's ``pin_rung`` in the
+    scenario overrides it): the rate controller's review runs each scenario at each fixed rung,
+    and the best in hindsight is what a controller's choices are judged against."""
 
     def sample(self) -> None:
         """Note each daemon's memory, files and threads (after each round of a script)."""
@@ -542,6 +546,14 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
                 break
             except OSError:
                 time.sleep(0.1)
+    # a fixed rung for the oracle: the station's own, or the run's
+    for who, st in run.stations.items():
+        pin = stations.get(who, {}).get("pin_rung", run.pin)
+        if pin is None:
+            continue
+        answer = call(st.control, "rate.pin", {"rung": int(pin)})
+        if not answer.get("ok"):
+            run.faults.append(f"harness: {who}: rate.pin {pin} refused: {answer}")
 
 
 def stations_of(scenario: dict) -> list[str]:
@@ -979,7 +991,14 @@ def variants(path: Path, ks: list[int]) -> list[tuple[Path, int | None]]:
     return [(path, base + SEED_STEP * k if k else None) for k in ks]
 
 
-def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path, seed: int | None = None) -> dict:
+def run_one(
+    path: Path,
+    out: Path,
+    daemon_a: Path,
+    daemon_b: Path,
+    seed: int | None = None,
+    pin: int | None = None,
+) -> dict:
     text = path.read_text(encoding="utf-8")
     base = tomllib.loads(text).get("name", path.stem)
     if seed is not None:
@@ -990,7 +1009,7 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path, seed: int | N
     shutil.rmtree(run_dir, ignore_errors=True)
     run_dir.mkdir(parents=True)
     (run_dir / "scenario.toml").write_text(text, encoding="utf-8")
-    run = Run(scenario, run_dir, run_dir / "channel.progress")
+    run = Run(scenario, run_dir, run_dir / "channel.progress", pin=pin)
     t0 = time.monotonic()
     ends: list[str] = []
     try:
@@ -1053,6 +1072,7 @@ def run_one(path: Path, out: Path, daemon_a: Path, daemon_b: Path, seed: int | N
     result = judge(run, ends)
     result["base"] = base
     result["seed"] = scenario.get("seed", 1)
+    result["pin"] = "" if pin is None else pin
     result["wall_s"] = round(time.monotonic() - t0, 1)
     (run_dir / "result.json").write_text(json.dumps(result, indent=1), encoding="utf-8")
     return result
@@ -1076,6 +1096,11 @@ def main() -> int:
         action="store_true",
         help="delete a passing run's recordings (a night of three seeds is gigabytes of WAV)",
     )
+    ap.add_argument(
+        "--pin",
+        type=int,
+        help="pin every station's own data at this rung (the rate controller's oracle)",
+    )
     args = ap.parse_args()
     paths = args.scenarios or sorted(SCENARIOS.glob("*.toml"))
     if args.tag:
@@ -1094,7 +1119,7 @@ def main() -> int:
     daemon_b = args.daemon_b or args.daemon
 
     def one(v: tuple[Path, int | None]) -> dict:
-        result = run_one(v[0], args.out, args.daemon, daemon_b, v[1])
+        result = run_one(v[0], args.out, args.daemon, daemon_b, v[1], pin=args.pin)
         if result["pass"] and args.drop_passing_audio:
             for wav in (args.out / str(result["scenario"])).rglob("*.wav"):
                 wav.unlink(missing_ok=True)

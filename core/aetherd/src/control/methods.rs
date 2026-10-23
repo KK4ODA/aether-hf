@@ -92,6 +92,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "counters.reset"
             | "frequencies.set"
             | "frequency.set"
+            | "rate.pin"
     ) || crate::control::profiles::is_mutating(method)
 }
 
@@ -1107,6 +1108,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
             station.reset_counters();
             Response::ok(id, json!({ "counters": counters(station) }))
         }
+        "rate.pin" => rate_pin(station, params, id),
         "test.start" => test_start(station, params, id),
         "test.status" => Response::ok(id, station.test_status()),
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
@@ -1248,6 +1250,35 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
 /// session or a probe that will be over in a while.
 fn answer_only(reason: &str) -> bool {
     reason.contains("answer-only")
+}
+
+/// `rate.pin`: the benches' fixed rung for this station's own data, or `null` to unpin
+/// (`Station::pin_rung`). Nothing an operator sets: the harness runs a session at each rung
+/// to find the one a path carries best, which is what a rate controller is judged against.
+fn rate_pin<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+    let rung = match params.get("rung") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64() {
+            Some(rung) => Some(usize::try_from(rung).unwrap_or(usize::MAX)),
+            None => {
+                return Response::failed(
+                    id,
+                    ApiError::new(
+                        "bad_params",
+                        "A rung is a whole number, or null to unpin: {\"rung\": 7}.",
+                        false,
+                    ),
+                );
+            }
+        },
+    };
+    match station.pin_rung(rung) {
+        Ok(()) => Response::ok(id, json!({ "pinned": rung })),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new("bad_params", format!("Cannot pin the rung: {reason}."), false),
+        ),
+    }
 }
 
 /// `beacon`: one frame with this station's callsign, outside any session.
@@ -2317,6 +2348,27 @@ mod tests {
         // resetting a display tally is not a session change
         assert_eq!(station.engine().state(), aether_link::State::Idle);
         assert!(is_mutating("counters.reset"));
+    }
+
+    #[test]
+    fn rate_pin_fixes_the_stations_own_rung_for_the_benches() {
+        let mut station = station();
+        let response = call(&mut station, "rate.pin", json!({ "rung": 7 }));
+        assert!(response.ok, "{response:?}");
+        assert_eq!(response.result.expect("result")["pinned"], 7);
+        assert_eq!(station.engine().pinned_mode(), Some(7));
+        // a rung the ladder has not, and a rung that is no number
+        let refused = call(&mut station, "rate.pin", json!({ "rung": 99 }));
+        assert!(!refused.ok);
+        assert_eq!(refused.error.expect("error").code, "bad_params");
+        let refused = call(&mut station, "rate.pin", json!({ "rung": "seven" }));
+        assert!(!refused.ok);
+        assert_eq!(station.engine().pinned_mode(), Some(7));
+        // null unpins
+        let response = call(&mut station, "rate.pin", json!({ "rung": null }));
+        assert!(response.ok);
+        assert_eq!(station.engine().pinned_mode(), None);
+        assert!(is_mutating("rate.pin"));
     }
 
     #[test]
