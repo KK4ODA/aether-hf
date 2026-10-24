@@ -1,11 +1,12 @@
-//! The rate controller review's prototype C2 (Gate 3, bench-only) against the model, input by
+//! The rate controller review's prototypes (Gate 3, bench-only) against the model, input by
 //! input: `tests/data/rate_review_vectors.json`'s controller traces, written by
-//! `tools/make_rate_review_vectors.py` from `aether_model.link.rate_review.OuterLoopController`.
-//! The same file's engine sessions are replayed by `granted_vectors.rs`.
+//! `tools/make_rate_review_vectors.py` from `aether_model.link.rate_review`'s
+//! `OuterLoopController` (C2) and `DeliveryController` (C1). The same file's engine sessions are
+//! replayed by `granted_vectors.rs`.
 
 use std::{fs, path::PathBuf};
 
-use aether_link::rate_review::{FrameOutcome, OuterLoopController};
+use aether_link::rate_review::{DeliveryController, FrameOutcome, OuterLoopController};
 use serde_json::Value;
 
 fn vectors() -> Value {
@@ -48,60 +49,179 @@ fn close_opt(a: Option<f64>, b: Option<f64>) -> bool {
     }
 }
 
+/// One prototype, either kind, behind the inputs a trace hands it.
+enum Prototype {
+    Olla(OuterLoopController),
+    Delivery(DeliveryController),
+}
+
+impl Prototype {
+    fn seed(&mut self, snr: f64) {
+        match self {
+            Self::Olla(c) => c.seed(snr),
+            Self::Delivery(c) => c.seed(snr),
+        }
+    }
+
+    fn observe_frames(&mut self, frames: &[FrameOutcome], snr: Option<f64>) {
+        match self {
+            Self::Olla(c) => c.observe_frames(frames, snr),
+            Self::Delivery(c) => c.observe_frames(frames, snr),
+        }
+    }
+
+    fn observe_echo(&mut self, share: Option<f64>, snr: f64) {
+        match self {
+            Self::Olla(c) => c.observe_echo(share, snr),
+            Self::Delivery(c) => c.observe_echo(share, snr),
+        }
+    }
+
+    fn observe_snr(&mut self, snr: Option<f64>) {
+        match self {
+            Self::Olla(c) => c.observe_snr(snr),
+            Self::Delivery(c) => c.observe_snr(snr),
+        }
+    }
+
+    fn recommend(&self) -> usize {
+        match self {
+            Self::Olla(c) => c.recommend(),
+            Self::Delivery(c) => c.recommend(),
+        }
+    }
+
+    fn snr_db(&self) -> Option<f64> {
+        match self {
+            Self::Olla(c) => c.snr_db(),
+            Self::Delivery(c) => c.snr_db(),
+        }
+    }
+
+    fn echo(&self) -> Option<f64> {
+        match self {
+            Self::Olla(c) => c.echo(),
+            Self::Delivery(c) => c.echo(),
+        }
+    }
+
+    fn modes(&self) -> &[usize] {
+        match self {
+            Self::Olla(c) => c.modes(),
+            Self::Delivery(c) => c.modes(),
+        }
+    }
+}
+
+fn build(trace: &Value, n: usize) -> Prototype {
+    let echo_limit: Vec<Option<f64>> = trace["echo_limit"]
+        .as_array()
+        .expect("echo limit")
+        .iter()
+        .map(opt)
+        .collect();
+    let (thresholds, payload, capacity, frame_s) = (
+        floats(&trace["thresholds"]),
+        ints(&trace["payload"]),
+        ints(&trace["capacity"]),
+        floats(&trace["frame_s"]),
+    );
+    match trace["controller"].as_str() {
+        Some("olla") => {
+            let c = OuterLoopController::for_table(
+                &thresholds,
+                &payload,
+                &capacity,
+                &frame_s,
+                int(&trace["floor_modes"]),
+                &echo_limit,
+            );
+            let targets = floats(&trace["targets"]);
+            assert!(
+                close_opt(Some(c.target(true)), Some(targets[0])),
+                "trace {n}: target"
+            );
+            assert!(
+                close_opt(Some(c.target(false)), Some(targets[1])),
+                "trace {n}: target"
+            );
+            Prototype::Olla(c)
+        }
+        Some("delivery") => Prototype::Delivery(DeliveryController::for_table(
+            &thresholds,
+            &payload,
+            &capacity,
+            &frame_s,
+            &echo_limit,
+        )),
+        other => panic!("trace {n}: no prototype {other:?} in the port"),
+    }
+}
+
+fn frames_of(doc: &Value) -> Vec<FrameOutcome> {
+    doc.as_array()
+        .expect("frames")
+        .iter()
+        .map(|f| FrameOutcome {
+            mode: int(&f[0]),
+            air_s: num(&f[1]),
+            capacity: int(&f[2]),
+            detected: f[3].as_bool().expect("detected"),
+            decoded: f[4].as_bool().expect("decoded"),
+            combined: f[5].as_bool().expect("combined"),
+        })
+        .collect()
+}
+
+fn check_state(ctl: &Prototype, op: &Value, at: &str) {
+    assert_eq!(ctl.recommend(), int(&op["recommend"]), "{at}: the rung");
+    assert!(
+        close_opt(ctl.snr_db(), opt(&op["snr"])),
+        "{at}: smoothed SNR"
+    );
+    assert!(close_opt(ctl.echo(), opt(&op["echo"])), "{at}: echo");
+    match ctl {
+        Prototype::Olla(c) => {
+            let [floor, ordinary] = c.offsets();
+            assert!(
+                close_opt(floor, opt(&op["floor_offset"])),
+                "{at}: floor offset"
+            );
+            assert!(close_opt(ordinary, opt(&op["offset"])), "{at}: offset");
+        }
+        Prototype::Delivery(c) => {
+            let want = floats(&op["estimates"]);
+            for (k, &mode) in c.modes().iter().enumerate() {
+                assert!(
+                    close_opt(Some(c.estimate(mode)), Some(want[k])),
+                    "{at}: rung {mode}'s estimate {} against the model's {}",
+                    c.estimate(mode),
+                    want[k]
+                );
+            }
+        }
+    }
+}
+
 #[test]
-fn the_prototype_decides_as_the_model_does() {
+fn the_prototypes_decide_as_the_model_does() {
     let doc = vectors();
     let traces = doc["controller_traces"]
         .as_array()
         .expect("controller traces");
-    assert!(traces.len() >= 2, "too few traces to mean anything");
+    assert!(traces.len() >= 4, "too few traces to mean anything");
     for (n, trace) in traces.iter().enumerate() {
-        let echo_limit: Vec<Option<f64>> = trace["echo_limit"]
-            .as_array()
-            .expect("echo limit")
-            .iter()
-            .map(opt)
-            .collect();
-        let mut ctl = OuterLoopController::for_table(
-            &floats(&trace["thresholds"]),
-            &ints(&trace["payload"]),
-            &ints(&trace["capacity"]),
-            &floats(&trace["frame_s"]),
-            int(&trace["floor_modes"]),
-            &echo_limit,
-        );
+        let mut ctl = build(trace, n);
         assert_eq!(
             ctl.modes(),
             ints(&trace["modes"]).as_slice(),
             "trace {n}: the usable rungs"
         );
-        let targets = floats(&trace["targets"]);
-        assert!(
-            close_opt(Some(ctl.target(true)), Some(targets[0])),
-            "trace {n}: floor target"
-        );
-        assert!(
-            close_opt(Some(ctl.target(false)), Some(targets[1])),
-            "trace {n}: target"
-        );
         for (i, op) in trace["ops"].as_array().expect("ops").iter().enumerate() {
             if let Some(snr) = op.get("seed") {
                 ctl.seed(num(snr));
             } else if let Some(frames) = op.get("frames") {
-                let frames: Vec<FrameOutcome> = frames
-                    .as_array()
-                    .expect("frames")
-                    .iter()
-                    .map(|f| FrameOutcome {
-                        mode: int(&f[0]),
-                        air_s: num(&f[1]),
-                        capacity: int(&f[2]),
-                        detected: f[3].as_bool().expect("detected"),
-                        decoded: f[4].as_bool().expect("decoded"),
-                        combined: f[5].as_bool().expect("combined"),
-                    })
-                    .collect();
-                ctl.observe_frames(&frames, opt(&op["snr_in"]));
+                ctl.observe_frames(&frames_of(frames), opt(&op["snr_in"]));
             } else if let Some(share) = op.get("echo_in") {
                 ctl.observe_echo(opt(share), num(&op["snr_in"]));
             } else if let Some(snr) = op.get("observe_snr") {
@@ -109,22 +229,7 @@ fn the_prototype_decides_as_the_model_does() {
             } else {
                 panic!("trace {n} op {i}: unknown input");
             }
-            let at = format!("trace {n} op {i}");
-            assert_eq!(ctl.recommend(), int(&op["recommend"]), "{at}: the rung");
-            let [floor, ordinary] = ctl.offsets();
-            assert!(
-                close_opt(floor, opt(&op["floor_offset"])),
-                "{at}: floor offset {floor:?}"
-            );
-            assert!(
-                close_opt(ordinary, opt(&op["offset"])),
-                "{at}: offset {ordinary:?}"
-            );
-            assert!(
-                close_opt(ctl.snr_db(), opt(&op["snr"])),
-                "{at}: smoothed SNR"
-            );
-            assert!(close_opt(ctl.echo(), opt(&op["echo"])), "{at}: echo");
+            check_state(&ctl, op, &format!("trace {n} op {i}"));
         }
     }
 }

@@ -286,6 +286,23 @@ class DeliveryController(RateController):
             self._probing = mode
             self._since_probe[mode] = 0
 
+    def observe_echo(self, share: float | None, snr_db: float | None) -> None:
+        """The echo reading moves the smoothed echo as the current controller's does (ADR-0087);
+        a try of a rung it now rules out ends, and a choice it rules out goes to the best
+        estimate below that it allows."""
+        if share is None or snr_db is None or snr_db < self.echo_min_snr_db:
+            return
+        w = self.echo_weight
+        self.echo = share if self.echo is None else (1.0 - w) * self.echo + w * share
+        if self._probing is not None and self._echo_out(self.modes.index(self._probing)):
+            self._probing = None
+            self._probe_tries = 0
+        if self._echo_out(self._index):
+            below = [i for i in range(self._index) if self._usable(i)]
+            self._index = (
+                max(below, key=lambda i: (self.estimate(self.modes[i]), -i)) if below else 0
+            )
+
     def silent(self, steps: int) -> None:
         """A transmission of this station's went unanswered (C1-S): the rung steps down, as the
         engine steps its own (R9), and a try ends."""
