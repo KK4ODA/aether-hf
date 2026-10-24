@@ -14,13 +14,17 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   real modem); `tools/rate_k6.py` (criterion K6, the field replay); an iteration bench on the real
   modem on seeds, sizes and SNRs that are not K5's grid (§2.1).
 * **Ported for the harness** (bench-only, `aether_link::rate_review`, `granted::Controller`,
-  default `Current`): C2, the leader on the iteration bench (§2.4). The port is held to the model
+  default `Current`): C2, C1 at the receiver and C1 at the sender. The port is held to the model
   by `tests/data/rate_review_vectors.json` (`tools/make_rate_review_vectors.py`): the granted
-  engine's trace sessions with C2 at both stations, two of its own with frames never detected,
-  and three direct traces of the controller's inputs. Planted faults (the step size, the frames
-  never detected, the echo's choice) each fail it.
-* **Next**: the harness, K1 and K3 first (the 20 regret scenarios and the start pair, three
-  draws each, against the oracle's runs of Gate 2), then K2 and K4 on the full matrix.
+  engine's trace sessions with each prototype at both stations, four of its own (frames never
+  detected, lopsided paths), and direct traces of the controllers' inputs. Planted faults each
+  fail it.
+* **On the harness** (§3.7): every candidate against the current controller on the 20 regret
+  scenarios, the start pair and `80m-agc-carrier-outside-500`, three draws each. The leader is C1
+  at the sender with its silent step fixed (§3.10): 69 of 69 complete, and K1(a), K1(b) and K3
+  each a near miss. C1 at the sender ranked per exchange (§3.11) is running.
+* **Next**: the decision on the near misses (the author's, case by case), then K2, K4, K5 and K7
+  for the candidate taken forward.
 
 ## 1. What the engine hands a prototype
 
@@ -315,6 +319,11 @@ delivery is under 85 % of the current controller's (K1(b)).
 | C1 | +33.5 % | 2 (NVIS evening 0.50, disturbed NVIS 0.76) | **1, 0, 0** | 0 |
 | **C1 v2** (the family's offset) | **+22.55 %** | **1 (disturbed NVIS 0.76)** | 3, 0, 2 | 0 |
 | C1 v3 (the cautious start) | +28.7 % | 3 | 2, 0, 2 | 1 |
+| C1 at the sender (§3.9) | +26.1 % | 2 (disturbed NVIS 0.84, slow machine 0.77) | 1, 0, 1 | 3 (the AGC carrier, all three) |
+| C1 at the sender, echo kept (§3.10) | +25.16 % | 1 (disturbed NVIS 0.63) | 3, 1, 1 | 3 (the AGC carrier, all three) |
+| **C1 at the sender, its silent step fixed** (§3.10) | **+22.63 %** | **1 (disturbed NVIS 0.84)** | 3, 1, 1 | **0** |
+
+The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
 K3 moved from pass to fail between C1 and C1 v2, a change that touches only unmeasured rungs'
 priors: on three draws a settled rung is noisy (a change that moves the session's timing puts it
@@ -372,5 +381,114 @@ Fixed in `64296a7`, with one design change beside it: every copy of a block, re-
 is now charged to the rung the block was cut at, so a try of OFDM whose blocks strand and go
 again on the floor costs that choice all of it — what C1 at the receiver could not charge (it
 sees frames, not blocks' histories) and what made the NVIS paths cost (§3.8). On the harness
-next.
+in §3.10.
 
+### 3.10 C1 at the sender: the echo kept, then its silent step (2026-10-24)
+
+**With the echo kept** (`64296a7`): K1(a) +25.16 %, K1(b) `80m-nvis-disturbed-500` 0.63, K3 3, 1
+and 1 apart, and `80m-agc-carrier-outside-500` none of three still. Its trace: transmission after
+transmission at rungs 3 and 4 again, each after a silent slot. The engine's own step down after
+silence (R9, `_back_off`) told C1 to step too (`DeliveryController.silent`), and C1 stepped by
+the ladder's index alone — from rung 5 on a 7 ms echo, onto rung 4, which the echo rules out.
+**A defect**: a step down after silence now lands on the highest rung at or under it that the
+echo allows (`d3bf27b`, model and port, a test in each; the vectors never take such a step and
+regenerate byte for byte).
+
+**With the step fixed** (`d3bf27b`), all 69 runs:
+
+| scenario | current, 3 draws | C1 at the sender, 3 draws | regret | candidate / current (medians) |
+|---|---|---|---|---|
+| `quick-awgn-2300` | 1263 / 1263 / 1263 | 2182 / 2182 / 2182 | +0 % | 1.73 |
+| `40m-good-throughput-2300` | 2327 / 2286 / 2133 | 1803 / 2723 / 2169 | +20 % | 0.95 |
+| `80m-strong-moderate-500` | 151 / 260 / 244 | 276 / 280 / 323 | +24 % | 1.15 |
+| `20m-dx-500` | 146 / 151 / 144 | 184 / 198 / 118 | +19 % | 1.26 |
+| `20m-dx-moderate-2300` | 632 / 1000 / 600 | 800 / 706 / 750 | +42 % | 1.19 |
+| `80m-qsb-dropout-500` | 146 / 158 / 142 | 171 / 177 / 168 | +17 % | 1.17 |
+| `80m-weak-500` | 70 / 67 / 65 | 70 / 77 / 82 | +0 % | 1.15 |
+| `80m-flutter-500` | 129 / 120 / 127 | 138 / 150 / 165 | +18 % | 1.18 |
+| `15m-equatorial-flutter-2300` | 387 / 211 / 211 | 500 / 211 / 240 | +212 % | 1.14 |
+| `80m-nvis-evening-500` | 41 / 25 / 26 | 39 / 44 / 44 | −5 % | 1.65 |
+| `80m-thunderstorm-agc-2300` | 591 / 535 / 616 | 576 / 580 / 590 | +67 % | 0.98 |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 | 32 / 74 / 76 | +23 % | 0.94 |
+| `20m-polar-path-2300` | 198 / 198 / 172 | 151 / 198 / 172 | +49 % | 0.87 |
+| `80m-weak-wide-test-2300` | 167 / 168 / 175 | 175 / 175 / 175 | +0 % | 1.04 |
+| `40m-good-2300-rtty-crashes` | 425 / 442 / 496 | 672 / 614 / 549 | +26 % | 1.39 |
+| `80m-poor-500-pactor-signalink` | 66 / 74 / 72 | 82 / 86 / 76 | +36 % | 1.14 |
+| `80m-nvis-disturbed-500` | 38 / 44 / 36 | 32 / 44 / 30 | +22 % | 0.84 |
+| `40m-moderate-2300-vara-qrm` | 842 / 390 / 667 | 1103 / 593 / 711 | +38 % | 1.07 |
+| `80m-lopsided-acks-500` | 77 / 76 / 83 | 104 / 82 / 62 | +14 % | 1.06 |
+| `80m-slow-machine-500` | 119 / 91 / 106 | 149 / 94 / 110 | +40 % | 1.03 |
+
+(Delivery in bit/s, the largest message's or the Test's file's; regret the median of the three
+draws' against the best fixed rung of Gate 2's runs.)
+
+* **Completion**: 69 of 69; `80m-agc-carrier-outside-500` three of three (328, 308 and 347 s of
+  air), where both earlier forms completed none.
+* **K1(a)**: the median regret is +22.6284 % against a line of +22.6222 % (half the current's
+  +45.2444 %): **short by six thousandths of a point**.
+* **K1(b)**: `80m-nvis-disturbed-500` at **0.84** of the current's median delivery (32, 44 and
+  30 bit/s against 38, 44 and 36), the line 0.85. Every other scenario is at 0.87 or over;
+  fifteen of the twenty are over 1.
+* **K3** fails: 3, 1 and 1 apart (the current controller: 2, 1, 2). Draw 0's trace: from the
+  low reading (the path at 9 dB, the call heard at 5) C1 at the sender started at rung 6, tried
+  rung 7 at 90 s and at 99 s with one frame each, lost both, and doubled its wait each time; it
+  stayed at rungs 5 and 6 to the ladder, at 91 bit/s, while the receiver advised 9 to 11 all
+  along and the high draw settled at 9 (156 bit/s). One frame is a thin sample to shut a rung
+  with, and the wait's doubling keeps it shut.
+
+Three near misses, each for the author with its trace (`03-candidates.md` §4).
+
+### 3.11 K6 for C1 at the sender, and the price of an exchange (2026-10-24)
+
+**The judge.** K6 as built compared the receivers' recommendations, and C1 at the sender's
+receiver advises with the current controller: K6 compared the current controller with itself.
+`rung_reading.replay_sender` runs C1 at the sender on what the sender recorded, as the engine
+feeds it (seeded by the slave's reading of the call, each acknowledgement judging the copies sent
+since the last, a silent data transmission stepping it down, every decoded frame giving its
+echo), and `rate_k6` judges each of the sender's data transmissions: the rung the advice had it
+send at against C1's choice there, each worth what the session measured of that rung. Its first
+run found a fault in the judge: a `/4` 500 Hz sidecar's rung 4 is QPSK ⅓, this tree's is
+tone4x100-93, and a choice of "rung 4" had been credited with what QPSK ⅓ measured (WC4Y's Test
+of 2026-10-14: 0.235 of the current; 1.031 with that rung left out). K6 now judges only rungs
+whose frame is the session's (`rung_reading.foreign_rungs`), for every candidate.
+
+**The finding.** With the judge fixed, C1 at the sender summed ×1.452 of the current and its
+worst session was WC4Y's 500 Hz Test of 2026-10-22 at 0.607: it chose rungs 5 and 6 throughout
+the message, where the session measured rung 4 (tone4x100-93) best. Part of that is K6's open
+loop (§2.5): the session never sent data at 5 or 6, so the replay never shows C1 its own losses
+there. Part is C1's measure. It ranked rungs by data per second of their frames' air, but an
+exchange also spends a header, an answer and two gaps whatever the data's rung, and a
+transmission holds at most six frames. The header and the answer go in the families the two
+stations ask of each other, and on this path (ADR-0059: WC4Y read KK4ODA-1's ordinary answers 7
+times in 15) the answers go on the floor. The 500 Hz rungs, nothing lost, in bit/s:
+
+| rung | per second of frame air | per exchange, both ordinary | ordinary header, floor answer | both on the floor |
+|---|---|---|---|---|
+| 4, tone4x100-93 (5 × 5.36 s) | 134 | 125 | 114 | 105 |
+| 5, QPSK ½ (6 × 1.05 s) | 167 | 128 | 96 | 77 |
+| 6, QPSK ⅔ (6 × 1.05 s) | 235 | 181 | 135 | 108 |
+
+(control frames 0.43 s ordinary and 3.2 s on the floor; the two gaps 1.05 s.) Per frame second
+the first OFDM rung looked 24 % better than the floor's top; per exchange with floor answers it
+is 16 % worse. **C1 now ranks rungs per second of a whole exchange** (`f7159e7`): the engine hands
+it the protocol's lengths — a control frame by family, the two gaps, the frames a full
+transmission carries at each rung — and, before each decision, the families both stations'
+control frames go in (its own, and the one it asks of the other: `GrantedEngine._price`). No tuned
+number is added. The port does the same; the review's vectors gain a families input in the
+traces, lopsided sessions at both bandwidths and the families in each prototype session's digest,
+and planted faults in the price and in the engine's wiring each fail them. The replays give C1 the
+session's families too (`787abaf`).
+
+K6 with the price (open loop, the nine two-sided sessions):
+
+| arm | sum against the current's | worst session | K6 |
+|---|---|---|---|
+| C1 at the receiver (C1 v2 and the price) | 1.184 | 0.620 (WC4Y, 500 Hz, 2026-10-22) | fails |
+| C1 at the sender (and the price) | 1.455 | 0.688 (WC4Y, 500 Hz, 2026-10-22) | fails |
+
+The price moved C1 at the receiver's worst session from 0.424 to 0.620 and WC4Y's 2300 Hz Test
+from 0.878 to 1.016. What is left on 2026-10-22 is the open loop: with floor answers rung 6 still
+beats rung 4 lossless (135 against 114), the optimistic prior believes it decodes, and the
+session — which sent no data there — never says otherwise; its ladder measured rung 6 a quarter
+of the time. The harness judges the closed loop: C1 at the sender with the price is running
+there (§0).
