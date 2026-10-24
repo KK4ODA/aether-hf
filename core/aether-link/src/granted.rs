@@ -1426,6 +1426,7 @@ impl GrantedEngine {
         self.last_rx_mode = None;
         self.sender =
             (self.config.controller == Controller::DeliveryS).then(|| delivery_for(&self.timing));
+        self.price_controllers();
         self.sent_copies.clear();
         self.rx_base = 0;
         self.rx_buf.clear();
@@ -1560,6 +1561,16 @@ impl GrantedEngine {
     #[must_use]
     pub fn echo(&self) -> Option<f64> {
         self.rate.echo()
+    }
+
+    /// C1 of the rate controller's review (bench-only): the families it prices an exchange by,
+    /// as this engine last told it; `None` for the other controllers.
+    #[must_use]
+    pub fn prototype_families(&self) -> Option<(bool, bool)> {
+        match (&self.rate, &self.sender) {
+            (Rate::Delivery(c), _) | (_, Some(c)) => c.families(),
+            _ => None,
+        }
     }
 
     /// The gap level in use: what a master grants, what a slave asks for.
@@ -2080,6 +2091,7 @@ impl GrantedEngine {
             self.config.max_mode = rung;
         }
         self.rate = rate_for(&self.timing, &self.config);
+        self.price_controllers();
         self.recommended = self.config.initial_mode;
     }
 
@@ -2415,20 +2427,67 @@ impl GrantedEngine {
     /// A decoded frame of the session: the link is alive, and what it read of the path's echo
     /// goes to the rate controller (ADR-0087) — the call or the acceptance first.
     fn heard(&mut self, frame: &Heard) {
-        self.rate.observe_echo(frame.echo, frame.snr_db);
-        if let Some(sender) = &mut self.sender {
-            // the sender's own choice keeps the echo exclusions too (ADR-0087)
-            sender.observe_echo(frame.echo, frame.snr_db);
-        }
         self.heard_db = Some(frame.snr_db);
         self.heard_recent.push(frame.snr_db);
         let keep = self.config.family_readings;
         if self.heard_recent.len() > keep {
             self.heard_recent.drain(..self.heard_recent.len() - keep);
         }
+        self.price();
+        self.rate.observe_echo(frame.echo, frame.snr_db);
+        if let Some(sender) = &mut self.sender {
+            // the sender's own choice keeps the echo exclusions too (ADR-0087)
+            sender.observe_echo(frame.echo, frame.snr_db);
+        }
         self.heard_at = self.now;
         self.deadlines
             .set(Timer::Link, self.now + self.link_timeout());
+    }
+
+    /// C1 (the rate controller's review) ranks rungs per second of a whole exchange: what one
+    /// costs beyond its data frames, by the protocol's lengths — a control frame each way and
+    /// the two gaps (the decode budgets are the families' alike) — and the frames a full
+    /// transmission at each rung carries (the model's `_delivery_controller`).
+    fn price_controllers(&mut self) {
+        let floor_s = self.ctl_s(true);
+        let ordinary_s = self.ctl_s(false);
+        let gap_s = self.slot_start(0.0, true, 0, 0.0) + self.after(0.0, true, 0.0);
+        let burst: Vec<usize> = (0..self.timing_rungs())
+            .map(|m| self.burst_capacity(self.timing.data_frame_s_for(m)))
+            .collect();
+        if let Rate::Delivery(c) = &mut self.rate {
+            c.price_exchanges(floor_s, ordinary_s, gap_s, &burst);
+        }
+        if let Some(c) = &mut self.sender {
+            c.price_exchanges(floor_s, ordinary_s, gap_s, &burst);
+        }
+    }
+
+    /// The rungs of this air's table.
+    fn timing_rungs(&self) -> usize {
+        if self.timing.mode_threshold_db.is_empty() {
+            crate::rate::AWGN_THRESHOLD_DB.len()
+        } else {
+            self.timing.mode_threshold_db.len()
+        }
+    }
+
+    /// The families both stations' control frames go in now — this station's own and the one
+    /// it asks of the other — for C1, which prices a transmission at any rung with them (the
+    /// model's `_price`).
+    fn price(&mut self) {
+        let own = if self.role == Role::Master {
+            self.hdr_floor
+        } else {
+            self.ans_sticky
+        };
+        let other = self.wants_floor();
+        if let Rate::Delivery(c) = &mut self.rate {
+            c.set_families(own, other);
+        }
+        if let Some(c) = &mut self.sender {
+            c.set_families(own, other);
+        }
     }
 
     // ── rate and family ───────────────────────────────────────────────
@@ -4497,6 +4556,7 @@ impl GrantedEngine {
         outcomes.reverse();
         self.sent_copies.clear();
         let reading = self.peer_snr_db;
+        self.price();
         if let Some(sender) = &mut self.sender {
             sender.observe_frames(&outcomes, reading);
         }
@@ -4850,6 +4910,7 @@ impl GrantedEngine {
         let snr = (!snrs.is_empty()).then(|| snrs.iter().sum::<f64>() / snrs.len() as f64);
         if matches!(self.rate, Rate::Olla(_) | Rate::Delivery(_)) {
             let outcomes = self.outcomes(records);
+            self.price();
             match &mut self.rate {
                 Rate::Olla(c) => c.observe_frames(&outcomes, snr),
                 Rate::Delivery(c) => c.observe_frames(&outcomes, snr),

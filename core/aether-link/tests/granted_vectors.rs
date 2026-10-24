@@ -383,6 +383,7 @@ fn stats(s: &GrantStats) -> [(&'static str, usize); 18] {
 }
 
 /// What the engine says of itself against what the model's said.
+#[allow(clippy::too_many_lines)] // a check a field of the digest
 fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
     let mut wrong = Vec::new();
     let mut check = |name: &str, ok: bool, got: String| {
@@ -460,6 +461,16 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         want["measuring"].as_bool() == Some(e.measuring()),
         e.measuring().to_string(),
     );
+    if let Some(families) = want.get("families") {
+        let model = families
+            .as_array()
+            .map(|f| (f[0].as_bool() == Some(true), f[1].as_bool() == Some(true)));
+        check(
+            "families",
+            model == e.prototype_families(),
+            format!("{:?}", e.prototype_families()),
+        );
+    }
     let note = &want["last_data"];
     check(
         "last_data",

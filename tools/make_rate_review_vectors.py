@@ -22,10 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import make_granted_vectors as granted
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.frames import data_capacity
+from aether_model.link.frames import GrantFrame, GrantKind, data_capacity
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing
-from aether_model.link.phy import Container
+from aether_model.link.phy import Container, TxFrame
 from aether_model.link.rate_review import (
     NARROW_CLASS_PENALTY_DB,
     WIDE_CLASS_PENALTY_DB,
@@ -65,7 +65,11 @@ def controller_trace(
                 "floor_offset": ctl._offset.get(True),
                 "offset": ctl._offset.get(False),
             }
-        return {**common, "estimates": [ctl.estimate(m) for m in ctl.modes]}
+        return {
+            **common,
+            "estimates": [ctl.estimate(m) for m in ctl.modes],
+            "values": [ctl.value(m) for m in ctl.modes],
+        }
 
     ctl.seed(snr)
     ops.append({"seed": snr, **state()})
@@ -105,6 +109,11 @@ def controller_trace(
             share = rng.choice([None, rng.uniform(0.0, 0.012)])
             ctl.observe_echo(share, snr)
             ops.append({"echo_in": share, "snr_in": snr, **state()})
+        elif roll < 0.9 and isinstance(ctl, DeliveryController):
+            # the control frames' families the engine says are in use (C1's exchange price)
+            families = (rng.random() < 0.5, rng.random() < 0.5)
+            ctl.families = families
+            ops.append({"families": list(families), **state()})
         else:
             reading = snr if rng.random() < 0.8 else None
             ctl.observe_snr(reading)
@@ -121,6 +130,15 @@ def controller_trace(
         if isinstance(ctl, DeliveryController)
         else [],
         "echo_limit": [(timing.echo_limit or {}).get(m) for m in modes],
+        # C1 ranks per second of a whole exchange (control frames [floor, ordinary], the gaps,
+        # a full transmission's frames by rung); its families stay the data's in a trace
+        "control_s": [ctl.control_s[True], ctl.control_s[False]]
+        if isinstance(ctl, DeliveryController) and ctl.control_s
+        else [],
+        "gap_s": ctl.gap_s if isinstance(ctl, DeliveryController) else 0.0,
+        "burst_frames": [ctl.burst_frames.get(m, 0) for m in modes]
+        if isinstance(ctl, DeliveryController)
+        else [],
         "targets": (
             [ctl._target[True], ctl._target[False]] if isinstance(ctl, OuterLoopController) else []
         ),
@@ -154,9 +172,34 @@ def unheard(
     return run
 
 
+def lopsided(
+    air: AirInterface, seed: int, snr: float
+) -> granted.Callable[[], list[granted.Recorder]]:
+    """The slave's answers heard 10 dB under everything else: the master asks for them on the
+    floor while its own headers stay ordinary, so the two families of an exchange differ — what
+    C1 prices a transmission at any rung by (``granted._price``)."""
+
+    def run() -> list[granted.Recorder]:
+        a, b, ra, rb = granted._pair(air)
+        rng = random.Random(seed)
+
+        def weaker(frame: TxFrame) -> float:
+            if frame.container is Container.DATA:
+                return 0.0
+            return -10.0 if GrantFrame.decode(frame.payload).kind is GrantKind.ANSWER else 0.0
+
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed, frame_snr_offset=weaker)
+        granted._exchange(sim, a, b, granted._message(rng, 3000), granted._message(rng, 300))
+        return [ra, rb]
+
+    return run
+
+
 EXTRA = {
     "unheard-wide": unheard(WIDE, 41, 10.0),
     "unheard-narrow": unheard(NARROW, 42, 4.0),
+    "lopsided-narrow": lopsided(NARROW, 43, 6.0),
+    "lopsided-wide": lopsided(WIDE, 44, 4.0),
 }
 """Sessions of this file's own."""
 
@@ -174,6 +217,8 @@ SESSIONS = (
     "cut-header",
     "unheard-wide",
     "unheard-narrow",
+    "lopsided-narrow",
+    "lopsided-wide",
 )
 """The sessions that build their stations with ``_pair`` and exercise the controller: a clean
 path, a weak one, the three fading channels, an outage, false detections, a ramp, stranded
