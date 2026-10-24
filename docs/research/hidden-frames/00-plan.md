@@ -96,6 +96,41 @@ does not pass by rule.
 | K4 | false frames | M3: at most one false frame added per 1 000 real frames, and none of them decoded; M4: no more candidates per hour than R0 plus one |
 | K5 | cost | M5: at most 5 % more decode attempts per real frame |
 
+## 4a. Amendment after the first runs (registered 2026-10-24, before the runs it names)
+
+R1's first runs, M1–M3 (M4 still running):
+
+* **K1 passes.** The three hidden frames of §1 are decoded, a fourth is found (ND1J's control
+  frame at −5 dB in KK4ODA-1's recording of Test 2, hidden by a 1.10 candidate 37 ms ahead of
+  it), and no frame decoded as built is lost in the twelve recordings.
+* **K2 misses as registered:** 90.6 % (2300 Hz) and 94.1 % (500 Hz) of the M2 frames that
+  decode alone. Where the false candidate read under 1.3 and the real frame at or over it, the
+  case R1 is for, 100 % and 99.8 %. 72 of the 75 misses are cut preambles the stream read at
+  1.3–1.49, which R1 trusts by design; three are real frames read just under 1.3. So R2 is
+  measured, as §2 says.
+* **K3 fails: four losses, and none is the rule under test.** Each is the span's end (traces in
+  the results). A burst's frames go back to back, so the next frame starts where the last one
+  ends. When the last one's timing locked on the later ray (2 ms on ITU Poor), the next one's
+  true start is 16 samples inside its span: it is hidden, and its copy a symbol late is taken
+  and fails. The rule as built has the same fault — in the first trace it lost frame *k* this
+  way, and the late copy's span then hid *k*+1. R1 recovers *k*+1 and the miss moves to *k*+2,
+  one gain and one loss. The port's `known()` is the same test.
+* **K4** at 500 Hz: 2.64 false frames added per 1 000 (0.27 at 2300 Hz), none decoded. **K5
+  passes:** +0.6 % and +0.8 % decode attempts.
+
+On the four conditions that lost a frame, a one-symbol guard at the span's end alone recovered
+16 frames the rule as built missed, with no loss and no false frame. Two more rules, with the
+same criteria:
+
+* **R0e:** the rule as built, plus: a candidate starting in the last symbol of a known frame's
+  span is not inside it (`end_guard`). It is measured against R0 on M1, M3 and M4 (it claims
+  nothing for M2's case).
+* **R3:** R1 plus the same guard. Measured on M1–M4 against R0, K1–K5 as registered.
+
+Order, set by what the four traces show: R3 first, then R0e, then R2 (M2 and M1; M3 and M4 if it
+passes K2). The guard is one symbol because the start already has a symbol's tolerance: the
+detector's sidelobe lies a symbol early, and a frame's late copy a symbol late.
+
 ## 5. Then
 
 If R1 passes: an ADR; R1 made the model's rule; the port's `known()` the same, with a streaming
