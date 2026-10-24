@@ -105,7 +105,9 @@ spectrum and the waterfall, and the receiver's readings:
   calling frequency on every band from 80 m to 6 m; the panel offers them as dial memories.
 * **Gateway:** the `aetherd-…` archive and [`docs/user/gateway-kit.md`](docs/user/gateway-kit.md)
   (headless install, systemd unit, cross-compiling for ARM64, automatic control inside the
-  §97.221(b) sub-bands). An Aether gateway must not be listed as a VARA gateway.
+  §97.221(b) sub-bands). An Aether gateway must not be listed as a VARA gateway. A Winlink
+  gateway on Windows — RMS Trimode at home, Winlink Express in the field — is set up step
+  by step in [`docs/user/winlink-gateway.md`](docs/user/winlink-gateway.md).
 * **Updates:** the desktop application checks for a newer signed build on start (`[update]
   channel`: `stable`, `beta` or `nightly`; a beta installation follows the betas) and keeps
   the previous installer for going back, settings included.

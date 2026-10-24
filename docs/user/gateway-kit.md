@@ -238,6 +238,9 @@ on the air as a datagram outside any session, judged by the same rules.
 It expects a VARA modem on the same two ports. Point it at 8300. Trimode also insists on a TNC
 "VARA program" path, which it launches and watches by process id: give it a small program that
 stays running and start `aetherd` separately (as the service does). The bench's notes, Trimode's scanning `LISTEN` included, are in `docs/spec/host-interfaces.md` §7.
+The step-by-step for a Windows gateway — Trimode's settings, the private service code that
+keeps the channel out of the public list, and the Winlink Express client in the field — is
+[winlink-gateway.md](winlink-gateway.md).
 
 **Do not list an Aether gateway as a VARA gateway.** A real-VARA client that called it would
 find something it cannot talk to, and would blame VARA. The compatibility is in the host

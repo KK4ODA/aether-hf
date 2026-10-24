@@ -522,6 +522,8 @@ Turn on **Host programs** in Setup step 5, then point the program's VARA HF sett
   and frequency control on CAT, as with VARA.
 
 The full setup for each program is in [VarAC, Winlink Express and Pat with Aether](host-programs.md).
+A Winlink gateway — RMS Trimode at the gateway, Winlink Express in the field — is set up step
+by step in [Winlink through an Aether gateway](winlink-gateway.md).
 
 The host program sees only its own sessions. A session you start from the panel is not reported
 to it, though the program's BUSY reads ON while it runs.
@@ -689,6 +691,7 @@ what happened in an issue on GitHub or by email.
 | The rules Aether checks | [fcc-regulatory-controls.md](fcc-regulatory-controls.md) |
 | Where to operate | [frequency-plan.md](frequency-plan.md) |
 | Running a gateway | [gateway-kit.md](gateway-kit.md) |
+| A Winlink gateway with RMS Trimode, and its client | [winlink-gateway.md](winlink-gateway.md) |
 | Field testing and the bench | [field-test.md](field-test.md) |
 | The signal on the air | [air-interface.md](../spec/air-interface.md) |
 | The host interface | [host-interfaces.md](../spec/host-interfaces.md) |

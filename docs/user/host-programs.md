@@ -94,6 +94,8 @@ PTT **off**.
 * Winlink Express leaves keying to the modem, as with VARA: keep **Aether keying the radio**
   (the second way above). If Aether keys on a serial line or a CM108 pin, Winlink Express can
   still do its own frequency control on the radio's CAT port.
+* The gateway end — RMS Trimode fed by an Aether station, and a Winlink Express client calling
+  it from the field — is set up step by step in [winlink-gateway.md](winlink-gateway.md).
 
 ## Pat
 
