@@ -328,6 +328,7 @@ delivery is under 85 % of the current controller's (K1(b)).
 | … and no step down for silence (§3.13, reverted) | +31.83 % | 1 (disturbed NVIS 0.66) | 5, 0, 0 | 2 (the AGC carrier, draws 0 and 2) |
 | … priced, a try decided on three frames (§3.15) | **+21.85 %** | 1 (slow machine 0.81) | 6, 0, 2 | **0** (72 runs) |
 | … and a try across the edge takes the transmission (§3.16) | +23.46 % | 1 (slow machine 0.77) | 2, 1, 2 | 0 (72 runs) |
+| … and the wait between tries in air at the rung tried (§3.17) | +24.41 % | 1 (polar path 0.81; slow machine 0.87) | 6, 1, 2 | 0 (72 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -611,3 +612,28 @@ five 5.36 s frames (≈ 27 s) where one on OFDM is six 1.05 s frames (≈ 8 s): 
 160 s on the floor and under a minute above it. The slow machine is the called station's stalls —
 the sender cannot tell them from a path that loses frames — and what costs is the way back: each
 stall puts the session on the floor, and the next try of OFDM waits six floor transmissions.
+
+### 3.17 The wait between tries in air (2026-10-24)
+
+The author's answer of the same day: the wait is `probe_every` full transmissions *at the rung
+being tried*, in seconds of air (`275209a`; no new parameter). Building it found the model and the
+port parting on a tie — six OFDM transmissions' air is the wait exactly, and Python's `sum()`
+compensates where the port's does not — so the model now adds in order and the comparison allows
+1e-9 s. The 72 runs:
+
+* **Completion**: 72 of 72. **WC4Y's path**: message ×1.12, file ×1.06 (98.0 / 95.4 / 98.0).
+* **K1(b)**: `80m-slow-machine-500` **0.87** (93 / 103 / 76 against 119 / 91 / 106) — over the
+  line; `20m-polar-path-2300` **0.81** (160 / 143 / 172 against 198 / 198 / 172) — under it.
+* **K1(a)**: +24.41 % (§3.16 +23.46, §3.15 +21.85).
+* **K3**: 6, 1, 2.
+
+**The traces.** *K3's draw 0*: the first try of OFDM now came at 88 s (it had at 188), a whole
+transmission at rung 5 — and C1 judged it a loss and went back to rung 4, while the receiver,
+reading the try's frames, advised rung 9 and then 11. Both stations' control frames were ordinary
+all session, so the price was fair: per exchange the 500 Hz first OFDM rung carries 128 bit/s with
+nothing lost against the floor's top's 125, and on this path it lost more than that. C1 tries only
+the rung directly above, and the first OFDM rung is a dip: the rungs over it carry 181 to 780. It
+sat at a local best. *The polar path's draw 1*: OFDM does not carry there; in §3.16 C1 stayed on
+the floor's top (rung 5) for the whole message (198 bit/s), here its tries of rung 7 came sooner,
+one was judged a gain, the transmissions after it went unanswered and the step for silence put it
+on rung 3 (143 bit/s). How often to try OFDM from the floor is a trade between these two paths.
