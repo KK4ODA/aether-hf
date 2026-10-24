@@ -157,6 +157,14 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    decoded every frame; a false detection whose span hid an answer; the busy detector's floor
    at the other station's signal after a bandwidth move; and KQ4SAX calling on 40 m while
    KK4ODA-1 listened on 80 m.
+17. [17-five-tests-beta121.md](17-five-tests-beta121.md): Step 4, five Tests of 2026-10-23/24
+   read from both sides: KQ4SAX's first complete sessions (40 m, 2300 Hz, a file at 1309 bit/s),
+   WC4Y at 2300 Hz after ADR-0093 (161 against 61 bit/s) and ND1J on 40 m at 500 Hz. Still no
+   overlap. Found: the panel saving `max_mode = 14` at 2300 Hz, which held KQ4SAX's link on
+   rung 14 while rung 15 was asked for; a Test's call that does not move to the bandwidth its
+   own probe learned; report 16's hidden frame again, a header at the slave and an answer at the
+   master in one exchange; a learned answer gap raised by the Test's own probe; and three slow
+   climbs back after a fade, for the rate controller's review.
 
 ## Reproduction
 

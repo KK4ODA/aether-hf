@@ -838,3 +838,32 @@ sender is §3.19's form again — a try from the floor's top goes to the first O
 when its lossless rate beats the top's estimate — with v11's guard kept (a try across the edge
 takes the transmission only when a block can be cut at its rung; the `edge-at-the-end` vector
 session still reaches it). K3's draw-0 dip stays a near miss.
+
+### 3.23 K6 on the five sessions of report 17 (2026-10-24)
+
+Five more two-sided Tests came in after §3.11's nine (`../link-architecture/17-five-tests-beta121.md`):
+KQ4SAX's two at 2300 Hz on 40 m, WC4Y's at 2300 Hz on 80 m and ND1J's two at 500 Hz on 40 m.
+`rate_k6.py --candidate delivery-s`, C1 at the sender as it stands at `109c519`, after §3.22's revert
+(`ca7587c` gives the same numbers), on those five alone (the nine of §3.11 were not rerun with
+this form here):
+
+| session | steps judged | current | C1 at the sender | ratio |
+|---|---|---|---|---|
+| KQ4SAX, 2026-10-23 21:08Z | 11 of 11 | 7552 | 8074 | 1.069 |
+| KQ4SAX, 2026-10-23 21:18Z | 2 of 8 | 1819 | 2442 | 1.343 |
+| WC4Y, 2026-10-24 00:20Z | 6 of 6 | 928 | 928 | 1.000 |
+| ND1J, 2026-10-24 15:55Z | 20 of 20 | 6764 | 7503 | 1.109 |
+| ND1J, 2026-10-24 16:00Z | 19 of 19 | 6688 | 6149 | 0.919 |
+| all five | | 23 751 | 25 096 | **1.057**, worst 0.919 |
+
+* **ND1J's second Test** is the one under 1. After a call read at +14.8 dB, C1 would have sent
+  rungs 14 and 13 first. The session's ladder measured those at 0 of 4 and 2 of 4; the current
+  controller started at 12, which carried.
+* **KQ4SAX's second** is judged on two steps only. C1 chose rungs the session never sent.
+* **Where the current controller left the most** in these sessions is the climb back after a
+  fade (report 17 §8.2): 40–106 s on a rung under one the same session measured carrying more.
+  That is the closed-loop question K6 cannot judge; the harness's fading scenarios are where it
+  is.
+* **One of the five was capped by configuration.** Both stations of KQ4SAX's Tests ran 2300 Hz
+  with `max_mode = 14`, which the panel had saved at 500 Hz (report 17 §3). A candidate replayed
+  open loop is not held to a station's `max_mode`.

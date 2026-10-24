@@ -205,14 +205,21 @@ Of note for the oracle (§7): the strong-path scenario's controller run delivere
 | 2026-10-23 00:52Z `20261023-005231_WC4Y_KK4ODA-1_test` | WC4Y → KK4ODA-1 | 2300 | beta.120 | 15 | 512 B, 55 bit/s | 768 B, 61 bit/s |
 | 2026-10-23 16:04Z `20261023-160400_ND1J_KK4ODA-1_test` | ND1J → KK4ODA-1 | 500 | beta.121 | 16 (Test 1) | 512 B, 204 bit/s | 2816 B, 413 bit/s |
 | 2026-10-23 16:07Z `20261023-160704_ND1J_KK4ODA-1_test` | ND1J → KK4ODA-1 | 500 | beta.121 | 16 (Test 2) | 2048 B, 514 bit/s | 7680 B, 579 bit/s |
+| 2026-10-23 21:08Z `20261023-210839_KQ4SAX_KK4ODA-1_test` | KQ4SAX → KK4ODA-1 | 2300 | beta.121 | 17 | 2048 B, 548 bit/s | 8192 B, 727 bit/s |
+| 2026-10-23 21:18Z `20261023-211807_KQ4SAX_KK4ODA-1_test` | KQ4SAX → KK4ODA-1 | 2300 | beta.121 | 17 | 2048 B, 494 bit/s | 7168 B, 1309 bit/s |
+| 2026-10-24 00:20Z `20261024-002051_WC4Y_KK4ODA-1_test` | WC4Y → KK4ODA-1 | 2300 | beta.121 | 17 | 512 B, 154 bit/s | 2304 B, 161 bit/s |
+| 2026-10-24 15:55Z `20261024-155500_ND1J_KK4ODA-1_test` | ND1J → KK4ODA-1 | 500 | beta.122 / beta.121 | 17 | 2048 B, 325 bit/s | 4864 B, 326 bit/s |
+| 2026-10-24 16:00Z `20261024-160000_ND1J_KK4ODA-1_test` | ND1J → KK4ODA-1 | 500 | beta.122 / beta.121 | 17 | 2048 B, 335 bit/s | 4864 B, 311 bit/s |
 
-All nine are Tests on 80 m with KK4ODA-1 the slave, so the data read here is the master's; the
-slave sent answers only. The five on beta.106–111 ran the old Test (the ladder as pinned data
+The first nine are Tests on 80 m with KK4ODA-1 the slave, so the data read here is the master's;
+the slave sent answers only. The five on beta.106–111 ran the old Test (the ladder as pinned data
 frames in the middle, before ADR-0074 and ADR-0077), the four on beta.118–121 the current one
-(measurement frames, the ladder last). The 2300 Hz session is the only one on that air. KQ4SAX's
-uploads hold no session with KK4ODA-1 (another band, report 16 §6). Sessions before protocol 8
-(2026-10-11 and earlier) are not read: another link protocol, and not what a candidate would
-run on.
+(measurement frames, the ladder last). Of those nine, the 2300 Hz session is the only one on that
+air. The last five came in after this gate and are read in report 17
+(`../link-architecture/17-five-tests-beta121.md`): KQ4SAX's first complete sessions with KK4ODA-1
+(an earlier upload held none, report 16 §6), three of the five at 2300 Hz and three on 40 m.
+Sessions before protocol 8 (2026-10-11 and earlier) are not read: another link protocol, and not
+what a candidate would run on.
 
 ### 2.2 One side: the ladders
 

@@ -2328,6 +2328,36 @@ open-loop replay judges a learning controller's untried choices as if it never l
 `pkill -f` a pattern from a Bash call whose own command line contains it** (it kills the call's
 shell: exit 144); bracket the first letter (`pgrep -f "[i]terate.py"`).
 
+**Five Tests from both sides (2026-10-24, `17-five-tests-beta121.md`).** KQ4SAX's two Tests of
+2026-10-23 21:08Z/21:18Z, 40 m at 2300 Hz — the first complete ones with KK4ODA-1, files at 727
+and **1309 bit/s**, the fastest yet; WC4Y's of 10-24 00:20Z, 80 m at 2300 Hz — 154/161 bit/s at
+rung 5 against report 15's 55/61 at rung 7, ADR-0093 on the air; ND1J's two of 10-24 15:55Z/16:00Z,
+40 m at 500 Hz, ND1J at 200 W on beta.122. No overlap in any (0.611 s the least clear air), no
+forfeit or late drop, answers 77–155 ms after their slots, identifiers last. Found, each the
+author's call (§11): **the panel saves `max_mode = 14` at 2300 Hz** — `fillModes` builds *Fastest
+mode* from the running ladder (0–14 at 500 Hz), the bandwidth handler only hides entries, so a
+Setup save at 500 Hz, or within seconds of a profile switch, writes 14 with `bandwidth = 2300`;
+KQ4SAX, WC4Y and KK4ODA-1 all ran that way, and in KQ4SAX's second Test it held the link on rung
+14 while KK4ODA-1 asked for 15 (the daemon clamps `max_mode` itself, so 19 is right at either
+bandwidth; the handler's comment that a higher value "would be refused" is wrong). **A Test's
+call does not move to 500 Hz** for a station its own probe found there — `movable()` refuses
+while a Test runs, so ADR-0035's `move_for_call` is skipped and only ADR-0058 moves it before
+the fifth try (WC4Y's call took 74 s until the author switched KK4ODA-1 by hand; reproduced in a
+scratch station test). Report 16's **hidden frame twice in one exchange** of ND1J's Test 1 — a
+weak detection (1.04) 0.26 s before ND1J's header took its span at KK4ODA-1, and a phantom
+(1.12) 0.34 s before KK4ODA-1's answer did the same at ND1J (`--replay` repeats it; 18 s); all
+three cases so far came 0.29–0.46 s after the receiving station's release, report 16's bench is
+now due. **ADR-0054 misread a Test's probe**: ND1J probed by hand, heard the answer, then
+started a Test, whose probe raised his gap at KK4ODA-1 650 → 900 ms (and 10-23 the same way), so
+every slot of both Tests was at level 1, +0.5 s an exchange (~5 %); proposal: a Test reuses a
+probe answered in the last minute. For the review: three slow climbs back after a fade (rung 10
+for 106 s in ND1J's Test 2 where 11 carried 24 % more); K6 with C1 at the sender 1.057 on these
+five (worst 0.919); the reconstruction numbered all 253 of ND1J's frames as recorded and the
+replay matched his controller's state at every step (Gate 1 on the air). Capture skips: five
+frames with a padded skip inside, all decoded (ADR-0089). Tool fixes: `two_sides.py` judges a
+call's acceptance at its try's gap level (`call_levels`), and `rung_reading.py` skips an
+acceptance keyed late in its slot.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
