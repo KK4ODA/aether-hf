@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import make_granted_vectors as granted
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.frames import GrantFrame, GrantKind, data_capacity
+from aether_model.link.frames import DataKind, GrantFrame, GrantKind, data_capacity, decode_data
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing
 from aether_model.link.phy import Container, TxFrame
@@ -195,11 +195,41 @@ def lopsided(
     return run
 
 
+def floor_in_flight(seed: int) -> granted.Callable[[], list[granted.Recorder]]:
+    """A 500 Hz call read 12 dB low starts C1 on the floor, and every third floor data frame is
+    lost, so a floor frame is always in flight when C1 at the sender tries OFDM: the try takes
+    the transmission (``granted._data_frames``' ``across``) — before, it never went."""
+
+    def run() -> list[granted.Recorder]:
+        a, b, ra, rb = granted._pair(NARROW)
+        rng = random.Random(seed)
+        timing = phy_timing(NARROW.params)
+        count = [0]
+
+        def offset(frame: TxFrame) -> float:
+            if frame.container is not Container.DATA:
+                return 0.0
+            kind = decode_data(frame.payload)[0].kind
+            if kind is DataKind.CONNECT_REQ:
+                return -12.0
+            if kind is DataKind.DATA and timing.is_floor(frame.mode):
+                count[0] += 1
+                return -40.0 if count[0] % 3 == 0 else 0.0
+            return 0.0
+
+        sim = TwoStationSim(a, b, snr_db=8.0, seed=seed, frame_snr_offset=offset)
+        granted._exchange(sim, a, b, granted._message(rng, 4000), granted._message(rng, 200))
+        return [ra, rb]
+
+    return run
+
+
 EXTRA = {
     "unheard-wide": unheard(WIDE, 41, 10.0),
     "unheard-narrow": unheard(NARROW, 42, 4.0),
     "lopsided-narrow": lopsided(NARROW, 43, 6.0),
     "lopsided-wide": lopsided(WIDE, 44, 4.0),
+    "floor-in-flight": floor_in_flight(45),
 }
 """Sessions of this file's own."""
 
@@ -219,6 +249,7 @@ SESSIONS = (
     "unheard-narrow",
     "lopsided-narrow",
     "lopsided-wide",
+    "floor-in-flight",
 )
 """The sessions that build their stations with ``_pair`` and exercise the controller: a clean
 path, a weak one, the three fading channels, an outage, false detections, a ramp, stranded

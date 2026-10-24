@@ -4170,12 +4170,14 @@ impl GrantedEngine {
         }
         let mut mode = self.burst_mode();
         let mut probe = self.probe_rung();
+        let mut across = false;
         if let Some(rung) = probe
             && self.timing.is_floor(rung) != self.timing.is_floor(mode)
         {
             // across the floor's edge a try is a whole transmission
             mode = rung;
             probe = None;
+            across = true;
         }
         let recommendation = self.recommended.min(self.cap());
         // what an unheard answer would have said is not resent blind: it waits for an answer —
@@ -4246,7 +4248,9 @@ impl GrantedEngine {
             }
         }
         let mut family = self.timing.is_floor(mode);
-        if let Some(first) = unacked.first().and_then(|s| self.records.get(s)) {
+        if !across && let Some(first) = unacked.first().and_then(|s| self.records.get(s)) {
+            // a try across the edge takes the transmission: the other family's frames in
+            // flight wait it out, or on a path that always leaves one unacknowledged it never goes
             family = self.timing.is_floor(first.mode);
         }
         let mut seqs: Vec<u8> = unacked

@@ -2768,8 +2768,10 @@ class GrantedEngine:
             return self._measurement(room_s)
         mode = self._burst_mode()
         probe = self._probe_rung(mode)
+        across = False
         if probe is not None and self.timing.is_floor(probe) != self.timing.is_floor(mode):
-            mode, probe = probe, None  # across the floor's edge a try is a whole transmission
+            # across the floor's edge a try is a whole transmission
+            mode, probe, across = probe, None, True
         recommendation = min(self._recommended, self._cap())
         # what an unheard answer would have said is not resent blind: it waits for an answer —
         # through one silent slot. Two in a row and the answers are not getting through, and
@@ -2813,7 +2815,10 @@ class GrantedEngine:
                 rec.reencoded += rec.tx_count
                 rec.tx_count = 0
         family = self.timing.is_floor(mode)
-        if unacked:
+        if unacked and not across:
+            # a try across the edge takes the transmission: the other family's frames in flight
+            # wait it out, or on a path that always leaves one unacknowledged it never goes
+            # (C1 at the sender sat on the floor's top 160 s from a low start, 04-results.md)
             family = self.timing.is_floor(self._records[unacked[0]].mode)
         seqs = [s for s in unacked if self.timing.is_floor(self._records[s].mode) == family]
         frame_s = self._frame_s(family)
