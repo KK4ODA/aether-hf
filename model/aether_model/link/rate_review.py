@@ -173,14 +173,14 @@ class DeliveryController(RateController):
     one below that (``04-results.md`` §3.4). ``0`` turns it off."""
     _family: dict[bool, float] = field(default_factory=dict)
     """The families' offsets, by whether the family is the floor's."""
-    cautious_start: bool = True
+    cautious_start: bool = False
     """The first rung is the four channels' mean's best (:func:`path_decode_probability`), not
-    the optimistic prior's, and the rung above it is tried at the next transmission. At the
-    start nothing is measured, and a block cut at the first rung is bound to it until its copies
-    run out: on the harness's disturbed NVIS a first transmission at OFDM 5 cost 24 OFDM frames
-    before its blocks could go on the floor (``04-results.md`` §3.5). The optimistic prior
-    stays for every choice after, where a rung found wanting costs one measured
-    transmission."""
+    the optimistic prior's, and the rung above it is tried at the next transmission. Built for
+    the harness's disturbed NVIS, where a first transmission at OFDM 5 cost 24 OFDM frames before
+    its blocks could go on the floor, and rejected there (``04-results.md`` §3.6): it took that
+    scenario from 0.76 to 1.03 of the current controller's delivery and cost more everywhere a
+    climb is the job — the median regret +22.6 → +28.7 %, three weak paths under 0.85, one Test
+    failed. Off; kept until the decision ADR says what goes."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, int] = field(default_factory=dict)
     _probe_wait: dict[int, int] = field(default_factory=dict)

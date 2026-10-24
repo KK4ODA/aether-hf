@@ -283,3 +283,40 @@ after the start. The reason is the asymmetry the iteration found (§2.4): after 
 found wanting costs one measured transmission, but the first transmission's blocks are bound to
 its rung before anything is measured.
 
+### 3.6 C1 v3 (the cautious start) on the harness: rejected (2026-10-24)
+
+C1 with the first rung by the four channels' mean and the first try at once (`6eb8b1d`), the same
+66 runs. It did what it was built for — `80m-nvis-disturbed-500` 0.76 → 1.03 — and cost more
+everywhere a climb is the job:
+
+* **K1(a)**: +28.7 % (v2 +22.55 %). `quick-awgn-2300` 2400 → 1714 bit/s.
+* **K1(b)**: three scenarios under 0.85, all weak paths where the cautious curves start low:
+  `80m-weak-both-ways-ladder-500` 0.67, `20m-polar-path-2300` 0.74, `80m-weak-wide-test-2300`
+  0.76.
+* **K4**: one Test failed (`80m-nvis-evening-500`, the third draw: the message timed out).
+* **K3**: 2, 0 and 2 apart.
+
+Off by default (`cautious_start`), kept until the decision ADR says what goes. The disturbed
+NVIS's cost is the first transmission's blocks bound to an OFDM rung until their copies run out
+— the engine's re-encode rule, which every candidate keeps, and the echo exclusions (ADR-0087),
+whose 500 Hz table has no OFDM rung. Neither is the controller's to change (`03-candidates.md`
+§1.1).
+
+### 3.7 The candidates on the harness so far
+
+The 20 regret scenarios and the start pair, three draws each. "Under 0.85": scenarios whose median
+delivery is under 85 % of the current controller's (K1(b)).
+
+| arm | K1(a): median regret (≤ +22.6 %) | K1(b): under 0.85 | K3: settled apart (≤ 1 each) | failed runs |
+|---|---|---|---|---|
+| the current controller | +45.2 % | — | 2, 1, 2 | 0 |
+| C2 | +30.5 % | 2 (disturbed NVIS 0.58, slow machine 0.83) | 4, 0, 3 | 0 |
+| C0, everything taken out | +46.7 % | 8 | 4, 1, 0 | 0 |
+| C1 | +33.5 % | 2 (NVIS evening 0.50, disturbed NVIS 0.76) | **1, 0, 0** | 0 |
+| **C1 v2** (the family's offset) | **+22.55 %** | **1 (disturbed NVIS 0.76)** | 3, 0, 2 | 0 |
+| C1 v3 (the cautious start) | +28.7 % | 3 | 2, 0, 2 | 1 |
+
+K3 moved from pass to fail between C1 and C1 v2, a change that touches only unmeasured rungs'
+priors: on three draws a settled rung is noisy (a change that moves the session's timing puts it
+on another stretch of the same fade, `00-brief.md` §8).
+
