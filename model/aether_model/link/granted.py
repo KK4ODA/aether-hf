@@ -485,6 +485,9 @@ class _TxRecord:
     seq: int
     body: bytes
     mode: int
+    origin: int | None = None
+    """The rung the block was cut at, before any re-encoding: what C1 at the sender charges all
+    of its copies to — the cost of the choice that made it."""
     tx_count: int = 0
     acked: bool = False
     reencoded: int = 0
@@ -1435,6 +1438,9 @@ class GrantedEngine:
         """A decoded frame of the session: the link is alive, and what it read of the path's
         echo goes to the rate controller (ADR-0087) — the call or the acceptance first."""
         self.rate.observe_echo(frame.echo, frame.snr_db)
+        if self._sender is not None:
+            # the sender's own choice keeps the echo exclusions too (ADR-0087)
+            self._sender.observe_echo(frame.echo, frame.snr_db)
         self._heard_db = frame.snr_db
         self._heard_recent = [*self._heard_recent, frame.snr_db][-self.cfg.family_readings :]
         self._heard_at = self.now
@@ -2818,7 +2824,7 @@ class GrantedEngine:
                 take -= 1  # the one length the container cannot carry
             body = bytes(self._tx_queue[:take])
             del self._tx_queue[:take]
-            rec = _TxRecord(self._tx_next, body, at)
+            rec = _TxRecord(self._tx_next, body, at, origin=at)
             self._records[rec.seq] = rec
             self._tx_next = seq_after(self._tx_next)
             seqs.append(rec.seq)
@@ -2837,8 +2843,11 @@ class GrantedEngine:
             follows = min(MAX_FOLLOWS, len(seqs) - 1 - i)
             frames.append(TxFrame(Container.DATA, payload, mode=rec.mode, rv=rv, follows=follows))
             if self._sender is not None:
+                # every copy of a block, re-encoded or not, is charged to the rung it was cut at:
+                # a try of OFDM whose blocks strand and go again on the floor cost all of that
                 air = self._frame_s(self.timing.is_floor(rec.mode))
-                self._sent_copies.append((rec.seq, rec.mode, air))
+                origin = rec.mode if rec.origin is None else rec.origin
+                self._sent_copies.append((rec.seq, origin, air))
         self.stats.frames_sent += len(frames)
         return frames
 

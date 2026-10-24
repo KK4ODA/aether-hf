@@ -636,6 +636,9 @@ struct TxRecord {
     seq: u8,
     body: Vec<u8>,
     mode: usize,
+    /// The rung the block was cut at, before any re-encoding: what C1 at the sender charges all
+    /// of its copies to.
+    origin: usize,
     tx_count: usize,
     acked: bool,
     reencoded: usize,
@@ -2413,6 +2416,10 @@ impl GrantedEngine {
     /// goes to the rate controller (ADR-0087) — the call or the acceptance first.
     fn heard(&mut self, frame: &Heard) {
         self.rate.observe_echo(frame.echo, frame.snr_db);
+        if let Some(sender) = &mut self.sender {
+            // the sender's own choice keeps the echo exclusions too (ADR-0087)
+            sender.observe_echo(frame.echo, frame.snr_db);
+        }
         self.heard_db = Some(frame.snr_db);
         self.heard_recent.push(frame.snr_db);
         let keep = self.config.family_readings;
@@ -4233,6 +4240,7 @@ impl GrantedEngine {
                     seq,
                     body,
                     mode: at,
+                    origin: at,
                     tx_count: 0,
                     acked: false,
                     reencoded: 0,
@@ -4277,8 +4285,10 @@ impl GrantedEngine {
                 follows,
             });
             if self.sender.is_some() {
+                // every copy of a block, re-encoded or not, is charged to the rung it was cut at
                 let air = self.frame_s(self.timing.is_floor(rung));
-                self.sent_copies.push((*s, rung, air));
+                let origin = self.records.get(s).map_or(rung, |r| r.origin);
+                self.sent_copies.push((*s, origin, air));
             }
         }
         self.stats.frames_sent += frames.len();
