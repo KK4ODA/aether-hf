@@ -108,6 +108,21 @@ def path_decode_probability(
     return sum(decode_probability(snr_db, threshold_db + p, slope_db) for p in points) / len(points)
 
 
+def prior_probability(
+    snr_db: float,
+    threshold_db: float,
+    penalties: tuple[float, ...],
+    slope_db: float,
+    margin_db: float | None,
+) -> float:
+    """The prototypes' prior: with ``margin_db`` the AWGN curve that far under the reading (an
+    optimistic prior — a rung above found wanting costs one measured transmission, a rung under
+    the path's best costs every wait for a try), else the four channels' mean."""
+    if margin_db is not None:
+        return decode_probability(snr_db - margin_db, threshold_db, slope_db)
+    return path_decode_probability(snr_db, threshold_db, penalties, slope_db)
+
+
 @dataclass
 class _Account:
     """A rung's measured delivery, decayed: data bytes delivered and seconds of air spent."""
@@ -142,7 +157,9 @@ class DeliveryController(RateController):
     slope_db: float = 0.5
     penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
     """Per rung, its fading channels' 10 % points over its AWGN one (:data:`CLASS_PENALTY_DB`):
-    the prior is the mean of the four channels' curves at the reading."""
+    the prior is the mean of the four channels' curves at the reading, unless
+    :attr:`prior_margin_db` is set."""
+    prior_margin_db: float | None = None
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, int] = field(default_factory=dict)
     _probe_wait: dict[int, int] = field(default_factory=dict)
@@ -198,8 +215,12 @@ class DeliveryController(RateController):
         if self.snr_db is None:
             prior = 0.0
         else:
-            prior = cap * path_decode_probability(
-                self.snr_db, self.thresholds[mode], self.penalties.get(mode, ()), self.slope_db
+            prior = cap * prior_probability(
+                self.snr_db,
+                self.thresholds[mode],
+                self.penalties.get(mode, ()),
+                self.slope_db,
+                self.prior_margin_db,
             )
         acc = self._accounts.get(mode, _Account())
         w = self.prior_frames
@@ -313,6 +334,8 @@ class OuterLoopController(RateController):
     penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
     """As :attr:`DeliveryController.penalties`: the curve a rung's chance is read off is the
     mean of the four channels', its family's offset under it."""
+    prior_margin_db: float | None = None
+    """As :attr:`DeliveryController.prior_margin_db`."""
     _offset: dict[bool, float] = field(default_factory=dict)
     _target: dict[bool, float] = field(default_factory=dict)
 
@@ -337,11 +360,12 @@ class OuterLoopController(RateController):
         snr = self.snr_db if snr_db is None else snr_db
         if snr is None:
             return 0.0
-        p = path_decode_probability(
+        p = prior_probability(
             snr - self.offset(mode),
             self.thresholds[mode],
             self.penalties.get(mode, ()),
             self.slope_db,
+            self.prior_margin_db,
         )
         return self.lossless(mode) * p
 

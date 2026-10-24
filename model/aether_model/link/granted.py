@@ -1590,14 +1590,23 @@ class GrantedEngine:
         if self.cfg.controller == "olla":
             return self._delivery_controller(OuterLoopController)
         if thresholds is None:
-            return RateController(**{**floor, **self.cfg.rate})  # type: ignore[arg-type]
+            return RateController(**{**floor, **self._current_rate()})  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
         frame_s = {m: self.timing.data_frame_s_for(m) for m in thresholds}
         return RateController(
             thresholds=dict(thresholds),
             modes=usable_modes(thresholds, payload, frame_s),
-            **{**floor, **self.cfg.rate},  # type: ignore[arg-type]
+            **{**floor, **self._current_rate()},  # type: ignore[arg-type]
         )
+
+    def _current_rate(self) -> dict[str, float | int | None]:
+        """:attr:`GrantConfig.rate` as the current controller takes it: with a sender-side
+        prototype (``delivery-s``) the receiver's advice is the current controller's, and the
+        prototype's own settings are not its."""
+        if self.cfg.controller != "delivery-s":
+            return self.cfg.rate
+        known = set(RateController.__dataclass_fields__)
+        return {k: v for k, v in self.cfg.rate.items() if k in known}
 
     # ── keying ────────────────────────────────────────────────────────
 
