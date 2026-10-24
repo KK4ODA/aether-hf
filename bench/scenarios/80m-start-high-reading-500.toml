@@ -1,0 +1,32 @@
+name = "80m-start-high-reading-500"
+description = """The start's test (the rate controller's review, `docs/research/rate-control/00-brief.md`
+§6): one path, two first readings. ND1J's two Tests to KK4ODA-1 of 2026-10-23 (report 16) ran on
+the same 80 m path three minutes apart; the call read 6.2 dB in one and 13.4 dB in the other, the
+data 8–10 dB in both, and the sessions settled a rung apart. Here the path is a steady Moderate
+9 dB at 500 Hz, and only its level while the probe and the call go differs: 4.0 dB until 28 s
+of air, so the call reads about 13 dB, then the same path as its pair
+(`80m-start-low-reading-500`). A controller the start does not decide settles within a
+rung of its pair."""
+tags = ["80m", "start"]
+bandwidth = 500
+seconds = 1200
+seed = 223
+
+[stations.a]
+callsign = "ND1J"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "moderate"
+snr_db = 9.0
+cfo_hz = 3.0
+level = [[0.0, 4.0], [28.0, 4.0], [30.0, 0.0]]
+
+[script]
+steps = ["test"]
+
+[expect]
+test = "complete"
+clean_end = true
+idle = true
