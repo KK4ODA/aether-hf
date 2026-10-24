@@ -2645,9 +2645,18 @@ class GrantedEngine:
 
     def _data_floor_only(self) -> bool:
         """Whether this station's data can go only on the tone floor: its ceiling, or the rung
-        it is pinned at, is a floor rung."""
+        it is pinned at, is a floor rung — or C1 at the sender (the rate review's prototype)
+        chose one. The master sizes a slave's slot in frames of the rung it recommends: C1 at a
+        slave asked for frames of its own floor rung, was granted as many OFDM frames' air, which
+        no floor frame fits, and sent nothing in any slot (``04-results.md`` §3.18)."""
         limit = self._cap() if self._pinned is None else min(self._pinned, self._cap())
-        return self.timing.floor_modes > 0 and self.timing.is_floor(limit)
+        if self.timing.floor_modes > 0 and self.timing.is_floor(limit):
+            return True
+        return (
+            self._sender is not None
+            and self._sender.snr_db is not None
+            and self.timing.is_floor(self._burst_mode())
+        )
 
     def _queued_frames(self) -> int:
         cap = data_capacity(self.timing.capacity(self._burst_mode()))

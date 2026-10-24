@@ -3987,7 +3987,14 @@ impl GrantedEngine {
         let limit = self
             .pinned
             .map_or_else(|| self.cap(), |pinned| pinned.min(self.cap()));
-        self.timing.floor_modes > 0 && self.timing.is_floor(limit)
+        if self.timing.floor_modes > 0 && self.timing.is_floor(limit) {
+            return true;
+        }
+        // C1 at the sender chose a floor rung: the master sizes this station's slot in frames
+        // of the rung it recommends, and no floor frame fits OFDM frames' air (the model's
+        // `_data_floor_only`)
+        self.sender.as_ref().is_some_and(|s| s.snr_db().is_some())
+            && self.timing.is_floor(self.burst_mode())
     }
 
     fn queued_frames(&self) -> usize {

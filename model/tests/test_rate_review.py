@@ -197,3 +197,27 @@ def test_the_wait_before_a_try_is_air_at_the_rung_tried() -> None:
         transmissions += 1
     assert ctl._probing == 5
     assert transmissions == 2
+
+
+def test_a_slave_on_its_own_floor_rung_is_granted_floor_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1 at a slave that chose a floor rung while the master recommends OFDM says so in its
+    answer's ``data_floor``: the master sizes the slot in floor frames. Before, the slave asked
+    for frames of its floor rung, was granted as many OFDM frames' air, which no floor frame
+    fits, and its reply never went (``04-results.md`` §3.18)."""
+    a, b = _pair(WIDE, "delivery-s")
+    original = GrantedEngine._burst_mode
+
+    def burst_mode(self: GrantedEngine) -> int:
+        if self is b and self._sender is not None and self._sender.snr_db is not None:
+            return 3  # tone50-75, a floor rung, whatever the master recommends
+        return original(self)
+
+    monkeypatch.setattr(GrantedEngine, "_burst_mode", burst_mode)
+    reply = bytes((i * 29) % 256 for i in range(300))
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+    a.connect("KK4XYZ")
+    b.send(reply)
+    sim.run(until=600.0)
+    assert sim.delivered(0) == reply, f"{len(sim.delivered(0))} of 300 bytes"
