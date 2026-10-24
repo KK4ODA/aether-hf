@@ -2,14 +2,16 @@
 and the best rung in hindsight against what the controller chose (the rate controller's review,
 `docs/research/rate-control/00-brief.md` §4, Gate 0).
 
-    python tools/rung_oracle.py [scenarios…] --rungs 1,3,5,7,9,11 [--seeds N] [--jobs J]
-                                [--out runs/oracle] [--daemon PATH] [--csv oracle.csv]
-                                [--summary oracle_summary.csv] [--tag T]
+    python tools/rung_oracle.py [scenarios…] --rungs 1,3,5,7,9,11 [--seeds N | --draws 1,2]
+                                [--jobs J] [--out runs/oracle] [--daemon PATH]
+                                [--csv oracle.csv] [--summary oracle_summary.csv] [--tag T]
 
 Every run is ``tools/session_matrix.py``'s: one scenario, one draw of its fading and its
 neighbours, both daemons real. ``auto`` runs the scenario as it is, the rate controller choosing;
 ``r<N>`` pins every station's own data at rung N (``rate.pin``). A run that has its
-``result.json`` under ``--out`` is not run again, so a set can be continued after a stop.
+``result.json`` under ``--out`` is not run again, so a set can be continued after a stop. Draw
+*k* is the scenario at its seed + k·1000 (``session_matrix.py --variant``); draw 0 is the
+scenario's own seed, kept under the scenario's own name.
 
 The measure of a run is what it delivered: a ``message`` step's rate (0 when the message was
 lost), or a Test's file rate, or its message rate. The oracle for a scenario and seed is the
@@ -129,11 +131,11 @@ def summarise(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def plan(
-    scenarios: list[Path], rungs: list[int], seeds: int
+    scenarios: list[Path], rungs: list[int], draws: list[int]
 ) -> list[tuple[Path, int | None, int | None]]:
-    """(scenario, rung or None for the controller, seed variant or None) in the order run: the
-    controller's run of each first, then the rungs."""
-    ks: list[int | None] = [None] if seeds <= 1 else list(range(seeds))
+    """(scenario, rung or None for the controller, draw or None for the scenario's own seed) in
+    the order run: the controller's run of each first, then the rungs."""
+    ks: list[int | None] = [k or None for k in draws]
     out: list[tuple[Path, int | None, int | None]] = []
     for k in ks:
         for path in scenarios:
@@ -169,7 +171,8 @@ def main() -> int:
     ap.add_argument("scenarios", nargs="*", type=Path)
     ap.add_argument("--tag", help="only scenarios carrying this tag")
     ap.add_argument("--rungs", required=True, help="rungs to pin, comma separated")
-    ap.add_argument("--seeds", type=int, default=1, help="draws of each scenario")
+    ap.add_argument("--seeds", type=int, default=1, help="draws 0 … N-1 of each scenario")
+    ap.add_argument("--draws", help="which draws, comma separated (0 is the scenario's own seed)")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--daemon", type=Path, default=session_matrix.DEFAULT_DAEMON)
     ap.add_argument("--out", type=Path, default=ROOT / "runs" / "oracle")
@@ -235,7 +238,12 @@ def main() -> int:
         )
         return r
 
-    items = plan(paths, rungs, args.seeds)
+    draws = (
+        [int(k) for k in args.draws.split(",") if k.strip()]
+        if args.draws
+        else list(range(max(1, args.seeds)))
+    )
+    items = plan(paths, rungs, draws)
     if args.jobs > 1:
         with ThreadPoolExecutor(args.jobs) as pool:
             rows = list(pool.map(one, items))
