@@ -12,6 +12,7 @@ from itertools import pairwise
 import pytest
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
+from aether_model.link.frames import data_capacity
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container
@@ -142,3 +143,35 @@ def test_a_silent_step_lands_on_a_rung_the_echo_allows() -> None:
     ctl._index = ctl.modes.index(5)
     ctl.silent(1)
     assert ctl.recommend() == 4
+
+
+def test_a_try_is_decided_on_more_frames_than_the_prior_weighs() -> None:
+    """A try of the rung above runs until its own frames outweigh the prior (three, against
+    ``prior_frames`` 2): one frame a transmission at the sender is a coin toss either way
+    (``04-results.md`` §3.14). Nor does one lucky frame make a rung above choosable."""
+    timing = phy_timing(NARROW.params)
+
+    def fresh() -> tuple[DeliveryController, int, int]:
+        a, _ = _pair(NARROW, "delivery")
+        ctl = a.rate
+        assert isinstance(ctl, DeliveryController)
+        ctl.seed(8.0)
+        return ctl, ctl.modes[ctl._index], ctl.modes[ctl._index + 1]
+
+    def frame(mode: int) -> FrameOutcome:
+        cap = data_capacity(timing.capacity(mode))
+        return FrameOutcome(mode, timing.data_frame_s_for(mode), cap, True, True, False, 8.0)
+
+    # one lucky frame above, outside a try: news of the rung, not enough to move to it
+    ctl, here, up = fresh()
+    ctl.observe_frames([frame(here)] * 5 + [frame(up)], 8.0)
+    assert ctl.recommend() == here
+    # a try of the rung above: two clean frames are not yet a verdict, the third is
+    ctl, here, up = fresh()
+    ctl._probing = up
+    for _ in range(2):
+        ctl.observe_frames([frame(here)] * 5 + [frame(up)], 8.0)
+        assert ctl._probing == up, "a try of two frames is still going"
+        assert ctl.modes[ctl._index] == here
+    ctl.observe_frames([frame(here)] * 5 + [frame(up)], 8.0)
+    assert ctl._probing != up and ctl.modes[ctl._index] == up, "three clean frames climb"
