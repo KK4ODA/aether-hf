@@ -26,12 +26,53 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rung_reading as rr
 
 
+def judge_sender(master: Path, slave: Path) -> list[tuple[str, int, int, float, float]]:
+    """K6 for C1 at the sender (``delivery-s``): the receiver's advice is the current
+    controller's, so the comparison is at the sender — each data transmission's rung as the
+    advice had it, against C1's choice there (``rung_reading.replay_sender``), each worth what
+    the session measured of that rung, as :func:`judge` has it."""
+    reading = rr.read_session(master, slave)
+    m, s = rr.load_side(master), rr.load_side(slave)
+    if rr.role_of(m.doc) == "slave" or rr.role_of(s.doc) == "master":
+        m, s = s, m
+    air = rr.air_for(m.doc)
+    foreign = rr.foreign_rungs(air)
+    out = []
+    for d, (sender, receiver) in zip(reading.directions, ((m, s), (s, m)), strict=True):
+        overhead = rr.exchange_overhead_s(d.txs)
+        worth = {
+            r: rr.rate_at(air, r, acc.first_copy_share, overhead)
+            for r, acc in d.accounts.items()
+            if overhead is not None
+            and acc.first_copy_share is not None
+            and r < air.n_rungs
+            and r not in foreign
+        }
+        steps = rr.replay_sender(sender, receiver, d.txs, d.blocks)
+        judged = 0
+        cur_sum = cand_sum = 0.0
+        for st in steps:
+            a, b = worth.get(st.rung_advised), worth.get(st.rung_chosen)
+            if a is None or b is None:
+                continue
+            judged += 1
+            cur_sum += a
+            cand_sum += b
+        out.append(
+            (f"{reading.recording} {d.sender}->{d.receiver}", judged, len(steps), cur_sum, cand_sum)
+        )
+    return out
+
+
 def judge(master: Path, slave: Path, candidate: str) -> list[tuple[str, int, int, float, float]]:
     """Per direction: (label, steps judged, steps, current's sum, candidate's sum)."""
+    if candidate == "delivery-s":
+        return judge_sender(master, slave)
     current = rr.read_session(master, slave, replay_controller=True)
     other = rr.read_session(master, slave, replay_controller=True, controller=candidate)
     out = []
     air = rr.air_for(rr.load_side(master).doc)
+    foreign = rr.foreign_rungs(air)
     for d_cur, d_cand in zip(current.directions, other.directions, strict=True):
         judged = 0
         cur_sum = cand_sum = 0.0
@@ -39,7 +80,10 @@ def judge(master: Path, slave: Path, candidate: str) -> list[tuple[str, int, int
         worth = {
             r: rr.rate_at(air, r, acc.first_copy_share, overhead)
             for r, acc in d_cur.accounts.items()
-            if overhead is not None and acc.first_copy_share is not None and r < air.n_rungs
+            if overhead is not None
+            and acc.first_copy_share is not None
+            and r < air.n_rungs
+            and r not in foreign
         }
         for s_cur, s_cand in zip(d_cur.steps, d_cand.steps, strict=True):
             a = worth.get(s_cur.rung_replayed)

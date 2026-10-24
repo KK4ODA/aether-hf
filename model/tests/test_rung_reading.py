@@ -434,3 +434,32 @@ def test_a_recorded_number_wins_over_the_reconstruction(tmp_path: Path) -> None:
     assert down.numbering == "recorded"
     assert down.agrees == (9, 10)
     assert 4 in down.blocks and len(down.blocks[1].copies) == 1
+
+
+def test_c1_at_the_sender_replays_as_the_engine_feeds_it(tmp_path: Path) -> None:
+    """``replay_sender`` (Gate 3's K6 for ``delivery-s``): seeded by the slave's reading of the
+    call, each acknowledgement judging the copies since the last — the newly acknowledged
+    block's latest copy delivered it, every other copy air for nothing — a step per data
+    transmission, the measurements none."""
+    from aether_model.link.rate_review import DeliveryController, FrameOutcome
+
+    master, slave = session(tmp_path)
+    reading = rr.read_session(master, slave)
+    down = reading.directions[0]
+    steps = rr.replay_sender(rr.load_side(master), rr.load_side(slave), down.txs, down.blocks)
+    ctl = rr.controller_for(NARROW, controller="delivery")
+    assert isinstance(ctl, DeliveryController)
+    ctl.seed(6.2)
+    first = ctl.modes[ctl._index]
+    air = RUNG_S[11]
+    cap = data_capacity(rr.timing_of(NARROW).capacity(11))
+
+    def copy(ok: bool) -> FrameOutcome:
+        return FrameOutcome(11, air, cap, True, ok, False, None)
+
+    ctl.observe_frames([copy(True), copy(False), copy(False)], 8.0)  # seq 0 acknowledged
+    second = ctl.modes[ctl._index]
+    assert [(s.rung_advised, s.rung_chosen, s.seeded) for s in steps] == [
+        (11, first, True),
+        (11, second, True),
+    ]
