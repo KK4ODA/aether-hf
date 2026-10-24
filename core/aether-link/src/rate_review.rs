@@ -821,12 +821,48 @@ impl DeliveryController {
                 .iter()
                 .position(|&m| m == mode)
                 .unwrap_or(self.index);
-            if self.usable(self.index + 1) {
+            if let Some(above) = self.try_target() {
                 // a climb that works goes on: the rung above is tried at the next transmission
-                let above = self.modes[self.index + 1];
                 self.since_probe[above] = Some(self.wait_s(above));
             }
         }
+    }
+
+    /// The rung a try goes to: the usable rung above the current one or, when that is the other
+    /// family's, the rung of that family with the best [`value`](Self::value) (of those whose
+    /// wait is over, when [`decide`](Self::decide) starts one). The first OFDM rung above the
+    /// floor's top carries about what the top carries, so a try of it alone was judged a loss
+    /// and the rung above it never looked at (the model's `_try_target`).
+    fn try_target(&self) -> Option<usize> {
+        self.best_of(&self.try_reach())
+    }
+
+    /// The indices a try may go to from the current rung: a try under way at one of them goes
+    /// on whatever its frames do to the values, until they decide it.
+    fn try_reach(&self) -> Vec<usize> {
+        let up = self.index + 1;
+        if !self.usable(up) {
+            return Vec::new();
+        }
+        let floor = self.modes[up] < self.floor_modes;
+        if floor == (self.modes[self.index] < self.floor_modes) {
+            return vec![up];
+        }
+        (up..self.modes.len())
+            .filter(|&i| self.usable(i) && (self.modes[i] < self.floor_modes) == floor)
+            .collect()
+    }
+
+    /// The rung of the best value among `indices`, the lowest on a tie.
+    fn best_of(&self, indices: &[usize]) -> Option<usize> {
+        let mut best: Option<(usize, f64)> = None;
+        for &i in indices {
+            let value = self.value(self.modes[i]);
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        best.map(|(i, _)| self.modes[i])
     }
 
     /// What frames at `mode`, above the current rung, said: whether it now beats the current
@@ -865,21 +901,23 @@ impl DeliveryController {
             return;
         };
         self.index = index;
-        let up = self.index + 1;
         if let Some(probe) = self.probing {
-            if !self.usable(up) || self.modes[up] != probe {
+            if !self.try_reach().iter().any(|&i| self.modes[i] == probe) {
                 self.cancel_try(); // the choice moved from under the try
             }
             return;
         }
-        if !self.usable(up) {
-            return;
-        }
-        let mode = self.modes[up];
-        if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
-            return;
-        }
-        if self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S {
+        let now = self.value(self.modes[self.index]);
+        let due: Vec<usize> = self
+            .try_reach()
+            .into_iter()
+            .filter(|&i| {
+                let mode = self.modes[i];
+                self.priced(mode, self.lossless(mode)) > now
+                    && self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S
+            })
+            .collect();
+        if let Some(mode) = self.best_of(&due) {
             self.probing = Some(mode);
             self.since_probe[mode] = Some(0.0);
         }
