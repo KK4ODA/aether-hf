@@ -1521,6 +1521,8 @@ class GrantedEngine:
         below = [m for m in modes if m <= current]
         index = modes.index(below[-1]) if below else 0
         self._recommended = modes[max(0, index - self.cfg.silence_step)]
+        if self._sender is not None:
+            self._sender.silent(self.cfg.silence_step)
 
     def _hopeless(self, mode: int) -> bool:
         thresholds = self.rate.thresholds

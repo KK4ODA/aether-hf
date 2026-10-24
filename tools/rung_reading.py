@@ -1503,7 +1503,9 @@ def replay_sender(
             if origin not in foreign:  # another frame than the controller's at that rung
                 copies.append((f.seq, origin, f.seconds))
         if tx.ack is None:
-            continue  # its copies are judged at the next answer, as the engine does
+            if tx.data:
+                ctl.silent(GrantConfig.silence_step)
+            continue
         advice = tx.ack.rung
         if tx.ack.snr is not None:
             peer_db = tx.ack.snr

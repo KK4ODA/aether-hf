@@ -638,6 +638,15 @@ impl DeliveryController {
         self.probing
     }
 
+    /// A transmission of this station's went unanswered (C1 at the sender): the choice steps
+    /// down, as the engine steps its own (R9), to a rung the echo allows, and a try ends.
+    pub fn silent(&mut self, steps: usize) {
+        self.probing = None;
+        self.probe_tries = 0;
+        let to = self.index.saturating_sub(steps);
+        self.index = (0..=to).rev().find(|&i| self.usable(i)).unwrap_or(0);
+    }
+
     /// The smoothed SNR.
     #[must_use]
     pub const fn snr_db(&self) -> Option<f64> {
@@ -934,5 +943,30 @@ mod tests {
         assert!(decode_probability(-6.2, -3.2, 0.5) < 0.05);
         assert!(decode_probability(0.0, -3.2, 0.5) > 0.99);
         assert!(decode_probability(-50.0, -3.2, 0.5).abs() < f64::MIN_POSITIVE);
+    }
+
+    /// A step down after silence passes the rungs the echo rules out, as the model's does.
+    #[test]
+    fn a_silent_step_lands_on_a_rung_the_echo_allows() {
+        let payload = [10, 20, 30, 40, 50, 60];
+        let limit = [None, None, None, Some(0.0038), Some(0.0038), None];
+        let mut ctl = DeliveryController::for_table(
+            &[-10.0, -8.0, -6.0, -4.0, -2.0, 0.0],
+            &payload,
+            &payload,
+            &[1.0; 6],
+            5,
+            &[[0.0; 3]; 6],
+            &limit,
+        );
+        assert_eq!(ctl.modes(), &[0, 1, 2, 3, 4, 5]);
+        ctl.observe_echo(Some(0.012), 0.0);
+        ctl.index = 5;
+        ctl.silent(1);
+        assert_eq!(ctl.recommend(), 2);
+        ctl.echo = None;
+        ctl.index = 5;
+        ctl.silent(1);
+        assert_eq!(ctl.recommend(), 4);
     }
 }
