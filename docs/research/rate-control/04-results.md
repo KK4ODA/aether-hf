@@ -123,4 +123,56 @@ the author with the harness's numbers.
 
 ## 3. Results against the criteria
 
-(To be filled.)
+### 3.1 C2 on the harness: K1 and K3 (2026-10-24)
+
+C2 in the daemon (a worktree of `b2b0efb` with `GrantConfig::default().controller` = `Olla`,
+its own target directory), the 20 regret scenarios and the start pair, three draws each (the
+scenario's seed, +1000, +2000); 66 runs, all complete. The fixed rungs are Gate 2's
+(`03-candidates.md` §5.1).
+
+| scenario | current, 3 draws | C2, 3 draws | C2's regret, median | the current's | C2 / current |
+|---|---|---|---|---|---|
+| `quick-awgn-2300` | 1263 / 1263 / 1263 | 2400 / 2400 / 2400 | −9 % | +73 % | 1.90 |
+| `40m-good-throughput-2300` | 2327 / 2286 / 2133 | 1882 / 2032 / 2667 | +34 % | +19 % | 0.89 |
+| `80m-strong-moderate-500` | 151 / 260 / 244 | 263 / 214 / 207 | +63 % | +70 % | 0.88 |
+| `20m-dx-500` | 146 / 151 / 144 | 159 / 167 / 123 | +38 % | +50 % | 1.09 |
+| `20m-dx-moderate-2300` | 632 / 1000 / 600 | 750 / 800 / 857 | +25 % | +46 % | 1.27 |
+| `80m-qsb-dropout-500` | 146 / 158 / 142 | 187 / 168 / 120 | +33 % | +38 % | 1.15 |
+| `80m-weak-500` | 70 / 67 / 65 | 65 / 67 / 70 | +17 % | +17 % | 1.00 |
+| `80m-flutter-500` | 129 / 120 / 127 | 154 / 155 / 136 | +9 % | +26 % | 1.21 |
+| `15m-equatorial-flutter-2300` | 387 / 211 / 211 | 632 / 261 / 500 | +50 % | +255 % | 2.37 |
+| `80m-nvis-evening-500` | 41 / 25 / 26 | 39 / 49 / 14 | 0 % | +56 % | 1.48 |
+| `80m-thunderstorm-agc-2300` | 591 / 535 / 616 | 460 / 651 / 622 | +58 % | +60 % | 1.05 |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 | 99 / 84 / 84 | 0 % | 0 % | 1.07 |
+| `20m-polar-path-2300` | 198 / 198 / 172 | 170 / 198 / 172 | +49 % | +44 % | 0.87 |
+| `80m-weak-wide-test-2300` | 167 / 168 / 175 | 175 / 175 / 175 | 0 % | +4 % | 1.04 |
+| `40m-good-2300-rtty-crashes` | 425 / 442 / 496 | 442 / 604 / 616 | +28 % | +75 % | 1.37 |
+| `80m-poor-500-pactor-signalink` | 66 / 74 / 72 | 68 / 70 / 69 | +62 % | +58 % | 0.96 |
+| `80m-nvis-disturbed-500` | 38 / 44 / 36 | 25 / 22 / 21 | +95 % | +3 % | **0.58** |
+| `40m-moderate-2300-vara-qrm` | 842 / 390 / 667 | 1032 / 627 / 1000 | +19 % | +65 % | 1.50 |
+| `80m-lopsided-acks-500` | 77 / 76 / 83 | 99 / 85 / 74 | +9 % | +28 % | 1.11 |
+| `80m-slow-machine-500` | 119 / 91 / 106 | 76 / 89 / 148 | +48 % | +44 % | **0.83** |
+
+* **K1(a) fails**: the median regret is +30.5 %, against the current's +45.2 % and the +22.6 %
+  asked for.
+* **K1(b) fails** on two scenarios: `80m-nvis-disturbed-500` at 0.58 of the current's median
+  delivery and `80m-slow-machine-500` at 0.83 (0.85 asked).
+* **K3 fails**, worse than the current controller: settled 4, 0 and 3 rungs apart (the current:
+  2, 1, 2). Draw 0: the low start settled at rung 10, the high start at 6.
+
+**The traces.** *K3, draw 0's high start*: it started at rung 9 and went to 11 on its second
+transmission (15 frames there), bounced between 9 and 11 for a minute, then slid to 7, 6, 5 and
+3 between 107 and 175 s at readings of 6–7 dB, and climbed back only to 9 by the ladder. C2's
+offset rises 0.5 dB a failed frame and falls 0.125 dB a decoded one (4:1 at its target of about
+20 %): the failures of a start too high, and of the fades that follow, are paid back four frames
+for one, and a single offset for the whole OFDM family carries a failure at rung 11 into the
+choice at rung 7. *K1(b), the disturbed NVIS*: no OFDM rung survives the 7 ms echo, and the floor's
+reading swings −4 … +1 dB. C2 sent its first transmission at OFDM rung 5 (the optimistic prior at
+the call's reading), and went back to rung 5 whenever the reading rose: 6, 16, 2 and 3 frames there,
+against the current controller's floor rungs throughout. The iteration bench had neither NVIS nor
+a start pair, which is why it ranked C2 first; it gains both (`iterate2`).
+
+**What it says.** C2's steady-channel and flutter gains are large (`quick-awgn-2300` ×1.90,
+`15m-equatorial-flutter-2300` ×2.37), but one offset per family, moved 4:1, is not start-
+independent, and the optimistic prior goes back to a family the path has refused. Next: C1 on the
+extended iteration bench and then on the harness, with the same two scenarios as its first test.
