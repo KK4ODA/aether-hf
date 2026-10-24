@@ -176,6 +176,12 @@ class DeliveryController(RateController):
         sent = {f.mode for f in frames}
         for mode in self.modes:
             self._since_probe[mode] = self._since_probe.get(mode, 0) + 1
+        here = self.modes[self._index]
+        for mode in sent - {self._probing, here}:
+            # frames at a rung above, sent for another reason (a copy still at its first rung,
+            # the Test's measurement): news of it, as a try would be
+            if mode > here:
+                self._judge_try(mode)
         if self._probing is not None:
             self._probe_tries += 1
             if self._probing in sent or self._probe_tries >= 2:
@@ -214,21 +220,34 @@ class DeliveryController(RateController):
         self._probe_tries = 0
         if not measured:
             return
-        here = self.modes[self._index]
-        if self.estimate(mode) > self.estimate(here):
+        if self._judge_try(mode):
             self._index = self.modes.index(mode)
-            self._probe_wait[mode] = self.probe_every
             if self._usable(self._index + 1):
                 # a climb that works goes on: the rung above is tried at the next transmission
                 above = self.modes[self._index + 1]
                 self._since_probe[above] = self._probe_wait.get(above, self.probe_every)
-        else:
-            wait = self._probe_wait.get(mode, self.probe_every)
-            self._probe_wait[mode] = min(self.probe_wait_max, 2 * wait)
+
+    def _judge_try(self, mode: int) -> bool:
+        """What frames at ``mode``, above the current rung, said: whether it now beats the
+        current rung. If not, the next try of it waits twice as long."""
+        here = self.modes[self._index]
+        if self.estimate(mode) > self.estimate(here):
+            self._probe_wait[mode] = self.probe_every
+            return True
+        wait = self._probe_wait.get(mode, self.probe_every)
+        self._probe_wait[mode] = min(self.probe_wait_max, 2 * wait)
+        self._since_probe[mode] = 0
+        return False
 
     def _decide(self) -> None:
-        # down to any rung (the estimate of one never sent is the prior), up only by a try
-        here = [i for i in range(self._index + 1) if self._usable(i)]
+        # down to any rung (the estimate of one never sent is the prior); up only to a rung
+        # measured — by a try, or by frames the sender put there itself
+        here = [
+            i
+            for i in range(len(self.modes))
+            if self._usable(i)
+            and (i <= self._index or self._accounts.get(self.modes[i], _Account()).frames >= 1.0)
+        ]
         if not here:
             self._index = 0
             return
