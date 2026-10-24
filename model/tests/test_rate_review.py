@@ -124,3 +124,21 @@ def test_the_outer_loop_targets_derive_from_the_ladder() -> None:
         rates = [ctl.lossless(m) for m in rungs]
         expected = sum(1 - lo / hi for lo, hi in pairwise(rates)) / (len(rates) - 1)
         assert ctl._target[floor] == pytest.approx(min(0.5, max(0.05, expected)))
+
+
+def test_a_silent_step_lands_on_a_rung_the_echo_allows() -> None:
+    """C1 at the sender steps down after silence as R9 does, but never onto a rung the echo
+    rules out (ADR-0087): from the first OFDM rung of the 500 Hz air on a 7 ms echo, one step
+    goes past rungs 3 and 4 to the floor's rung 2."""
+    a, _ = _pair(NARROW, "delivery")
+    ctl = a.rate
+    assert isinstance(ctl, DeliveryController)
+    ctl.echo = 0.012
+    assert ctl._echo_out(ctl.modes.index(3)) and ctl._echo_out(ctl.modes.index(4))
+    ctl._index = ctl.modes.index(5)
+    ctl.silent(1)
+    assert ctl.recommend() == 2
+    ctl.echo = None
+    ctl._index = ctl.modes.index(5)
+    ctl.silent(1)
+    assert ctl.recommend() == 4
