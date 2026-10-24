@@ -286,6 +286,10 @@ pub enum Controller {
     Olla,
     /// C1, choose by measured delivery at the receiver ([`DeliveryController`]).
     Delivery,
+    /// C1 at the sender: the station chooses its own data's rung from what its acknowledgements
+    /// say of its copies, the other station's recommendation advice; a try is one new frame of
+    /// a transmission at the rung above.
+    DeliveryS,
 }
 
 /// The rate controller in use.
@@ -1099,6 +1103,11 @@ pub struct GrantedEngine {
     /// The rung the other station's data last decoded at, for a prototype's frames never
     /// detected (`granted._outcomes`).
     last_rx_mode: Option<usize>,
+    /// C1 at the sender ([`Controller::DeliveryS`]): this station's own choice of its data's
+    /// rung.
+    sender: Option<DeliveryController>,
+    /// Copies sent since the last acknowledgement — block, rung, air — for [`Self::sender`].
+    sent_copies: Vec<(u8, usize, f64)>,
     asked: Option<usize>,
     rx_base: u8,
     rx_buf: HashMap<u8, Vec<u8>>,
@@ -1173,11 +1182,44 @@ impl std::fmt::Debug for GrantedEngine {
     }
 }
 
+/// C1 on an air's table: the receiver's, or the sender's own.
+fn delivery_for(timing: &PhyTiming) -> DeliveryController {
+    let thresholds = if timing.mode_threshold_db.is_empty() {
+        crate::rate::AWGN_THRESHOLD_DB.to_vec()
+    } else {
+        timing.mode_threshold_db.clone()
+    };
+    let payload = if timing.data_capacity.is_empty() {
+        vec![0; thresholds.len()]
+    } else {
+        timing.data_capacity.clone()
+    };
+    let frame_s: Vec<f64> = (0..thresholds.len())
+        .map(|m| timing.data_frame_s_for(m))
+        .collect();
+    let capacity: Vec<usize> = (0..thresholds.len())
+        .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
+        .collect();
+    DeliveryController::for_table(
+        &thresholds,
+        &payload,
+        &capacity,
+        &frame_s,
+        timing.floor_modes,
+        crate::rate_review::class_penalty_db(thresholds.len()),
+        &timing.echo_limit,
+    )
+}
+
 /// The controller a station's configuration names, on its air's table.
 fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
     match config.controller {
-        Controller::Current => Rate::Current(rate_controller_for(timing, config.rate)),
-        Controller::Olla | Controller::Delivery => {
+        // at the sender, the advice the receiver gives is the current controller's
+        Controller::Current | Controller::DeliveryS => {
+            Rate::Current(rate_controller_for(timing, config.rate))
+        }
+        Controller::Delivery => Rate::Delivery(delivery_for(timing)),
+        Controller::Olla => {
             // as the model builds it: the air's table, or the wide one's
             let thresholds = if timing.mode_threshold_db.is_empty() {
                 crate::rate::AWGN_THRESHOLD_DB.to_vec()
@@ -1195,17 +1237,6 @@ fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
             let capacity: Vec<usize> = (0..thresholds.len())
                 .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
                 .collect();
-            if config.controller == Controller::Delivery {
-                return Rate::Delivery(DeliveryController::for_table(
-                    &thresholds,
-                    &payload,
-                    &capacity,
-                    &frame_s,
-                    timing.floor_modes,
-                    crate::rate_review::class_penalty_db(thresholds.len()),
-                    &timing.echo_limit,
-                ));
-            }
             Rate::Olla(OuterLoopController::for_table(
                 &thresholds,
                 &payload,
@@ -1318,6 +1349,8 @@ impl GrantedEngine {
             measure_again: false,
             rate,
             last_rx_mode: None,
+            sender: None,
+            sent_copies: Vec::new(),
             asked: None,
             rx_base: 0,
             rx_buf: HashMap::new(),
@@ -1388,6 +1421,9 @@ impl GrantedEngine {
         self.rate = rate_for(&self.timing, &self.config);
         self.asked = None;
         self.last_rx_mode = None;
+        self.sender =
+            (self.config.controller == Controller::DeliveryS).then(|| delivery_for(&self.timing));
+        self.sent_copies.clear();
         self.rx_base = 0;
         self.rx_buf.clear();
         self.max_seen = None;
@@ -2401,7 +2437,36 @@ impl GrantedEngine {
     }
 
     fn burst_mode(&self) -> usize {
-        self.pinned.unwrap_or(self.recommended).min(self.cap())
+        let mut chosen = self.pinned.unwrap_or(self.recommended);
+        if self.pinned.is_none()
+            && let Some(sender) = &self.sender
+            && sender.snr_db().is_some()
+        {
+            chosen = sender.choice();
+        }
+        chosen.min(self.cap())
+    }
+
+    /// C1 at the sender's try: the rung one new frame of this transmission goes at, or `None`.
+    fn probe_rung(&self) -> Option<usize> {
+        if self.pinned.is_some() {
+            return None;
+        }
+        self.sender
+            .as_ref()
+            .and_then(DeliveryController::probing)
+            .filter(|&probe| probe <= self.cap())
+    }
+
+    /// The other station's reading of this one, from a control frame: what the sender-side
+    /// prototype seeds from, the first time one comes.
+    fn peer_reading(&mut self, snr_db: f64) {
+        self.peer_snr_db = Some(snr_db);
+        if let Some(sender) = &mut self.sender
+            && sender.snr_db().is_none()
+        {
+            sender.seed(snr_db);
+        }
     }
 
     fn ctl_threshold(&self) -> f64 {
@@ -2445,6 +2510,9 @@ impl GrantedEngine {
         let current = self.recommended.min(self.cap());
         let index = modes.iter().rposition(|&m| m <= current).unwrap_or(0);
         self.recommended = modes[index.saturating_sub(self.config.silence_step)];
+        if let Some(sender) = &mut self.sender {
+            sender.silent(self.config.silence_step);
+        }
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -2932,6 +3000,9 @@ impl GrantedEngine {
             let first = self.rate.first_mode(snr);
             self.recommended = self.config.initial_mode.max(self.cap().min(first));
             self.peer_snr_db = Some(snr);
+            if let Some(sender) = &mut self.sender {
+                sender.seed(snr);
+            }
             // the first header goes in the family the slave's reading of the call asks for: a
             // floor reading is a lower bound, never too fast
             if self.timing.floor_modes > 0 {
@@ -3066,8 +3137,8 @@ impl GrantedEngine {
             return; // a frame of a slot already closed: its timing is nothing's now
         }
         self.heard(frame);
-        if ctl.snr_db.is_some() {
-            self.peer_snr_db = ctl.snr_db;
+        if let Some(snr) = ctl.snr_db {
+            self.peer_reading(snr);
         }
         match ctl.kind {
             GrantKind::DiscAck => {
@@ -3555,8 +3626,8 @@ impl GrantedEngine {
         }
         self.heard(frame);
         self.measure_lateness(frame);
-        if ctl.snr_db.is_some() {
-            self.peer_snr_db = ctl.snr_db;
+        if let Some(snr) = ctl.snr_db {
+            self.peer_reading(snr);
         }
         if ctl.kind == GrantKind::Disc {
             self.end_session("peer disconnected", true);
@@ -4031,7 +4102,15 @@ impl GrantedEngine {
         if self.measure_ask.is_some() && self.unacked().is_empty() {
             return self.measurement(room_s);
         }
-        let mode = self.burst_mode();
+        let mut mode = self.burst_mode();
+        let mut probe = self.probe_rung();
+        if let Some(rung) = probe
+            && self.timing.is_floor(rung) != self.timing.is_floor(mode)
+        {
+            // across the floor's edge a try is a whole transmission
+            mode = rung;
+            probe = None;
+        }
         let recommendation = self.recommended.min(self.cap());
         // what an unheard answer would have said is not resent blind: it waits for an answer —
         // through one silent slot. Two in a row and the answers are not getting through, and
@@ -4132,12 +4211,13 @@ impl GrantedEngine {
         seqs.truncate(room);
         // a measurement asked for waits only for what is in flight: nothing new goes before it
         let new_frames = family == self.timing.is_floor(mode) && self.measure_ask.is_none();
-        let cap = data_capacity(self.timing.capacity(mode));
         while new_frames
             && seqs.len() < room
             && seq_distance(self.tx_next, self.tx_base) < WINDOW
             && !self.tx_queue.is_empty()
         {
+            let at = probe.take().unwrap_or(mode);
+            let cap = data_capacity(self.timing.capacity(at));
             let mut take = cap.min(self.tx_queue.len());
             if let Some(body) = self.pin_body {
                 take = take.min(body);
@@ -4152,7 +4232,7 @@ impl GrantedEngine {
                 TxRecord {
                     seq,
                     body,
-                    mode,
+                    mode: at,
                     tx_count: 0,
                     acked: false,
                     reencoded: 0,
@@ -4187,14 +4267,19 @@ impl GrantedEngine {
             let rv = RV_SEQUENCE[(rec.tx_count - 1) % RV_SEQUENCE.len()];
             let follows =
                 u8::try_from((count - 1 - i).min(usize::from(MAX_FOLLOWS))).unwrap_or(MAX_FOLLOWS);
+            let rung = rec.mode;
             frames.push(TxFrame {
                 container: Container::Data,
                 payload,
-                mode: rec.mode,
+                mode: rung,
                 rv,
                 floor: false,
                 follows,
             });
+            if self.sender.is_some() {
+                let air = self.frame_s(self.timing.is_floor(rung));
+                self.sent_copies.push((*s, rung, air));
+            }
         }
         self.stats.frames_sent += frames.len();
         frames
@@ -4348,6 +4433,7 @@ impl GrantedEngine {
             }
         }
         let mut progress = false;
+        let mut newly: Vec<u8> = Vec::new();
         for rec in self.records.values_mut() {
             rec.unknown = false; // the answer says what arrived
         }
@@ -4355,6 +4441,7 @@ impl GrantedEngine {
             if !rec.acked && rec.sent() && ctl.received(s) {
                 rec.acked = true;
                 progress = true;
+                newly.push(s);
                 self.top_acked_mode = Some(self.top_acked_mode.unwrap_or(0).max(rec.mode));
                 self.stats.bytes_acked += rec.body.len();
             }
@@ -4371,6 +4458,37 @@ impl GrantedEngine {
         if recommendation {
             self.recommended = self.cap().min(usize::from(ctl.rung));
             self.peer_rung = Some(usize::from(ctl.rung));
+            if self.sender.is_some() && !self.sent_copies.is_empty() {
+                self.judge_copies(&newly);
+            }
+        }
+    }
+
+    /// C1 at the sender: what an acknowledgement says of the copies sent since the last one — a
+    /// block it acknowledges for the first time was delivered by the latest of them, every other
+    /// copy was air spent for nothing (the model's `_judge_copies`).
+    fn judge_copies(&mut self, newly: &[u8]) {
+        let mut credited: Vec<u8> = Vec::new();
+        let mut outcomes = Vec::with_capacity(self.sent_copies.len());
+        for &(seq, mode, air) in self.sent_copies.iter().rev() {
+            let ok = newly.contains(&seq) && !credited.contains(&seq);
+            if ok {
+                credited.push(seq);
+            }
+            outcomes.push(FrameOutcome {
+                mode,
+                air_s: air,
+                capacity: data_capacity(self.timing.capacity(mode)),
+                detected: true,
+                decoded: ok,
+                combined: false,
+            });
+        }
+        outcomes.reverse();
+        self.sent_copies.clear();
+        let reading = self.peer_snr_db;
+        if let Some(sender) = &mut self.sender {
+            sender.observe_frames(&outcomes, reading);
         }
     }
 

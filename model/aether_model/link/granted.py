@@ -1452,12 +1452,16 @@ class GrantedEngine:
 
     def _burst_mode(self) -> int:
         chosen = self._recommended if self._pinned is None else self._pinned
-        if self._sender is not None and self._pinned is None:
-            if self._sender.snr_db is None and self.peer_snr_db is not None:
-                self._sender.seed(self.peer_snr_db)
-            if self._sender.snr_db is not None:
-                chosen = self._sender.modes[self._sender._index]
+        if self._sender is not None and self._pinned is None and self._sender.snr_db is not None:
+            chosen = self._sender.modes[self._sender._index]
         return min(chosen, self._cap())
+
+    def _peer_reading(self, snr_db: float) -> None:
+        """The other station's reading of this one, from a control frame: what the sender-side
+        prototype (C1-S) seeds from, the first time one comes."""
+        self.peer_snr_db = snr_db
+        if self._sender is not None and self._sender.snr_db is None:
+            self._sender.seed(snr_db)
 
     def _probe_rung(self, mode: int) -> int | None:
         """C1-S's try: the rung one new frame of this transmission goes at, in ``mode``'s
@@ -2022,7 +2026,7 @@ class GrantedEngine:
             return  # a frame of a slot already closed: its timing is nothing's now
         self._heard(frame)
         if ctl.snr_db is not None:
-            self.peer_snr_db = ctl.snr_db
+            self._peer_reading(ctl.snr_db)
         if ctl.kind is GrantKind.DISC_ACK:
             if self.state is State.DISCONNECTING:
                 # the slave's closing identifier follows its DISC_ACK, as long as it declared
@@ -2392,7 +2396,7 @@ class GrantedEngine:
         self._heard(frame)
         self._measure_lateness(frame)
         if ctl.snr_db is not None:
-            self.peer_snr_db = ctl.snr_db
+            self._peer_reading(ctl.snr_db)
         if ctl.kind is GrantKind.DISC:
             self._end_session("peer disconnected", disc_heard=True)
             self._answer_disc(ctl, frame, GrantKind.DISC_ACK)
