@@ -668,7 +668,8 @@ def replay_sidecar(path: Path, seed: int, rung: Hypothetical | None = None) -> d
 
 def overrides(text: str) -> dict[str, float | int | None]:
     """``key=value,key=value`` as a dict of numbers; ``none`` for a setting that can be
-    absent (``ceiling=none``: no ceiling)."""
+    absent (``ceiling=none``: no ceiling); a word is kept as it is (``controller=delivery``,
+    a prototype of the rate controller's review)."""
     out: dict[str, float | int | None] = {}
     for item in text.split(","):
         if item.strip():
@@ -676,8 +677,13 @@ def overrides(text: str) -> dict[str, float | int | None]:
             value = value.strip()
             if value.lower() == "none":
                 out[key.strip()] = None
+            elif value.lstrip("-").isdigit():
+                out[key.strip()] = int(value)
             else:
-                out[key.strip()] = int(value) if value.lstrip("-").isdigit() else float(value)
+                try:
+                    out[key.strip()] = float(value)
+                except ValueError:
+                    out[key.strip()] = value  # type: ignore[assignment]
     return out
 
 
