@@ -209,3 +209,51 @@ through the dips — and a controller that steps down in every dip and climbs ba
 time low. The operating point that pays has a first-copy loss of 25–30 %, as the survey's HARQ
 sources say (`02-survey.md` §2.3), where the current controller aims at about 5 %.
 
+### 3.4 C1 on the harness (2026-10-24)
+
+C1 at the receiver in the daemon (`559baaa`, `Controller::Delivery`), the same 66 runs.
+
+| scenario | current, 3 draws | C1, 3 draws | C1's regret, median | the current's | C1 / current |
+|---|---|---|---|---|---|
+| `quick-awgn-2300` | 1263 / 1263 / 1263 | 2400 / 2400 / 2400 | −9 % | +73 % | 1.90 |
+| `40m-good-throughput-2300` | 2327 / 2286 / 2133 | 2133 / 2723 / 2327 | +12 % | +19 % | 1.02 |
+| `80m-strong-moderate-500` | 151 / 260 / 244 | 192 / 282 / 252 | +65 % | +70 % | 1.03 |
+| `20m-dx-500` | 146 / 151 / 144 | 188 / 219 / 198 | +3 % | +50 % | 1.36 |
+| `20m-dx-moderate-2300` | 632 / 1000 / 600 | 750 / 706 / 750 | +42 % | +46 % | 1.19 |
+| `80m-qsb-dropout-500` | 146 / 158 / 142 | 181 / 188 / 160 | +19 % | +38 % | 1.24 |
+| `80m-weak-500` | 70 / 67 / 65 | 70 / 77 / 82 | 0 % | +17 % | 1.15 |
+| `80m-flutter-500` | 129 / 120 / 127 | 140 / 110 / 160 | +16 % | +26 % | 1.10 |
+| `15m-equatorial-flutter-2300` | 387 / 211 / 211 | 500 / 222 / 240 | +212 % | +255 % | 1.14 |
+| `80m-nvis-evening-500` | 41 / 25 / 26 | 4 / 44 / 13 | +215 % | +56 % | **0.50** |
+| `80m-thunderstorm-agc-2300` | 591 / 535 / 616 | 548 / 618 / 602 | +61 % | +60 % | 1.02 |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 | 78 / 84 / 76 | 0 % | 0 % | 1.00 |
+| `20m-polar-path-2300` | 198 / 198 / 172 | 165 / 198 / 172 | +49 % | +44 % | 0.87 |
+| `80m-weak-wide-test-2300` | 167 / 168 / 175 | 175 / 175 / 175 | 0 % | +4 % | 1.04 |
+| `40m-good-2300-rtty-crashes` | 425 / 442 / 496 | 505 / 524 / 592 | +47 % | +75 % | 1.19 |
+| `80m-poor-500-pactor-signalink` | 66 / 74 / 72 | 83 / 62 / 88 | +33 % | +58 % | 1.15 |
+| `80m-nvis-disturbed-500` | 38 / 44 / 36 | 29 / 44 / 21 | +34 % | +3 % | **0.76** |
+| `40m-moderate-2300-vara-qrm` | 842 / 390 / 667 | 1103 / 582 / 711 | +41 % | +65 % | 1.07 |
+| `80m-lopsided-acks-500` | 77 / 76 / 83 | 104 / 65 / 74 | +44 % | +28 % | 0.95 |
+| `80m-slow-machine-500` | 119 / 91 / 106 | 117 / 83 / 153 | +9 % | +44 % | 1.10 |
+
+* **K3 passes**: settled 1, 0 and 0 rungs apart (low start 10, 11, 11; high start 11, 11, 11) —
+  the first candidate to, and the current controller does not.
+* **K1(a) fails**: +33.5 % (the current +45.2 %, +22.6 % asked).
+* **K1(b) fails only on the two NVIS paths**: `80m-nvis-evening-500` at 0.50 and
+  `80m-nvis-disturbed-500` at 0.76; every other scenario at 0.87 or more, fourteen of the twenty
+  above 1.
+
+**The trace** (`80m-nvis-evening-500`, draw 0, 4 bit/s): C1's first rung was OFDM 6 (the
+optimistic prior at the call's reading); 6 failed, and C1 stepped down to OFDM 5 — never sent at,
+so still on the prior, which put it at twice the floor's rung 2 at a −1 dB reading. Over the
+session it sent 90 frames at OFDM 5–6 on a path where no OFDM rung survives the echo; the
+current controller stayed on the floor's rungs 1–2. The disturbed NVIS: the same, from OFDM 5–6
+at the start. **The failures of one OFDM rung said nothing to the prior of the OFDM rung below
+it.**
+
+**The change** (C1 v2, `8b21148`): the prior of a family's rungs carries the family's offset,
+moved by every frame of the family by `gain × (p − decoded)` (0.5 dB) — up by nearly the gain for
+a failure the prior was sure of, down by nearly it for a success it ruled out. A measured rung is
+still judged by its own account; the offset reshapes only the prior. One setting added; C2's one
+good idea (a family's evidence) without its single-offset choice. On the harness next.
+
