@@ -28,9 +28,9 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
 * **Where it stands**: §3.19's form — C1 at the sender with every fix of §3.10–§3.18 — over
   six draws completes every run and passes K1(b) and K7, but **fails K1(a) clearly** (+26.80 %
   against +19.41 %, §3.20); K3 and WC4Y's file rate are near misses. The fix of K3's dip (§3.21,
-  §3.22) costs three floor-top paths 14–29 % and does not pass K3.
-* **Next**: the author's calls — whether to take the dip fix out, and what to do about K1(a),
-  whose gap is the climb on strong paths (§3.20); then K2 and K5.
+  §3.22) cost three floor-top paths 14–29 % and did not pass K3: taken out by the author's call.
+* **Next**: the author's call on K1(a), whose gap is the climb on strong paths (§3.20); then K2
+  and K5.
 
 ## 1. What the engine hands a prototype
 
@@ -827,4 +827,10 @@ and they took three more OFDM transmissions (85–126 s) before the session was 
 top — 144 bit/s against §3.19's 175, where no try of OFDM ever went. On these paths a try of OFDM
 from the floor's top costs a whole transmission and its leftovers, and it bought nothing on K3:
 3, 0, 2 apart against §3.19's 2, 1, 1. **The dip fix, as built, fails K1(b) on three paths and
-does not pass K3; whether to take it out is the author's call.**
+does not pass K3.**
+
+**The author's call: take it out** (`b53d0e6`, reverting `2db2fb8` and `55e5139`). C1 at the
+sender is §3.19's form again — a try from the floor's top goes to the first OFDM rung, and only
+when its lossless rate beats the top's estimate — with v11's guard kept (a try across the edge
+takes the transmission only when a block can be cut at its rung; the `edge-at-the-end` vector
+session still reaches it). K3's draw-0 dip stays a near miss.
