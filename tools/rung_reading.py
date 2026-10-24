@@ -1211,6 +1211,14 @@ def _echo(ctl: RateController, echo: object, snr_db: float) -> None:
         observe(echo if isinstance(echo, int | float) else None, snr_db)
 
 
+def _families(ctl: RateController, own: bool | None, other: bool | None) -> None:
+    """The families both stations' control frames went in, to a prototype that prices an
+    exchange by them (C1, ``granted._price``): this station's own and the other's, once both are
+    known."""
+    if own is not None and other is not None and hasattr(ctl, "families"):
+        ctl.families = (own, other)
+
+
 def _feed(ctl: RateController, obs: Observation, asked: int | None) -> None:
     if obs.mode is None or (obs.ok == 0 and obs.failed == 0 and obs.snr is None):
         return
@@ -1284,10 +1292,21 @@ def replay_slave(
     def own(t: float) -> float:
         return t - two_sides.offset_of(rx_offset, t)
 
+    answers = sorted(
+        (float(s["t_s"]), bool(s.get("floor")))
+        for s in slave.doc.get("sent") or []
+        if s.get("kind") == "control" and s.get("t_s") is not None
+    )
+    header_floor: bool | None = None
+
     for i, tx in enumerate(master_txs):
         _echoes(ctl, tx)
+        if tx.header is not None:
+            header_floor = tx.header.floor
         if not (tx.header_read is True or any(f.decoded for f in tx.data)):
             continue
+        answered = [floor for t, floor in answers if t < own(tx.end)]
+        _families(ctl, answered[-1] if answered else None, header_floor)
         frames = list(tx.data)
         if tx.header_read is not True:
             # without the header, the engine takes any data frame found since its last answer
@@ -1338,6 +1357,7 @@ def replay_master(
     silent = 0
     steps = []
     granted = False
+    answer_floor: bool | None = None
     states = rate_events(master)
     _, master_end = session_span(master)
     previous_end = -math.inf
@@ -1368,6 +1388,9 @@ def replay_master(
         heard = tx.ack is not None or any(s.heard_any for s in in_slot)
         for s in in_slot:
             _echoes(ctl, s)
+            if s.header is not None:
+                answer_floor = s.header.floor
+            _families(ctl, None if tx.header is None else tx.header.floor, answer_floor)
             if s.data and s.heard_any:
                 obs = observation(s.data, blocks)
                 if hasattr(ctl, "observe_frames"):
