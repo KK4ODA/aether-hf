@@ -327,6 +327,7 @@ delivery is under 85 % of the current controller's (K1(b)).
 | C1 at the sender, priced per exchange (§3.12) | **+21.30 %** | 1 (slow machine 0.76) | 5, 1, 1 | 1 (the AGC carrier, draw 0) |
 | … and no step down for silence (§3.13, reverted) | +31.83 % | 1 (disturbed NVIS 0.66) | 5, 0, 0 | 2 (the AGC carrier, draws 0 and 2) |
 | … priced, a try decided on three frames (§3.15) | **+21.85 %** | 1 (slow machine 0.81) | 6, 0, 2 | **0** (72 runs) |
+| … and a try across the edge takes the transmission (§3.16) | +23.46 % | 1 (slow machine 0.77) | 2, 1, 2 | 0 (72 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -587,4 +588,26 @@ was always in flight, so the try of OFDM — a whole transmission in the other f
 and expired unmeasured, again and again. **A defect** of the try, not the path: a try across the
 edge now takes the transmission and the floor frames in flight wait it out (`25995cb`, model and
 port; the review's vectors gain a session with a floor frame always in flight, and removing the
-exception in the port fails them). On the harness next.
+exception in the port fails them). On the harness next (§3.16).
+
+### 3.16 The try across the edge takes the transmission (2026-10-24)
+
+`25995cb`, the same 72 runs:
+
+* **Completion**: 72 of 72.
+* **K1(a)**: +23.46 % (§3.15: +21.85 %) — over the line by 0.84 points. Nothing changed for the
+  scenarios whose tries stay in one family; the moves are those a change of timing makes on three
+  draws (`80m-flutter-500` +6 → +28 %, `40m-good-2300-rtty-crashes` +28 → +22 %).
+* **K1(b)**: `80m-slow-machine-500` 0.77.
+* **K3**: 2, 1, 2 — the current controller's own (2, 1, 2), still failing.
+* **WC4Y's path**: message 91.6 / 91.6 / 91.6, file 98.0 / 98.0 / 89.4 bit/s against the current's
+  73.9 / 81.9 / 81.9 and 92.7 / 92.6 / 104.5 — ×1.12 and ×1.06 (medians), **at least as well**:
+  the author's condition for excusing K6's WC4Y session is met.
+
+**K3's draw 0 and the slow machine, traced, have one cause.** Draw 0's low start is the same as in
+§3.15: rung 4 for 27 frames, and the try of rung 5 at 188 s — after exactly six transmissions,
+the try's wait (`probe_every`). The wait counts transmissions, and a transmission on the floor is
+five 5.36 s frames (≈ 27 s) where one on OFDM is six 1.05 s frames (≈ 8 s): six transmissions are
+160 s on the floor and under a minute above it. The slow machine is the called station's stalls —
+the sender cannot tell them from a path that loses frames — and what costs is the way back: each
+stall puts the session on the floor, and the next try of OFDM waits six floor transmissions.
