@@ -336,10 +336,13 @@ class DeliveryController(RateController):
 
     def silent(self, steps: int) -> None:
         """A transmission of this station's went unanswered (C1-S): the rung steps down, as the
-        engine steps its own (R9), and a try ends."""
+        engine steps its own (R9), to a rung the echo allows, and a try ends. Stepped by the
+        ladder's index alone it landed on the rungs a 7 ms echo rules out (ADR-0087), and blocks
+        cut there stayed for their four copies (``04-results.md`` §3.10)."""
         self._probing = None
         self._probe_tries = 0
-        self._index = max(0, self._index - steps)
+        below = [i for i in range(max(0, self._index - steps) + 1) if self._usable(i)]
+        self._index = below[-1] if below else 0
 
     # ── the start ─────────────────────────────────────────────────────
 
