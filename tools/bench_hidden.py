@@ -19,6 +19,7 @@ transmissions through the channel and counts the frames each rule loses, the fal
 rule under test adds and the decode attempts; ``noise`` (M4) counts candidates on noise alone.
 Each appends its rows to the CSV as they finish (losses and additions to ``<out>.notes.txt``),
 so a stopped run keeps what it had; ``synth-summary`` and ``traffic-summary`` tabulate a CSV.
+``--rule r2`` puts the offline rule (the stronger candidate wins) under test in place of R1.
 """
 
 from __future__ import annotations
@@ -43,6 +44,16 @@ from aether_model.phy.stream import TRUSTED_CONFIDENCE, StreamingReceiver
 from aether_model.waveform import NARROW_500, WIDE_2300, WaveformParams
 
 AUDIO_RATE = 48_000
+
+RULES = ("r0", "r1", "r2")
+"""The rules the bench compares (``00-plan.md`` §2): R0 as built, R1 under test, R2 the offline
+rule, measured because R1 missed K2."""
+
+
+def receiver(params: WaveformParams, rule: str) -> StreamingReceiver:
+    if rule not in RULES:
+        raise ValueError(f"no rule {rule!r}")
+    return StreamingReceiver(params, weak_spans_hide=rule == "r0", strongest_wins=rule == "r2")
 
 
 @dataclass(frozen=True)
@@ -116,12 +127,12 @@ def found_of(decoded: DecodedFrame, params: WaveformParams, delay_s: float) -> F
 
 
 def replay(
-    audio: NDArray[np.float64], params: WaveformParams, weak_spans_hide: bool, block_ms: float
+    audio: NDArray[np.float64], params: WaveformParams, rule: str, block_ms: float
 ) -> list[Found]:
     """The recording through the model's streaming receiver, block by block as the daemon
     feeds it."""
     front = AudioToBaseband(params)
-    rx = StreamingReceiver(params, weak_spans_hide=weak_spans_hide)
+    rx = receiver(params, rule)
     # absolute indices count the samples the blanker has released at their input positions:
     # the stream lags the input by the band filter alone
     delay_s = rx.delay_samples / params.fs_baseband
@@ -139,9 +150,9 @@ def field(args: argparse.Namespace) -> None:
     params = NARROW_500 if hz == 500 else WIDE_2300
     audio = read_audio(path)
     runs: dict[str, list[Found]] = {}
-    for name, hide in (("as built", True), ("under test", False)):
+    for name, rule in (("as built", "r0"), ("under test", args.rule)):
         t0 = time.monotonic()
-        runs[name] = replay(audio, params, hide, args.block_ms)
+        runs[name] = replay(audio, params, rule, args.block_ms)
         took = time.monotonic() - t0
         ok = sum(f.decoded for f in runs[name])
         print(
@@ -210,10 +221,10 @@ def cut_preamble(modem: object, control: bool) -> NDArray[np.complex128]:
 
 
 def stream_out(
-    params: WaveformParams, x: NDArray[np.complex128], weak_spans_hide: bool
+    params: WaveformParams, x: NDArray[np.complex128], rule: str
 ) -> tuple[list[DecodedFrame], int, int]:
     """The frames a stream hands out over ``x``, its decode attempts, and its index lag."""
-    rx = StreamingReceiver(params, weak_spans_hide=weak_spans_hide)
+    rx = receiver(params, rule)
     out: list[DecodedFrame] = []
     for i in range(0, len(x), BLOCK):
         out += rx.feed(x[i : i + BLOCK])
@@ -266,6 +277,7 @@ class Trial:
     snr_above_db: float
     false_snr: tuple[float, float]
     seed: int
+    rule: str = "r1"
 
 
 SYNTH_FIELDS = [
@@ -280,10 +292,13 @@ SYNTH_FIELDS = [
     "real_conf",
     "ref",
     "r0",
-    "r1",
+    "test",
     "r0_attempts",
-    "r1_attempts",
+    "test_attempts",
+    "rule",
 ]
+"""``test`` is the rule under test, named in ``rule`` (the first M2 run, R1 only, called its
+columns ``r1``)."""
 
 
 def run_trial(t: Trial) -> dict[str, object]:
@@ -322,9 +337,9 @@ def run_trial(t: Trial) -> dict[str, object]:
     with_false = with_real.copy()
     with_false[lead : lead + len(cut)] += cut * 10 ** (false_snr / 20)
 
-    ref, _, lag = stream_out(params, with_real, True)
-    r0, r0_n, _ = stream_out(params, with_false, True)
-    r1, r1_n, _ = stream_out(params, with_false, False)
+    ref, _, lag = stream_out(params, with_real, "r0")
+    r0, r0_n, _ = stream_out(params, with_false, "r0")
+    r1, r1_n, _ = stream_out(params, with_false, t.rule)
     sym = params.symbol_samples
 
     def has(out: list[DecodedFrame]) -> bool:
@@ -348,9 +363,10 @@ def run_trial(t: Trial) -> dict[str, object]:
         else "",
         "ref": int(has(ref)),
         "r0": int(has(r0)),
-        "r1": int(has(r1)),
+        "test": int(has(r1)),
         "r0_attempts": r0_n,
-        "r1_attempts": r1_n,
+        "test_attempts": r1_n,
+        "rule": t.rule,
     }
 
 
@@ -373,7 +389,9 @@ def synth(args: argparse.Namespace) -> None:
                 for above in SNR_ABOVE_DB:
                     for _ in range(args.trials):
                         seed += 1
-                        trials.append(Trial(hz, false_control, real, above, window, seed))
+                        trials.append(
+                            Trial(hz, false_control, real, above, window, seed, args.rule)
+                        )
     new = not out_path.exists()
     with out_path.open("a", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, SYNTH_FIELDS)
@@ -399,6 +417,7 @@ def summarise_synth(path: Path) -> None:
     rows = list(csv.DictReader(path.open(encoding="utf-8")))
     cells: dict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
     for r in rows:
+        r.setdefault("test", r.get("r1", ""))
         cells[(r["hz"], r["false_type"], r["real"])].append(r)
 
     def share(rs: list[dict[str, str]], key: str) -> str:
@@ -422,14 +441,14 @@ def summarise_synth(path: Path) -> None:
         totals[key[0]] += rs
         totals[key[0] + " aimed"] += aimed
         print(
-            f"{key[0]:>4} {key[1]:8} {key[2]:8} | {share(rs, 'r0')}  {share(rs, 'r1')} "
-            f"| {share(aimed, 'r0')}  {share(aimed, 'r1')}"
+            f"{key[0]:>4} {key[1]:8} {key[2]:8} | {share(rs, 'r0')}  {share(rs, 'test')} "
+            f"| {share(aimed, 'r0')}  {share(aimed, 'test')}"
         )
     for hz in sorted(k for k in totals if " " not in k):
         print(
             f"{hz:>4} all: counted as built {share(totals[hz], 'r0')}, under test "
-            f"{share(totals[hz], 'r1')}; aimed as built {share(totals[hz + ' aimed'], 'r0')}, "
-            f"under test {share(totals[hz + ' aimed'], 'r1')}"
+            f"{share(totals[hz], 'test')}; aimed as built {share(totals[hz + ' aimed'], 'r0')}, "
+            f"under test {share(totals[hz + ' aimed'], 'test')}"
         )
 
 
@@ -441,12 +460,14 @@ TRAFFIC_SNRS = (-8.0, -4.0, 0.0, 4.0, 8.0, 12.0, 16.0, 20.0)
 TRAFFIC_FIELDS = [
     "hz", "channel", "snr_db", "seconds", "real_ofdm", "real_tone", "r0_decoded",
     "r1_decoded", "losses", "gains", "r0_unmatched", "r1_unmatched", "false_added",
-    "false_added_decoded", "r0_attempts", "r1_attempts",
+    "false_added_decoded", "r0_attempts", "r1_attempts", "rule",
 ]  # fmt: skip
+"""The ``r1`` columns are the rule under test, named in ``rule``."""
 
 
-Job = tuple[int, str, float, float, int]
-"""(air, channel or "noise", SNR, seconds, seed): one condition of M3 or chunk of M4."""
+Job = tuple[int, str, float, float, int, str]
+"""(air, channel or "noise", SNR, seconds, seed, rule under test): one condition of M3 or chunk
+of M4."""
 
 
 @dataclass(frozen=True)
@@ -522,15 +543,15 @@ def run_traffic(job: Job) -> tuple[dict[str, object], list[str]]:
     from aether_model.channel import make_channel
     from aether_model.frame.modes import air_interface
 
-    hz, channel, snr, seconds, seed = job
+    hz, channel, snr, seconds, seed, rule = job
     params = params_of(hz)
     rng = np.random.default_rng(seed)
     x, sent = traffic(hz, snr, seconds, rng)
     y = make_channel(
         channel, snr_db=snr, fs=params.fs_baseband, seed=seed, signal_power=1.0
     ).process(x)
-    r0, r0_n, lag = stream_out(params, y, True)
-    r1, r1_n, _ = stream_out(params, y, False)
+    r0, r0_n, lag = stream_out(params, y, "r0")
+    r1, r1_n, _ = stream_out(params, y, rule)
     sym = params.symbol_samples
     starts = np.array([s.start + lag for s in sent])
 
@@ -585,6 +606,7 @@ def run_traffic(job: Job) -> tuple[dict[str, object], list[str]]:
         "false_added_decoded": sum(d.ok for d in added),
         "r0_attempts": r0_n,
         "r1_attempts": r1_n,
+        "rule": rule,
     }
     return row, notes
 
@@ -627,7 +649,7 @@ def traffic_cmd(args: argparse.Namespace) -> None:
         for channel in args.channels:
             for snr in args.snrs:
                 seed += 1
-                jobs.append((hz, channel, float(snr), args.seconds, seed))
+                jobs.append((hz, channel, float(snr), args.seconds, seed, args.rule))
     run_jobs(jobs, run_traffic, TRAFFIC_FIELDS, Path(args.out), args.jobs)
     summarise_traffic(Path(args.out))
 
@@ -660,16 +682,16 @@ def summarise_traffic(path: Path) -> None:
 
 # ── M4: noise alone ──────────────────────────────────────────────────────────
 
-NOISE_FIELDS = ["hz", "seed", "seconds", "r0_candidates", "r1_candidates", "r1_decoded"]
+NOISE_FIELDS = ["hz", "seed", "seconds", "r0_candidates", "r1_candidates", "r1_decoded", "rule"]
 
 
 def run_noise(job: Job) -> tuple[dict[str, object], list[str]]:
-    hz, _, _, seconds, seed = job
+    hz, _, _, seconds, seed, rule = job
     params = params_of(hz)
     fs = params.fs_baseband
     x = noise(np.random.default_rng(seed), int(seconds * fs), fs)
-    r0, _, _ = stream_out(params, x, True)
-    r1, _, lag = stream_out(params, x, False)
+    r0, _, _ = stream_out(params, x, "r0")
+    r1, _, lag = stream_out(params, x, rule)
 
     def ofdm(out: list[DecodedFrame]) -> list[DecodedFrame]:
         return [d for d in out if d.frame is not None and d.tone_sync is None]
@@ -688,6 +710,7 @@ def run_noise(job: Job) -> tuple[dict[str, object], list[str]]:
         "r0_candidates": len(o0),
         "r1_candidates": len(o1),
         "r1_decoded": sum(d.ok for d in o1),
+        "rule": rule,
     }
     return row, notes
 
@@ -698,7 +721,7 @@ def noise_cmd(args: argparse.Namespace) -> None:
     for hz in args.airs:
         for _ in range(args.chunks):
             seed += 1
-            jobs.append((hz, "noise", 0.0, args.seconds, seed))
+            jobs.append((hz, "noise", 0.0, args.seconds, seed, args.rule))
     run_jobs(jobs, run_noise, NOISE_FIELDS, Path(args.out), args.jobs)
 
 
@@ -710,6 +733,7 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--bandwidth", type=int, choices=(500, 2300))
     f.add_argument("--block-ms", type=float, default=20.0)
     f.add_argument("--list", action="store_true", help="list every frame the rule under test found")
+    f.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
     f.set_defaults(run=field)
     s = sub.add_parser("synth", help="M2: a false candidate, then a real frame inside its span")
     s.add_argument("--out", required=True, help="CSV, appended to as trials finish")
@@ -717,6 +741,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--trials", type=int, default=20, help="per cell")
     s.add_argument("--seed", type=int, default=1000)
     s.add_argument("--jobs", type=int, default=4)
+    s.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
     s.set_defaults(run=synth)
     sm = sub.add_parser("synth-summary", help="the M2 table from a CSV")
     sm.add_argument("csv")
@@ -729,6 +754,7 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--seconds", type=float, default=120.0, help="of air per condition")
     t.add_argument("--seed", type=int, default=5000)
     t.add_argument("--jobs", type=int, default=4)
+    t.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
     t.set_defaults(run=traffic_cmd)
     ts = sub.add_parser("traffic-summary", help="the M3 table from a CSV")
     ts.add_argument("csv")
@@ -740,6 +766,7 @@ def main(argv: list[str] | None = None) -> None:
     n.add_argument("--seconds", type=float, default=600.0, help="per chunk")
     n.add_argument("--seed", type=int, default=9000)
     n.add_argument("--jobs", type=int, default=4)
+    n.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
     n.set_defaults(run=noise_cmd)
     args = ap.parse_args(argv)
     args.run(args)

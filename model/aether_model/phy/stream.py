@@ -66,7 +66,9 @@ class StreamingReceiver:
         max_buffer_s: float = 7.0,
         blank_impulses: bool = True,
         blanker: NoiseBlanker | None = None,
+        *,
         weak_spans_hide: bool = True,
+        strongest_wins: bool = False,
     ) -> None:
         self.p = params
         self.modem = Modem(params, blank_impulses=False)  # blanking happens here, once
@@ -90,6 +92,11 @@ class StreamingReceiver:
         :data:`TRUSTED_CONFIDENCE` that has not decoded — still pending, or handed out and
         failed — does not hide a candidate at or over it. A phantom's span hid a real header or
         answer on the air three times (report 17 §6). Bench-only until the bench is judged."""
+        self.strongest_wins = strongest_wins
+        """The bench's second rule (R2, measured because R1 missed K2): a known frame that has not
+        decoded hides only a candidate no stronger than itself, whatever either's confidence —
+        what :meth:`Modem.decode_buffer` does, taking the strongest first. Overrides
+        :attr:`weak_spans_hide`. Bench-only."""
         self._tone_keep = max(k.samples for k in self.modem.air.tone_data) + 4000
         """Samples always kept for the tone floor: its longest frame and half a second — a
         tone frame is taken a symbol after it ends and refined against its own samples."""
@@ -151,7 +158,7 @@ class StreamingReceiver:
                     False,
                     pend.sync.detect_confidence(self.modem.air),
                 )
-                inside_decoded = not self.weak_spans_hide and any(
+                inside_decoded = (not self.weak_spans_hide or self.strongest_wins) and any(
                     d.decoded and d.start - self.p.symbol_samples < done.start < d.end
                     for d in self._done
                 )
@@ -200,9 +207,15 @@ class StreamingReceiver:
             for p in self._pending
         ] + [(d.start, d.end, d.decoded, d.confidence) for d in self._done]
         inside = [k for k in known if k[0] - self.p.symbol_samples < start < k[1]]
+        confidence = new.sync.detect_confidence(self.modem.air)
+        if inside and self.strongest_wins:
+            return any(abs(start - k[0]) < self.p.symbol_samples for k in inside) or any(
+                decoded or known_confidence >= confidence
+                for _, _, decoded, known_confidence in inside
+            )
         if not inside or self.weak_spans_hide:
             return bool(inside)
-        if new.sync.detect_confidence(self.modem.air) < TRUSTED_CONFIDENCE:
+        if confidence < TRUSTED_CONFIDENCE:
             return True
         # a duplicate of a frame already known is hidden however weak it was
         if any(abs(start - k[0]) < self.p.symbol_samples for k in inside):
