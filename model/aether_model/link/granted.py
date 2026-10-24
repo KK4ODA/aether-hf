@@ -56,7 +56,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TypedDict
+from typing import TypedDict, TypeVar
 
 from aether_model.link.frames import (
     CAP_LEVEL_MASK,
@@ -89,6 +89,14 @@ from aether_model.link.frames import (
 )
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_modes
+from aether_model.link.rate_review import (
+    CONTROLLERS,
+    DeliveryController,
+    FrameOutcome,
+    OuterLoopController,
+)
+
+_Prototype = TypeVar("_Prototype", DeliveryController, OuterLoopController)
 
 # ── what the engine hands its driver ──────────────────────────────────
 
@@ -357,6 +365,10 @@ class GrantConfig:
     link_timeout_exchanges: float = 4.0
     """Silence ends a session after this many exchanges of the size in use, 45 s at least."""
     rate: dict[str, float | int | None] = field(default_factory=dict)
+    controller: str = "current"
+    """Bench only: which rate controller the station runs — the current one, or a prototype of
+    the rate controller's review (:mod:`aether_model.link.rate_review`). :attr:`rate` overrides
+    its parameters either way."""
     initial_mode: int = 0
     max_mode: int = 19
     ceiling: int | None = None
@@ -736,6 +748,19 @@ class GrantedEngine:
         """The measurement out is a repeat, its first slot silent (:meth:`_measurement_unheard`)."""
         self.rate = self._rate_controller()
         self._asked: int | None = None
+        self._last_rx_mode: int | None = None
+        self._sender: DeliveryController | None = (
+            self._delivery_controller(DeliveryController)
+            if self.cfg.controller == "delivery-s"
+            else None
+        )
+        """C1-S (the rate controller's review): this station's own choice of the rung its data
+        goes at, from what its acknowledgements say of its frames; the other station's
+        recommendation is advice."""
+        self._sent_copies: list[tuple[int, int, float]] = []
+        """Copies sent since the last acknowledgement — block, rung, air — for :attr:`_sender`."""
+        """The rung the other station's data last decoded at: what a transmission none of whose
+        frames was heard is counted at, for a prototype of the rate controller's review."""
         # receiving, either role
         self._rx_base = 0
         self._rx_buf: dict[int, bytes] = {}
@@ -1426,7 +1451,22 @@ class GrantedEngine:
 
     def _burst_mode(self) -> int:
         chosen = self._recommended if self._pinned is None else self._pinned
+        if self._sender is not None and self._pinned is None:
+            if self._sender.snr_db is None and self.peer_snr_db is not None:
+                self._sender.seed(self.peer_snr_db)
+            if self._sender.snr_db is not None:
+                chosen = self._sender.modes[self._sender._index]
         return min(chosen, self._cap())
+
+    def _probe_rung(self, mode: int) -> int | None:
+        """C1-S's try: the rung one new frame of this transmission goes at, in ``mode``'s
+        family, or ``None``."""
+        if self._sender is None or self._pinned is not None:
+            return None
+        probe = self._sender._probing
+        if probe is None or probe > self._cap():
+            return None
+        return probe
 
     def _ctl_threshold(self) -> float:
         return (self.timing.control_threshold_db or CONTROL_THRESHOLD_DB)[False]
@@ -1458,6 +1498,8 @@ class GrantedEngine:
         below = [m for m in modes if m <= current]
         index = modes.index(below[-1]) if below else 0
         self._recommended = modes[max(0, index - self.cfg.silence_step)]
+        if self._sender is not None:
+            self._sender.silent(self.cfg.silence_step)
 
     def _hopeless(self, mode: int) -> bool:
         thresholds = self.rate.thresholds
@@ -1516,11 +1558,35 @@ class GrantedEngine:
                     best = (mode, count)
         return None if best is None else best[0]
 
+    def _delivery_controller(self, kind: type[_Prototype]) -> _Prototype:
+        """A prototype of the rate controller's review on this air's tables."""
+        thresholds = self.timing.mode_threshold_db
+        floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
+        if self.timing.echo_limit:
+            floor["echo_limit"] = dict(self.timing.echo_limit)
+        table = dict(thresholds if thresholds is not None else RateController().thresholds)
+        capacity = self.timing.data_capacity or {}
+        payload = capacity or {m: 0 for m in table}
+        frame_s = {m: self.timing.data_frame_s_for(m) for m in table}
+        return kind(
+            thresholds=table,
+            modes=usable_modes(table, payload, frame_s),
+            capacity={m: data_capacity(c) for m, c in capacity.items()},
+            frame_air_s=frame_s,
+            **{**floor, **self.cfg.rate},  # type: ignore[arg-type]
+        )
+
     def _rate_controller(self) -> RateController:
         thresholds = self.timing.mode_threshold_db
         floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
         if self.timing.echo_limit:
             floor["echo_limit"] = dict(self.timing.echo_limit)
+        if self.cfg.controller not in CONTROLLERS:
+            raise ValueError(f"no rate controller {self.cfg.controller!r}")
+        if self.cfg.controller == "delivery":
+            return self._delivery_controller(DeliveryController)
+        if self.cfg.controller == "olla":
+            return self._delivery_controller(OuterLoopController)
         if thresholds is None:
             return RateController(**{**floor, **self.cfg.rate})  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
@@ -1849,6 +1915,8 @@ class GrantedEngine:
             first = self.rate.first_mode(ack.snr_db)
             self._recommended = max(self.cfg.initial_mode, min(self._cap(), first))
             self.peer_snr_db = ack.snr_db
+            if self._sender is not None:
+                self._sender.seed(ack.snr_db)
             # the first header goes in the family the slave's reading of the call asks for: a
             # floor reading is a lower bound, never too fast
             if self.timing.floor_modes > 0:
@@ -2657,6 +2725,9 @@ class GrantedEngine:
         if self._measure_ask is not None and not self._unacked():
             return self._measurement(room_s)
         mode = self._burst_mode()
+        probe = self._probe_rung(mode)
+        if probe is not None and self.timing.is_floor(probe) != self.timing.is_floor(mode):
+            mode, probe = probe, None  # across the floor's edge a try is a whole transmission
         recommendation = min(self._recommended, self._cap())
         # what an unheard answer would have said is not resent blind: it waits for an answer —
         # through one silent slot. Two in a row and the answers are not getting through, and
@@ -2715,13 +2786,16 @@ class GrantedEngine:
         seqs = seqs[:room]
         # a measurement asked for waits only for what is in flight: nothing new goes before it
         new_frames = family == self.timing.is_floor(mode) and self._measure_ask is None
-        cap = data_capacity(self.timing.capacity(mode))
         while (
             new_frames
             and len(seqs) < room
             and seq_distance(self._tx_next, self._tx_base) < WINDOW
             and self._tx_queue
         ):
+            at = mode
+            if probe is not None:
+                at, probe = probe, None
+            cap = data_capacity(self.timing.capacity(at))
             take = min(cap, len(self._tx_queue))
             if self._pin_body is not None:
                 take = min(take, self._pin_body)
@@ -2729,7 +2803,7 @@ class GrantedEngine:
                 take -= 1  # the one length the container cannot carry
             body = bytes(self._tx_queue[:take])
             del self._tx_queue[:take]
-            rec = _TxRecord(self._tx_next, body, mode)
+            rec = _TxRecord(self._tx_next, body, at)
             self._records[rec.seq] = rec
             self._tx_next = seq_after(self._tx_next)
             seqs.append(rec.seq)
@@ -2747,6 +2821,9 @@ class GrantedEngine:
             rv = RV_SEQUENCE[(rec.tx_count - 1) % len(RV_SEQUENCE)]
             follows = min(MAX_FOLLOWS, len(seqs) - 1 - i)
             frames.append(TxFrame(Container.DATA, payload, mode=rec.mode, rv=rv, follows=follows))
+            if self._sender is not None:
+                air = self._frame_s(self.timing.is_floor(rec.mode))
+                self._sent_copies.append((rec.seq, rec.mode, air))
         self.stats.frames_sent += len(frames)
         return frames
 
@@ -2841,12 +2918,14 @@ class GrantedEngine:
             else:
                 self._measure_unheard = True
         progress = False
+        newly: set[int] = set()
         for rec in self._records.values():
             rec.unknown = False  # the answer says what arrived
         for s, rec in list(self._records.items()):
             if not rec.acked and rec.sent and ctl.received(s):
                 rec.acked = True
                 progress = True
+                newly.add(s)
                 self.top_acked_mode = max(self.top_acked_mode or 0, rec.mode)
                 self.stats.bytes_acked += len(rec.body)
         while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
@@ -2857,6 +2936,25 @@ class GrantedEngine:
         if recommendation:
             self._recommended = max(0, min(self._cap(), ctl.rung))
             self._peer_rung = ctl.rung
+            if self._sender is not None and self._sent_copies:
+                self._judge_copies(newly)
+
+    def _judge_copies(self, newly: set[int]) -> None:
+        """C1-S: what an acknowledgement says of the copies sent since the last one — a block
+        it acknowledges for the first time was delivered by one of them, every other copy was
+        air spent for nothing (lost, never detected, or of a block already delivered whose
+        acknowledgement was lost)."""
+        assert self._sender is not None
+        credited: set[int] = set()
+        outcomes = []
+        for seq, mode, air in reversed(self._sent_copies):
+            ok = seq in newly and seq not in credited
+            if ok:
+                credited.add(seq)
+            capacity = data_capacity(self.timing.capacity(mode))
+            outcomes.append(FrameOutcome(mode, air, capacity, True, ok, False, None))
+        self._sent_copies = []
+        self._sender.observe_frames(outcomes[::-1], self.peer_snr_db)
 
     # ── receiving data ────────────────────────────────────────────────
 
@@ -3099,6 +3197,9 @@ class GrantedEngine:
         snrs = [r.frame.snr_db for r in records if r.payload is not None or r.frame.trusted]
         snr = sum(snrs) / len(snrs) if snrs else None
         modes = [r.frame.mode for r in records]
+        if isinstance(self.rate, (DeliveryController, OuterLoopController)):
+            self.rate.observe_frames(self._outcomes(records), snr)
+            return snr
         if not modes:
             return snr
         if failed and self._asked is not None and min(modes) > self._asked:
@@ -3108,6 +3209,73 @@ class GrantedEngine:
             # takes the same one)
             self.rate.observe(snr, ok, failed, max(sorted(set(modes)), key=modes.count))
         return snr
+
+    def _outcomes(self, records: list[_RxRecord]) -> list[FrameOutcome]:
+        """What each data frame of the transmission being closed came to, for a prototype of
+        the rate controller's review — the frames its header (or a count this station can
+        believe) stated and nothing reported included, at the rung most of the transmission
+        went at: a frame never heard is air spent for nothing."""
+        out = []
+        for r in records:
+            if r.payload is None and not r.frame.trusted:
+                continue  # a frame neither decoded nor trusted is no frame of the path
+            rung = r.frame.mode
+            capacity = data_capacity(self.timing.capacity(rung)) if self.timing.data_capacity else 0
+            out.append(
+                FrameOutcome(
+                    mode=rung,
+                    air_s=max(0.0, r.frame.t_end - r.frame.t_start),
+                    capacity=capacity,
+                    detected=True,
+                    decoded=r.payload is not None,
+                    combined=r.combined,
+                    snr_db=r.frame.snr_db,
+                    measure=self._rx_measure,
+                )
+            )
+        slots = {r.slot for r in records}
+        stated = None
+        floor = None
+        if self._grid is not None:
+            _, stated, floor = self._grid
+        else:
+            believed = [
+                r.slot + 1 + r.frame.follows
+                for r in records
+                if r.payload is not None
+                and not r.combined
+                and r.frame.follows is not None
+                and r.frame.follows < MAX_FOLLOWS
+            ]
+            if believed:
+                stated = max(believed)
+        if stated:
+            heard = [r.frame.mode for r in records if r.payload is not None or r.frame.trusted]
+            mode: int | None
+            if heard:
+                mode = max(sorted(set(heard)), key=heard.count)
+            elif self._last_rx_mode is not None and (
+                floor is None or self.timing.is_floor(self._last_rx_mode) == floor
+            ):
+                mode = self._last_rx_mode
+            else:
+                mode = None
+            if mode is not None:
+                capacity = (
+                    data_capacity(self.timing.capacity(mode)) if self.timing.data_capacity else 0
+                )
+                air = self._frame_s(self.timing.is_floor(mode))
+                for k in range(stated):
+                    if k not in slots:
+                        out.append(
+                            FrameOutcome(
+                                mode, air, capacity, False, False, False, None, self._rx_measure
+                            )
+                        )
+        decoded = [o.mode for o in out if o.decoded]
+        if decoded:
+            self._last_rx_mode = decoded[-1]
+        return out
 
     def _receive_window(self) -> tuple[int, list[int], int]:
         bitmap = 0

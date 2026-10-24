@@ -901,12 +901,18 @@ def timing_of(air: AirInterface) -> PhyTiming:
     return phy_timing(NARROW_500 if air.params.bandwidth is NARROW.params.bandwidth else WIDE_2300)
 
 
-def controller_for(air: AirInterface, rate: dict[str, Any] | None = None) -> RateController:
+def controller_for(
+    air: AirInterface, rate: dict[str, Any] | None = None, controller: str = "current"
+) -> RateController:
     """The controller the engine builds for an air: the engine's own, so that whatever the
     tree's engine hands it (the thresholds, the usable rungs, the floor, its echo limits, a cap
     it once had) is what the replay runs — ``rate`` the daemon's ``[link] rate`` overrides,
-    none by default."""
-    engine = GrantedEngine("TOOL", timing_of(air), GrantConfig(rate=dict(rate or {})))
+    none by default; ``controller`` a prototype of the rate controller's review (Gate 3), which
+    only this tree's engine has."""
+    cfg = GrantConfig(rate=dict(rate or {}))
+    if controller != "current":
+        cfg.controller = controller  # type: ignore[attr-defined]
+    engine = GrantedEngine("TOOL", timing_of(air), cfg)
     return engine.rate
 
 
@@ -1117,6 +1123,49 @@ def observation(frames: list[Frame], blocks: dict[int, Block]) -> Observation:
     )
 
 
+def outcomes_of(
+    frames: list[Frame], blocks: dict[int, Block], air: AirInterface, header_read: bool | None
+) -> list[Any]:
+    """What a transmission's data frames came to, as the engine hands a prototype of the
+    review (``granted._outcomes``): every frame decoded or trusted, at the rung read off its
+    chips, and — when the station read the header, or decoded a frame of the transmission and
+    could believe its count — every frame sent and never detected, at its rung."""
+    from aether_model.link.rate_review import FrameOutcome
+
+    timing = timing_of(air)
+    out = []
+    counted = header_read is True or any(f.decoded for f in frames)
+    for f in frames:
+        capacity = data_capacity(timing.capacity(f.rung))
+        if not f.detected:
+            if counted:
+                out.append(FrameOutcome(f.rung, f.seconds, capacity, False, False, False, None))
+            continue
+        heard = f.heard or {}
+        delivered_here = bool(heard.get("rescued")) or (
+            f.seq is not None
+            and not f.measure
+            and blocks[f.seq].delivered_by is f
+            and not f.decoded
+        )
+        if not (f.decoded or delivered_here or f.trusted):
+            continue
+        rung = f.heard_rung if f.heard_rung is not None else f.rung
+        out.append(
+            FrameOutcome(
+                rung,
+                f.seconds,
+                data_capacity(timing.capacity(rung)),
+                True,
+                f.decoded or delivered_here,
+                f.combined,
+                f.snr,
+                f.measure,
+            )
+        )
+    return out
+
+
 def _seed(ctl: RateController, receiver: two_sides.Side) -> None:
     """The connect frame the station seeded from: the last data frame it decoded before its
     role began (a slave's is the call, the master's the acceptance), read for its echo first."""
@@ -1202,12 +1251,13 @@ def replay_slave(
     master_txs: list[Transmission],
     blocks: dict[int, Block],
     rx_offset: two_sides.Offset = 0.0,
+    controller: str = "current",
 ) -> list[Step]:
     """The current controller on what the slave recorded of the master's transmissions, against
     the recommendation each of its answers carried as the master decoded it. The slave observes
     a transmission when it answers it (or forfeits it): when it read the header or decoded a
     data frame of it; the frames of one it could not place are nothing to it."""
-    ctl = controller_for(slave.air)
+    ctl = controller_for(slave.air, controller=controller)
     _seed(ctl, slave)
     asked: int | None = None
     steps = []
@@ -1230,7 +1280,10 @@ def replay_slave(
             frames = [*strays_before(strays, master_txs, i), *frames]
         obs = observation(frames, blocks)
         if frames:
-            _feed(ctl, obs, asked)
+            if hasattr(ctl, "observe_frames"):
+                ctl.observe_frames(outcomes_of(frames, blocks, slave.air, tx.header_read), obs.snr)
+            else:
+                _feed(ctl, obs, asked)
         rec = ctl.recommend()
         if tx.ack is not None:
             asked = rec if asked is None else max(asked, rec)
@@ -1257,12 +1310,13 @@ def replay_master(
     master_txs: list[Transmission],
     slave_txs: list[Transmission],
     blocks: dict[int, Block],
+    controller: str = "current",
 ) -> list[Step]:
     """The current controller on what the master recorded of the slave's answers, against the
     recommendation each of its headers carried as the slave decoded it. The master observes the
     slave's data when it closes the slot; a slot heard silent twice in a row, with frames
     granted, counts as a failure (``granted._close_slot``). ``blocks`` are the slave's data's."""
-    ctl = controller_for(master.air)
+    ctl = controller_for(master.air, controller=controller)
     _seed(ctl, master)
     asked: int | None = None
     silent = 0
@@ -1299,7 +1353,13 @@ def replay_master(
         for s in in_slot:
             _echoes(ctl, s)
             if s.data and s.heard_any:
-                _feed(ctl, observation(s.data, blocks), asked)
+                obs = observation(s.data, blocks)
+                if hasattr(ctl, "observe_frames"):
+                    ctl.observe_frames(
+                        outcomes_of(s.data, blocks, master.air, s.header_read), obs.snr
+                    )
+                else:
+                    _feed(ctl, obs, asked)
         if heard:
             silent = 0
         else:
@@ -1367,7 +1427,12 @@ def records_engine(side: two_sides.Side) -> bool:
     )
 
 
-def read_session(master_path: Path, slave_path: Path, replay_controller: bool = False) -> Reading:
+def read_session(
+    master_path: Path,
+    slave_path: Path,
+    replay_controller: bool = False,
+    controller: str = "current",
+) -> Reading:
     master, slave = load_side(master_path), load_side(slave_path)
     if role_of(master.doc) == "slave" or role_of(slave.doc) == "master":
         master, slave = slave, master
@@ -1405,9 +1470,9 @@ def read_session(master_path: Path, slave_path: Path, replay_controller: bool = 
         )
         if replay_controller:
             d.steps = (
-                replay_slave(slave, down, down_blocks, offset)
+                replay_slave(slave, down, down_blocks, offset, controller)
                 if role == "master"
-                else replay_master(master, down, up, up_blocks)
+                else replay_master(master, down, up, up_blocks, controller)
             )
         directions.append(d)
     return Reading(
