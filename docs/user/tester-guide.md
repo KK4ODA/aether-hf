@@ -116,7 +116,8 @@ Pat's configuration, with Aether keying the radio.
   each way, the speed and the rung (how fast the link is running — it starts low and climbs);
   the **Stations** tab lists every station heard and every session.
 * **A probe** (Session tab, *Probe*) is a one-frame check: it tells you how the other station
-  hears you, and how you hear it, without starting a session. Try one before calling.
+  hears you, and how you hear it, without starting a session. Try one before calling. A Test
+  started within a minute of an answered probe uses it and does not probe again.
 * **A Test session** (Session tab, *Test session*) runs a fixed sequence against a listening
   Aether station — a probe, a call, a message, a file, then a climb up the rungs from just under
   the fastest the transfers reached — and records it. It is the single most useful thing you can

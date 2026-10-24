@@ -309,8 +309,10 @@ The line under the buttons reports the last probe, the beacon timer, or the Test
 A Test turns a contact into a measurement the project can use. With the other callsign in Call,
 press **Test session**. It runs:
 
-1. a probe;
-2. a call;
+1. a probe. If you probed the same station on the same dial in the last minute and were
+   answered, that probe counts and no new one is sent;
+2. a call. If the probe found the other station at 500 Hz and you run 2300 Hz, the call and
+   the whole Test go at 500 Hz, and your station goes back after;
 3. a message, sized to how well the probe says you are heard;
 4. a file, sized to about two minutes at the message's rate (at least 256 bytes);
 5. a **ladder**: a short measurement at each rung the link uses, starting one rung under the
@@ -326,7 +328,8 @@ lost is logged with no SNR (*at ? dB*). After the last rung the Test disconnects
 It takes about five minutes and stops itself at ten. The other station only has to be listening.
 If you wait for a clear channel, the probe and the call wait too, and the wait does not count
 against them. It counts against the ten minutes: a channel that never clears ends the Test.
-Both stations must run the same bandwidth and protocol version. The result is recorded as two
+The two stations may run different bandwidths: the Test then runs at 500 Hz, as a call
+would. They must run versions with the same protocol. The result is recorded as two
 files ending in `_test`: a `.json` report and the `.wav` audio. See
 [Field testing](field-test.md) and the [tester's guide](tester-guide.md).
 

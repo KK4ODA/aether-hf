@@ -139,7 +139,9 @@ frames it heard are the channel); keep both anyway.
 
 The one-button version of §3, for volunteers. Put the other station's callsign in
 **Call** on the Session tab and press **Test session**. The modem then runs, and records,
-a fixed sequence: a probe (both directions' SNR), a call, a message (512 B to 2 kB, sized
+a fixed sequence: a probe (both directions' SNR; one you sent the same station on the same dial
+in the last minute counts, if it was answered, and no new one goes), a call (at 500 Hz when the
+probe found the other station there and yours runs 2300 Hz), a message (512 B to 2 kB, sized
 to how well the probe says you are heard, and sent in the session's first burst when the probe
 was answered), a file sized to about two minutes at the message's rate (at least 256 B), then the
 **mode ladder** — a short measurement at every mode the link uses, from a rung under the

@@ -523,7 +523,48 @@ const PROBE_TIMEOUT_S: f64 = 30.0;
 const CONNECT_TIMEOUT_S: f64 = 120.0;
 const DISCONNECT_TIMEOUT_S: f64 = 90.0;
 
+/// A probe of this station's that was answered, and where it was sent from: what a Test that
+/// starts soon after takes for its own ([`Station::fresh_probe`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeHeard {
+    remote: String,
+    at_s: f64,
+    dial_hz: Option<u64>,
+    bandwidth_hz: usize,
+}
+
 impl<P: Ptt> Station<P> {
+    /// Remember that the probe just answered was: its station, when, and the dial and air it
+    /// went out on.
+    pub(super) fn note_probe_heard(&mut self) {
+        if let Some(probe) = self.engine.last_probe() {
+            self.probe_heard = Some(ProbeHeard {
+                remote: probe.remote.clone(),
+                at_s: self.now(),
+                dial_hz: self.frequency.value,
+                bandwidth_hz: self.bandwidth_hz(),
+            });
+        }
+    }
+
+    /// How long ago a probe to `remote`, from this dial and on this air, was answered, if it
+    /// was within [`super::gaps::PROBE_AGAIN_S`] and its answer is still the engine's last: a
+    /// second probe within that minute is what the other station takes for its answer lost
+    /// (ADR-0054). ND1J probed KK4ODA-1 by hand, heard the answer and started a Test whose own
+    /// probe raised his answer gap there to 900 ms, and every slot of his next two Tests opened
+    /// half a second late (report 17 §7).
+    fn fresh_probe(&self, remote: &str, now: f64) -> Option<f64> {
+        let heard = self.probe_heard.as_ref()?;
+        let age = now - heard.at_s;
+        let same = |call: &str| call.trim().eq_ignore_ascii_case(remote.trim());
+        (same(&heard.remote)
+            && self.engine.last_probe().is_some_and(|p| same(&p.remote))
+            && (0.0..=super::gaps::PROBE_AGAIN_S).contains(&age)
+            && heard.dial_hz == self.frequency.value
+            && heard.bandwidth_hz == self.bandwidth_hz())
+        .then_some(age)
+    }
+
     /// Begin a Test session with another station. Refused on an answer-only station,
     /// during a session or a probe, and while a Test session is running.
     ///
@@ -721,15 +762,25 @@ impl<P: Ptt> Station<P> {
         match run.step {
             Step::Probe => {
                 if !run.entered {
-                    match self
-                        .engine
-                        .probe(&run.plan.remote, run.plan.as_call.as_deref())
-                    {
-                        Ok(()) => {
-                            self.pump();
-                            run.entered = true;
+                    // a probe answered within the minute is the Test's probe: the engine's last
+                    // result is the one read below, as a probe sent now would leave it
+                    if let Some(age) = self.fresh_probe(&run.plan.remote, now) {
+                        run.adjustments
+                            .push(format!("probe: the one answered {age:.0} s before"));
+                        run.entered = true;
+                    } else {
+                        match self
+                            .engine
+                            .probe(&run.plan.remote, run.plan.as_call.as_deref())
+                        {
+                            Ok(()) => {
+                                self.pump();
+                                run.entered = true;
+                            }
+                            Err(reason) => {
+                                self.finish_test(run, &format!("aborted: {reason}"));
+                            }
                         }
-                        Err(reason) => self.finish_test(run, &format!("aborted: {reason}")),
                     }
                 } else if run.remaining_s(now) <= 0.0 {
                     // the step's clock stops while the channel is busy, the run's does not
@@ -1543,5 +1594,126 @@ mod tests {
             run.step
         );
         assert!(run.outcome.is_none(), "{:?}", run.outcome);
+    }
+
+    /// A 2 300 Hz station running a Test, with the station on the other end at 500 Hz.
+    fn wide_tester_and_narrow_station() -> Air {
+        use crate::station::StationConfig;
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                params: aether_phy::waveform::WIDE_2300,
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            crate::ptt::NullPtt::default(),
+            1,
+        );
+        air
+    }
+
+    #[test]
+    fn a_test_calls_at_500_hz_a_station_its_probe_found_there() {
+        // WC4Y's Test of 2026-10-24 probed KK4ODA-1, learned "runs 500 Hz", and called at
+        // 2 300 Hz anyway — the move ADR-0035 makes before a call was refused because a Test
+        // was running — until ADR-0058 moved it after four unanswered tries (report 17 §5)
+        let mut air = wide_tester_and_narrow_station();
+        let plan = TestPlan {
+            remote: "KK4XYZ".to_owned(),
+            message_bytes: 300,
+            file_bytes: 300,
+            rung_frames: 1,
+            ..TestPlan::default()
+        };
+        air.a.start_test(plan).expect("idle");
+        let mut first_try = None;
+        air.run(200.0, |a, _| {
+            if a.state() == State::Connecting && first_try.is_none() {
+                first_try = Some((a.bandwidth_hz(), a.known_bandwidth("KK4XYZ")));
+            }
+            a.connected()
+        });
+        assert_eq!(
+            first_try,
+            Some((500, Some(500))),
+            "{:?}",
+            air.a.take_events()
+        );
+        assert!(air.a.connected() && air.b.connected());
+        assert_eq!(air.a.bandwidth_status()["why"], "calling");
+        assert!(
+            air.a.engine().connect_tries() < crate::station::bandwidth::NARROW_AFTER_TRIES,
+            "{} tries",
+            air.a.engine().connect_tries()
+        );
+    }
+
+    fn short_test(remote: &str) -> TestPlan {
+        TestPlan {
+            remote: remote.to_owned(),
+            message_bytes: 300,
+            file_bytes: 300,
+            rung_frames: 1,
+            ..TestPlan::default()
+        }
+    }
+
+    #[test]
+    fn a_test_takes_a_probe_answered_within_the_minute_for_its_own() {
+        // ND1J probed KK4ODA-1 by hand, heard the answer, then started a Test; its own probe
+        // was the second within the minute, which KK4ODA-1 read as its answer lost (ADR-0054)
+        // and raised his answer gap to 900 ms (report 17 §7)
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(60.0, |a, _| a.engine().last_probe().is_some());
+        let heard = air.a.engine().last_probe().expect("answered").clone();
+        air.run(10.0, |_, _| false);
+        air.a.start_test(short_test("kk4xyz")).expect("idle");
+        air.run(200.0, |a, _| a.connected());
+        assert!(air.a.connected(), "{:?}", air.a.take_events());
+        assert_eq!(air.a.engine().stats.probes_sent, 1, "the Test probed again");
+        assert_eq!(air.b.engine().stats.probes_answered, 1);
+        let status = &air.a.test_status()["results"];
+        let here = status["probe"]["heard_here_db"]
+            .as_f64()
+            .expect("the probe's reading");
+        assert!((here - heard.heard_here_db).abs() < 0.1, "{status}");
+        assert!(
+            status["adjustments"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x
+                    .as_str()
+                    .is_some_and(|x| x.starts_with("probe: the one answered")))),
+            "{status}"
+        );
+    }
+
+    #[test]
+    fn a_test_probes_again_after_the_minute_or_on_another_dial() {
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(60.0, |a, _| a.engine().last_probe().is_some());
+        let answered = air.a.now();
+        air.run(super::super::gaps::PROBE_AGAIN_S + 5.0, |_, _| false);
+        assert!(air.a.now() - answered > super::super::gaps::PROBE_AGAIN_S);
+        assert_eq!(air.a.fresh_probe("KK4XYZ", air.a.now()), None);
+        // within the minute, but from another dial: the probe measured another path
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(60.0, |a, _| {
+            !a.engine().probing() && a.engine().last_probe().is_some()
+        });
+        let now = air.a.now();
+        assert!(air.a.fresh_probe("KK4XYZ", now).is_some());
+        assert_eq!(air.a.fresh_probe("N0CALL", now), None);
+        air.a.read_dial(7_082_000, now);
+        assert_eq!(air.a.fresh_probe("KK4XYZ", now), None);
+        // and a Test then sends its own
+        air.a.start_test(short_test("KK4XYZ")).expect("idle");
+        air.run(200.0, |a, _| a.connected());
+        assert_eq!(air.a.engine().stats.probes_sent, 3);
     }
 }

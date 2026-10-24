@@ -40,6 +40,9 @@ pub const MOST_S: f64 = 2.0;
 pub const EASE_S: f64 = 0.025;
 /// How long after a probe was answered a second probe from the same station says the answer
 /// was lost: a Test probes once, and an operator probing again is asking why there was none.
+/// A Test started within it from this version takes the answered probe for its own and sends
+/// none; one from an earlier version probes again, and is read as the answer lost (ND1J's
+/// Tests of 2026-10-23 and 10-24, report 17 §7).
 pub const PROBE_AGAIN_S: f64 = 60.0;
 /// How long after an acceptance a second call from the same station says it was lost: a
 /// caller tries again within a few of its frames, and later is a new call.

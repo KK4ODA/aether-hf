@@ -1138,6 +1138,9 @@ pub struct Station<P: Ptt> {
     record_notes: Option<String>,
     /// The Test session running, or the last one run (P6-7).
     test: Option<TestRun>,
+    /// The last probe of this station's that was answered, and where from: a Test reuses it
+    /// rather than probing again within the minute (`fieldtest::Station::fresh_probe`).
+    probe_heard: Option<fieldtest::ProbeHeard>,
     /// A Test session is taking its next step: the run is out of `test` meanwhile, and what
     /// it does — ending its session on a crawling transfer — must still see it running, or the
     /// session's end closed the recording before the run wrote its report into the sidecar.
@@ -1349,6 +1352,7 @@ impl<P: Ptt> Station<P> {
             record_notes: None,
             test: None,
             test_stepping: false,
+            probe_heard: None,
             pending_callsigns: None,
             delivered: Vec::new(),
             events: Vec::new(),
@@ -4166,6 +4170,9 @@ impl<P: Ptt> Station<P> {
                         self.session_ended(&detail);
                     }
                     self.note(name, &detail);
+                    if name == "probe" && self.engine.last_probe().is_some() {
+                        self.note_probe_heard();
+                    }
                     // a session is the unit of a field recording: one file per session,
                     // started when it comes up and closed when it ends — unless a Test
                     // session is recording itself, probe to disconnect

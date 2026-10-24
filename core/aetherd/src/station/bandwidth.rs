@@ -377,11 +377,18 @@ impl<P: Ptt> Station<P> {
     /// Before a call: a 2 300 Hz station calling one it knows runs 500 Hz moves to 500 Hz, so
     /// the call is one the other answers whatever its version (ADR-0035). The move back is a
     /// call's: after the session, or the call's end, and a quiet spell.
+    ///
+    /// A Test's own call moves too. Its probe has just learned the other's bandwidth, and
+    /// between the probe and the call nothing is on the air; refusing because a Test runs,
+    /// as every other move does, sent WC4Y's Test of 2026-10-24 calling at 2 300 Hz a station
+    /// its probe had found at 500 Hz, three tries ignored (report 17 §5).
     pub(super) fn move_for_call(&mut self, remote: &str) {
-        if self.bandwidth_hz() == 2300
-            && self.known_bandwidth(remote) == Some(500)
-            && self.movable().is_ok()
-        {
+        let may = if self.test_stepping {
+            self.movable_but_for_a_test()
+        } else {
+            self.movable()
+        };
+        if self.bandwidth_hz() == 2300 && self.known_bandwidth(remote) == Some(500) && may.is_ok() {
             self.move_to(500, Why::Calling(remote.trim().to_ascii_uppercase()));
         }
     }
@@ -617,6 +624,12 @@ impl<P: Ptt> Station<P> {
         if self.test_running() {
             return Err("a Test session is running".into());
         }
+        self.movable_but_for_a_test()
+    }
+
+    /// [`Self::movable`] without the Test: what the Test itself asks before the move its own
+    /// call makes ([`Self::move_for_call`]).
+    fn movable_but_for_a_test(&self) -> Result<(), String> {
         if self.engine.probing() {
             return Err("a probe is out".into());
         }
