@@ -637,3 +637,52 @@ sat at a local best. *The polar path's draw 1*: OFDM does not carry there; in §
 the floor's top (rung 5) for the whole message (198 bit/s), here its tries of rung 7 came sooner,
 one was judged a gain, the transmissions after it went unanswered and the step for silence put it
 on rung 3 (143 bit/s). How often to try OFDM from the floor is a trade between these two paths.
+
+### 3.18 Six draws (2026-10-24)
+
+The author chose to measure before changing anything else: draws 3–5 (seeds +3000…+5000) of the
+24 scenarios for §3.17's form and for the current controller (master `144a384`, its default),
+judged over six draws against the current. K1(a) stays on draws 0–2 (it needs the fixed rungs'
+runs of every draw, some twelve hours more).
+
+| scenario | current, 6 draws | C1 at the sender, 6 draws | ratio of medians |
+|---|---|---|---|
+| `quick-awgn-2300` | 1263 ×6 | 2182 / 2182 / 2182 / 2000 / 2182 / 2182 | 1.73 |
+| `40m-good-throughput-2300` | 2327 / 2286 / 2133 / 2207 / 2000 / 2510 | 1542 / 2723 / 2169 / 2133 / 2169 / 2370 | 0.97 |
+| `80m-strong-moderate-500` | 151 / 260 / 244 / 270 / 315 / 232 | 192 / 237 / 348 / 168 / 321 / 235 | 0.94 |
+| `20m-dx-500` | 146 / 151 / 144 / 175 / 136 / 150 | 209 / 170 / 108 / 185 / 181 / 152 | 1.19 |
+| `20m-dx-moderate-2300` | 632 / 1000 / 600 / 600 / 706 / 750 | 800 / 706 / 800 / 800 / 923 / 857 | 1.20 |
+| `80m-qsb-dropout-500` | 146 / 158 / 142 / 167 / 185 / 143 | 167 / 177 / 169 / 169 / 205 / 152 | 1.11 |
+| `80m-weak-500` | 70 / 67 / 65 / 56 / 62 / 67 | 70 / 77 / 82 / 74 / 86 / 77 | 1.17 |
+| `80m-flutter-500` | 129 / 120 / 127 / 152 / 115 / 130 | 128 / 162 / 150 / 105 / 151 / 130 | 1.09 |
+| `15m-equatorial-flutter-2300` | 387 / 211 / 211 / 211 / 200 / 235 | 500 / 211 / 211 / 211 / 200 / 364 | 1.00 |
+| `80m-nvis-evening-500` | 41 / 25 / 26 / 49 / 52 / 34 | 39 / 23 / 44 / 52 / 46 / 39 | 1.10 |
+| `80m-thunderstorm-agc-2300` | 591 / 535 / 616 / 466 / 516 / 526 | 505 / 622 / 617 / 708 / 735 / 720 | 1.25 |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 / 66 / 70 / 91 | 78 / 74 / 76 / 70 / 60 / 91 | 1.00 |
+| `20m-polar-path-2300` | 198 / 198 / 172 / 186 / 198 / 198 | 160 / 143 / 172 / 186 / 198 / 198 | 0.90 |
+| `80m-weak-wide-test-2300` | 167 / 168 / 175 / 171 / 176 / 168 | 175 / 175 / 175 / 164 / 176 / 175 | 1.03 |
+| `40m-good-2300-rtty-crashes` | 425 / 442 / 496 / 427 / 455 / 674 | 484 / 601 / 662 / 684 / 191 / 478 | 1.21 |
+| `80m-poor-500-pactor-signalink` | 66 / 74 / 72 / 68 / 89 / 75 | 71 / 86 / 73 / 80 / 86 / 76 | 1.07 |
+| `80m-nvis-disturbed-500` | 38 / 44 / 36 / 42 / 43 / 34 | 40 / 44 / 30 / 30 / 39 / 24 | 0.86 |
+| `40m-moderate-2300-vara-qrm` | 842 / 390 / 667 / 780 / 640 / 627 | 1103 / 593 / 711 / 842 / 711 / 604 | 1.09 |
+| `80m-lopsided-acks-500` | 77 / 76 / 83 / 87 / 104 / 58 | 103 / 82 / 106 / 102 / 106 / 97 | 1.28 |
+| `80m-slow-machine-500` | 119 / 91 / 106 / 99 / 88 / 69 | 93 / 103 / 76 / 70 / 118 / 80 | 0.91 |
+| `80m-floor-top-start-500` | 93 / 93 / 104 / 87 / 99 / 87 | 98 / 95 / 98 / 93 / 99 / 77 | 1.04 |
+
+(The current's draws of WC4Y's path 0–2 are the K2 run's.)
+
+* **K1(b) passes over six draws**: no scenario under 0.85 — the lowest `80m-nvis-disturbed-500`
+  0.86, `20m-polar-path-2300` 0.90 and `80m-slow-machine-500` 0.91; fourteen of 21 over 1. Over
+  three draws the polar path had read 0.81 and the slow machine 0.76–0.87: three draws were too
+  few to judge a scenario by.
+* **K3** over six draws: C1 at the sender 6, 1, 2, 4, 1, 1 apart; the current 2, 1, 2, 2, 2, 0.
+  Both fail; the current's would not have passed either.
+* **Completion**: 143 of 144 against 144. The one, `15m-equatorial-flutter-2300` draw 4: the
+  called station's 300-byte reply never went. **A defect**: the master sizes a slave's slot in
+  frames of the rung *it* recommends; C1 at the slave had chosen a floor rung of its own and asked
+  for frames of it, was granted as many OFDM frames' air, which no 5.36 s floor frame fits, and
+  sent nothing in any slot for 600 s (the current controller's slave sent the reply at rungs 7–8).
+  The answer's `data_floor` bit, with no data after it, already tells the master the slave's data
+  can go only on the floor; C1's own floor choice now sets it too (`91e6144`, no wire change; a
+  model test reproduces the deadlock and fails without the change; the review's vectors change and
+  the port without the clause fails them). That form on all six draws is running.
