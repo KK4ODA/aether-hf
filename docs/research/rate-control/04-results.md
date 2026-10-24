@@ -25,9 +25,12 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   each a near miss; ranked per exchange (§3.11, §3.12), K1(a) passes, `80m-slow-machine-500`
   fails K1(b) and one run fails to complete; without its step down for silence it is worse
   (§3.13, reverted). Where it stands: §3.14.
-* **Where it stands**: §3.19 — C1 at the sender with every fix of §3.10–§3.18, over six draws:
-  every run complete, K1(b) and K7 pass, K1(a), K3 and WC4Y's file rate near misses.
-* **Next**: the author's decision on §3.19's near misses, case by case; then K2 and K5.
+* **Where it stands**: §3.19's form — C1 at the sender with every fix of §3.10–§3.18 — over
+  six draws completes every run and passes K1(b) and K7, but **fails K1(a) clearly** (+26.80 %
+  against +19.41 %, §3.20); K3 and WC4Y's file rate are near misses. The fix of K3's dip (§3.21,
+  §3.22) costs three floor-top paths 14–29 % and does not pass K3.
+* **Next**: the author's calls — whether to take the dip fix out, and what to do about K1(a),
+  whose gap is the climb on strong paths (§3.20); then K2 and K5.
 
 ## 1. What the engine hands a prototype
 
@@ -331,6 +334,10 @@ delivery is under 85 % of the current controller's (K1(b)).
 | … and a try across the edge takes the transmission (§3.16) | +23.46 % | 1 (slow machine 0.77) | 2, 1, 2 | 0 (72 runs) |
 | … and the wait between tries in air at the rung tried (§3.17) | +24.41 % | 1 (polar path 0.81; slow machine 0.87) | 6, 1, 2 | 0 (72 runs) |
 | … and a slave on its own floor rung asks for floor slots (§3.19) | +23.76 % | 1 over 3 draws (polar path 0.81); **none over 6** | 2, 1, 1, 0, 1, 1 (6 draws) | **0** (144 runs) |
+| the same, K1(a) over six draws (§3.20) | **+26.80 %** against +19.41 % | none | — | — |
+| … and the try past the dip (§3.21, `2db2fb8`) | +40.25 % (6 draws) | 3 (weak wide Test 0.23, weak both ways 0.52, polar path 0.82); WC4Y's path 0.31 | 0, 1, 2, 3, 1, 1 | 1 (the AGC carrier, draw 0) |
+| … and the try waits for data to cut (§3.21, `ca7587c`) | +30.18 % (6 draws) | 3 (weak wide Test 0.53, weak both ways 0.74, polar path 0.82); WC4Y's path 0.49 | 0, 1, 2, 1, 1, 2 | 0 (144 runs) |
+| … and a failed try holds the family back (§3.22, `55e5139`; 6 scenarios and the start pair, 3 draws) | — | 2 of 4 run (polar path 0.76, weak both ways 0.79); WC4Y's path 0.71 | 3, 0, 2 | 0 (24 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -708,3 +715,116 @@ Changed from §3.18 by the slave's fix: the slow machine 0.91 → 1.13, `40m-goo
 near misses are the author's, case by case. K1(a) is the median of twenty scenarios' medians over
 three draws; on draws alone the current controller's own reads +36 … +50 % (`03-candidates.md`
 §5.1).
+
+### 3.20 K1(a) over six draws (2026-10-24)
+
+The author's call on §3.19's K1(a) near miss: measure draws 3–5 too. The fixed rungs ran on draws
+3–5 (366 runs, the rungs of draws 0–2 and the current's own), so K1(a) is judged as registered —
+the median over the twenty scenarios of each scenario's median regret — over six draws. The line
+is half the current controller's own: **+38.81 %** over six draws, so **+19.41 %**.
+
+| scenario | best fixed rung by draw | the current's regret | §3.19's form | ratio of medians |
+|---|---|---|---|---|
+| `quick-awgn-2300` | 16 / 16 / 16 / 16 / 16 / 18 | +73 % | +0 % | 1.73 |
+| `40m-good-throughput-2300` | 19 / 17 / 17 / 18 / 18 / 18 | +25 % | +34 % | 0.97 |
+| `80m-strong-moderate-500` | 13 / 13 / 13 / 14 / 13 / 14 | +35 % | +56 % | 0.94 |
+| `20m-dx-500` | 11 / 11 / 10 / 11 / 13 / 11 | +45 % | +30 % | 1.19 |
+| `20m-dx-moderate-2300` | 14 / 11 / 14 / 11 / 15 / 14 | +44 % | +20 % | 1.20 |
+| `80m-qsb-dropout-500` | 11 / 13 / 11 / 10 / 10 / 13 | +35 % | +17 % | 1.11 |
+| `80m-weak-500` | 3 ×6 | +27 % | +0 % | 1.17 |
+| `80m-flutter-500` | 9 / 9 / 7 / 9 / 10 / 9 | +26 % | +32 % | 0.97 |
+| `15m-equatorial-flutter-2300` | 14 / 14 / 14 / 14 / 11 / 14 | +255 % | +255 % | 1.00 |
+| `80m-nvis-evening-500` | 1 / 1 / 2 / 2 / 2 / 1 | +7 % | −5 % | 1.15 |
+| `80m-thunderstorm-agc-2300` | 14 / 15 / 14 / 14 / 14 / 14 | +76 % | +46 % | 1.24 |
+| `80m-weak-both-ways-ladder-500` | 4 / 4 / 4 / 4 / 3 / 4 | −3 % | +4 % | 0.98 |
+| `20m-polar-path-2300` | 9 ×6 | +43 % | +60 % | 0.90 |
+| `80m-weak-wide-test-2300` | 5 ×6 | +4 % | +0 % | 1.03 |
+| `40m-good-2300-rtty-crashes` | 14 / 16 / 14 / 14 / 14 / 16 | +62 % | +22 % | 1.38 |
+| `80m-poor-500-pactor-signalink` | 9 / 4 / 4 / 4 / 4 / 4 | +55 % | +40 % | 1.07 |
+| `80m-nvis-disturbed-500` | 2 / 2 / 2 / 2 / 1 / 2 | +4 % | +23 % | 0.86 |
+| `40m-moderate-2300-vara-qrm` | 14 / 15 / 14 / 14 / 14 / 14 | +59 % | +45 % | 1.09 |
+| `80m-lopsided-acks-500` | 4 / 9 / 4 / 4 / 4 / 4 | +25 % | +0 % | 1.31 |
+| `80m-slow-machine-500` | 7 / 11 / 11 / 9 / 11 / 9 | +49 % | +51 % | 1.13 |
+
+**K1(a) fails over six draws: +26.80 % against a line of +19.41 %**, 7.4 points — not a near miss.
+On draws 0–2 alone the same form had read +23.76 % against +22.62 %: the three new draws moved the
+current controller's own regret more (+45.2 → +38.8 %) than the candidate's. Where the candidate
+is furthest behind the best fixed rung is a climb on a strong path: `80m-strong-moderate-500`
+(+56 %, settles at rungs 10–12 where 13–14 carry most), `20m-polar-path-2300` (+60 %),
+`40m-good-throughput-2300` (+34 %), `80m-slow-machine-500` (+51 %), and `80m-nvis-disturbed-500`
+(+23 % against the current's +4 %). In eight draws of five scenarios the best fixed rung is the
+highest the oracle ran (`quick-awgn-2300` draw 5 at 18, `20m-dx-500` draw 4 at 13,
+`80m-qsb-dropout-500` draws 1 and 5 at 13, `40m-good-2300-rtty-crashes` draws 1 and 5 at 16,
+`80m-strong-moderate-500` draws 3 and 5 at the ladder's top, 14), so those regrets are a lower
+bound for both controllers.
+
+### 3.21 The try past the dip, and what it broke (2026-10-24)
+
+The author's call on §3.19's K3 near miss: fix the dip. From the floor's top a try now goes to the
+rung of the OFDM family the reading rates best, not to the first OFDM rung (`_try_target`,
+`_try_reach`; a try under way goes on while its rung is in reach; `2db2fb8`, model, port, tests
+and the review's vectors). That form (v10) on the 24 scenarios × six draws:
+
+* **One run did not complete** (`80m-agc-carrier-outside-500` draw 0, the message not delivered
+  in 300 s of air) and three scenarios fell far under the current: `80m-weak-wide-test-2300` 0.23,
+  WC4Y's `80m-floor-top-start-500` 0.31 (file ×0.31), `80m-weak-both-ways-ladder-500` 0.52; K1(a)
+  +40.25 %, K3 0, 1, 2, 3, 1, 1.
+* **The trace** (a scratch daemon logging each header it sent): the session's last block was
+  re-encoded onto the floor while a try of OFDM was pending and the queue was empty; a try across
+  the floor's edge takes the whole transmission (§3.16), so every transmission went out with no
+  data frame — nothing of the try's family was left to cut, and the floor block could not ride
+  with it — and the try never ended. The master sent empty headers for 160 s.
+* **The fix** (`ca7587c`, v11): the try takes the transmission only when a new block can be cut
+  at its rung (`_can_cut`: data queued, no measurement asked, room in the window); otherwise the
+  transmission is the floor's frames. A model test builds the state and fails on the old rule; a
+  new vector session (`edge-at-the-end`) reaches it, and the port with the old rule fails
+  `granted_vectors.rs`.
+
+v11 on the 24 scenarios × six draws: **144 of 144 complete**, but the regressions stay —
+`80m-weak-wide-test-2300` 0.53, WC4Y's path 0.49 (message ×1.11, file ×0.49: 39.3 / 41.1 / 57.5 /
+50.4 / 41.3 / 57.1 against 92.7 / 92.6 / 104.5 / 87.4 / 98.7 / 87.4),
+`80m-weak-both-ways-ladder-500` 0.74, `20m-polar-path-2300` 0.82; K1(a) +30.18 %; K3 0, 1, 2, 1, 1,
+2 (draw 0 now 10 and 10, draws 2 and 5 at 9 and 11).
+
+**Traced** (the port's controller logging its state after every transmission it is fed, on
+`80m-weak-wide-test-2300` draw 0, which repeated its 111.1 bit/s): from the floor's top (rung 5,
+165 bit/s over its exchanges) every OFDM rung's estimate was nearly nothing — the prior at the
+floor's reading of −3 dB — but each one's lossless rate beat rung 5's, so each was due. The try
+went to rung 8 (2 of 6 decoded) and was judged a loss, which made rung 8 wait twice as long; but
+rungs 9, 10 and 11 each had their own wait, already over, so the next transmission tried 9, then
+10, then 11, then 12 — **a cascade of tries**, each cutting new blocks at its own rung, whose
+copies stay at that rung. The session spent 85–196 s on rungs 8–11 delivering 0–98 bit/s. A
+second effect rode on it: the OFDM family's offset fell to its clamp, −5 dB. The prior gave every
+OFDM frame almost no chance at the floor's reading, so each decode moved the offset by nearly the
+whole gain toward optimism and each failure by nearly nothing; once rung 9 had frames of its own
+the optimistic prior carried it over rung 5 (choice 9 at two points). The same pattern is in the
+rung sequences of WC4Y's path and the weak-both-ways ladder. Under §3.19's form the first OFDM rung
+alone was in reach, its lossless rate did not beat the floor's top, and no try went.
+
+### 3.22 A failed try holds the family back, and the dip fix judged (2026-10-24)
+
+The cascade is a defect of how the dip fix was built, not of the decision: the author's call was
+one try, at the rung the reading rates best. Now a failed try across the floor's edge doubles the
+wait of every rung of the family above (`55e5139`, model and port; two scripted controller
+traces on the floor's top reach the rule, and the port with the old rule fails them). The same
+rule in a scratch daemon, on the six scenarios where v11 lost or that climb from the floor, and
+the start pair, draws 0–2 (24 runs, all complete), against §3.19's form (no dip fix) and v11:
+
+| scenario | the current | §3.19's form | v11 | a failed try holds the family back |
+|---|---|---|---|---|
+| `80m-floor-top-start-500` (WC4Y's path) | 93 / 93 / 104 | 77 / 104 / 89 ×0.96 | 39 / 41 / 58 ×0.44 | 53 / 66 / 86 ×0.71 |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 | 78 / 74 / 76 ×0.97 | 51 / 28 / 76 ×0.65 | 57 / 62 / 76 ×0.79 |
+| `80m-weak-wide-test-2300` | 167 / 168 / 175 | 175 / 175 / 175 ×1.04 | 111 / 89 / 141 ×0.66 | 144 / 132 / 156 ×0.86 |
+| `20m-polar-path-2300` | 198 / 198 / 172 | 160 / 143 / 172 ×0.81 | 163 / 162 / 162 ×0.82 | 163 / 143 / 150 ×0.76 |
+| `20m-dx-moderate-2300` | 632 / 1000 / 600 | 800 / 706 / 800 ×1.27 | 800 / 706 / 800 ×1.27 | 800 / 706 / 800 ×1.27 |
+| `quick-awgn-2300` | 1263 ×3 | 2182 ×3, ×1.73 | 2182 ×3, ×1.73 | 2182 ×3, ×1.73 |
+| K3, settled (low / high) | 2, 1, 2 apart | 4 / 6, 9 / 10, 9 / 10 | 10 / 10, 10 / 11, 9 / 11 | 7 / 10, 10 / 10, 9 / 11 |
+
+**What is left is the price of the try itself.** On `80m-weak-wide-test-2300` draw 0 (the port's
+state logged after every transmission): one try of rung 8, six frames, two decoded, judged a
+loss, and no other try followed; but the four blocks it had cut stay at rung 8 for their copies,
+and they took three more OFDM transmissions (85–126 s) before the session was back on the floor's
+top — 144 bit/s against §3.19's 175, where no try of OFDM ever went. On these paths a try of OFDM
+from the floor's top costs a whole transmission and its leftovers, and it bought nothing on K3:
+3, 0, 2 apart against §3.19's 2, 1, 1. **The dip fix, as built, fails K1(b) on three paths and
+does not pass K3; whether to take it out is the author's call.**
