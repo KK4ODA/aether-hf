@@ -200,6 +200,82 @@ def test_the_wait_before_a_try_is_air_at_the_rung_tried() -> None:
     assert transmissions == 2
 
 
+def _strong_path() -> tuple[DeliveryController, int, int, list[FrameOutcome], FrameOutcome]:
+    """A 2 300 Hz controller seeded at 10 dB on an OFDM rung, a transmission there that decodes
+    whole at a reading of 15 dB, and a frame of the rung above that is lost."""
+    timing = phy_timing(WIDE.params)
+    a, _ = _pair(WIDE, "delivery")
+    ctl = a.rate
+    assert isinstance(ctl, DeliveryController)
+    ctl.seed(10.0)
+    here, up = ctl.modes[ctl._index], ctl.modes[ctl._index + 1]
+    assert ctl.floor_modes <= here < up, "both rungs OFDM"
+
+    def frame(mode: int, decoded: bool) -> FrameOutcome:
+        cap = data_capacity(timing.capacity(mode))
+        return FrameOutcome(mode, timing.data_frame_s_for(mode), cap, True, decoded, False, 15.0)
+
+    return ctl, here, up, [frame(here, True)] * 6, frame(up, False)
+
+
+def test_a_clean_transmission_tries_the_rung_above_without_its_wait() -> None:
+    """Every frame at the current rung decoded and the reading rates the rung above higher: the
+    try goes at once, not after six full transmissions — on a strong path the wait was most of a
+    session (``04-results.md`` §3.24, K5)."""
+    ctl, here, up, clean, _ = _strong_path()
+    air = sum(f.air_s for f in clean)
+    for _ in range(5):
+        waited = ctl._since_probe.get(up, 0.0) + air >= ctl._wait_s(up)
+        ctl.observe_frames(clean, 15.0)
+        if ctl._probing is not None:
+            break
+    assert ctl._probing == up
+    assert not waited, "the try came by its wait, not by the clean frames"
+    assert ctl.value(up) > ctl.value(here)
+
+
+def test_a_failed_try_waits_its_doubled_wait_whatever_the_frames() -> None:
+    """A try that failed doubles the rung's wait, and clean frames do not cut it short."""
+    ctl, here, up, clean, lost = _strong_path()
+    while ctl._probing is None:
+        ctl.observe_frames(clean, 15.0)
+    assert ctl._probing == up
+    for _ in range(3):
+        ctl.observe_frames([*clean[:5], lost], 15.0)
+    assert ctl._probing is None and ctl.modes[ctl._index] == here
+    assert ctl._probe_wait[up] == 2 * ctl.probe_every
+    air = sum(f.air_s for f in clean)
+    while ctl._since_probe.get(up, 0.0) + 2 * air < ctl._wait_s(up):
+        ctl.observe_frames(clean, 15.0)
+        assert ctl._probing is None, "a clean transmission cut a failed try's wait short"
+
+
+def test_a_rungs_account_ages_with_the_air_sent_at_other_rungs() -> None:
+    """Three frames of an OFDM rung that did well, then the floor's: the rung's account ages with
+    the floor's air, so it no longer outweighs the prior and the rung is chosen again only by a
+    try. Aged only by its own frames, three copies of one block let an OFDM rung back in on an
+    NVIS path two minutes later, and it delivered two blocks of the next seventeen frames
+    (``04-results.md`` §3.24)."""
+    timing = phy_timing(NARROW.params)
+    a, _ = _pair(NARROW, "delivery")
+    ctl = a.rate
+    assert isinstance(ctl, DeliveryController)
+    ctl.seed(2.0)
+    ofdm, top = 5, 2
+
+    def frames(mode: int, n: int) -> list[FrameOutcome]:
+        cap = data_capacity(timing.capacity(mode))
+        return [FrameOutcome(mode, timing.data_frame_s_for(mode), cap, True, True, False, 2.0)] * n
+
+    ctl.observe_frames(frames(ofdm, 3), 2.0)
+    assert ctl._accounts[ofdm].frames > ctl.prior_frames
+    ctl._index = ctl.modes.index(top)
+    ctl._cancel_try()
+    ctl.observe_frames(frames(top, 4), 2.0)
+    assert ctl._accounts[ofdm].frames <= ctl.prior_frames
+    assert ctl.modes[ctl._index] == top
+
+
 def test_a_slave_on_its_own_floor_rung_is_granted_floor_slots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

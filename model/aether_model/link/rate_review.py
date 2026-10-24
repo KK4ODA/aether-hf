@@ -142,12 +142,15 @@ class DeliveryController(RateController):
     """C1-R: choose by measured delivery, at the receiver (``03-candidates.md`` §2.2).
 
     Per rung, the data its frames delivered per second of the air they took — every copy,
-    every frame never detected — decayed with a half-life of :attr:`half_life` frames sent at
-    it, against a prior from the smoothed SNR worth :attr:`prior_frames` frames. The
-    recommendation is the best estimate of the current rung and its usable neighbours. The
-    neighbour above is tried — one transmission recommended at it — when its lossless rate
-    beats the current rung's estimate and the air of :attr:`probe_every` full transmissions at
-    it has gone since the last try of it; a try that delivered less than the rung it went up
+    every frame never detected — decayed with a half-life of :attr:`half_life` of its own
+    frames' air, whatever rung that air went at, against a prior from the smoothed SNR worth
+    :attr:`prior_frames` frames. The recommendation is the best estimate of the current rung
+    and its usable neighbours. The neighbour above is tried — one transmission recommended at
+    it — when its lossless rate beats the current rung's estimate and the air of
+    :attr:`probe_every` full transmissions at it has gone since the last try of it, or at once
+    when it is of the same family, its estimate beats the current rung's, no try of it has
+    failed since it last carried, and every frame of the last transmission at the current rung
+    decoded alone (:meth:`_clean_climb`); a try that delivered less than the rung it went up
     from doubles the wait.
 
     It inherits :class:`RateController` for what the engine reads of it (the ladder, the
@@ -213,6 +216,9 @@ class DeliveryController(RateController):
     _try_frames: int = 0
     """Frames at the rung being tried since the try began: a try is decided once they outweigh
     the prior (:meth:`_try_over`)."""
+    _clean_at: int | None = None
+    """The rung the last transmission's frames went at, when every one of them there decoded
+    alone (:meth:`_clean_climb`)."""
 
     # ── what the engine feeds it ──────────────────────────────────────
 
@@ -239,6 +245,17 @@ class DeliveryController(RateController):
                 self._family[floor] = min(20.0, max(-5.0, offset))
         decay = 0.5 ** (1.0 / self.half_life)
         for f in frames:
+            for mode, old in self._accounts.items():
+                if mode == f.mode:
+                    continue
+                # a rung's account ages with the air sent at any rung, in frames of its own:
+                # aged only by its own frames, three copies of one block sent two minutes
+                # earlier let an OFDM rung back in on an NVIS path, and it delivered two blocks
+                # of the next seventeen frames (04-results.md §3.24)
+                aged = 0.5 ** (f.air_s / (self.half_life * self.frame_air_s.get(mode, 1.0)))
+                old.bytes *= aged
+                old.air_s *= aged
+                old.frames *= aged
             acc = self._accounts.setdefault(f.mode, _Account())
             acc.bytes *= decay
             acc.air_s *= decay
@@ -254,6 +271,9 @@ class DeliveryController(RateController):
         for mode in self.modes:
             self._since_probe[mode] = self._since_probe.get(mode, 0.0) + air
         here = self.modes[self._index]
+        at_here = [f for f in frames if f.mode == here]
+        clean = bool(at_here) and all(f.decoded and not f.combined for f in at_here)
+        self._clean_at = here if clean else None
         for mode in sent - {self._probing, here}:
             # frames at a rung above, sent for another reason (a copy still at its first rung,
             # the Test's measurement): news of it, as a try would be
@@ -389,9 +409,27 @@ class DeliveryController(RateController):
         mode = self.modes[up]
         if self._priced(mode, self.lossless(mode)) <= self.value(self.modes[self._index]):
             return
-        if self._since_probe.get(mode, 0.0) >= self._wait_s(mode) - WAIT_TOLERANCE_S:
+        waited = self._since_probe.get(mode, 0.0) >= self._wait_s(mode) - WAIT_TOLERANCE_S
+        if waited or self._clean_climb(mode):
             self._probing = mode
             self._since_probe[mode] = 0.0
+
+    def _clean_climb(self, mode: int) -> bool:
+        """Whether the rung above, ``mode``, is tried without its wait: of the current rung's
+        family (a try of it is one frame a transmission at the sender, where a try across the
+        floor's edge takes the transmission and its leftovers, §3.22), rated above the current
+        rung, no try of it failed since it last carried, and every frame of the last
+        transmission at the current rung decoded alone. On a strong path the wait — six full
+        transmissions — was most of a session: 36 of 36 frames decoded at rung 12 while the
+        reading rose and rated rung 14 higher, and the try came in the last transmission
+        (``04-results.md`` §3.24, K5)."""
+        here = self.modes[self._index]
+        return (
+            self._clean_at == here
+            and (mode < self.floor_modes) == (here < self.floor_modes)
+            and self._probe_wait.get(mode, self.probe_every) == self.probe_every
+            and self.value(mode) > self.value(here)
+        )
 
     def observe_echo(self, share: float | None, snr_db: float | None) -> None:
         """The echo reading moves the smoothed echo as the current controller's does (ADR-0087);

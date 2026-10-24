@@ -404,13 +404,14 @@ pub struct Account {
 
 /// C1: choose by measured delivery, at the receiver. Per rung, the data its frames delivered
 /// per second of the air they took — every copy, every frame never detected — decayed with a
-/// half-life of `half_life` frames sent at it, against a prior from the smoothed SNR (the AWGN
-/// curve `prior_margin_db` under the reading) worth `prior_frames` frames. The recommendation
-/// is the best estimate of the rungs at or under the current one and the rungs above it
-/// measured; the rung above is tried — one transmission recommended at it — when its lossless
-/// rate beats the current rung's estimate and `probe_every` transmissions have gone since the
-/// last try of it; a try that delivered less doubles the wait, one that delivered more moves
-/// there and tries the next at once. The prior of a family's rungs is read `family_gain_db`
+/// half-life of `half_life` of its own frames' air, whatever rung that air went at, against a
+/// prior from the smoothed SNR (the AWGN curve `prior_margin_db` under the reading) worth
+/// `prior_frames` frames. The recommendation is the best estimate of the rungs at or under the
+/// current one and the rungs above it measured; the rung above is tried — one transmission
+/// recommended at it — when its lossless rate beats the current rung's estimate and
+/// `probe_every` transmissions have gone since the last try of it, or at once after a clean
+/// transmission ([`clean_climb`](Self::clean_climb)); a try that delivered less doubles the
+/// wait, one that delivered more moves there and tries the next at once. The prior of a family's rungs is read `family_gain_db`
 /// times its surprises under the reading: every frame of the family, not combined, moves the
 /// family's offset by `gain × (p − decoded)`. The model's `DeliveryController`.
 #[derive(Debug, Clone)]
@@ -441,6 +442,9 @@ pub struct DeliveryController {
     /// Frames at the rung being tried since the try began: a try is decided once they outweigh
     /// the prior ([`try_over`](Self::try_over)).
     try_frames: usize,
+    /// The rung the last transmission's frames went at, when every one of them there decoded
+    /// alone ([`clean_climb`](Self::clean_climb)).
+    clean_at: Option<usize>,
     half_life: f64,
     prior_frames: f64,
     probe_every: usize,
@@ -505,6 +509,7 @@ impl DeliveryController {
             probing: None,
             probe_tries: 0,
             try_frames: 0,
+            clean_at: None,
             half_life: 12.0,
             prior_frames: 2.0,
             probe_every: 6,
@@ -753,6 +758,19 @@ impl DeliveryController {
         let decay = 0.5_f64.powf(1.0 / self.half_life);
         #[allow(clippy::cast_precision_loss)]
         for f in frames {
+            for (mode, old) in self.accounts.iter_mut().enumerate() {
+                if mode == f.mode {
+                    continue;
+                }
+                if let Some(old) = old {
+                    // a rung's account ages with the air sent at any rung, in frames of its own
+                    // (the model's `observe_frames`)
+                    let aged = 0.5_f64.powf(f.air_s / (self.half_life * self.frame_s[mode]));
+                    old.bytes *= aged;
+                    old.air_s *= aged;
+                    old.frames *= aged;
+                }
+            }
             let Some(slot) = self.accounts.get_mut(f.mode) else {
                 continue;
             };
@@ -775,6 +793,9 @@ impl DeliveryController {
             self.since_probe[mode] = Some(self.since(mode) + air);
         }
         let here = self.modes[self.index];
+        let mut at_here = frames.iter().filter(|f| f.mode == here).peekable();
+        let clean = at_here.peek().is_some() && at_here.all(|f| f.decoded && !f.combined);
+        self.clean_at = clean.then_some(here);
         for &mode in &sent {
             // frames at a rung above, sent for another reason (a copy still at its first rung,
             // the Test's measurement): news of it, as a try would be
@@ -879,10 +900,22 @@ impl DeliveryController {
         if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
             return;
         }
-        if self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S {
+        let waited = self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S;
+        if waited || self.clean_climb(mode) {
             self.probing = Some(mode);
             self.since_probe[mode] = Some(0.0);
         }
+    }
+
+    /// Whether the rung above, `mode`, is tried without its wait: of the current rung's family,
+    /// rated above the current rung, no try of it failed since it last carried, and every frame
+    /// of the last transmission at the current rung decoded alone (the model's `_clean_climb`).
+    fn clean_climb(&self, mode: usize) -> bool {
+        let here = self.modes[self.index];
+        self.clean_at == Some(here)
+            && (mode < self.floor_modes) == (here < self.floor_modes)
+            && self.wait(mode) == self.probe_every
+            && self.value(mode) > self.value(here)
     }
 
     /// A frame's echo reading (ADR-0087): a try of a rung it rules out ends, and a choice it
