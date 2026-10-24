@@ -29,8 +29,11 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   six draws completes every run and passes K1(b) and K7, but **fails K1(a) clearly** (+26.80 %
   against +19.41 %, §3.20); K3 and WC4Y's file rate are near misses. The fix of K3's dip (§3.21,
   §3.22) cost three floor-top paths 14–29 % and did not pass K3: taken out by the author's call.
-* **Next**: K2, K4 and K5 for this form (§3.23); K1(a)'s miss is accepted as recorded by the
-  author's call (§3.20).
+* **K2, K4, K5 and K6** for this form (§3.23, §3.24): pooled it beats the current (harness air ×0.982,
+  real-modem session time ×0.885), but K2, K4, K5 and K6 each fail on a few scenarios or points,
+  every one traced to the start and tries on 500 Hz NVIS or the wait before the first try on a
+  strong path. K1(a)'s miss is accepted as recorded by the author's call (§3.20).
+* **Next**: the author's call on §3.24.
 
 ## 1. What the engine hands a prototype
 
@@ -867,3 +870,79 @@ this form here):
 * **One of the five was capped by configuration.** Both stations of KQ4SAX's Tests ran 2300 Hz
   with `max_mode = 14`, which the panel had saved at 500 Hz (report 17 §3). A candidate replayed
   open loop is not held to a station's `max_mode`.
+### 3.24 K2, K4, K5 and K6 for §3.19's form (2026-10-24)
+
+The form the author's calls left (`b53d0e6`: §3.19's rule with v11's guard), and the current
+controller, **on the same build** (`3e79008`, the default and a worktree with
+`Controller::DeliveryS`): every scenario in `bench/scenarios/` (60), three draws, 180 runs each.
+The current's earlier K2 runs (§3.8, build `3712e2e`) could not stand in: five of eight scenarios
+sampled on today's build repeated their air time to the tenth of a second, but three with runner
+steps (a Test, host steps, a scheduled clear) did not, so both arms ran again.
+
+| criterion | result | verdict |
+|---|---|---|
+| K2, pooled air | ×**0.982** (49 292 against 50 177 s) | passes |
+| K2, `scenario_trend.py` against the current's three draws | *failing* `80m-agc-carrier-outside-500` (2/3); *slower* `80m-floor-top-start-500` (air 332 s, the current's 280–286) and `80m-leave-together-500` (359 s, 281–305); *faster* `40m-drift-and-clocks-2300`, `40m-long-attachment-cwid-2300`, `80m-capture-skips-500`, `80m-nvis-evening-500`, `80m-thunderstorm-agc-2300` | **fails** |
+| K4, completion | 179 of 180 against 180 (`80m-agc-carrier-outside-500` draw 0) | **fails** |
+| K4, radiated overlaps | 0 and 0 | passes |
+| K6, the field replay (open loop) | the nine of §3.11: ×1.455 of the current's summed, WC4Y 2026-10-22 at 0.688 (the same as §3.11: on the steps the sessions measured, the later changes chose alike); with report 17's five (§3.23, ×1.057, worst 0.919) the fourteen: ×1.276 | fails; the author's condition (WC4Y's path at least as well) a near miss — message ×1.12, file ×0.91 in this run |
+| K5, completion | 168 of 168 in both arms | passes |
+| K5, pooled session time | ×**0.885** | passes |
+| K5, per point (≤ ×1.05) | 52 of 56; over: 2 300 Hz Good +20 dB ×1.067, Moderate +20 ×1.063, Poor +16 ×1.132, Poor +20 ×1.103 (the best: 2 300 Hz Good +4 ×0.51, Poor +4 ×0.54, AWGN 0 and +4 ×0.66; 500 Hz Good +4 and +8 ×0.69–0.70) | **fails** |
+
+**The three flagged, traced.** All three are 500 Hz paths, two of them ITU NVIS:
+
+* `80m-agc-carrier-outside-500` draw 0 (NVIS, 10 dB, the 1000-byte message not delivered in 300 s
+  of air). The session started at OFDM rung 6 from the call's 10 dB reading, as every form of C1
+  has on this path (§3.8), and was on the floor by 53 s. At 224 s the choice went **straight to
+  OFDM rung 5, not as a try**: rung 5's account was three copies of one block sent 124–182 s
+  earlier that had delivered it by combining — one block for three frames' air, three times rung
+  2's measured rate per second of air — and three frames outweigh the prior's two, so `_decide`
+  lets rung 5 back in. The next 17 frames at rung 5 delivered two blocks (five never detected),
+  and the message missed its budget. A rung's account ages only with frames sent at it, not with
+  time: a rung left alone keeps an old, small sample. The same draw passed in §3.19's six-draw
+  run; the scenario's runner steps make it part from run to run.
+* `80m-leave-together-500` (NVIS, 8 dB, a 1000-byte message): the message took 260 and 263 s on
+  draws 0 and 1 against the current's 186–208. Draw 0 started at OFDM rung 6 and sent 18 frames
+  on rungs 5–6 before the floor; draw 1 started at rung 4 (tone4x100-93, which the echo rules out
+  once it has been read) and went back to it at 96 s. Draw 2 started at rung 2, as the current
+  does on every draw, and took 178 s against 186. The optimistic prior's start (§3.6: the
+  cautious start that would have kept it on the floor was rejected for what it cost elsewhere).
+* `80m-floor-top-start-500` (WC4Y's path): message 91.6 / 91.6 / 81.9 against 73.9 / 81.9 / 81.9
+  bit/s, file 77.2 / 95.4 / 104.5 against 92.7 / 104.5 / 104.5. The longer air is the Test's
+  ladder: on draws 0 and 1 the candidate's measured up to rungs 9 and 12 where the current's
+  stopped at 7 and 9 — six and nine measured rungs against five and six, each about 12 s. The
+  ladder measures at pinned rungs whatever the controller says; it ran later (the file ended at
+  207 and 182 s against 174 and 158) on another stretch of the same fading.
+
+**K5's four points, traced** (the model's controller logged after every transmission it is fed,
+on the same seeds). All four are 2 300 Hz sessions of 8 000 bytes that take about a minute, and in
+all four the candidate sent more frames than the current and resent none: at Poor +20 dB trial 1
+it started at rung 12 from the call's reading, every one of 36 frames over six transmissions
+decoded, the reading rose from 10.7 to 15 dB and the prior rated rung 14 above rung 12 (210 against
+156 bytes a second of exchange) — but a rung above is chosen only once its own frames outweigh the
+prior, and the first try of it waits six full transmissions' air (§3.17), so the try came in the
+last transmission and the session ended at rung 12 (66.6 s against the current's 57.2, which
+climbed to 15–16 and resent four frames on the way). At Moderate +20 dB trial 0 the same: 28
+frames at rung 14, every one decoded, rungs 15 and 16 rated higher, and the wait still 8 s from
+over when the session ended. **This is the climb K1(a)'s gap is made of** (§3.20): on a strong
+path the candidate waits out a try's whole wait before it may go up, however clean its frames.
+
+**This form against every criterion:**
+
+| criterion | verdict |
+|---|---|
+| K1(a), regret against the oracle | fails, +26.80 % against +19.41 % over six draws (§3.20; accepted as recorded by the author's call) |
+| K1(b), no scenario 15 % under | passes over six draws (§3.19) |
+| K2, no scenario slower; pooled air | pooled ×0.982 passes; one scenario failing and two slower — fails |
+| K3, start independence | near miss, one draw of six two rungs apart (§3.19) |
+| K4, completion; overlaps | one run of 180 not complete — fails; no overlap — passes |
+| K5, the real-modem link bench | pooled ×0.885 passes; four points over ×1.05 — fails |
+| K6, the field replay | fails at WC4Y 2026-10-22 (0.688); the author's condition a near miss |
+| K7, simpler | passes (§3.19) |
+
+What the failures share, traced: the start and the try on a 500 Hz NVIS path (an OFDM start from
+the optimistic prior, a rung let back in on an old, small sample), and the wait before the first
+try on a strong path. Pooled — air on the harness, session time on the real modem, the regret's
+median — the form beats the current controller; at the per-scenario and per-point guards it does
+not.
