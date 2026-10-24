@@ -112,6 +112,7 @@ fn config(doc: &Value) -> GrantConfig {
     let controller = match doc.get("controller").and_then(Value::as_str) {
         None => Controller::Current,
         Some("olla") => Controller::Olla,
+        Some("delivery") => Controller::Delivery,
         Some(other) => panic!("no controller {other} in the port"),
     };
     GrantConfig {

@@ -58,7 +58,7 @@ use crate::{
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
-    rate_review::{FrameOutcome, OuterLoopController},
+    rate_review::{DeliveryController, FrameOutcome, OuterLoopController},
 };
 
 // ── what the engine hands its driver ──────────────────────────────────
@@ -284,6 +284,8 @@ pub enum Controller {
     Current,
     /// C2, outer-loop adaptation to a derived target ([`OuterLoopController`]).
     Olla,
+    /// C1, choose by measured delivery at the receiver ([`DeliveryController`]).
+    Delivery,
 }
 
 /// The rate controller in use.
@@ -291,6 +293,7 @@ pub enum Controller {
 enum Rate {
     Current(RateController),
     Olla(OuterLoopController),
+    Delivery(DeliveryController),
 }
 
 impl Rate {
@@ -298,6 +301,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.snr_db(),
             Self::Olla(c) => c.snr_db(),
+            Self::Delivery(c) => c.snr_db(),
         }
     }
 
@@ -305,6 +309,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.margin_db(),
             Self::Olla(c) => c.margin_db(),
+            Self::Delivery(c) => c.margin_db(),
         }
     }
 
@@ -312,6 +317,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.echo(),
             Self::Olla(c) => c.echo(),
+            Self::Delivery(c) => c.echo(),
         }
     }
 
@@ -319,6 +325,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.recommend(),
             Self::Olla(c) => c.recommend(),
+            Self::Delivery(c) => c.recommend(),
         }
     }
 
@@ -326,6 +333,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.observe_echo(share, snr_db),
             Self::Olla(c) => c.observe_echo(share, snr_db),
+            Self::Delivery(c) => c.observe_echo(share, snr_db),
         }
     }
 
@@ -333,6 +341,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.modes(),
             Self::Olla(c) => c.modes(),
+            Self::Delivery(c) => c.modes(),
         }
     }
 
@@ -340,6 +349,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.threshold_db(mode),
             Self::Olla(c) => c.threshold_db(mode),
+            Self::Delivery(c) => c.threshold_db(mode),
         }
     }
 
@@ -347,6 +357,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.seed(snr_db, lower_bound),
             Self::Olla(c) => c.seed(snr_db),
+            Self::Delivery(c) => c.seed(snr_db),
         }
     }
 
@@ -354,6 +365,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.first_mode(snr_db),
             Self::Olla(c) => c.first_mode(snr_db),
+            Self::Delivery(c) => c.first_mode(snr_db),
         }
     }
 
@@ -361,6 +373,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.observe(snr_db, ok, failed, mode),
             Self::Olla(c) => c.observe(snr_db),
+            Self::Delivery(c) => c.observe(snr_db),
         }
     }
 
@@ -368,6 +381,7 @@ impl Rate {
         match self {
             Self::Current(c) => c.observe_snr(snr_db),
             Self::Olla(c) => c.observe_snr(snr_db),
+            Self::Delivery(c) => c.observe_snr(snr_db),
         }
     }
 }
@@ -1163,7 +1177,7 @@ impl std::fmt::Debug for GrantedEngine {
 fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
     match config.controller {
         Controller::Current => Rate::Current(rate_controller_for(timing, config.rate)),
-        Controller::Olla => {
+        Controller::Olla | Controller::Delivery => {
             // as the model builds it: the air's table, or the wide one's
             let thresholds = if timing.mode_threshold_db.is_empty() {
                 crate::rate::AWGN_THRESHOLD_DB.to_vec()
@@ -1181,6 +1195,15 @@ fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
             let capacity: Vec<usize> = (0..thresholds.len())
                 .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
                 .collect();
+            if config.controller == Controller::Delivery {
+                return Rate::Delivery(DeliveryController::for_table(
+                    &thresholds,
+                    &payload,
+                    &capacity,
+                    &frame_s,
+                    &timing.echo_limit,
+                ));
+            }
             Rate::Olla(OuterLoopController::for_table(
                 &thresholds,
                 &payload,
@@ -4695,10 +4718,12 @@ impl GrantedEngine {
             .map(|r| r.frame.snr_db)
             .collect();
         let snr = (!snrs.is_empty()).then(|| snrs.iter().sum::<f64>() / snrs.len() as f64);
-        if matches!(self.rate, Rate::Olla(_)) {
+        if matches!(self.rate, Rate::Olla(_) | Rate::Delivery(_)) {
             let outcomes = self.outcomes(records);
-            if let Rate::Olla(c) = &mut self.rate {
-                c.observe_frames(&outcomes, snr);
+            match &mut self.rate {
+                Rate::Olla(c) => c.observe_frames(&outcomes, snr),
+                Rate::Delivery(c) => c.observe_frames(&outcomes, snr),
+                Rate::Current(_) => {}
             }
             return snr;
         }

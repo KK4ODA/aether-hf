@@ -2,8 +2,8 @@
 //! `aether_model.link.rate_review.OuterLoopController` (`docs/research/rate-control/
 //! 03-candidates.md` §2.4, `04-results.md`), ported so the scenario harness can judge it.
 //!
-//! Bench-only. [`Controller`](crate::granted::Controller) selects it, and a station never runs
-//! it on the air: the default is the current controller.
+//! Bench-only. [`Controller`](crate::granted::Controller) selects one, and a station never runs
+//! one on the air: the default is the current controller.
 //!
 //! [`RateController`]: crate::rate::RateController
 
@@ -306,6 +306,396 @@ impl OuterLoopController {
     /// A burst's counts: only its SNR is read; a silent slot is no news.
     pub fn observe(&mut self, snr_db: Option<f64>) {
         self.observe_snr(snr_db);
+    }
+}
+
+/// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Account {
+    /// Data bytes its frames delivered.
+    pub bytes: f64,
+    /// Seconds of air its frames took.
+    pub air_s: f64,
+    /// Frames sent at it.
+    pub frames: f64,
+}
+
+/// C1: choose by measured delivery, at the receiver. Per rung, the data its frames delivered
+/// per second of the air they took — every copy, every frame never detected — decayed with a
+/// half-life of `half_life` frames sent at it, against a prior from the smoothed SNR (the AWGN
+/// curve `prior_margin_db` under the reading) worth `prior_frames` frames. The recommendation
+/// is the best estimate of the rungs at or under the current one and the rungs above it
+/// measured; the rung above is tried — one transmission recommended at it — when its lossless
+/// rate beats the current rung's estimate and `probe_every` transmissions have gone since the
+/// last try of it; a try that delivered less doubles the wait, one that delivered more moves
+/// there and tries the next at once. The model's `DeliveryController`.
+#[derive(Debug, Clone)]
+pub struct DeliveryController {
+    thresholds: Vec<f64>,
+    modes: Vec<usize>,
+    capacity: Vec<usize>,
+    frame_s: Vec<f64>,
+    echo_limit: Vec<Option<f64>>,
+    echo: Option<f64>,
+    smoothed_snr_db: Option<f64>,
+    index: usize,
+    accounts: Vec<Option<Account>>,
+    since_probe: Vec<Option<usize>>,
+    probe_wait: Vec<Option<usize>>,
+    probing: Option<usize>,
+    probe_tries: usize,
+    half_life: f64,
+    prior_frames: f64,
+    probe_every: usize,
+    probe_wait_max: usize,
+    slope_db: f64,
+    prior_margin_db: f64,
+    echo_weight: f64,
+    echo_min_snr_db: f64,
+}
+
+impl DeliveryController {
+    /// One for an air's table, as [`OuterLoopController::for_table`].
+    ///
+    /// # Panics
+    /// If the table's columns differ in length or are empty.
+    #[must_use]
+    pub fn for_table(
+        thresholds: &[f64],
+        payload: &[usize],
+        capacity: &[usize],
+        frame_s: &[f64],
+        echo_limit: &[Option<f64>],
+    ) -> Self {
+        assert!(
+            !thresholds.is_empty()
+                && thresholds.len() == payload.len()
+                && thresholds.len() == capacity.len()
+                && thresholds.len() == frame_s.len(),
+            "a mode table has one threshold, payload, capacity and air time per mode"
+        );
+        let n = thresholds.len();
+        Self {
+            thresholds: thresholds.to_vec(),
+            modes: usable_modes_by_rate(thresholds, payload, frame_s),
+            capacity: capacity.to_vec(),
+            frame_s: frame_s.to_vec(),
+            echo_limit: echo_limit.to_vec(),
+            echo: None,
+            smoothed_snr_db: None,
+            index: 0,
+            accounts: vec![None; n],
+            since_probe: vec![None; n],
+            probe_wait: vec![None; n],
+            probing: None,
+            probe_tries: 0,
+            half_life: 12.0,
+            prior_frames: 2.0,
+            probe_every: 6,
+            probe_wait_max: 48,
+            slope_db: 0.5,
+            prior_margin_db: 3.0,
+            echo_weight: 0.4,
+            echo_min_snr_db: -6.0,
+        }
+    }
+
+    /// Data bytes a second of a rung's frames carries, nothing lost.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn lossless(&self, mode: usize) -> f64 {
+        self.capacity.get(mode).copied().unwrap_or(0) as f64
+            / self.frame_s.get(mode).copied().unwrap_or(1.0)
+    }
+
+    /// Data bytes a second of air at `mode` delivers, measured and prior together.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn estimate(&self, mode: usize) -> f64 {
+        self.estimate_at(mode, self.smoothed_snr_db)
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn estimate_at(&self, mode: usize, snr_db: Option<f64>) -> f64 {
+        let cap = self.capacity.get(mode).copied().unwrap_or(0) as f64;
+        let air = self.frame_s.get(mode).copied().unwrap_or(1.0);
+        let prior = snr_db.map_or(0.0, |snr| {
+            cap * decode_probability(
+                snr - self.prior_margin_db,
+                self.thresholds[mode],
+                self.slope_db,
+            )
+        });
+        let acc = self.account(mode);
+        let w = self.prior_frames;
+        (acc.bytes + w * prior) / (acc.air_s + w * air)
+    }
+
+    /// A rung's account so far (zero for one never sent at).
+    #[must_use]
+    pub fn account(&self, mode: usize) -> Account {
+        self.accounts
+            .get(mode)
+            .copied()
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    /// The usable rungs, ascending.
+    #[must_use]
+    pub fn modes(&self) -> &[usize] {
+        &self.modes
+    }
+
+    /// The rung to use: the one being tried, else the choice.
+    #[must_use]
+    pub fn recommend(&self) -> usize {
+        self.probing.unwrap_or(self.modes[self.index])
+    }
+
+    /// The smoothed SNR.
+    #[must_use]
+    pub const fn snr_db(&self) -> Option<f64> {
+        self.smoothed_snr_db
+    }
+
+    /// What a recording calls the margin: the prior's.
+    #[must_use]
+    pub const fn margin_db(&self) -> f64 {
+        self.prior_margin_db
+    }
+
+    /// The path's echo as the frames have read it, smoothed.
+    #[must_use]
+    pub const fn echo(&self) -> Option<f64> {
+        self.echo
+    }
+
+    /// The threshold of a rung, if the table has one.
+    #[must_use]
+    pub fn threshold_db(&self, mode: usize) -> Option<f64> {
+        self.thresholds.get(mode).copied()
+    }
+
+    /// Take an SNR reading and nothing else.
+    pub fn observe_snr(&mut self, snr_db: Option<f64>) {
+        if let Some(value) = snr_db {
+            self.smoothed_snr_db = Some(
+                self.smoothed_snr_db
+                    .map_or(value, |prev| 0.7 * prev + 0.3 * value),
+            );
+        }
+    }
+
+    /// A burst's counts: only its SNR is read; a silent slot is no news.
+    pub fn observe(&mut self, snr_db: Option<f64>) {
+        self.observe_snr(snr_db);
+    }
+
+    fn usable(&self, index: usize) -> bool {
+        index < self.modes.len() && !self.echo_out(index)
+    }
+
+    fn echo_out(&self, index: usize) -> bool {
+        match (
+            self.echo_limit.get(self.modes[index]).copied().flatten(),
+            self.echo,
+        ) {
+            (Some(limit), Some(echo)) => echo > limit,
+            _ => false,
+        }
+    }
+
+    fn since(&self, mode: usize) -> usize {
+        self.since_probe.get(mode).copied().flatten().unwrap_or(0)
+    }
+
+    fn wait(&self, mode: usize) -> usize {
+        self.probe_wait
+            .get(mode)
+            .copied()
+            .flatten()
+            .unwrap_or(self.probe_every)
+    }
+
+    /// A transmission's data frames: each rung's account takes its frames, a try ends, and the
+    /// recommendation is the best estimate around the current rung.
+    pub fn observe_frames(&mut self, frames: &[FrameOutcome], snr_db: Option<f64>) {
+        self.observe_snr(snr_db);
+        if frames.is_empty() {
+            return;
+        }
+        let decay = 0.5_f64.powf(1.0 / self.half_life);
+        #[allow(clippy::cast_precision_loss)]
+        for f in frames {
+            let Some(slot) = self.accounts.get_mut(f.mode) else {
+                continue;
+            };
+            let acc = slot.get_or_insert_with(Account::default);
+            acc.bytes *= decay;
+            acc.air_s *= decay;
+            acc.frames *= decay;
+            acc.air_s += f.air_s;
+            acc.frames += 1.0;
+            if f.decoded {
+                acc.bytes += f.capacity as f64;
+            }
+        }
+        let mut sent: Vec<usize> = frames.iter().map(|f| f.mode).collect();
+        sent.sort_unstable();
+        sent.dedup();
+        for i in 0..self.modes.len() {
+            let mode = self.modes[i];
+            self.since_probe[mode] = Some(self.since(mode) + 1);
+        }
+        let here = self.modes[self.index];
+        for &mode in &sent {
+            // frames at a rung above, sent for another reason (a copy still at its first rung,
+            // the Test's measurement): news of it, as a try would be
+            if Some(mode) != self.probing && mode != here && mode > here {
+                self.judge_try(mode);
+            }
+        }
+        if let Some(probe) = self.probing {
+            self.probe_tries += 1;
+            let measured = sent.contains(&probe);
+            if measured || self.probe_tries >= 2 {
+                self.end_probe(measured);
+            }
+        }
+        if self.probing.is_none() {
+            self.decide();
+        }
+    }
+
+    fn end_probe(&mut self, measured: bool) {
+        let Some(mode) = self.probing.take() else {
+            return;
+        };
+        self.probe_tries = 0;
+        if !measured {
+            return;
+        }
+        if self.judge_try(mode) {
+            self.index = self
+                .modes
+                .iter()
+                .position(|&m| m == mode)
+                .unwrap_or(self.index);
+            if self.usable(self.index + 1) {
+                // a climb that works goes on: the rung above is tried at the next transmission
+                let above = self.modes[self.index + 1];
+                self.since_probe[above] = Some(self.wait(above));
+            }
+        }
+    }
+
+    /// What frames at `mode`, above the current rung, said: whether it now beats the current
+    /// rung. If not, the next try of it waits twice as long.
+    fn judge_try(&mut self, mode: usize) -> bool {
+        let here = self.modes[self.index];
+        if self.estimate(mode) > self.estimate(here) {
+            self.probe_wait[mode] = Some(self.probe_every);
+            return true;
+        }
+        let wait = self.wait(mode);
+        self.probe_wait[mode] = Some(self.probe_wait_max.min(2 * wait));
+        self.since_probe[mode] = Some(0);
+        false
+    }
+
+    fn decide(&mut self) {
+        // down to any rung (the estimate of one never sent is the prior); up only to a rung
+        // measured — by a try, or by frames the sender put there itself
+        let mut best: Option<(usize, f64)> = None;
+        for i in 0..self.modes.len() {
+            if !self.usable(i) {
+                continue;
+            }
+            if i > self.index && self.account(self.modes[i]).frames < 1.0 {
+                continue;
+            }
+            let value = self.estimate(self.modes[i]);
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        let Some((index, _)) = best else {
+            self.index = 0;
+            return;
+        };
+        self.index = index;
+        let up = self.index + 1;
+        if !self.usable(up) {
+            return;
+        }
+        let mode = self.modes[up];
+        if self.lossless(mode) <= self.estimate(self.modes[self.index]) {
+            return;
+        }
+        if self.since(mode) >= self.wait(mode) {
+            self.probing = Some(mode);
+            self.since_probe[mode] = Some(0);
+        }
+    }
+
+    /// A frame's echo reading (ADR-0087): a try of a rung it rules out ends, and a choice it
+    /// rules out goes to the best estimate below that it allows.
+    pub fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
+        let Some(share) = share else {
+            return;
+        };
+        if snr_db < self.echo_min_snr_db {
+            return;
+        }
+        let w = self.echo_weight;
+        self.echo = Some(self.echo.map_or(share, |prev| (1.0 - w) * prev + w * share));
+        if let Some(probe) = self.probing
+            && let Some(at) = self.modes.iter().position(|&m| m == probe)
+            && self.echo_out(at)
+        {
+            self.probing = None;
+            self.probe_tries = 0;
+        }
+        if self.echo_out(self.index) {
+            let mut best: Option<(usize, f64)> = None;
+            for i in 0..self.index {
+                if !self.usable(i) {
+                    continue;
+                }
+                let value = self.estimate(self.modes[i]);
+                if best.is_none_or(|(_, b)| value > b) {
+                    best = Some((i, value));
+                }
+            }
+            self.index = best.map_or(0, |(i, _)| i);
+        }
+    }
+
+    /// The rung a session starts at from one reading: the prior's best, no steps in hand.
+    #[must_use]
+    pub fn first_mode(&self, snr_db: f64) -> usize {
+        let mut best: Option<(usize, f64)> = None;
+        for i in 0..self.modes.len() {
+            if self.echo_out(i) {
+                continue;
+            }
+            let value = self.estimate_at(self.modes[i], Some(snr_db));
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        self.modes[best.map_or(0, |(i, _)| i)]
+    }
+
+    /// Start from the connect frame's reading, before anything has been observed.
+    pub fn seed(&mut self, snr_db: f64) {
+        if self.smoothed_snr_db.is_some() {
+            return;
+        }
+        self.smoothed_snr_db = Some(snr_db);
+        let first = self.first_mode(snr_db);
+        self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
     }
 }
 
