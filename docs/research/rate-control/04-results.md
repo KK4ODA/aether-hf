@@ -66,8 +66,13 @@ The iteration bench, current against `delivery`, session time (lower is better):
 | 2 300 Hz Moderate | 0.93 |
 | 2 300 Hz Poor | 1.02 |
 | 500 Hz AWGN | 0.92 |
+| 500 Hz Good | 0.94 |
+| 500 Hz Moderate | 0.91 |
+| 500 Hz Poor | 0.98 |
+| pooled (80 sessions) | median 0.935, geometric mean 0.923 |
 
-(500 Hz fading: to be filled.)
+No session failed on either. The worst cells were 1.25 (2 300 Hz Poor, +8 dB) and 1.24
+(2 300 Hz Good, −2 dB): K5's "×1.05 at every point" would fail on this form.
 
 ## 3. Results against the criteria
 
