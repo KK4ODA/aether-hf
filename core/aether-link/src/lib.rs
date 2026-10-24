@@ -15,13 +15,15 @@ pub mod frames;
 pub mod granted;
 pub mod phy;
 pub mod rate;
+pub mod rate_review;
 
 pub use frames::{
     CONTROL_BYTES, ConnectBody, DATA_HEADER, DataHeader, DataKind, FrameError, GrantFrame,
     GrantKind, ProbeBody, WINDOW,
 };
 pub use granted::{
-    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult, State,
+    Action, Controller, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult,
+    State,
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, RateConfig, RateController, usable_modes};

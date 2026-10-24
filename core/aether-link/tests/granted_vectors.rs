@@ -16,16 +16,18 @@
 use std::{cell::RefCell, collections::VecDeque, fs, path::PathBuf};
 
 use aether_link::{
-    Action, Container, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
-    State, TxFrame, granted::Role,
+    Action, Container, Controller, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming,
+    SoftFrame, State, TxFrame, granted::Role,
 };
 use serde_json::Value;
 
-fn vectors() -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/granted_vectors.json");
+fn vectors(file: &str, generator: &str) -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data")
+        .join(file);
     let text = fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
-            "cannot read {} ({e}).\nGenerate it with: python tools/make_granted_vectors.py",
+            "cannot read {} ({e}).\nGenerate it with: python tools/{generator}",
             path.display()
         )
     });
@@ -106,7 +108,14 @@ fn pair(doc: &Value) -> [f64; 2] {
 
 fn config(doc: &Value) -> GrantConfig {
     let levels = doc["levels_s"].as_array().expect("levels");
+    // a prototype of the rate controller's review is named; the current controller is not
+    let controller = match doc.get("controller").and_then(Value::as_str) {
+        None => Controller::Current,
+        Some("olla") => Controller::Olla,
+        Some(other) => panic!("no controller {other} in the port"),
+    };
     GrantConfig {
+        controller,
         max_data_frames: int(&doc["max_data_frames"]),
         max_burst_s: opt(&doc["max_burst_s"]),
         max_retries: int(&doc["max_retries"]),
@@ -576,9 +585,8 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
     }
 }
 
-#[test]
-fn the_port_does_what_the_model_does_input_by_input() {
-    let doc = vectors();
+fn replay_file(file: &str, generator: &str, at_least: usize) {
+    let doc = vectors(file, generator);
     let blobs: Vec<Vec<u8>> = doc["blobs"]
         .as_array()
         .expect("blobs")
@@ -587,11 +595,30 @@ fn the_port_does_what_the_model_does_input_by_input() {
         .collect();
     let replay = Replay { blobs: &blobs };
     let sessions = doc["sessions"].as_array().expect("sessions");
-    assert!(sessions.len() >= 10, "too few sessions to mean anything");
+    assert!(
+        sessions.len() >= at_least,
+        "too few sessions to mean anything"
+    );
     for session in sessions {
         let name = session["name"].as_str().expect("name");
         for station in session["stations"].as_array().expect("stations") {
             replay_station(&replay, name, station);
         }
     }
+}
+
+#[test]
+fn the_port_does_what_the_model_does_input_by_input() {
+    replay_file("granted_vectors.json", "make_granted_vectors.py", 10);
+}
+
+/// The rate controller review's prototype C2 (Gate 3, bench-only), through the same sessions:
+/// the harness's A/B of it is only as good as the port's agreement with the model.
+#[test]
+fn the_rate_review_prototype_does_what_the_model_does() {
+    replay_file(
+        "rate_review_vectors.json",
+        "make_rate_review_vectors.py",
+        10,
+    );
 }

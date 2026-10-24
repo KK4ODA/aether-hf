@@ -13,7 +13,14 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
 * **The tools**: `tools/bench_link.py --link controller=NAME` (the link bench, both pipes and the
   real modem); `tools/rate_k6.py` (criterion K6, the field replay); an iteration bench on the real
   modem on seeds, sizes and SNRs that are not K5's grid (§2.1).
-* **Not yet**: the port of the survivors to the daemon for the harness criteria (K1–K4).
+* **Ported for the harness** (bench-only, `aether_link::rate_review`, `granted::Controller`,
+  default `Current`): C2, the leader on the iteration bench (§2.4). The port is held to the model
+  by `tests/data/rate_review_vectors.json` (`tools/make_rate_review_vectors.py`): the granted
+  engine's trace sessions with C2 at both stations, two of its own with frames never detected,
+  and three direct traces of the controller's inputs. Planted faults (the step size, the frames
+  never detected, the echo's choice) each fail it.
+* **Next**: the harness, K1 and K3 first (the 20 regret scenarios and the start pair, three
+  draws each, against the oracle's runs of Gate 2), then K2 and K4 on the full matrix.
 
 ## 1. What the engine hands a prototype
 
@@ -55,7 +62,7 @@ used for a first look only (`00-brief.md` §7).
    ND1J's strong 500 Hz Tests it sat under rungs the session had measured. Now such frames judge
    that rung as a try does, and the choice takes any rung measured.
 
-### 2.3 First numbers (C1's first form, margin prior)
+### 2.3 First numbers (C1's first form, the 3 dB prior)
 
 The iteration bench, current against `delivery`, session time (lower is better):
 
@@ -73,6 +80,46 @@ The iteration bench, current against `delivery`, session time (lower is better):
 
 No session failed on either. The worst cells were 1.25 (2 300 Hz Poor, +8 dB) and 1.24
 (2 300 Hz Good, −2 dB): K5's "×1.05 at every point" would fail on this form.
+
+### 2.4 The prototypes on the iteration bench
+
+Every arm against the current controller on the same 80 sessions (session time, lower is better;
+"worst" the worst single cell). The prior is the AWGN curve 3 dB under the reading unless named
+("four channels": their mean, §2.2 item 1).
+
+| arm | pooled median | geometric mean | worst | failed sessions |
+|---|---|---|---|---|
+| **C2** (`olla`) | **0.886** | **0.865** | 1.18 | 0 |
+| C1 (`delivery`, with §2.2 item 2) | 0.942 | 0.921 | 1.18 | 0 |
+| C1, first form | 0.935 | 0.923 | 1.25 | 0 |
+| C1 at the sender (`delivery-s`) | 0.945 | 0.936 | 1.36 | 0 |
+| C0, everything taken out (hysteresis, dwell, stride, decay schedule, re-seed, steps in hand, partial rule) | 0.961 | 0.962 | 1.36 | 0 |
+| C2, four channels | 1.000 | 1.012 | 1.43 | 0 |
+| C1, four channels | 1.095 | 1.106 | 1.99 | 0 |
+
+C2 per class: 2 300 Hz AWGN 0.78, Good 0.89, Moderate 0.83, Poor 0.90; 500 Hz AWGN 0.83, Good 0.93,
+Moderate 0.92, Poor 0.94. **The optimistic prior beats the four channels' mean for both C1 and
+C2**, though the mean predicts the field's ladders better: a rung above found wanting costs one
+measured transmission, and a rung under the path's best costs every wait for a try (C1) or the
+offset's whole walk down (C2) — the survey's "optimism in the face of uncertainty"
+(`02-survey.md`).
+
+### 2.5 The field replay (K6), and what it can judge
+
+| arm | sum against the current's | worst session | K6 |
+|---|---|---|---|
+| C2 | 1.141 | 0.499 (WC4Y, 500 Hz, 2026-10-22) | fails |
+| C1 | 1.158 | 0.800 (ND1J, 500 Hz, 2026-10-15 15:42) | fails |
+
+Both fail the worst-session rule. The trace of C2's: at that Test's −1 dB floor reading (a lower
+bound, ADR-0016) the optimistic prior puts the first OFDM rungs (5, 6) above the floor's top
+rung (4), where the session's ladder decoded rung 6 a quarter of the time and rung 4 86 %. Open
+loop, a choice the session never sent at is never measured, so the replay keeps judging the
+same unlearned choice; closed loop, the first transmission at rung 6 would move the OFDM offset
+by up to +3 dB. On the iteration bench at 500 Hz around 0 dB C2 ran 0.97–1.08 of the current
+controller, and the harness judges the closed loop (`80m-floor-top-start-500` is WC4Y's path).
+The criterion stands as agreed; this is the explanation `03-candidates.md` §3 asks for, to put to
+the author with the harness's numbers.
 
 ## 3. Results against the criteria
 

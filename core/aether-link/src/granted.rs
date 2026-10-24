@@ -58,6 +58,7 @@ use crate::{
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
+    rate_review::{FrameOutcome, OuterLoopController},
 };
 
 // ── what the engine hands its driver ──────────────────────────────────
@@ -274,6 +275,103 @@ pub enum Role {
 
 // ── configuration and counters ────────────────────────────────────────
 
+/// Which rate controller a station runs: bench only (the rate controller's review, Gate 3,
+/// `docs/research/rate-control/04-results.md`). The model's `GrantConfig.controller`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Controller {
+    /// The current controller ([`RateController`]).
+    #[default]
+    Current,
+    /// C2, outer-loop adaptation to a derived target ([`OuterLoopController`]).
+    Olla,
+}
+
+/// The rate controller in use.
+#[derive(Debug, Clone)]
+enum Rate {
+    Current(RateController),
+    Olla(OuterLoopController),
+}
+
+impl Rate {
+    fn snr_db(&self) -> Option<f64> {
+        match self {
+            Self::Current(c) => c.snr_db(),
+            Self::Olla(c) => c.snr_db(),
+        }
+    }
+
+    fn margin_db(&self) -> f64 {
+        match self {
+            Self::Current(c) => c.margin_db(),
+            Self::Olla(c) => c.margin_db(),
+        }
+    }
+
+    fn echo(&self) -> Option<f64> {
+        match self {
+            Self::Current(c) => c.echo(),
+            Self::Olla(c) => c.echo(),
+        }
+    }
+
+    fn recommend(&self) -> usize {
+        match self {
+            Self::Current(c) => c.recommend(),
+            Self::Olla(c) => c.recommend(),
+        }
+    }
+
+    fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
+        match self {
+            Self::Current(c) => c.observe_echo(share, snr_db),
+            Self::Olla(c) => c.observe_echo(share, snr_db),
+        }
+    }
+
+    fn modes(&self) -> &[usize] {
+        match self {
+            Self::Current(c) => c.modes(),
+            Self::Olla(c) => c.modes(),
+        }
+    }
+
+    fn threshold_db(&self, mode: usize) -> Option<f64> {
+        match self {
+            Self::Current(c) => c.threshold_db(mode),
+            Self::Olla(c) => c.threshold_db(mode),
+        }
+    }
+
+    fn seed(&mut self, snr_db: f64, lower_bound: bool) {
+        match self {
+            Self::Current(c) => c.seed(snr_db, lower_bound),
+            Self::Olla(c) => c.seed(snr_db),
+        }
+    }
+
+    fn first_mode(&self, snr_db: f64) -> usize {
+        match self {
+            Self::Current(c) => c.first_mode(snr_db),
+            Self::Olla(c) => c.first_mode(snr_db),
+        }
+    }
+
+    fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {
+        match self {
+            Self::Current(c) => c.observe(snr_db, ok, failed, mode),
+            Self::Olla(c) => c.observe(snr_db),
+        }
+    }
+
+    fn observe_snr(&mut self, snr_db: Option<f64>) {
+        match self {
+            Self::Current(c) => c.observe_snr(snr_db),
+            Self::Olla(c) => c.observe_snr(snr_db),
+        }
+    }
+}
+
 /// Tuning for a station; the protocol's constants are here too, so a bench can change them for
 /// both stations (they must hold the same).
 #[derive(Debug, Clone, PartialEq)]
@@ -319,6 +417,10 @@ pub struct GrantConfig {
     pub link_timeout_exchanges: f64,
     /// The rate controller's tuning.
     pub rate: RateConfig,
+    /// Bench only: which rate controller the station runs — the current one, or a prototype of
+    /// the rate controller's review ([`crate::rate_review`]). A station on the air runs the
+    /// current one.
+    pub controller: Controller,
     /// The rung a session's data starts at before anything is measured.
     pub initial_mode: usize,
     /// The fastest rung this station uses.
@@ -424,6 +526,7 @@ impl Default for GrantConfig {
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
             rate: RateConfig::default(),
+            controller: Controller::Current,
             initial_mode: 0,
             max_mode: 19,
             ceiling: None,
@@ -978,7 +1081,10 @@ pub struct GrantedEngine {
     measure_unheard: bool,
     /// The measurement out is a repeat, its first slot silent ([`Self::measurement_unheard`]).
     measure_again: bool,
-    rate: RateController,
+    rate: Rate,
+    /// The rung the other station's data last decoded at, for a prototype's frames never
+    /// detected (`granted._outcomes`).
+    last_rx_mode: Option<usize>,
     asked: Option<usize>,
     rx_base: u8,
     rx_buf: HashMap<u8, Vec<u8>>,
@@ -1053,6 +1159,40 @@ impl std::fmt::Debug for GrantedEngine {
     }
 }
 
+/// The controller a station's configuration names, on its air's table.
+fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
+    match config.controller {
+        Controller::Current => Rate::Current(rate_controller_for(timing, config.rate)),
+        Controller::Olla => {
+            // as the model builds it: the air's table, or the wide one's
+            let thresholds = if timing.mode_threshold_db.is_empty() {
+                crate::rate::AWGN_THRESHOLD_DB.to_vec()
+            } else {
+                timing.mode_threshold_db.clone()
+            };
+            let payload = if timing.data_capacity.is_empty() {
+                vec![0; thresholds.len()]
+            } else {
+                timing.data_capacity.clone()
+            };
+            let frame_s: Vec<f64> = (0..thresholds.len())
+                .map(|m| timing.data_frame_s_for(m))
+                .collect();
+            let capacity: Vec<usize> = (0..thresholds.len())
+                .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
+                .collect();
+            Rate::Olla(OuterLoopController::for_table(
+                &thresholds,
+                &payload,
+                &capacity,
+                &frame_s,
+                timing.floor_modes,
+                &timing.echo_limit,
+            ))
+        }
+    }
+}
+
 fn rate_controller_for(timing: &PhyTiming, config: RateConfig) -> RateController {
     let controller = if timing.mode_threshold_db.is_empty() {
         RateController::new(config)
@@ -1091,7 +1231,7 @@ impl GrantedEngine {
     #[allow(clippy::too_many_lines)] // the engine's state, a field a line
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
-        let rate = rate_controller_for(&timing, config.rate);
+        let rate = rate_for(&timing, &config);
         let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
@@ -1152,6 +1292,7 @@ impl GrantedEngine {
             measure_unheard: false,
             measure_again: false,
             rate,
+            last_rx_mode: None,
             asked: None,
             rx_base: 0,
             rx_buf: HashMap::new(),
@@ -1219,8 +1360,9 @@ impl GrantedEngine {
         self.measure_out = None;
         self.measure_unheard = false;
         self.measure_again = false;
-        self.rate = rate_controller_for(&self.timing, self.config.rate);
+        self.rate = rate_for(&self.timing, &self.config);
         self.asked = None;
+        self.last_rx_mode = None;
         self.rx_base = 0;
         self.rx_buf.clear();
         self.max_seen = None;
@@ -1873,7 +2015,7 @@ impl GrantedEngine {
         if let Some(rung) = max_mode {
             self.config.max_mode = rung;
         }
-        self.rate = rate_controller_for(&self.timing, self.config.rate);
+        self.rate = rate_for(&self.timing, &self.config);
         self.recommended = self.config.initial_mode;
     }
 
@@ -4553,6 +4695,13 @@ impl GrantedEngine {
             .map(|r| r.frame.snr_db)
             .collect();
         let snr = (!snrs.is_empty()).then(|| snrs.iter().sum::<f64>() / snrs.len() as f64);
+        if matches!(self.rate, Rate::Olla(_)) {
+            let outcomes = self.outcomes(records);
+            if let Rate::Olla(c) = &mut self.rate {
+                c.observe_frames(&outcomes, snr);
+            }
+            return snr;
+        }
         let Some(slowest) = records.iter().map(|r| r.frame.mode).min() else {
             return snr;
         };
@@ -4579,6 +4728,94 @@ impl GrantedEngine {
             self.rate.observe(snr, ok, failed, Some(best));
         }
         snr
+    }
+
+    /// What each data frame of the transmission being closed came to, for a prototype of the
+    /// rate controller's review — the frames its header (or a count this station can believe)
+    /// stated and nothing reported included, at the rung most of the transmission went at: a
+    /// frame never heard is air spent for nothing (the model's `_outcomes`).
+    fn outcomes(&mut self, records: &[RxRecord]) -> Vec<FrameOutcome> {
+        let capacity_of = |timing: &PhyTiming, mode: usize| {
+            if timing.data_capacity.is_empty() {
+                0
+            } else {
+                data_capacity(timing.capacity(mode))
+            }
+        };
+        let mut out = Vec::new();
+        for r in records {
+            if r.payload.is_none() && !r.frame.trusted {
+                continue; // a frame neither decoded nor trusted is no frame of the path
+            }
+            out.push(FrameOutcome {
+                mode: r.frame.mode,
+                air_s: (r.frame.t_end - r.frame.t_start).max(0.0),
+                capacity: capacity_of(&self.timing, r.frame.mode),
+                detected: true,
+                decoded: r.payload.is_some(),
+                combined: r.combined,
+            });
+        }
+        let slots: Vec<usize> = records.iter().map(|r| r.slot).collect();
+        let (stated, floor) = match self.grid {
+            Some((_, count, floor)) => (Some(count), Some(floor)),
+            None => (
+                records
+                    .iter()
+                    .filter_map(|r| {
+                        r.frame
+                            .follows
+                            .filter(|&f| r.payload.is_some() && !r.combined && f < MAX_FOLLOWS)
+                            .map(|f| r.slot + 1 + usize::from(f))
+                    })
+                    .max(),
+                None,
+            ),
+        };
+        if let Some(stated) = stated.filter(|&n| n > 0) {
+            let heard: Vec<usize> = records
+                .iter()
+                .filter(|r| r.payload.is_some() || r.frame.trusted)
+                .map(|r| r.frame.mode)
+                .collect();
+            let mode = if heard.is_empty() {
+                self.last_rx_mode
+                    .filter(|&m| floor.is_none_or(|f| self.timing.is_floor(m) == f))
+            } else {
+                // the most common, of two as common the slower
+                let mut sorted = heard.clone();
+                sorted.sort_unstable();
+                sorted.dedup();
+                let count = |m: usize| heard.iter().filter(|&&h| h == m).count();
+                let mut best = sorted[0];
+                for &m in &sorted[1..] {
+                    if count(m) > count(best) {
+                        best = m;
+                    }
+                }
+                Some(best)
+            };
+            if let Some(mode) = mode {
+                let capacity = capacity_of(&self.timing, mode);
+                let air = self.frame_s(self.timing.is_floor(mode));
+                for k in 0..stated {
+                    if !slots.contains(&k) {
+                        out.push(FrameOutcome {
+                            mode,
+                            air_s: air,
+                            capacity,
+                            detected: false,
+                            decoded: false,
+                            combined: false,
+                        });
+                    }
+                }
+            }
+        }
+        if let Some(last) = out.iter().rev().find(|o| o.decoded) {
+            self.last_rx_mode = Some(last.mode);
+        }
+        out
     }
 
     fn receive_window(&self) -> (u16, Vec<u8>, u8) {

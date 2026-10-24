@@ -392,6 +392,16 @@ class OuterLoopController(RateController):
             self._offset[floor] = min(20.0, max(-5.0, offset))
         self._choose()
 
+    def observe_echo(self, share: float | None, snr_db: float | None) -> None:
+        """The echo reading moves the smoothed echo as the current controller's does (ADR-0087);
+        a choice it now rules out is chosen again among the rungs it allows."""
+        if share is None or snr_db is None or snr_db < self.echo_min_snr_db:
+            return
+        w = self.echo_weight
+        self.echo = share if self.echo is None else (1.0 - w) * self.echo + w * share
+        if self._echo_out(self._index):
+            self._choose()
+
     def _choose(self) -> None:
         usable = [i for i in range(len(self.modes)) if not self._echo_out(i)]
         if not usable or self.snr_db is None:
