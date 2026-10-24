@@ -326,6 +326,7 @@ delivery is under 85 % of the current controller's (K1(b)).
 | **C1 at the sender, its silent step fixed** (§3.10) | **+22.63 %** | **1 (disturbed NVIS 0.84)** | 3, 1, 1 | **0** |
 | C1 at the sender, priced per exchange (§3.12) | **+21.30 %** | 1 (slow machine 0.76) | 5, 1, 1 | 1 (the AGC carrier, draw 0) |
 | … and no step down for silence (§3.13, reverted) | +31.83 % | 1 (disturbed NVIS 0.66) | 5, 0, 0 | 2 (the AGC carrier, draws 0 and 2) |
+| … priced, a try decided on three frames (§3.15) | **+21.85 %** | 1 (slow machine 0.81) | 6, 0, 2 | **0** (72 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -562,3 +563,28 @@ a station's stalls (§3.12, §3.13); the AGC carrier's undelivered message and K
 a try of one frame — one lucky decode put seventeen frames on OFDM rung 5 on a 7 ms echo, two
 unlucky ones shut rung 7 from a low start for the session (§3.10, §3.12). They are the author's to
 decide, case by case (`03-candidates.md` §4).
+
+### 3.15 A try decided on three frames (2026-10-24)
+
+The author's answer 3 (`03-candidates.md` §4): a try of the rung above runs until its own frames
+outweigh the prior — more than `prior_frames`, so three — or twice the transmissions that takes,
+and a rung above becomes choosable only once its frames outweigh its prior (`995ff5e`; no new
+parameter). The 69 runs and WC4Y's path (`80m-floor-top-start-500`, the author's answer 5), 72:
+
+* **Completion**: 72 of 72; `80m-agc-carrier-outside-500` three of three (328, 336 and 371 s).
+* **K1(a) passes**: +21.85 %.
+* **K1(b)**: `80m-slow-machine-500` 0.81 (126 / 43 / 86 against 119 / 91 / 106; draw 1's 43 is
+  the floor after a stall again); every other scenario at 0.87 or over.
+* **K3** fails: 6, 0, 2.
+* **WC4Y's path** (the current's Test: message 73.9 / 81.9 / 81.9, file 92.7 / 92.6 / 104.5
+  bit/s): message 91.6 / 81.9 / 91.6, file 77.2 / 92.6 / 89.4 — the message ×1.12, the file ×0.96
+  (medians).
+
+**K3's draw 0, traced**: from the low reading C1 at the sender sat on rung 4 (the floor's top)
+from 30 to 188 s — 27 frames — without one try of rung 5, while the receiver advised 6 to 10. A
+transmission goes in the family of its oldest unacknowledged frame, and on this path a floor frame
+was always in flight, so the try of OFDM — a whole transmission in the other family — never went
+and expired unmeasured, again and again. **A defect** of the try, not the path: a try across the
+edge now takes the transmission and the floor frames in flight wait it out (`25995cb`, model and
+port; the review's vectors gain a session with a floor frame always in flight, and removing the
+exception in the port fails them). On the harness next.
