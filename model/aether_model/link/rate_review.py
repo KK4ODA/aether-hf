@@ -68,6 +68,11 @@ CLASS_PENALTY_DB: dict[int, dict[int, tuple[float, float, float]]] = {
 """The table for a ladder, by its number of rungs (20 at 2 300 Hz, 15 at 500 Hz)."""
 
 
+WAIT_TOLERANCE_S = 1e-9
+"""Six transmissions' air is a try's wait exactly when six such transmissions went: a sum that
+lands on it counts as there whatever its last bit (:meth:`DeliveryController._wait_s`)."""
+
+
 @dataclass(frozen=True)
 class FrameOutcome:
     """One data frame of a transmission, as the receiving station saw it."""
@@ -141,8 +146,9 @@ class DeliveryController(RateController):
     it, against a prior from the smoothed SNR worth :attr:`prior_frames` frames. The
     recommendation is the best estimate of the current rung and its usable neighbours. The
     neighbour above is tried — one transmission recommended at it — when its lossless rate
-    beats the current rung's estimate and :attr:`probe_every` transmissions have gone since the
-    last try of it; a try that delivered less than the rung it went up from doubles the wait.
+    beats the current rung's estimate and the air of :attr:`probe_every` full transmissions at
+    it has gone since the last try of it; a try that delivered less than the rung it went up
+    from doubles the wait.
 
     It inherits :class:`RateController` for what the engine reads of it (the ladder, the
     thresholds, the echo exclusions, the SNR) and replaces the margin, the hysteresis, the
@@ -198,7 +204,8 @@ class DeliveryController(RateController):
     climb is the job — the median regret +22.6 → +28.7 %, three weak paths under 0.85, one Test
     failed. Off; kept until the decision ADR says what goes."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
-    _since_probe: dict[int, int] = field(default_factory=dict)
+    _since_probe: dict[int, float] = field(default_factory=dict)
+    """Seconds of data air observed since each rung's last try (:meth:`_wait_s`)."""
     _probe_wait: dict[int, int] = field(default_factory=dict)
     _probing: int | None = None
     """The rung being tried — what is recommended until a transmission carrying it is seen."""
@@ -241,8 +248,11 @@ class DeliveryController(RateController):
             if f.decoded:
                 acc.bytes += f.capacity
         sent = {f.mode for f in frames}
+        air = 0.0
+        for f in frames:
+            air += f.air_s  # added in order, as the port adds (Python's sum() compensates)
         for mode in self.modes:
-            self._since_probe[mode] = self._since_probe.get(mode, 0) + 1
+            self._since_probe[mode] = self._since_probe.get(mode, 0.0) + air
         here = self.modes[self._index]
         for mode in sent - {self._probing, here}:
             # frames at a rung above, sent for another reason (a copy still at its first rung,
@@ -329,7 +339,16 @@ class DeliveryController(RateController):
             if self._usable(self._index + 1):
                 # a climb that works goes on: the rung above is tried at the next transmission
                 above = self.modes[self._index + 1]
-                self._since_probe[above] = self._probe_wait.get(above, self.probe_every)
+                self._since_probe[above] = self._wait_s(above)
+
+    def _wait_s(self, mode: int) -> float:
+        """The air to let go by before trying ``mode``: its wait, in full transmissions at
+        ``mode``. Counted in transmissions of whatever was sent, the wait was six floor
+        transmissions (about 160 s) before a try of OFDM and under a minute above it: from a low
+        start, or after a stall put the session on the floor, the way back took minutes
+        (``04-results.md`` §3.16)."""
+        n = self.burst_frames.get(mode, 1)
+        return self._probe_wait.get(mode, self.probe_every) * (n * self.frame_air_s.get(mode, 1.0))
 
     def _judge_try(self, mode: int) -> bool:
         """What frames at ``mode``, above the current rung, said: whether it now beats the
@@ -340,7 +359,7 @@ class DeliveryController(RateController):
             return True
         wait = self._probe_wait.get(mode, self.probe_every)
         self._probe_wait[mode] = min(self.probe_wait_max, 2 * wait)
-        self._since_probe[mode] = 0
+        self._since_probe[mode] = 0.0
         return False
 
     def _decide(self) -> None:
@@ -370,9 +389,9 @@ class DeliveryController(RateController):
         mode = self.modes[up]
         if self._priced(mode, self.lossless(mode)) <= self.value(self.modes[self._index]):
             return
-        if self._since_probe.get(mode, 0) >= self._probe_wait.get(mode, self.probe_every):
+        if self._since_probe.get(mode, 0.0) >= self._wait_s(mode) - WAIT_TOLERANCE_S:
             self._probing = mode
-            self._since_probe[mode] = 0
+            self._since_probe[mode] = 0.0
 
     def observe_echo(self, share: float | None, snr_db: float | None) -> None:
         """The echo reading moves the smoothed echo as the current controller's does (ADR-0087);
@@ -433,7 +452,7 @@ class DeliveryController(RateController):
         self._index = self.modes.index(self.first_mode(snr_db))
         if self.cautious_start and self._usable(self._index + 1):
             above = self.modes[self._index + 1]
-            self._since_probe[above] = self._probe_wait.get(above, self.probe_every)
+            self._since_probe[above] = self._wait_s(above)
 
 
 @dataclass

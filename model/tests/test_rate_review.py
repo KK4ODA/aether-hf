@@ -175,3 +175,25 @@ def test_a_try_is_decided_on_more_frames_than_the_prior_weighs() -> None:
         assert ctl.modes[ctl._index] == here
     ctl.observe_frames([frame(here)] * 5 + [frame(up)], 8.0)
     assert ctl._probing != up and ctl.modes[ctl._index] == up, "three clean frames climb"
+
+
+def test_the_wait_before_a_try_is_air_at_the_rung_tried() -> None:
+    """The wait before a try of the rung above is :attr:`probe_every` full transmissions *at
+    that rung*, in seconds of air: from the 500 Hz floor's top (four 5.36 s frames a
+    transmission here) a try of OFDM (six 1.05 s frames) comes after two floor transmissions,
+    not six — six floor transmissions were 160 s on the harness (``04-results.md`` §3.16)."""
+    timing = phy_timing(NARROW.params)
+    a, _ = _pair(NARROW, "delivery")
+    ctl = a.rate
+    assert isinstance(ctl, DeliveryController)
+    ctl.seed(0.0)
+    ctl._index = ctl.modes.index(4)
+    ctl._cancel_try()
+    cap = data_capacity(timing.capacity(4))
+    floor = [FrameOutcome(4, timing.data_frame_s_for(4), cap, True, True, False, 0.0)] * 4
+    transmissions = 0
+    while ctl._probing is None and transmissions < 10:
+        ctl.observe_frames(floor, 0.0)
+        transmissions += 1
+    assert ctl._probing == 5
+    assert transmissions == 2

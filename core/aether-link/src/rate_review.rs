@@ -9,6 +9,10 @@
 
 use crate::rate::usable_modes_by_rate;
 
+/// Six transmissions' air is a try's wait exactly when six such transmissions went: a sum that
+/// lands on it counts as there whatever its last bit (the model's `WAIT_TOLERANCE_S`).
+const WAIT_TOLERANCE_S: f64 = 1e-9;
+
 /// One data frame of a transmission, as the receiving station saw it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrameOutcome {
@@ -429,7 +433,8 @@ pub struct DeliveryController {
     smoothed_snr_db: Option<f64>,
     index: usize,
     accounts: Vec<Option<Account>>,
-    since_probe: Vec<Option<usize>>,
+    /// Seconds of data air observed since each rung's last try ([`wait_s`](Self::wait_s)).
+    since_probe: Vec<Option<f64>>,
     probe_wait: Vec<Option<usize>>,
     probing: Option<usize>,
     probe_tries: usize,
@@ -703,8 +708,17 @@ impl DeliveryController {
         }
     }
 
-    fn since(&self, mode: usize) -> usize {
-        self.since_probe.get(mode).copied().flatten().unwrap_or(0)
+    fn since(&self, mode: usize) -> f64 {
+        self.since_probe.get(mode).copied().flatten().unwrap_or(0.0)
+    }
+
+    /// The air to let go by before trying `mode`: its wait, in full transmissions at `mode`
+    /// (the model's `_wait_s`). Counted in transmissions of whatever was sent, it was six floor
+    /// transmissions before a try of OFDM.
+    #[allow(clippy::cast_precision_loss)]
+    fn wait_s(&self, mode: usize) -> f64 {
+        let n = self.burst_frames.get(mode).copied().unwrap_or(1);
+        self.wait(mode) as f64 * (n as f64 * self.frame_s.get(mode).copied().unwrap_or(1.0))
     }
 
     fn wait(&self, mode: usize) -> usize {
@@ -755,9 +769,10 @@ impl DeliveryController {
         let mut sent: Vec<usize> = frames.iter().map(|f| f.mode).collect();
         sent.sort_unstable();
         sent.dedup();
+        let air = frames.iter().map(|f| f.air_s).sum::<f64>();
         for i in 0..self.modes.len() {
             let mode = self.modes[i];
-            self.since_probe[mode] = Some(self.since(mode) + 1);
+            self.since_probe[mode] = Some(self.since(mode) + air);
         }
         let here = self.modes[self.index];
         for &mode in &sent {
@@ -809,7 +824,7 @@ impl DeliveryController {
             if self.usable(self.index + 1) {
                 // a climb that works goes on: the rung above is tried at the next transmission
                 let above = self.modes[self.index + 1];
-                self.since_probe[above] = Some(self.wait(above));
+                self.since_probe[above] = Some(self.wait_s(above));
             }
         }
     }
@@ -824,7 +839,7 @@ impl DeliveryController {
         }
         let wait = self.wait(mode);
         self.probe_wait[mode] = Some(self.probe_wait_max.min(2 * wait));
-        self.since_probe[mode] = Some(0);
+        self.since_probe[mode] = Some(0.0);
         false
     }
 
@@ -864,9 +879,9 @@ impl DeliveryController {
         if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
             return;
         }
-        if self.since(mode) >= self.wait(mode) {
+        if self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S {
             self.probing = Some(mode);
-            self.since_probe[mode] = Some(0);
+            self.since_probe[mode] = Some(0.0);
         }
     }
 
@@ -950,7 +965,7 @@ impl DeliveryController {
         self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
         if self.cautious_start && self.usable(self.index + 1) {
             let above = self.modes[self.index + 1];
-            self.since_probe[above] = Some(self.wait(above));
+            self.since_probe[above] = Some(self.wait_s(above));
         }
     }
 }
