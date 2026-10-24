@@ -21,8 +21,10 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   fail it.
 * **On the harness** (§3.7): every candidate against the current controller on the 20 regret
   scenarios, the start pair and `80m-agc-carrier-outside-500`, three draws each. The leader is C1
-  at the sender with its silent step fixed (§3.10): 69 of 69 complete, and K1(a), K1(b) and K3
-  each a near miss. C1 at the sender ranked per exchange (§3.11) is running.
+  at the sender: with its silent step fixed (§3.10), 69 of 69 complete and K1(a), K1(b) and K3
+  each a near miss; ranked per exchange (§3.11, §3.12), K1(a) passes, `80m-slow-machine-500`
+  fails K1(b) and one run fails to complete. Without its step down for silence (§3.12) it is
+  running.
 * **Next**: the decision on the near misses (the author's, case by case), then K2, K4, K5 and K7
   for the candidate taken forward.
 
@@ -322,6 +324,7 @@ delivery is under 85 % of the current controller's (K1(b)).
 | C1 at the sender (§3.9) | +26.1 % | 2 (disturbed NVIS 0.84, slow machine 0.77) | 1, 0, 1 | 3 (the AGC carrier, all three) |
 | C1 at the sender, echo kept (§3.10) | +25.16 % | 1 (disturbed NVIS 0.63) | 3, 1, 1 | 3 (the AGC carrier, all three) |
 | **C1 at the sender, its silent step fixed** (§3.10) | **+22.63 %** | **1 (disturbed NVIS 0.84)** | 3, 1, 1 | **0** |
+| C1 at the sender, priced per exchange (§3.12) | **+21.30 %** | 1 (slow machine 0.76) | 5, 1, 1 | 1 (the AGC carrier, draw 0) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -490,5 +493,37 @@ The price moved C1 at the receiver's worst session from 0.424 to 0.620 and WC4Y'
 from 0.878 to 1.016. What is left on 2026-10-22 is the open loop: with floor answers rung 6 still
 beats rung 4 lossless (135 against 114), the optimistic prior believes it decodes, and the
 session — which sent no data there — never says otherwise; its ladder measured rung 6 a quarter
-of the time. The harness judges the closed loop: C1 at the sender with the price is running
-there (§0).
+of the time. The harness judges the closed loop (§3.12).
+
+### 3.12 C1 at the sender, priced per exchange, on the harness (2026-10-24)
+
+`f9976ad`, the same 69 runs. Changed from §3.10 (delivery in bit/s, three draws):
+
+| scenario | current | §3.10 | priced | priced / current (medians) |
+|---|---|---|---|---|
+| `80m-nvis-disturbed-500` | 38 / 44 / 36 | 32 / 44 / 30 | 40 / 44 / 30 | **1.05** (was 0.84) |
+| `80m-nvis-evening-500` | 41 / 25 / 26 | 39 / 44 / 44 | 39 / 26 / 33 | 1.25 (was 1.65) |
+| `80m-slow-machine-500` | 119 / 91 / 106 | 149 / 94 / 110 | 149 / 63 / 81 | **0.76** (was 1.03) |
+| `80m-poor-500-pactor-signalink` | 66 / 74 / 72 | 82 / 86 / 76 | 71 / 86 / 65 | 0.99 (was 1.14) |
+| `80m-strong-moderate-500` | 151 / 260 / 244 | 276 / 280 / 323 | 267 / 323 / 183 | 1.10 (was 1.15) |
+| `80m-lopsided-acks-500` | 77 / 76 / 83 | 104 / 82 / 62 | 103 / 76 / 106 | 1.33 (was 1.06) |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 | 32 / 74 / 76 | 78 / 78 / 76 | 1.00 (was 0.94) |
+
+* **K1(a) passes**: +21.30 % against the line of +22.62 %.
+* **K1(b)** fails on `80m-slow-machine-500` (0.76); every other scenario is at 0.87 or over.
+* **K3** fails: 5, 1 and 1 apart (draw 0's low reading settled at rung 4).
+* **Completion**: 68 of 69. `80m-agc-carrier-outside-500` draw 0 left its message undelivered in
+  400 s.
+
+**The traces.** *The AGC carrier, draw 0*: three single-frame tries of rung 5 (41.7, 85.3 and
+99.5 s), then at 224 s seventeen frames at rung 5 while the receiver advised rung 2 — on a 7 ms
+NVIS path, where OFDM decodes about a quarter of its frames. One try that happens to decode moves
+a rung's estimate further than a thin sample should. *The slow machine*: after each of the
+station's stalls (silent slots) C1 at the sender stepped its own rung down two — the engine's R9,
+copied into it (`silent`, §3.10) — onto the floor (rungs 2 and 4) for long stretches, where the
+current controller, set straight by the receiver's next advice, stayed at OFDM rungs 5–9. **That
+step counts the silence twice**: the copies a silent transmission carried are judged at the next
+answer anyway, delivered or not, and a slot goes silent mostly for a lost control frame or a
+stalled station, which a slower data rung does not cure. It is gone (`bd81150`, model, port and
+replay; R9 still steps the engine's own recommendation). K6 without it: ×1.511 of the current, the
+worst session WC4Y's of 2026-10-22 at 0.688 — the open loop of §3.11, the only one under 0.9.
