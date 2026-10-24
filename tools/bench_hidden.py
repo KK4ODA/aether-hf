@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.phy.passband import AudioToBaseband
 from aether_model.phy.pipeline import DecodedFrame
-from aether_model.phy.stream import StreamingReceiver
+from aether_model.phy.stream import TRUSTED_CONFIDENCE, StreamingReceiver
 from aether_model.waveform import NARROW_500, WIDE_2300, WaveformParams
 
 AUDIO_RATE = 48_000
@@ -390,6 +390,9 @@ def synth(args: argparse.Namespace) -> None:
 
 
 def summarise_synth(path: Path) -> None:
+    """Per cell: the trials that count (the reference decodes the real frame, the as-built
+    stream handed out the false candidate), what each rule decoded, and the same for the case
+    the rule is for — the false candidate under 1.3 and the real frame at or over it."""
     import csv
     from collections import defaultdict
 
@@ -397,15 +400,36 @@ def summarise_synth(path: Path) -> None:
     cells: dict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
     for r in rows:
         cells[(r["hz"], r["false_type"], r["real"])].append(r)
-    print("air  false    real       decodes alone  hidden as built  recovered under test")
+
+    def share(rs: list[dict[str, str]], key: str) -> str:
+        k = sum(r[key] == "1" for r in rs)
+        return f"{k:4}/{len(rs):<4} {100 * k / max(len(rs), 1):5.1f} %"
+
+    def weak_false(r: dict[str, str]) -> bool:
+        return float(r["false_conf"]) < TRUSTED_CONFIDENCE
+
+    def strong_real(r: dict[str, str]) -> bool:
+        return r["real_conf"] != "" and float(r["real_conf"]) >= TRUSTED_CONFIDENCE
+
+    print(
+        "air  false    real     | counted: as built        under test       "
+        "| false < 1.3, real >= 1.3: as built   under test"
+    )
+    totals: dict[str, list[dict[str, str]]] = defaultdict(list)
     for key in sorted(cells):
         rs = [r for r in cells[key] if r["ref"] == "1" and r["false_conf"] != ""]
-        r0 = sum(r["r0"] == "1" for r in rs)
-        r1 = sum(r["r1"] == "1" for r in rs)
-        n = len(rs)
+        aimed = [r for r in rs if weak_false(r) and strong_real(r)]
+        totals[key[0]] += rs
+        totals[key[0] + " aimed"] += aimed
         print(
-            f"{key[0]:>4} {key[1]:8} {key[2]:9} {n:6}        {n - r0:6}           "
-            f"{r1:6} ({100 * r1 / max(n, 1):5.1f} %)"
+            f"{key[0]:>4} {key[1]:8} {key[2]:8} | {share(rs, 'r0')}  {share(rs, 'r1')} "
+            f"| {share(aimed, 'r0')}  {share(aimed, 'r1')}"
+        )
+    for hz in sorted(k for k in totals if " " not in k):
+        print(
+            f"{hz:>4} all: counted as built {share(totals[hz], 'r0')}, under test "
+            f"{share(totals[hz], 'r1')}; aimed as built {share(totals[hz + ' aimed'], 'r0')}, "
+            f"under test {share(totals[hz + ' aimed'], 'r1')}"
         )
 
 
