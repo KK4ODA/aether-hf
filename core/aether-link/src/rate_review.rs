@@ -825,6 +825,16 @@ impl DeliveryController {
                 // a climb that works goes on: the rung above is tried at the next transmission
                 self.since_probe[above] = Some(self.wait_s(above));
             }
+        } else if (mode < self.floor_modes) != (self.modes[self.index] < self.floor_modes) {
+            // a try across the floor's edge answers for the whole family above: with a wait of
+            // their own each, the next rung up was tried at the next transmission, and the next
+            // (the model's `_end_probe`)
+            let wait = self.wait(mode);
+            for i in self.try_reach() {
+                let m = self.modes[i];
+                self.probe_wait[m] = Some(self.wait(m).max(wait));
+                self.since_probe[m] = Some(0.0);
+            }
         }
     }
 

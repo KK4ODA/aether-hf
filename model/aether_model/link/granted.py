@@ -2785,7 +2785,7 @@ class GrantedEngine:
             else:
                 # of new data: with none to cut at the try's rung the transmission is not the
                 # try's, or the other family's frames in flight never went — C1 at the sender
-                # sent empty headers for 160 s, the try never decided (04-results.md §3.20)
+                # sent empty headers for 160 s, the try never decided (04-results.md §3.21)
                 probe = None
         recommendation = min(self._recommended, self._cap())
         # what an unheard answer would have said is not resent blind: it waits for an answer —

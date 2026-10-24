@@ -149,7 +149,8 @@ class DeliveryController(RateController):
     lossless rate beats the current rung's estimate and the air of :attr:`probe_every` full
     transmissions at it has gone since the last try of it; a try that delivered less than the
     rung it went up from doubles the wait. Above the top of one family the try goes to the rung
-    of the other with the best estimate (:meth:`_try_target`).
+    of the other with the best estimate (:meth:`_try_target`), and a failed one doubles the wait
+    of every rung of that family.
 
     It inherits :class:`RateController` for what the engine reads of it (the ladder, the
     thresholds, the echo exclusions, the SNR) and replaces the margin, the hysteresis, the
@@ -341,6 +342,16 @@ class DeliveryController(RateController):
             if above is not None:
                 # a climb that works goes on: the rung above is tried at the next transmission
                 self._since_probe[above] = self._wait_s(above)
+        elif (mode < self.floor_modes) != (self.modes[self._index] < self.floor_modes):
+            # a try across the floor's edge answers for the whole family above: with a wait of
+            # their own each, the next rung up was tried at the next transmission, and the next —
+            # four tries in a row, each cutting blocks at a rung that delivered 0-98 bit/s where
+            # the floor's top delivered 165 (04-results.md §3.21)
+            wait = self._probe_wait[mode]
+            for i in self._try_reach():
+                m = self.modes[i]
+                self._probe_wait[m] = max(self._probe_wait.get(m, self.probe_every), wait)
+                self._since_probe[m] = 0.0
 
     def _try_target(self) -> int | None:
         """The rung a try goes to: the usable rung above the current one or, when that is the
