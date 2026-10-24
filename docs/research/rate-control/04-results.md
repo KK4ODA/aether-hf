@@ -257,3 +257,29 @@ a failure the prior was sure of, down by nearly it for a success it ruled out. A
 still judged by its own account; the offset reshapes only the prior. One setting added; C2's one
 good idea (a family's evidence) without its single-offset choice. On the harness next.
 
+### 3.5 C1 v2 (the family's offset) on the harness, and v3 (2026-10-24)
+
+C1 with the family offset (`8b21148`), the same 66 runs.
+
+* **K1(a) passes by a hair**: +22.55 % against +22.62 % asked (the current +45.24 %) — inside the
+  statistic's own spread on draws alone (±7 points), so a case for the author, not a pass by rule.
+* **K1(b)**: `80m-nvis-evening-500` 0.50 → 0.95; `80m-nvis-disturbed-500` still 0.76, its
+  deliveries the same as v1's to the bit (29 / 44 / 21): the change never acted there.
+* **K3 fails**: 3, 0 and 2 apart (v1 passed: 1, 0, 0).
+
+**The traces.** *The disturbed NVIS*: the master's first transmission went at OFDM 5 (its own
+controller's first rung, the optimistic prior at the acceptance's reading of the call), before any
+frame was measured, so the family offset had nothing to act on; its six blocks were then bound to
+rung 5 until each had gone four times (`max_combines`), 24 OFDM frames on a path whose echo
+refuses OFDM — the engine's re-encode rule, which every candidate keeps (`03-candidates.md`
+§1.1). *The start pair*: the low start of draw 0 sent 35 frames at rung 6 before its first try
+upward (the first try waited `probe_every`, six transmissions); the high start went 9 → 6 and
+climbed to 12–14 only late.
+
+**The change** (C1 v3, `6eb8b1d`): the first rung is the best by the four channels' mean
+(`cautious_start`; the tables are in the port, `class_penalty_db`, held to the model's), and the
+rung above it is tried at the next transmission. The optimistic prior stays for every choice
+after the start. The reason is the asymmetry the iteration found (§2.4): after the start a rung
+found wanting costs one measured transmission, but the first transmission's blocks are bound to
+its rung before anything is measured.
+
