@@ -6,11 +6,13 @@ the field's two-sided sessions, open loop (``docs/research/rate-control/03-candi
 Both controllers are replayed on what each receiver recorded (``tools/rung_reading.py``'s
 replay, which reproduces the current controller's recommendations exactly). At every step where
 the session measured both controllers' choices — data or the Test's ladder sent at that rung in
-that direction — each choice is worth the data per second of air its rung delivered in the
-session (``RungAccount.frame_bps``); K6 passes when the candidate's sum is at least the
-current's and no session's is ten per cent under. A step whose choice the session never sent at
-is not judged, and the share judged is reported: open loop, a candidate is only ever judged on
-what the session happened to measure.
+that direction — each choice is worth what its rung's measured first copies say it delivers in
+this session's exchanges (``rung_reading.rate_at`` on ``RungAccount.first_copy_share``, a frame
+never detected counted lost: Gate 0's neighbour estimate, one measure for data and ladder rungs
+alike); K6 passes when the candidate's sum is at least the current's and no session's is ten
+per cent under. A step whose choice the session never measured is not judged, and the share
+judged is reported: open loop, a candidate is only ever judged on what the session happened to
+measure.
 """
 
 from __future__ import annotations
@@ -29,17 +31,24 @@ def judge(master: Path, slave: Path, candidate: str) -> list[tuple[str, int, int
     current = rr.read_session(master, slave, replay_controller=True)
     other = rr.read_session(master, slave, replay_controller=True, controller=candidate)
     out = []
+    air = rr.air_for(rr.load_side(master).doc)
     for d_cur, d_cand in zip(current.directions, other.directions, strict=True):
         judged = 0
         cur_sum = cand_sum = 0.0
+        overhead = rr.exchange_overhead_s(d_cur.txs)
+        worth = {
+            r: rr.rate_at(air, r, acc.first_copy_share, overhead)
+            for r, acc in d_cur.accounts.items()
+            if overhead is not None and acc.first_copy_share is not None and r < air.n_rungs
+        }
         for s_cur, s_cand in zip(d_cur.steps, d_cand.steps, strict=True):
-            a = d_cur.accounts.get(s_cur.rung_replayed)
-            b = d_cur.accounts.get(s_cand.rung_replayed)
-            if a is None or b is None or a.frame_bps is None or b.frame_bps is None:
+            a = worth.get(s_cur.rung_replayed)
+            b = worth.get(s_cand.rung_replayed)
+            if a is None or b is None:
                 continue
             judged += 1
-            cur_sum += a.frame_bps
-            cand_sum += b.frame_bps
+            cur_sum += a
+            cand_sum += b
         out.append(
             (
                 f"{current.recording} {d_cur.sender}->{d_cur.receiver}",

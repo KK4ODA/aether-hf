@@ -17,6 +17,56 @@ from itertools import pairwise
 
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController
 
+# What each rung's 10 % point moves by on ITU-R F.1487's Good, Moderate and Poor channels, dB over
+# its AWGN point (bench/baselines/phy_fer.csv, phy_fer_500.csv and tone_floor.csv through
+# tools/bench_link.channel_thresholds, which fills a rung not swept from its family's mean): the
+# prototypes' prior for a path not yet measured is the mean of the four channels' curves.
+WIDE_CLASS_PENALTY_DB: dict[int, tuple[float, float, float]] = {
+    0: (7.3, 5.8, 4.5),
+    1: (8.5, 7.0, 6.4),
+    2: (7.4, 4.8, 4.2),
+    3: (8.5, 6.0, 6.7),
+    4: (6.6, 4.9, 4.7),
+    5: (8.0, 6.9, 7.1),
+    6: (7.1, 6.3, 4.8),
+    7: (7.4, 7.4, 5.0),
+    8: (7.3, 6.6, 4.1),
+    9: (7.4, 7.4, 5.0),
+    10: (7.3, 7.1, 4.6),
+    11: (7.4, 7.4, 5.0),
+    12: (7.0, 7.6, 5.0),
+    13: (7.4, 7.4, 5.0),
+    14: (7.7, 6.7, 6.5),
+    15: (7.4, 7.4, 5.0),
+    16: (7.8, 9.9, 5.0),
+    17: (7.4, 7.4, 5.0),
+    18: (7.4, 7.4, 5.0),
+    19: (7.9, 7.4, 5.0),
+}
+NARROW_CLASS_PENALTY_DB: dict[int, tuple[float, float, float]] = {
+    0: (7.3, 5.8, 4.5),
+    1: (8.5, 7.0, 6.4),
+    2: (6.6, 4.1, 3.5),
+    3: (9.4, 6.8, 5.8),
+    4: (10.4, 8.9, 7.3),
+    5: (9.2, 8.7, 5.2),
+    6: (9.1, 8.6, 7.6),
+    7: (9.1, 10.1, 6.6),
+    8: (9.5, 9.8, 6.9),
+    9: (9.1, 9.6, 8.1),
+    10: (10.0, 12.0, 6.9),
+    11: (10.5, 9.8, 6.9),
+    12: (10.1, 9.8, 6.9),
+    13: (9.2, 9.8, 6.9),
+    14: (10.6, 9.8, 6.9),
+}
+
+CLASS_PENALTY_DB: dict[int, dict[int, tuple[float, float, float]]] = {
+    len(WIDE_CLASS_PENALTY_DB): WIDE_CLASS_PENALTY_DB,
+    len(NARROW_CLASS_PENALTY_DB): NARROW_CLASS_PENALTY_DB,
+}
+"""The table for a ladder, by its number of rungs (20 at 2 300 Hz, 15 at 500 Hz)."""
+
 
 @dataclass(frozen=True)
 class FrameOutcome:
@@ -47,6 +97,15 @@ def decode_probability(snr_db: float, threshold_db: float, slope_db: float) -> f
     if x < -40:
         return 0.0
     return 1.0 / (1.0 + math.exp(-x) / 9.0)
+
+
+def path_decode_probability(
+    snr_db: float, threshold_db: float, penalties: tuple[float, ...], slope_db: float
+) -> float:
+    """The chance a frame decodes at ``snr_db`` on a path not yet measured: the mean of the
+    steady channel's curve and the three fading channels' (``penalties`` over the threshold)."""
+    points = (0.0, *penalties)
+    return sum(decode_probability(snr_db, threshold_db + p, slope_db) for p in points) / len(points)
 
 
 @dataclass
@@ -81,9 +140,9 @@ class DeliveryController(RateController):
     probe_every: int = 6
     probe_wait_max: int = 48
     slope_db: float = 0.5
-    prior_margin_db: float = 3.0
-    """How far under the reading the prior puts a rung's AWGN curve: what a path not yet measured
-    is assumed to cost — the current controller's starting margin."""
+    penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
+    """Per rung, its fading channels' 10 % points over its AWGN one (:data:`CLASS_PENALTY_DB`):
+    the prior is the mean of the four channels' curves at the reading."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, int] = field(default_factory=dict)
     _probe_wait: dict[int, int] = field(default_factory=dict)
@@ -133,8 +192,8 @@ class DeliveryController(RateController):
         if self.snr_db is None:
             prior = 0.0
         else:
-            prior = cap * decode_probability(
-                self.snr_db - self.prior_margin_db, self.thresholds[mode], self.slope_db
+            prior = cap * path_decode_probability(
+                self.snr_db, self.thresholds[mode], self.penalties.get(mode, ()), self.slope_db
             )
         acc = self._accounts.get(mode, _Account())
         w = self.prior_frames
@@ -231,7 +290,10 @@ class OuterLoopController(RateController):
     frame_air_s: dict[int, float] = field(default_factory=dict)
     step_db: float = 0.5
     slope_db: float = 0.5
-    start_offset_db: float = 3.0
+    start_offset_db: float = 0.0
+    penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
+    """As :attr:`DeliveryController.penalties`: the curve a rung's chance is read off is the
+    mean of the four channels', its family's offset under it."""
     _offset: dict[bool, float] = field(default_factory=dict)
     _target: dict[bool, float] = field(default_factory=dict)
 
@@ -256,7 +318,12 @@ class OuterLoopController(RateController):
         snr = self.snr_db if snr_db is None else snr_db
         if snr is None:
             return 0.0
-        p = decode_probability(snr - self.offset(mode), self.thresholds[mode], self.slope_db)
+        p = path_decode_probability(
+            snr - self.offset(mode),
+            self.thresholds[mode],
+            self.penalties.get(mode, ()),
+            self.slope_db,
+        )
         return self.lossless(mode) * p
 
     def observe(self, snr_db: float | None, ok: int, failed: int, mode: int | None = None) -> None:
