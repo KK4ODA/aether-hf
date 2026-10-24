@@ -145,12 +145,10 @@ class DeliveryController(RateController):
     every frame never detected — decayed with a half-life of :attr:`half_life` frames sent at
     it, against a prior from the smoothed SNR worth :attr:`prior_frames` frames. The
     recommendation is the best estimate of the current rung and its usable neighbours. The
-    neighbour above is tried — recommended until its frames outweigh the prior — when its
-    lossless rate beats the current rung's estimate and the air of :attr:`probe_every` full
-    transmissions at it has gone since the last try of it; a try that delivered less than the
-    rung it went up from doubles the wait. Above the top of one family the try goes to the rung
-    of the other with the best estimate (:meth:`_try_target`), and a failed one doubles the wait
-    of every rung of that family.
+    neighbour above is tried — one transmission recommended at it — when its lossless rate
+    beats the current rung's estimate and the air of :attr:`probe_every` full transmissions at
+    it has gone since the last try of it; a try that delivered less than the rung it went up
+    from doubles the wait.
 
     It inherits :class:`RateController` for what the engine reads of it (the ladder, the
     thresholds, the echo exclusions, the SNR) and replaces the margin, the hysteresis, the
@@ -338,49 +336,10 @@ class DeliveryController(RateController):
             return
         if self._judge_try(mode):
             self._index = self.modes.index(mode)
-            above = self._try_target()
-            if above is not None:
+            if self._usable(self._index + 1):
                 # a climb that works goes on: the rung above is tried at the next transmission
+                above = self.modes[self._index + 1]
                 self._since_probe[above] = self._wait_s(above)
-        elif (mode < self.floor_modes) != (self.modes[self._index] < self.floor_modes):
-            # a try across the floor's edge answers for the whole family above: with a wait of
-            # their own each, the next rung up was tried at the next transmission, and the next —
-            # four tries in a row, each cutting blocks at a rung that delivered 0-98 bit/s where
-            # the floor's top delivered 165 (04-results.md §3.21)
-            wait = self._probe_wait[mode]
-            for i in self._try_reach():
-                m = self.modes[i]
-                self._probe_wait[m] = max(self._probe_wait.get(m, self.probe_every), wait)
-                self._since_probe[m] = 0.0
-
-    def _try_target(self) -> int | None:
-        """The rung a try goes to: the usable rung above the current one or, when that is the
-        other family's, the rung of that family with the best :meth:`value` (of those whose wait
-        is over, when :meth:`_decide` starts one). The first OFDM rung
-        above the floor's top carries about what the top carries — at 500 Hz less, once its
-        exchanges are priced with floor answers — so a try of it alone was judged a loss and the
-        rung above it never looked at: from a call heard 4 dB low the session stayed on the
-        floor's top where the same path's other start settled two rungs up (``04-results.md``
-        §3.19, K3)."""
-        reach = self._try_reach()
-        if not reach:
-            return None
-        return self.modes[max(reach, key=lambda i: (self.value(self.modes[i]), -i))]
-
-    def _try_reach(self) -> list[int]:
-        """The indices a try may go to from the current rung (:meth:`_try_target`): a try under
-        way at one of them goes on whatever its frames do to the values, until they decide it."""
-        up = self._index + 1
-        if not self._usable(up):
-            return []
-        floor = self.modes[up] < self.floor_modes
-        if floor == (self.modes[self._index] < self.floor_modes):
-            return [up]
-        return [
-            i
-            for i in range(up, len(self.modes))
-            if self._usable(i) and (self.modes[i] < self.floor_modes) == floor
-        ]
 
     def _wait_s(self, mode: int) -> float:
         """The air to let go by before trying ``mode``: its wait, in full transmissions at
@@ -420,20 +379,17 @@ class DeliveryController(RateController):
             self._cancel_try()
             return
         self._index = max(here, key=lambda i: (self.value(self.modes[i]), -i))
+        up = self._index + 1
         if self._probing is not None:
-            if self._probing not in (self.modes[i] for i in self._try_reach()):
+            if not self._usable(up) or self.modes[up] != self._probing:
                 self._cancel_try()  # the choice moved from under the try
             return
-        now = self.value(self.modes[self._index])
-        due = [
-            i
-            for i in self._try_reach()
-            if self._priced(self.modes[i], self.lossless(self.modes[i])) > now
-            and self._since_probe.get(self.modes[i], 0.0)
-            >= self._wait_s(self.modes[i]) - WAIT_TOLERANCE_S
-        ]
-        if due:
-            mode = self.modes[max(due, key=lambda i: (self.value(self.modes[i]), -i))]
+        if not self._usable(up):
+            return
+        mode = self.modes[up]
+        if self._priced(mode, self.lossless(mode)) <= self.value(self.modes[self._index]):
+            return
+        if self._since_probe.get(mode, 0.0) >= self._wait_s(mode) - WAIT_TOLERANCE_S:
             self._probing = mode
             self._since_probe[mode] = 0.0
 

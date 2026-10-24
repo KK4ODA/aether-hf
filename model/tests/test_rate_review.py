@@ -196,85 +196,8 @@ def test_the_wait_before_a_try_is_air_at_the_rung_tried() -> None:
     while ctl._probing is None and transmissions < 10:
         ctl.observe_frames(floor, 0.0)
         transmissions += 1
-    assert ctl._probing == 6  # the OFDM rung the reading rates best (``_try_target``)
+    assert ctl._probing == 5
     assert transmissions == 2
-
-
-def _on_floor_top(snr_db: float) -> tuple[DeliveryController, list[FrameOutcome]]:
-    """A 500 Hz controller on the floor's top, both stations' control frames on the floor, and
-    a transmission there that decoded whole."""
-    timing = phy_timing(NARROW.params)
-    a, _ = _pair(NARROW, "delivery")
-    ctl = a.rate
-    assert isinstance(ctl, DeliveryController)
-    ctl.seed(snr_db)
-    ctl.families = (True, True)
-    ctl._index = ctl.modes.index(4)
-    ctl._cancel_try()
-    cap = data_capacity(timing.capacity(4))
-    return ctl, [FrameOutcome(4, timing.data_frame_s_for(4), cap, True, True, False, snr_db)] * 4
-
-
-def test_a_try_from_the_floors_top_goes_past_the_first_ofdm_rung() -> None:
-    """With floor answers the 500 Hz air's first OFDM rung carries less per exchange than the
-    floor's top even with nothing lost, so a try of it alone never started and the rungs above
-    it were never looked at; the try goes to the OFDM rung the reading rates best
-    (``04-results.md`` §3.19, K3)."""
-    ctl, floor = _on_floor_top(3.0)
-    assert ctl._priced(5, ctl.lossless(5)) < ctl.value(4)  # the dip
-    transmissions = 0
-    while ctl._probing is None and transmissions < 10:
-        ctl.observe_frames(floor, 3.0)
-        transmissions += 1
-    best = max((m for m in ctl.modes if m >= ctl.floor_modes), key=ctl.value)
-    assert ctl._probing == best
-    assert best > 5
-
-
-def test_a_try_goes_on_while_its_own_frames_lower_its_estimate() -> None:
-    """A try across the floor's edge is decided on its frames, not dropped when the first of
-    them move the best estimate to another rung."""
-    timing = phy_timing(NARROW.params)
-    ctl, floor = _on_floor_top(3.0)
-    while ctl._probing is None:
-        ctl.observe_frames(floor, 3.0)
-    tried = ctl._probing
-    assert tried is not None
-    cap = data_capacity(timing.capacity(tried))
-    lost = FrameOutcome(tried, timing.data_frame_s_for(tried), cap, True, False, False, 3.0)
-    ctl.observe_frames([lost, lost], 3.0)
-    assert ctl._try_target() != tried  # the estimates moved
-    assert ctl._probing == tried  # the try did not
-    ctl.observe_frames([lost], 3.0)
-    assert ctl.recommend() != tried
-    assert ctl._probe_wait[tried] == 2 * ctl.probe_every
-
-
-def test_a_failed_try_across_the_floors_edge_holds_the_whole_family_back() -> None:
-    """A try of OFDM from the floor's top that fails makes every OFDM rung wait twice as long,
-    not only the one tried. With a wait of its own each, the next rung up was tried at the next
-    transmission, and the next, each cutting blocks at a rung that delivered less than the
-    floor's top (``04-results.md`` §3.21)."""
-    timing = phy_timing(NARROW.params)
-    ctl, floor = _on_floor_top(3.0)
-    while ctl._probing is None:
-        ctl.observe_frames(floor, 3.0)
-    tried = ctl._probing
-    assert tried is not None
-    cap = data_capacity(timing.capacity(tried))
-    lost = FrameOutcome(tried, timing.data_frame_s_for(tried), cap, True, False, False, 3.0)
-    ctl.observe_frames([lost] * 3, 3.0)
-    assert ctl._probing is None
-    reach = [ctl.modes[i] for i in ctl._try_reach()]
-    assert len(reach) > 1
-    assert all(ctl._probe_wait[m] == 2 * ctl.probe_every for m in reach)
-    air = sum(f.air_s for f in floor)
-    left = min(ctl._wait_s(m) for m in reach)
-    assert left > air
-    while left > air:
-        ctl.observe_frames(floor, 3.0)
-        left -= air
-        assert ctl._probing is None, f"tried {ctl._probing} {left:.0f} s before the wait was over"
 
 
 def test_a_slave_on_its_own_floor_rung_is_granted_floor_slots(

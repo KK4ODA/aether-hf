@@ -58,7 +58,18 @@ def controller_trace(
     ops: list[dict[str, object]] = []
 
     def state() -> dict[str, object]:
-        return _state(ctl)
+        common = {"recommend": ctl.recommend(), "snr": ctl.snr_db, "echo": ctl.echo}
+        if isinstance(ctl, OuterLoopController):
+            return {
+                **common,
+                "floor_offset": ctl._offset.get(True),
+                "offset": ctl._offset.get(False),
+            }
+        return {
+            **common,
+            "estimates": [ctl.estimate(m) for m in ctl.modes],
+            "values": [ctl.value(m) for m in ctl.modes],
+        }
 
     ctl.seed(snr)
     ops.append({"seed": snr, **state()})
@@ -107,76 +118,6 @@ def controller_trace(
             reading = snr if rng.random() < 0.8 else None
             ctl.observe_snr(reading)
             ops.append({"observe_snr": reading, **state()})
-    return {**_header(ctl, controller, air), "ops": ops}
-
-
-def edge_trace(air: AirInterface, steps: int = 40) -> dict[str, object]:
-    """C1 on the floor's top with floor answers both ways, input by input: transmissions there
-    that decode whole, and every one at a rung of OFDM — a try across the floor's edge — lost.
-    A failed try makes the whole family above wait (``04-results.md`` §3.21), which the random
-    traces never reach: they seldom sit on the floor's top, and their frames at a try's rung
-    decode as often as any."""
-    timing = phy_timing(air.params)
-    ctl = GrantedEngine("TOOL", timing, GrantConfig(controller="delivery")).rate
-    assert isinstance(ctl, DeliveryController)
-    top = max(m for m in ctl.modes if m < ctl.floor_modes)
-    snr = next(s / 2 for s in range(-20, 41) if ctl.first_mode(s / 2) == top)
-    ctl.seed(snr)
-    ops: list[dict[str, object]] = [{"seed": snr, **_state(ctl)}]
-    ctl.families = (True, True)
-    ops.append({"families": [True, True], **_state(ctl)})
-    tries = 0
-    for _ in range(steps):
-        mode = ctl.recommend()
-        floor = mode < ctl.floor_modes
-        tries += not floor
-        frames = [
-            FrameOutcome(
-                mode,
-                timing.data_frame_s_for(mode),
-                data_capacity(timing.capacity(mode)),
-                True,
-                floor,
-                False,
-                snr if floor else None,
-            )
-        ] * (4 if floor else 3)
-        ctl.observe_frames(frames, snr)
-        ops.append(
-            {
-                "frames": [
-                    [f.mode, f.air_s, f.capacity, f.detected, f.decoded, f.combined] for f in frames
-                ],
-                "snr_in": snr,
-                **_state(ctl),
-            }
-        )
-    assert tries >= 2, "the trace never tried across the floor's edge twice"
-    return {**_header(ctl, "delivery", air), "ops": ops}
-
-
-def _state(ctl: OuterLoopController | DeliveryController) -> dict[str, object]:
-    """What a trace records after each input."""
-    common = {"recommend": ctl.recommend(), "snr": ctl.snr_db, "echo": ctl.echo}
-    if isinstance(ctl, OuterLoopController):
-        return {
-            **common,
-            "floor_offset": ctl._offset.get(True),
-            "offset": ctl._offset.get(False),
-        }
-    return {
-        **common,
-        "estimates": [ctl.estimate(m) for m in ctl.modes],
-        "values": [ctl.value(m) for m in ctl.modes],
-    }
-
-
-def _header(
-    ctl: OuterLoopController | DeliveryController, controller: str, air: AirInterface
-) -> dict[str, object]:
-    """What the port needs to build the same controller as a trace's."""
-    timing = phy_timing(air.params)
-    modes = sorted(ctl.thresholds)
     return {
         "controller": controller,
         "air": air.params.bandwidth.value,
@@ -202,6 +143,7 @@ def _header(
             [ctl._target[True], ctl._target[False]] if isinstance(ctl, OuterLoopController) else []
         ),
         "modes": list(ctl.modes),
+        "ops": ops,
     }
 
 
@@ -345,13 +287,9 @@ def main() -> int:
             for table in (WIDE_CLASS_PENALTY_DB, NARROW_CLASS_PENALTY_DB)
         },
         "controller_traces": [
-            *(
-                controller_trace(air, seed, controller)
-                for controller in TRACED
-                for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3))
-            ),
-            edge_trace(NARROW),
-            edge_trace(WIDE),
+            controller_trace(air, seed, controller)
+            for controller in TRACED
+            for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3))
         ],
     }
     out = Path(args.out)
