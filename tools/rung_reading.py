@@ -100,6 +100,10 @@ EXCHANGE_MAX_S = 60.0
 spent: a floor exchange of six frames is about 40 s."""
 FRAMES_PER_EXCHANGE = 6
 """What a counterfactual rung's rate is reckoned over: a full transmission."""
+FLOOR_CONTROL_S = 1.5
+"""A decoded control frame longer than this was the floor's (3.2 s; an ordinary one is 0.43 s
+at either bandwidth): the family of a station's control frames, which its record does not
+name."""
 CONTROL = re.compile(
     r"(?P<kind>\w+) session (?P<session>\d+) count (?P<count>\d+)(?P<data_floor> on the floor)? "
     r"level (?P<level>\d+) base (?P<base>\d+) bitmap 0x(?P<bitmap>[0-9a-fA-F]+) rung (?P<rung>\d+) "
@@ -126,6 +130,18 @@ def air_for(doc: dict[str, Any]) -> AirInterface:
     if (doc.get("session") or {}).get("bandwidth_hz") != 500:
         return WIDE
     return narrow_before_93() if doc.get("format") == "aether-hf-session/4" else NARROW
+
+
+def foreign_rungs(air: AirInterface) -> set[int]:
+    """The rungs a sidecar's ladder holds another frame at than this tree's of its bandwidth:
+    what a controller of this tree means by such a rung was not on that session's air (a ``/4``
+    500 Hz sidecar's rung 4 is QPSK ⅓, this tree's tone4x100-93)."""
+    tree = NARROW if air.params == NARROW.params else WIDE
+    return {
+        r
+        for r in range(air.n_rungs)
+        if r >= tree.n_rungs or air.ladder[r].name != tree.ladder[r].name
+    }
 
 
 def load_side(path: Path) -> two_sides.Side:
@@ -1368,6 +1384,123 @@ def replay_master(
                 ctl.observe(None, 0, 1)
         if tx.ack is not None:
             granted = tx.ack.n > 0
+    return steps
+
+
+@dataclass
+class SenderStep:
+    """One data transmission of the sender's: the rung the other station's recommendation (the
+    current controller's) had it send at, beside the one C1 at the sender chose then."""
+
+    t: float
+    """On the sender's own clock, when it keyed."""
+    rung_advised: int
+    rung_chosen: int
+    seeded: bool
+    """C1 at the sender had a reading to choose from; before it, the engine follows the advice."""
+
+
+def replay_sender(
+    sender: two_sides.Side,
+    receiver: two_sides.Side,
+    txs: list[Transmission],
+    blocks: dict[int, Block],
+) -> list[SenderStep]:
+    """C1 at the sender (the review's ``delivery-s``, Gate 3) on what the sender recorded, as the
+    engine feeds it: seeded by the other station's first reading of this one (the master's by
+    the slave's reading of the call, which the acceptance carries); every frame the sender
+    decoded gives it its echo (``granted._heard``); each acknowledgement judges the copies sent
+    since the last — a block it acknowledges for the first time delivered by its latest copy,
+    every other copy air spent for nothing — each charged to the rung its block was first cut at
+    (``granted._judge_copies``); a data transmission nothing answered steps it down
+    (``granted._back_off``). A step is each data transmission: what the advice in hand said
+    (the last recommendation the sender read, or what it sent before any), against the
+    choice."""
+    from aether_model.link.rate_review import DeliveryController, FrameOutcome
+
+    ctl = controller_for(sender.air, controller="delivery")
+    assert isinstance(ctl, DeliveryController)
+    foreign = foreign_rungs(sender.air)
+    timing = timing_of(sender.air)
+    if role_of(sender.doc) == "master":
+        began, _ = session_span(receiver)
+        call = [
+            f
+            for f in receiver.doc.get("frames") or []
+            if f.get("kind") == "data"
+            and f.get("decoded")
+            and float(f.get("start_s") or 0.0) <= began
+        ]
+        if call:
+            ctl.seed(float(call[-1]["snr_3k_db"]))
+    heard = sorted(
+        (
+            (float(f["t_s"]), f)
+            for f in sender.doc.get("frames") or []
+            if f.get("decoded") and f.get("t_s") is not None and f.get("snr_3k_db") is not None
+        ),
+        key=lambda x: x[0],
+    )
+    fed = 0
+    advice: int | None = None
+    peer_db: float | None = None
+    copies: list[tuple[int, int, float]] = []
+    steps = []
+    own: bool | None = None  # the family of the sender's control frames, as sent
+    other: bool | None = None  # of the receiver's, as decoded: a floor one is seconds long
+
+    def families() -> None:
+        if own is not None and other is not None:
+            ctl.families = (own, other)
+
+    for tx in txs:
+        while fed < len(heard) and heard[fed][0] < tx.key:
+            rec = heard[fed][1]
+            if rec.get("kind") == "control" and rec.get("end_s") is not None:
+                other = float(rec["end_s"]) - float(rec.get("start_s") or 0.0) > FLOOR_CONTROL_S
+            families()
+            _echo(ctl, rec.get("echo"), float(rec["snr_3k_db"]))
+            fed += 1
+        if tx.header is not None:
+            own = tx.header.floor
+        sent = [f for f in tx.data if not f.measure and f.seq is not None]
+        if tx.data and not tx.measure and tx.rung is not None:
+            seeded = ctl.snr_db is not None
+            steps.append(
+                SenderStep(
+                    tx.key,
+                    tx.rung if advice is None else advice,
+                    ctl.modes[ctl._index] if seeded else (tx.rung if advice is None else advice),
+                    seeded,
+                )
+            )
+        for f in sent:
+            assert f.seq is not None
+            origin = blocks[f.seq].copies[0].rung
+            if origin not in foreign:  # another frame than the controller's at that rung
+                copies.append((f.seq, origin, f.seconds))
+        if tx.ack is None:
+            if tx.data:
+                ctl.silent(GrantConfig.silence_step)
+            continue
+        advice = tx.ack.rung
+        if tx.ack.snr is not None:
+            peer_db = tx.ack.snr
+            if ctl.snr_db is None:
+                ctl.seed(peer_db)
+        if copies:
+            newly = {s for s, b in blocks.items() if b.acked_after == tx.index}
+            credited: set[int] = set()
+            outcomes = []
+            for seq, rung, air in reversed(copies):
+                ok = seq in newly and seq not in credited
+                if ok:
+                    credited.add(seq)
+                capacity = data_capacity(timing.capacity(rung))
+                outcomes.append(FrameOutcome(rung, air, capacity, True, ok, False, None))
+            copies = []
+            families()
+            ctl.observe_frames(outcomes[::-1], peer_db)
     return steps
 
 
