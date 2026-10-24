@@ -422,7 +422,7 @@ pub struct DeliveryController {
     /// By rung, its fading channels' 10 % points over its AWGN one: the cautious start's prior.
     penalties: Vec<[f64; 3]>,
     /// The first rung is the four channels' mean's best, and the rung above it is tried at the
-    /// next transmission.
+    /// next transmission: off, rejected on the harness (`04-results.md` §3.6).
     cautious_start: bool,
     echo_limit: Vec<Option<f64>>,
     echo: Option<f64>,
@@ -475,7 +475,7 @@ impl DeliveryController {
             family: [0.0, 0.0],
             family_gain_db: 0.5,
             penalties: penalties.to_vec(),
-            cautious_start: true,
+            cautious_start: false,
             echo_limit: echo_limit.to_vec(),
             echo: None,
             smoothed_snr_db: None,
