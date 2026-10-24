@@ -27,6 +27,8 @@ from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing
 from aether_model.link.phy import Container
 from aether_model.link.rate_review import (
+    NARROW_CLASS_PENALTY_DB,
+    WIDE_CLASS_PENALTY_DB,
     DeliveryController,
     FrameOutcome,
     OuterLoopController,
@@ -113,6 +115,9 @@ def controller_trace(
         "capacity": [data_capacity(timing.capacity(m)) for m in modes],
         "frame_s": [timing.data_frame_s_for(m) for m in modes],
         "floor_modes": timing.floor_modes,
+        "penalties": [list(ctl.penalties.get(m, (0.0, 0.0, 0.0))) for m in modes]
+        if isinstance(ctl, DeliveryController)
+        else [],
         "echo_limit": [(timing.echo_limit or {}).get(m) for m in modes],
         "targets": (
             [ctl._target[True], ctl._target[False]] if isinstance(ctl, OuterLoopController) else []
@@ -193,6 +198,10 @@ def main() -> int:
         "Payloads are indices into blobs.",
         "blobs": granted.BLOBS.table,
         "sessions": sessions,
+        "class_penalty_db": {
+            str(len(table)): [list(table[m]) for m in sorted(table)]
+            for table in (WIDE_CLASS_PENALTY_DB, NARROW_CLASS_PENALTY_DB)
+        },
         "controller_traces": [
             controller_trace(air, seed, controller)
             for controller in CONTROLLERS

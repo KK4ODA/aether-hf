@@ -173,6 +173,14 @@ class DeliveryController(RateController):
     one below that (``04-results.md`` §3.4). ``0`` turns it off."""
     _family: dict[bool, float] = field(default_factory=dict)
     """The families' offsets, by whether the family is the floor's."""
+    cautious_start: bool = True
+    """The first rung is the four channels' mean's best (:func:`path_decode_probability`), not
+    the optimistic prior's, and the rung above it is tried at the next transmission. At the
+    start nothing is measured, and a block cut at the first rung is bound to it until its copies
+    run out: on the harness's disturbed NVIS a first transmission at OFDM 5 cost 24 OFDM frames
+    before its blocks could go on the floor (``04-results.md`` §3.5). The optimistic prior
+    stays for every choice after, where a rung found wanting costs one measured
+    transmission."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, int] = field(default_factory=dict)
     _probe_wait: dict[int, int] = field(default_factory=dict)
@@ -336,22 +344,40 @@ class DeliveryController(RateController):
     # ── the start ─────────────────────────────────────────────────────
 
     def first_mode(self, snr_db: float) -> int:
-        """The rung the prior puts highest at ``snr_db``, no steps in hand (C4)."""
+        """The rung a session starts at from one reading, no steps in hand (C4): the best by the
+        four channels' mean when :attr:`cautious_start`, by the optimistic prior otherwise."""
         saved = self.snr_db
         self.snr_db = snr_db
+        value = self._start_estimate if self.cautious_start else self.estimate
         best = max(
             (i for i in range(len(self.modes)) if not self._echo_out(i)),
-            key=lambda i: (self.estimate(self.modes[i]), -i),
+            key=lambda i: (value(self.modes[i]), -i),
             default=0,
         )
         self.snr_db = saved
         return self.modes[best]
+
+    def _start_estimate(self, mode: int) -> float:
+        """:meth:`estimate` with the four channels' mean as the prior."""
+        assert self.snr_db is not None
+        cap = float(self.capacity.get(mode, 0))
+        air = self.frame_air_s.get(mode, 1.0)
+        offset = self._family.get(mode < self.floor_modes, 0.0)
+        p = path_decode_probability(
+            self.snr_db - offset, self.thresholds[mode], self.penalties.get(mode, ()), self.slope_db
+        )
+        acc = self._accounts.get(mode, _Account())
+        w = self.prior_frames
+        return (acc.bytes + w * cap * p) / (acc.air_s + w * air)
 
     def seed(self, snr_db: float, *, lower_bound: bool = False) -> None:
         if self._smoothed is not None:
             return
         self._smoothed = self.snr_db = snr_db
         self._index = self.modes.index(self.first_mode(snr_db))
+        if self.cautious_start and self._usable(self._index + 1):
+            above = self.modes[self._index + 1]
+            self._since_probe[above] = self._probe_wait.get(above, self.probe_every)
 
 
 @dataclass

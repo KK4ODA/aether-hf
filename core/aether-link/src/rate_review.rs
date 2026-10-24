@@ -26,6 +26,84 @@ pub struct FrameOutcome {
     pub combined: bool,
 }
 
+// What each rung's 10 % point moves by on ITU-R F.1487's Good, Moderate and Poor channels, dB
+// over its AWGN point: the model's tables (`aether_model.link.rate_review`, from the PHY sweeps),
+// which `tests/rate_review_vectors.rs` holds these to.
+
+/// The 2 300 Hz ladder's: by rung, Good, Moderate, Poor (the model's `WIDE_CLASS_PENALTY_DB`).
+pub const WIDE_CLASS_PENALTY_DB: [[f64; 3]; 20] = [
+    [7.3, 5.8, 4.5],
+    [8.5, 7.0, 6.4],
+    [7.4, 4.8, 4.2],
+    [8.5, 6.0, 6.7],
+    [6.6, 4.9, 4.7],
+    [8.0, 6.9, 7.1],
+    [7.1, 6.3, 4.8],
+    [7.4, 7.4, 5.0],
+    [7.3, 6.6, 4.1],
+    [7.4, 7.4, 5.0],
+    [7.3, 7.1, 4.6],
+    [7.4, 7.4, 5.0],
+    [7.0, 7.6, 5.0],
+    [7.4, 7.4, 5.0],
+    [7.7, 6.7, 6.5],
+    [7.4, 7.4, 5.0],
+    [7.8, 9.9, 5.0],
+    [7.4, 7.4, 5.0],
+    [7.4, 7.4, 5.0],
+    [7.9, 7.4, 5.0],
+];
+
+/// The 500 Hz ladder's: by rung, Good, Moderate, Poor (the model's `NARROW_CLASS_PENALTY_DB`).
+pub const NARROW_CLASS_PENALTY_DB: [[f64; 3]; 15] = [
+    [7.3, 5.8, 4.5],
+    [8.5, 7.0, 6.4],
+    [6.6, 4.1, 3.5],
+    [9.4, 6.8, 5.8],
+    [10.4, 8.9, 7.3],
+    [9.2, 8.7, 5.2],
+    [9.1, 8.6, 7.6],
+    [9.1, 10.1, 6.6],
+    [9.5, 9.8, 6.9],
+    [9.1, 9.6, 8.1],
+    [10.0, 12.0, 6.9],
+    [10.5, 9.8, 6.9],
+    [10.1, 9.8, 6.9],
+    [9.2, 9.8, 6.9],
+    [10.6, 9.8, 6.9],
+];
+
+/// The table for a ladder of `rungs` rungs (20 at 2 300 Hz, 15 at 500 Hz); empty for another.
+#[must_use]
+pub fn class_penalty_db(rungs: usize) -> &'static [[f64; 3]] {
+    match rungs {
+        n if n == WIDE_CLASS_PENALTY_DB.len() => &WIDE_CLASS_PENALTY_DB,
+        n if n == NARROW_CLASS_PENALTY_DB.len() => &NARROW_CLASS_PENALTY_DB,
+        _ => &[],
+    }
+}
+
+/// The chance a frame decodes at `snr_db` on a path not yet measured: the mean of the steady
+/// channel's curve and the three fading channels' (`penalties` over the threshold, none for a
+/// rung the table lacks).
+#[must_use]
+pub fn path_decode_probability(
+    snr_db: f64,
+    threshold_db: f64,
+    penalties: Option<&[f64; 3]>,
+    slope_db: f64,
+) -> f64 {
+    let mut sum = decode_probability(snr_db, threshold_db, slope_db);
+    let mut n = 1.0;
+    if let Some(penalties) = penalties {
+        for p in penalties {
+            sum += decode_probability(snr_db, threshold_db + p, slope_db);
+            n += 1.0;
+        }
+    }
+    sum / n
+}
+
 /// The prior's chance that a frame decodes at `snr_db`: a logistic through 90 % at the rung's
 /// AWGN 10 % point, `slope_db` wide.
 #[must_use]
@@ -341,6 +419,11 @@ pub struct DeliveryController {
     /// The families' offsets, `[floor, ordinary]`.
     family: [f64; 2],
     family_gain_db: f64,
+    /// By rung, its fading channels' 10 % points over its AWGN one: the cautious start's prior.
+    penalties: Vec<[f64; 3]>,
+    /// The first rung is the four channels' mean's best, and the rung above it is tried at the
+    /// next transmission.
+    cautious_start: bool,
     echo_limit: Vec<Option<f64>>,
     echo: Option<f64>,
     smoothed_snr_db: Option<f64>,
@@ -372,6 +455,7 @@ impl DeliveryController {
         capacity: &[usize],
         frame_s: &[f64],
         floor_modes: usize,
+        penalties: &[[f64; 3]],
         echo_limit: &[Option<f64>],
     ) -> Self {
         assert!(
@@ -390,6 +474,8 @@ impl DeliveryController {
             floor_modes,
             family: [0.0, 0.0],
             family_gain_db: 0.5,
+            penalties: penalties.to_vec(),
+            cautious_start: true,
             echo_limit: echo_limit.to_vec(),
             echo: None,
             smoothed_snr_db: None,
@@ -707,7 +793,25 @@ impl DeliveryController {
         }
     }
 
-    /// The rung a session starts at from one reading: the prior's best, no steps in hand.
+    /// [`estimate`](Self::estimate) with the four channels' mean as the prior.
+    #[allow(clippy::cast_precision_loss)]
+    fn start_estimate(&self, mode: usize, snr_db: f64) -> f64 {
+        let cap = self.capacity.get(mode).copied().unwrap_or(0) as f64;
+        let air = self.frame_s.get(mode).copied().unwrap_or(1.0);
+        let offset = self.family[usize::from(mode >= self.floor_modes)];
+        let p = path_decode_probability(
+            snr_db - offset,
+            self.thresholds[mode],
+            self.penalties.get(mode),
+            self.slope_db,
+        );
+        let acc = self.account(mode);
+        let w = self.prior_frames;
+        (acc.bytes + w * cap * p) / (acc.air_s + w * air)
+    }
+
+    /// The rung a session starts at from one reading, no steps in hand: the four channels'
+    /// mean's best (the cautious start), or the optimistic prior's.
     #[must_use]
     pub fn first_mode(&self, snr_db: f64) -> usize {
         let mut best: Option<(usize, f64)> = None;
@@ -715,7 +819,11 @@ impl DeliveryController {
             if self.echo_out(i) {
                 continue;
             }
-            let value = self.estimate_at(self.modes[i], Some(snr_db));
+            let value = if self.cautious_start {
+                self.start_estimate(self.modes[i], snr_db)
+            } else {
+                self.estimate_at(self.modes[i], Some(snr_db))
+            };
             if best.is_none_or(|(_, b)| value > b) {
                 best = Some((i, value));
             }
@@ -731,6 +839,10 @@ impl DeliveryController {
         self.smoothed_snr_db = Some(snr_db);
         let first = self.first_mode(snr_db);
         self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
+        if self.cautious_start && self.usable(self.index + 1) {
+            let above = self.modes[self.index + 1];
+            self.since_probe[above] = Some(self.wait(above));
+        }
     }
 }
 

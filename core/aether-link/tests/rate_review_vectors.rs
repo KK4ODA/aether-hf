@@ -6,7 +6,9 @@
 
 use std::{fs, path::PathBuf};
 
-use aether_link::rate_review::{DeliveryController, FrameOutcome, OuterLoopController};
+use aether_link::rate_review::{
+    DeliveryController, FrameOutcome, OuterLoopController, class_penalty_db,
+};
 use serde_json::Value;
 
 fn vectors() -> Value {
@@ -147,14 +149,26 @@ fn build(trace: &Value, n: usize) -> Prototype {
             );
             Prototype::Olla(c)
         }
-        Some("delivery") => Prototype::Delivery(DeliveryController::for_table(
-            &thresholds,
-            &payload,
-            &capacity,
-            &frame_s,
-            int(&trace["floor_modes"]),
-            &echo_limit,
-        )),
+        Some("delivery") => {
+            let penalties: Vec<[f64; 3]> = trace["penalties"]
+                .as_array()
+                .expect("penalties")
+                .iter()
+                .map(|row| {
+                    let row = floats(row);
+                    [row[0], row[1], row[2]]
+                })
+                .collect();
+            Prototype::Delivery(DeliveryController::for_table(
+                &thresholds,
+                &payload,
+                &capacity,
+                &frame_s,
+                int(&trace["floor_modes"]),
+                &penalties,
+                &echo_limit,
+            ))
+        }
         other => panic!("trace {n}: no prototype {other:?} in the port"),
     }
 }
@@ -231,6 +245,26 @@ fn the_prototypes_decide_as_the_model_does() {
                 panic!("trace {n} op {i}: unknown input");
             }
             check_state(&ctl, op, &format!("trace {n} op {i}"));
+        }
+    }
+}
+
+/// The port's tables of the fading channels' penalties are the model's.
+#[test]
+fn the_penalty_tables_are_the_models() {
+    let doc = vectors();
+    let tables = doc["class_penalty_db"]
+        .as_object()
+        .expect("class_penalty_db");
+    assert_eq!(tables.len(), 2, "both airs' tables");
+    for (rungs, table) in tables {
+        let rungs: usize = rungs.parse().expect("a ladder's length");
+        let port = class_penalty_db(rungs);
+        let model = table.as_array().expect("rows");
+        assert_eq!(port.len(), model.len(), "{rungs} rungs");
+        for (row, want) in port.iter().zip(model) {
+            let want = floats(want);
+            assert_eq!(row.as_slice(), want.as_slice(), "{rungs} rungs");
         }
     }
 }

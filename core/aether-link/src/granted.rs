@@ -1202,6 +1202,7 @@ fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
                     &capacity,
                     &frame_s,
                     timing.floor_modes,
+                    crate::rate_review::class_penalty_db(thresholds.len()),
                     &timing.echo_limit,
                 ));
             }
