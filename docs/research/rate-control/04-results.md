@@ -25,8 +25,9 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   each a near miss; ranked per exchange (§3.11, §3.12), K1(a) passes, `80m-slow-machine-500`
   fails K1(b) and one run fails to complete; without its step down for silence it is worse
   (§3.13, reverted). Where it stands: §3.14.
-* **Next**: the author's decision on §3.14's failures, case by case; then K2 and K5 for the
-  candidate taken forward.
+* **Where it stands**: §3.19 — C1 at the sender with every fix of §3.10–§3.18, over six draws:
+  every run complete, K1(b) and K7 pass, K1(a), K3 and WC4Y's file rate near misses.
+* **Next**: the author's decision on §3.19's near misses, case by case; then K2 and K5.
 
 ## 1. What the engine hands a prototype
 
@@ -329,6 +330,7 @@ delivery is under 85 % of the current controller's (K1(b)).
 | … priced, a try decided on three frames (§3.15) | **+21.85 %** | 1 (slow machine 0.81) | 6, 0, 2 | **0** (72 runs) |
 | … and a try across the edge takes the transmission (§3.16) | +23.46 % | 1 (slow machine 0.77) | 2, 1, 2 | 0 (72 runs) |
 | … and the wait between tries in air at the rung tried (§3.17) | +24.41 % | 1 (polar path 0.81; slow machine 0.87) | 6, 1, 2 | 0 (72 runs) |
+| … and a slave on its own floor rung asks for floor slots (§3.19) | +23.76 % | 1 over 3 draws (polar path 0.81); **none over 6** | 2, 1, 1, 0, 1, 1 (6 draws) | **0** (144 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -686,3 +688,23 @@ runs of every draw, some twelve hours more).
   can go only on the floor; C1's own floor choice now sets it too (`91e6144`, no wire change; a
   model test reproduces the deadlock and fails without the change; the review's vectors change and
   the port without the clause fails them). That form on all six draws is running.
+
+### 3.19 C1 at the sender, all fixes, over six draws (2026-10-24)
+
+`91e6144` on the 24 scenarios, six draws (144 runs), against the current controller's six:
+
+| criterion | result | verdict |
+|---|---|---|
+| Completion | 144 of 144 (the current: 144) | passes |
+| K1(a), draws 0–2 | +23.76 % against a line of +22.62 % | **near miss**, 1.1 points |
+| K1(b), six draws | no scenario under 0.85; lowest `80m-nvis-disturbed-500` 0.86, `20m-polar-path-2300` 0.90; `80m-slow-machine-500` **1.13**; 13 of 21 over 1 | passes |
+| K3, six draws | 2, 1, 1, 0, 1, 1 apart (the current: 2, 1, 2, 2, 2, 0) | **near miss**, one draw of six |
+| WC4Y's path (K6's condition), six draws | message ×1.11 (91.6 / 81.9 / 91.6 / 81.9 / 81.9 / 91.6 against 73.9 / 81.9 / 81.9 / 81.9 / 68.1 / 73.9), file ×0.98 (77.2 / 104.5 / 89.4 / 92.6 / 104.5 / 89.4 against 92.7 / 92.6 / 104.5 / 87.4 / 98.7 / 87.4) | **near miss** on the file |
+| K2, K4's overlaps, K5 | not run for this form | — |
+| K7 | eight of its own (§3.11's count, the author's answer 6) | passes |
+
+Changed from §3.18 by the slave's fix: the slow machine 0.91 → 1.13, `40m-good-2300-rtty-crashes`
+1.21 → 1.38, `80m-flutter-500` 1.09 → 0.97; nothing that had passed fell under 0.85. The three
+near misses are the author's, case by case. K1(a) is the median of twenty scenarios' medians over
+three draws; on draws alone the current controller's own reads +36 … +50 % (`03-candidates.md`
+§5.1).
