@@ -29,8 +29,8 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   six draws completes every run and passes K1(b) and K7, but **fails K1(a) clearly** (+26.80 %
   against +19.41 %, §3.20); K3 and WC4Y's file rate are near misses. The fix of K3's dip (§3.21,
   §3.22) cost three floor-top paths 14–29 % and did not pass K3: taken out by the author's call.
-* **Next**: the author's call on K1(a), whose gap is the climb on strong paths (§3.20); then K2
-  and K5.
+* **Next**: K2, K4 and K5 for this form (§3.23); K1(a)'s miss is accepted as recorded by the
+  author's call (§3.20).
 
 ## 1. What the engine hands a prototype
 
@@ -757,6 +757,10 @@ highest the oracle ran (`quick-awgn-2300` draw 5 at 18, `20m-dx-500` draw 4 at 1
 `80m-qsb-dropout-500` draws 1 and 5 at 13, `40m-good-2300-rtty-crashes` draws 1 and 5 at 16,
 `80m-strong-moderate-500` draws 3 and 5 at the ladder's top, 14), so those regrets are a lower
 bound for both controllers.
+
+**The author's call: accept the miss and go on** — K1(a) stands as a recorded miss of this form,
+untraced, and K2, K4 and K5 are run for it so that the decision ADR weighs it against everything
+else.
 
 ### 3.21 The try past the dip, and what it broke (2026-10-24)
 
