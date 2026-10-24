@@ -90,6 +90,7 @@ from aether_model.link.frames import (
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_modes
 from aether_model.link.rate_review import (
+    CLASS_PENALTY_DB,
     CONTROLLERS,
     DeliveryController,
     FrameOutcome,
@@ -1573,6 +1574,7 @@ class GrantedEngine:
             modes=usable_modes(table, payload, frame_s),
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
+            penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
             **{**floor, **self.cfg.rate},  # type: ignore[arg-type]
         )
 
