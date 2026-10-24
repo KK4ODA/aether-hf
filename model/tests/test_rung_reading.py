@@ -377,3 +377,60 @@ def test_a_control_frame_is_read_as_the_daemon_spells_it() -> None:
     assert plain is not None and plain.measure and plain.count == 6 and plain.snr is None
     assert plain.received(4) and not plain.received(3)
     assert rr.parse_control("nothing like it") is None
+
+
+def _numbered(master: Path, slave: Path) -> None:
+    """Give the session's sidecars what beta.122 records: the sender's sequence number on every
+    data frame it sends, and on every one the receiver hears the number its engine filed it under
+    and whether copies combined into it."""
+    doc = json.loads(master.read_text(encoding="utf-8"))
+    sent = [s for s in doc["sent"] if s["kind"] == "data"]
+    seqs = [0, 1, 2, 1, 2, 3, 0, 1, 0, 1]  # two exchanges of data, then two measurements
+    assert len(sent) == len(seqs)
+    for s, seq in zip(sent, seqs, strict=True):
+        s["seq"] = seq
+    for s in sent[6:]:
+        s["measure"] = True
+    master.write_text(json.dumps(doc), encoding="utf-8")
+    doc = json.loads(slave.read_text(encoding="utf-8"))
+    heard = [f for f in doc["frames"] if f["kind"] == "data" and f["mode"] == 11]
+    notes: list[dict[str, Any]] = [
+        {"seq": 0},
+        {"seq": 1},
+        {"seq": 1, "combined": True, "rescued": True},
+        {"seq": 2},
+        {"seq": 3},
+    ]
+    assert len(heard) == len(notes)
+    for f, note in zip(heard, notes, strict=True):
+        f.update(note)
+    slave.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_the_numbers_a_sidecar_records_are_taken_and_checked(tmp_path: Path) -> None:
+    master, slave = session(tmp_path)
+    reconstructed = rr.read_session(master, slave).directions[0]
+    _numbered(master, slave)
+    reading = rr.read_session(master, slave)
+    down = reading.directions[0]
+    assert down.numbering == "recorded"
+    assert down.agrees == (10, 10)  # the reconstruction numbers every frame as recorded
+    assert [down.blocks[s].how for s in range(4)] == ["alone", "combined", "alone", "alone"]
+    assert vars(down.accounts[11]) == vars(reconstructed.accounts[11])
+    assert reconstructed.numbering == "reconstructed" and reconstructed.agrees is None
+    # the slave sent no data: nothing to number
+    assert reading.directions[1].numbering == "reconstructed"
+
+
+def test_a_recorded_number_wins_over_the_reconstruction(tmp_path: Path) -> None:
+    master, slave = session(tmp_path)
+    _numbered(master, slave)
+    doc = json.loads(master.read_text(encoding="utf-8"))
+    sent = [s for s in doc["sent"] if s["kind"] == "data"]
+    # say the second exchange's first frame was a new block, not seq 1 again
+    sent[3]["seq"] = 4
+    master.write_text(json.dumps(doc), encoding="utf-8")
+    down = rr.read_session(master, slave).directions[0]
+    assert down.numbering == "recorded"
+    assert down.agrees == (9, 10)
+    assert 4 in down.blocks and len(down.blocks[1].copies) == 1

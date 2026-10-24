@@ -20,6 +20,8 @@ pub use frames::{
     CONTROL_BYTES, ConnectBody, DATA_HEADER, DataHeader, DataKind, FrameError, GrantFrame,
     GrantKind, ProbeBody, WINDOW,
 };
-pub use granted::{Action, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult, State};
+pub use granted::{
+    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult, State,
+};
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, RateConfig, RateController, usable_modes};

@@ -3615,36 +3615,7 @@ impl<P: Ptt> Station<P> {
             let span_end = span_start + decoded.frame.samples(&air) as f64 / fs;
             // its blocks are a frame's, not the noise's (ADR-0076)
             self.busy.explain(span_start, span_end);
-            let record = crate::record::FrameRecord {
-                t_s: now,
-                start_s: Some(span_start),
-                end_s: Some(span_end),
-                follows: decoded.frame.follows(),
-                kind: if control { "control" } else { "data" }.into(),
-                mode: rung,
-                rv: decoded.frame.rv(),
-                snr_3k_db: decoded.frame.snr_3k_db(),
-                cfo_hz: reported_cfo(
-                    decoded.ok(),
-                    decoded.frame.mode_confidence(),
-                    detected,
-                    self.true_cfo(decoded.frame.cfo_hz(), span_start),
-                ),
-                confidence: decoded.frame.mode_confidence(),
-                detect_confidence: detected,
-                decoded: decoded.ok(),
-                bytes: decoded.payload.as_ref().map_or(0, Vec::len),
-                control: if control {
-                    decoded
-                        .payload
-                        .as_deref()
-                        .and_then(crate::record::describe_control)
-                } else {
-                    None
-                },
-                capture_skip: self.capture_skipped_within(span_start, span_end),
-                echo: decoded.frame.echo(),
-            };
+            let record = self.frame_record(&decoded, rung, (span_start, span_end), now);
             self.keep_frame(record, now);
             // A beacon belongs to no session, so it is handled before anything the engine
             // would do with it. It is reported and never answered: a channel where every
@@ -3705,6 +3676,9 @@ impl<P: Ptt> Station<P> {
                 trusted,
             };
             self.hand_over(&frame, asked, decoded_ok, now);
+            if let Some(heard) = self.engine.last_data() {
+                self.engine_heard(heard);
+            }
         }
 
         self.heed_preambles(&preambles, origin, now);
@@ -4148,6 +4122,9 @@ impl<P: Ptt> Station<P> {
                     // sooner than the engine reckoned, never early (`latency.rs`).
                     let not_before =
                         not_before.or_else(|| Some(self.now() + self.engine_latency_s()));
+                    if frames.iter().any(|f| f.container == Container::Control) {
+                        self.record_rate();
+                    }
                     let slotless = listen_first || starts_an_exchange(&frames);
                     self.pending.push_back(Outgoing::Link(LinkTx {
                         frames,
@@ -4594,6 +4571,69 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A frame found: into the recording, or kept for the next one's first seconds.
+    /// What a recording keeps of a frame the receiver found: `span` is where it lies on the
+    /// station's clock.
+    fn frame_record(
+        &self,
+        decoded: &aether_phy::DecodedFrame,
+        rung: usize,
+        (span_start, span_end): (f64, f64),
+        now: f64,
+    ) -> crate::record::FrameRecord {
+        let control = decoded.frame.is_control();
+        let detected = decoded.frame.detect_confidence(&self.air());
+        let (seq, measure) = if control {
+            (None, false)
+        } else {
+            crate::record::data_seq(decoded.payload.as_deref())
+        };
+        crate::record::FrameRecord {
+            t_s: now,
+            start_s: Some(span_start),
+            end_s: Some(span_end),
+            follows: decoded.frame.follows(),
+            kind: if control { "control" } else { "data" }.into(),
+            mode: rung,
+            rv: decoded.frame.rv(),
+            snr_3k_db: decoded.frame.snr_3k_db(),
+            cfo_hz: reported_cfo(
+                decoded.ok(),
+                decoded.frame.mode_confidence(),
+                detected,
+                self.true_cfo(decoded.frame.cfo_hz(), span_start),
+            ),
+            confidence: decoded.frame.mode_confidence(),
+            detect_confidence: detected,
+            decoded: decoded.ok(),
+            bytes: decoded.payload.as_ref().map_or(0, Vec::len),
+            control: if control {
+                decoded
+                    .payload
+                    .as_deref()
+                    .and_then(crate::record::describe_control)
+            } else {
+                None
+            },
+            capture_skip: self.capture_skipped_within(span_start, span_end),
+            echo: decoded.frame.echo(),
+            seq,
+            measure,
+            // the engine sees the frame after the record is kept: `engine_heard`
+            combined: false,
+            rescued: false,
+        }
+    }
+
+    /// What the engine made of the frame just kept (the sequence number it filed it under,
+    /// and whether copies combined into it): the engine sees a frame after the record is made.
+    fn engine_heard(&mut self, heard: aether_link::DataHeard) {
+        if let Some(recording) = &mut self.recording {
+            recording.engine_heard(heard);
+        } else if let Some(record) = self.preroll_frames.back_mut() {
+            record.note_engine(heard);
+        }
+    }
+
     fn keep_frame(&mut self, record: crate::record::FrameRecord, now: f64) {
         if let Some(recording) = &mut self.recording {
             recording.frame(record);
@@ -4961,17 +5001,26 @@ impl<P: Ptt> Station<P> {
             return;
         };
         for frame in frames {
-            recording.sent(crate::record::SentRecord {
-                t_s: now,
-                kind: match frame.container {
-                    Container::Data => "data".to_owned(),
-                    Container::Control => "control".to_owned(),
-                },
-                mode: frame.mode,
-                rv: frame.rv,
-                floor: frame.floor,
-                bytes: frame.payload.len(),
-            });
+            recording.sent(crate::record::SentRecord::of(frame, now));
+        }
+    }
+
+    /// The rate controller's state as a control frame carrying its recommendation is decided:
+    /// the replay of a session (`tools/rung_reading.py --replay`) checks its own controller's
+    /// state against it, not only the rung, so a drift shows where it starts rather than where
+    /// it first changes a recommendation.
+    fn record_rate(&mut self) {
+        let now = self.now();
+        let state = format!("{:?}", self.engine.state());
+        let (snr, margin) = self.engine.rate_readings();
+        if let Some(recording) = &mut self.recording {
+            let snr = snr.map_or_else(|| "-".to_owned(), |s| format!("{s:.3}"));
+            recording.event(
+                now,
+                "rate",
+                &format!("snr {snr} margin {margin:.3}"),
+                &state,
+            );
         }
     }
 
@@ -6647,6 +6696,106 @@ mod tests {
                 .iter()
                 .any(|e| e == "receiver:back on the dial"),
             "the caller said nothing of its return"
+        );
+    }
+
+    /// Two stations recording a session in which the master sends `bytes` at `rung` against
+    /// noise of `sigma`: each station's sidecar, and the receiver's HARQ rescues.
+    fn recorded_session(
+        sigma: f32,
+        rung: usize,
+        bytes: usize,
+        tag: &str,
+    ) -> (serde_json::Value, serde_json::Value, usize, bool) {
+        let dir = std::env::temp_dir().join(format!("aether-seq-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut air = Air::with(1.0, sigma, |config| StationConfig {
+            record_dir: Some(dir.clone()),
+            ..config
+        });
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.start_recording(Some("a"), None).expect("a records");
+        air.b.start_recording(Some("b"), None).expect("b records");
+        air.a.pin_rung(Some(rung)).expect("pinned");
+        // incompressible: deflate rides above the link, and a pattern would go as two frames
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let message: Vec<u8> = (0..bytes)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 24) as u8
+            })
+            .collect();
+        air.a.send(&message);
+        air.run(300.0, |_, b| b.received_len() >= bytes);
+        let delivered = air.b.received_len() >= bytes;
+        let read = |summary: Option<crate::record::Summary>| -> serde_json::Value {
+            let summary = summary.expect("a recording");
+            serde_json::from_str(&std::fs::read_to_string(summary.sidecar).expect("sidecar"))
+                .expect("json")
+        };
+        let rescues = air.b.engine().stats.harq_rescues;
+        let (a, b) = (read(air.a.stop_recording()), read(air.b.stop_recording()));
+        let _ = std::fs::remove_dir_all(&dir);
+        (a, b, rescues, delivered)
+    }
+
+    #[test]
+    fn a_recording_says_which_block_each_frame_is_of_and_what_combined() {
+        // The rate controller's review read sessions from both stations' sidecars, and had to
+        // reconstruct which block each copy was of and whether copies combined into it from the
+        // sends and the acknowledgements (01-evidence.md §8). Both are recorded now: the
+        // sequence number on every data frame a station sends, and on every one it hears the
+        // number the engine filed it under and whether copies combined. Pinned at the top rung
+        // against this noise, most blocks come by combining.
+        let (a, b, rescues, delivered) = recorded_session(0.1, 19, 4000, "combine");
+        assert!(delivered, "the message did not cross");
+        let sent: Vec<u64> = a["sent"]
+            .as_array()
+            .expect("sent")
+            .iter()
+            .filter(|f| f["kind"] == "data")
+            .map(|f| {
+                f["seq"]
+                    .as_u64()
+                    .expect("every data frame sent says its block")
+            })
+            .collect();
+        assert!(!sent.is_empty());
+        let heard: Vec<&serde_json::Value> = b["frames"]
+            .as_array()
+            .expect("frames")
+            .iter()
+            // the session's data, at the rung pinned: the call heard before the recording began
+            // is a data frame too, and is no block
+            .filter(|f| f["kind"] == "data" && f["mode"] == 19)
+            .collect();
+        for frame in &heard {
+            if frame["decoded"] == true {
+                assert!(
+                    frame["seq"].is_u64(),
+                    "a decoded frame says its block: {frame}"
+                );
+                assert!(frame.get("combined").is_none(), "decoded alone: {frame}");
+            }
+            if let Some(seq) = frame["seq"].as_u64() {
+                assert!(sent.contains(&seq), "{seq} was never sent: {frame}");
+            }
+        }
+        let rescued = heard.iter().filter(|f| f["rescued"] == true).count();
+        assert!(rescues > 0, "nothing combined into a block: no test");
+        assert_eq!(
+            rescued, rescues,
+            "every rescue is recorded, on the frame it happened at"
+        );
+        assert!(
+            heard
+                .iter()
+                .filter(|f| f["combined"] == true)
+                .all(|f| f["seq"].is_u64()),
+            "a combined frame says the block it combined under"
         );
     }
 

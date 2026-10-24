@@ -20,6 +20,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use aether_link::frames::DataKind;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -36,6 +37,9 @@ pub const FORMAT: &str = "aether-hf-session/5";
 pub const READS: [&str; 2] = [FORMAT, "aether-hf-session/4"];
 
 /// One frame the receiver found, as the sidecar records it.
+///
+/// Its flags are independent facts a reading of the sidecar asks one at a time.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrameRecord {
     /// Seconds since the recording started, by the station's audio clock.
@@ -94,6 +98,36 @@ pub struct FrameRecord {
     /// written before beta.119.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub echo: Option<f64>,
+    /// A session data frame's sequence number: its header's when it decoded, the one the engine
+    /// gave it by its slot when it did not (what its copies are combined under,
+    /// `aether_link::DataHeard`); a measurement frame's index in its transmission. Absent for any
+    /// other frame, and from a sidecar written before beta.122 — `tools/rung_reading.py` then
+    /// reconstructs it from the sends and the acknowledgements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u8>,
+    /// A measurement frame (ADR-0077): written only when it is one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub measure: bool,
+    /// The engine combined the frame with copies of its block it held (HARQ): written only when
+    /// it did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub combined: bool,
+    /// And the combination decoded — the block came by combining, not by this copy alone, which
+    /// `decoded` (the copy's own decode) cannot say: written only when it did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rescued: bool,
+}
+
+impl FrameRecord {
+    /// What the engine made of the frame: the sequence number it filed a frame that did not
+    /// decode under, and whether copies combined into it.
+    pub const fn note_engine(&mut self, heard: aether_link::DataHeard) {
+        if self.seq.is_none() {
+            self.seq = heard.seq;
+        }
+        self.combined = heard.combined;
+        self.rescued = heard.rescued;
+    }
 }
 
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
@@ -194,6 +228,57 @@ pub struct SentRecord {
     pub floor: bool,
     /// Payload length.
     pub bytes: usize,
+    /// A session data frame's sequence number, or a measurement frame's index in its
+    /// transmission: which block a copy is of, which a sidecar written before beta.122 leaves to
+    /// be reconstructed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u8>,
+    /// A measurement frame (ADR-0077): written only when it is one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub measure: bool,
+    /// A piece of its block (ADR-0086): written only when it is one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub piece: bool,
+}
+
+impl SentRecord {
+    /// What a recording keeps of a frame put on the air at `t_s`.
+    #[must_use]
+    pub fn of(frame: &aether_link::TxFrame, t_s: f64) -> Self {
+        let header = match frame.container {
+            aether_link::Container::Data => aether_link::frames::decode_data(&frame.payload)
+                .ok()
+                .map(|(header, _)| header)
+                .filter(|h| matches!(h.kind, DataKind::Data | DataKind::Measure)),
+            aether_link::Container::Control => None,
+        };
+        Self {
+            t_s,
+            kind: match frame.container {
+                aether_link::Container::Data => "data".to_owned(),
+                aether_link::Container::Control => "control".to_owned(),
+            },
+            mode: frame.mode,
+            rv: frame.rv,
+            floor: frame.floor,
+            bytes: frame.payload.len(),
+            seq: header.map(|h| h.seq),
+            measure: header.is_some_and(|h| h.kind == DataKind::Measure),
+            piece: header.is_some_and(|h| h.piece.is_some()),
+        }
+    }
+}
+
+/// A decoded frame's sequence number and whether it is a measurement frame, when it is a session
+/// data frame or a measurement frame ([`FrameRecord::seq`]).
+#[must_use]
+pub fn data_seq(payload: Option<&[u8]>) -> (Option<u8>, bool) {
+    payload
+        .and_then(|p| aether_link::frames::decode_data(p).ok())
+        .filter(|(h, _)| matches!(h.kind, DataKind::Data | DataKind::Measure))
+        .map_or((None, false), |(h, _)| {
+            (Some(h.seq), h.kind == DataKind::Measure)
+        })
 }
 
 /// What `stop` reports.
@@ -327,6 +412,14 @@ impl Recording {
         record.start_s = record.start_s.map(|t| t - self.t0);
         record.end_s = record.end_s.map(|t| t - self.t0);
         self.frames.push(record);
+    }
+
+    /// What the engine made of the frame recorded last ([`aether_link::DataHeard`]): it sees a
+    /// frame after the receiver, so the record is kept first and told after.
+    pub fn engine_heard(&mut self, heard: aether_link::DataHeard) {
+        if let Some(record) = self.frames.last_mut() {
+            record.note_engine(heard);
+        }
     }
 
     /// A frame this station transmitted.
@@ -566,17 +659,7 @@ impl TxCapture {
             tail_s,
             frames: frames
                 .iter()
-                .map(|frame| SentRecord {
-                    t_s: 0.0,
-                    kind: match frame.container {
-                        aether_link::Container::Data => "data".to_owned(),
-                        aether_link::Container::Control => "control".to_owned(),
-                    },
-                    mode: frame.mode,
-                    rv: frame.rv,
-                    floor: frame.floor,
-                    bytes: frame.payload.len(),
-                })
+                .map(|frame| SentRecord::of(frame, 0.0))
                 .collect(),
             keyed_at_s: None,
             samples: Vec::new(),
@@ -945,6 +1028,10 @@ mod tests {
             control: None,
             capture_skip: false,
             echo: None,
+            seq: Some(5),
+            measure: false,
+            combined: true,
+            rescued: true,
         });
         recording.sent(SentRecord {
             t_s: 11.8,
@@ -953,6 +1040,9 @@ mod tests {
             rv: 1,
             floor: false,
             bytes: 96,
+            seq: Some(7),
+            measure: false,
+            piece: false,
         });
         recording.event(12.0, "connected", "W4XYZ", "Connected");
         let summary = recording
@@ -992,6 +1082,16 @@ mod tests {
         assert_eq!(sidecar["sent"][0]["kind"], "data");
         assert_eq!(sidecar["sent"][0]["floor"], false);
         assert_eq!(sidecar["sent"][0]["bytes"], 96);
+        // which block each copy is of, and whether copies combined into it: what a two-sided
+        // reading had to reconstruct (the rate controller's review, 01-evidence.md §8)
+        assert_eq!(sidecar["sent"][0]["seq"], 7);
+        assert!(
+            sidecar["sent"][0].get("measure").is_none(),
+            "written only when true"
+        );
+        assert_eq!(sidecar["frames"][0]["seq"], 5);
+        assert_eq!(sidecar["frames"][0]["combined"], true);
+        assert_eq!(sidecar["frames"][0]["rescued"], true);
         assert!((sidecar["events"][0]["t_s"].as_f64().unwrap() - 2.0).abs() < 1e-9);
         assert_eq!(sidecar["counters"]["frames_sent"], 3);
         assert!(sidecar["ended"].is_string());

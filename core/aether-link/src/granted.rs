@@ -610,6 +610,23 @@ struct RxRecord {
     combined: bool,
 }
 
+/// What the engine made of the last session data frame it was handed
+/// ([`GrantedEngine::last_data`]): for a recording, never for a decision. A sidecar could only say
+/// whether a frame decoded on its own; which block it was a copy of, and whether copies combined
+/// into it, had to be reconstructed from the sends and the acknowledgements
+/// (`tools/rung_reading.py`, `docs/research/rate-control/01-evidence.md` §8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataHeard {
+    /// Its sequence number: its header's when it decoded, the one its slot gave it when it did
+    /// not — what its copies are combined under — or none (a measurement frame, a piece's
+    /// transmission, a frame off the transmission's grid).
+    pub seq: Option<u8>,
+    /// Combined with copies of its block the engine held.
+    pub combined: bool,
+    /// And the combination decoded: the block came by combining, not by this copy alone.
+    pub rescued: bool,
+}
+
 /// What one of this station's control frames said it had received: the frames it missed and
 /// the next new one — what the sender's next transmission is laid out from.
 #[derive(Debug, Clone)]
@@ -865,6 +882,9 @@ pub struct GrantedEngine {
     pub remote_call: String,
     /// Counters.
     pub stats: GrantStats,
+    /// The last frame handed to [`Self::on_frame`], if the engine filed it as this session's
+    /// data: what a recording keeps of it beside what the receiver made of it.
+    last_data: Option<DataHeard>,
     timing: PhyTiming,
     config: GrantConfig,
     rng: Draws,
@@ -1078,6 +1098,7 @@ impl GrantedEngine {
             my_call: call,
             remote_call: String::new(),
             stats: GrantStats::default(),
+            last_data: None,
             recommended: config.initial_mode,
             peer_rung: None,
             timing,
@@ -1696,6 +1717,13 @@ impl GrantedEngine {
         Ok(())
     }
 
+    /// What the engine made of the last frame handed to [`Self::on_frame`], if it filed it as
+    /// this session's data.
+    #[must_use]
+    pub const fn last_data(&self) -> Option<DataHeard> {
+        self.last_data
+    }
+
     /// A measurement is asked for and not yet reported.
     #[must_use]
     pub const fn measuring(&self) -> bool {
@@ -1974,6 +2002,7 @@ impl GrantedEngine {
     pub fn on_frame<F: SoftFrame>(&mut self, frame: &F, now: f64) {
         self.now = self.now.max(now);
         self.cause = "frame";
+        self.last_data = None;
         let heard = Heard::of(frame);
         let (payload, _) = frame.decode(None);
         if frame.container() == Container::Control {
@@ -2951,6 +2980,7 @@ impl GrantedEngine {
             return;
         }
         let index = self.take_data(soft, frame);
+        self.note_data(index);
         if index.is_none_or(|i| self.rx[i].payload.is_none()) {
             return;
         }
@@ -3395,6 +3425,7 @@ impl GrantedEngine {
             return;
         }
         let index = self.take_data(soft, frame);
+        self.note_data(index);
         if index.is_some_and(|i| self.rx[i].payload.is_some()) {
             let rescued = index.is_some_and(|i| self.rx[i].combined);
             self.heard(frame);
@@ -4258,6 +4289,18 @@ impl GrantedEngine {
         };
         self.rx[index].seq = seq;
         Some(index)
+    }
+
+    /// What [`Self::take_data`] filed, for [`Self::last_data`]; nothing for a frame it kept no
+    /// record of (off the grid, or decoded and not this session's).
+    fn note_data(&mut self, index: Option<usize>) {
+        if let Some(record) = index.map(|i| &self.rx[i]) {
+            self.last_data = Some(DataHeard {
+                seq: record.seq,
+                combined: record.combined,
+                rescued: record.combined && record.payload.is_some(),
+            });
+        }
     }
 
     fn restart_rx(&mut self) {
