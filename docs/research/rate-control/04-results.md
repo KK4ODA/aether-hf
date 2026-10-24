@@ -351,3 +351,26 @@ frames for one try — where C1's account charges the try only its own frames. T
 controller never tries OFDM on these paths: its margin and its two steps in hand keep it on the
 floor.
 
+### 3.9 C1 at the sender on the harness (2026-10-24)
+
+C1 at the sender (`78e6a12`, `Controller::DeliveryS`): the station chooses its own data's rung
+with C1, fed by what each acknowledgement says of the copies sent since the last; the other
+station's recommendation is advice; a try is one new frame at the rung above (across the floor's
+edge, a whole transmission). The same 66 runs and `80m-agc-carrier-outside-500`'s three.
+
+* **K1(a)**: +26.1 % (fails; C1 v2 +22.55 %).
+* **K1(b)**: `80m-nvis-disturbed-500` 0.84 (C1 v2 0.76), `80m-slow-machine-500` 0.77 — two
+  under 0.85.
+* **K3 passes**: 1, 0 and 1 apart.
+* **`80m-agc-carrier-outside-500`**: none of three complete (C1 v2 one, the current three).
+
+**The trace** (`80m-agc-carrier-outside-500`): the sender sent at rungs 3 and 4 transmission
+after transmission — the rungs the 7 ms echo rules out (ADR-0087). Its own controller had never
+been told the echo readings: the engine gave them to the receive-side controller only (`_heard`).
+**A defect**, not a finding: every candidate keeps the echo exclusions (`03-candidates.md` §1.1).
+Fixed in `64296a7`, with one design change beside it: every copy of a block, re-encoded or not,
+is now charged to the rung the block was cut at, so a try of OFDM whose blocks strand and go
+again on the floor costs that choice all of it — what C1 at the receiver could not charge (it
+sees frames, not blocks' histories) and what made the NVIS paths cost (§3.8). On the harness
+next.
+
