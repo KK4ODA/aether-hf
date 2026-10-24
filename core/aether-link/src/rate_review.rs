@@ -560,6 +560,26 @@ impl DeliveryController {
         self.probing.unwrap_or(self.modes[self.index])
     }
 
+    /// The choice, whatever is being tried.
+    #[must_use]
+    pub fn choice(&self) -> usize {
+        self.modes[self.index]
+    }
+
+    /// The rung being tried, if one is.
+    #[must_use]
+    pub const fn probing(&self) -> Option<usize> {
+        self.probing
+    }
+
+    /// A transmission of this station's went unanswered (C1 at the sender): the choice steps
+    /// down, as the engine steps its own (R9), and a try ends.
+    pub fn silent(&mut self, steps: usize) {
+        self.probing = None;
+        self.probe_tries = 0;
+        self.index = self.index.saturating_sub(steps);
+    }
+
     /// The smoothed SNR.
     #[must_use]
     pub const fn snr_db(&self) -> Option<f64> {

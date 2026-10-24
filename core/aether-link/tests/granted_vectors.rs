@@ -113,6 +113,7 @@ fn config(doc: &Value) -> GrantConfig {
         None => Controller::Current,
         Some("olla") => Controller::Olla,
         Some("delivery") => Controller::Delivery,
+        Some("delivery-s") => Controller::DeliveryS,
         Some(other) => panic!("no controller {other} in the port"),
     };
     GrantConfig {
