@@ -103,6 +103,9 @@ class Keying:
     records: list[dict[str, Any]] = field(default_factory=list)
     """The sidecar's ``sent`` records of those frames, in the same order — what
     ``tools/rung_reading.py`` reads each frame's redundancy version and payload from."""
+    state: str | None = None
+    """The link's state at the key, as the ``ptt`` event says it: ``Connecting`` for a try of
+    a call."""
 
     @property
     def rf_end(self) -> float | None:
@@ -143,9 +146,11 @@ def keyings(side: Side) -> list[Keying]:
     sent = side.doc.get("sent") or []
     out: list[Keying] = []
     key: float | None = None
+    state: str | None = None
     for e in events:
         if e.get("event") == "ptt" and e.get("detail") == "keyed":
             key = float(e["t_s"])
+            state = e.get("state")
         elif e.get("event") == "ptt" and e.get("detail") == "released" and key is not None:
             release = float(e["t_s"])
             tx_end = next(
@@ -178,6 +183,7 @@ def keyings(side: Side) -> list[Keying]:
                         for s in batch
                     ],
                     records=list(batch),
+                    state=state,
                 )
             )
             key = None
@@ -423,9 +429,9 @@ def gaps(a: Side, b: Side) -> list[tuple[Keying, Keying, float]]:
 
 def answers(master: Side, slave: Side, offset_slave: Offset) -> list[dict[str, float]]:
     """Each of the master's transmissions the slave answered: the answer's lateness against the
-    slot its header granted (level from the header the slave decoded, 0 without one) and the
-    margin left to ``not_after``. ``offset_slave`` takes the slave's recording clock to the
-    common one."""
+    slot its header granted (level from the header the slave decoded, 0 without one; a call's
+    from its try, :func:`call_levels`) and the margin left to ``not_after``. ``offset_slave``
+    takes the slave's recording clock to the common one."""
     gap = DECODE_BUDGET_S[0] + KEY_S + GUARD_S
     out = []
     headers = [
@@ -433,6 +439,7 @@ def answers(master: Side, slave: Side, offset_slave: Offset) -> list[dict[str, f
         for f in slave.doc.get("frames") or []
         if f.get("kind") == "control" and f.get("decoded")
     ]
+    tries = call_levels(master.keyings)
     placed = [k for k in master.keyings if k.rf_start is not None and k.rf_end is not None]
     for k, after in itertools.zip_longest(placed, placed[1:]):
         assert k.rf_start is not None and k.rf_end is not None
@@ -450,11 +457,29 @@ def answers(master: Side, slave: Side, offset_slave: Offset) -> list[dict[str, f
             continue
         header = next((h for t, h in headers if abs(t - k.rf_start) < 0.3), "")
         level = re.search(r"level (\d)", header)
-        start = end + gap + LEVELS_S[int(level[1]) if level else 0]
+        at = int(level[1]) if level else tries.get(id(k), 0)
+        start = end + gap + LEVELS_S[at]
         late = float(reply[0].rf_start or 0.0) - start
         out.append(
             {"master_key": k.key, "slot_start": start, "late": late, "margin": SLACK_S - late}
         )
+    return out
+
+
+def call_levels(keyings: list[Keying]) -> dict[int, int]:
+    """The gap level each try of a call grants its acceptance, by the keying's ``id``: up one
+    every second try (``GrantedEngine._call_level``). It rides in the connect body's capability
+    bits, which no sidecar records, so it is counted from the tries — every keying while
+    ``Connecting``, the slave's recording or not: WC4Y's fourth try to KK4ODA-1 on 2026-10-24
+    granted level 1, and its acceptance, judged at level 0, read 240 ms past its limit."""
+    out: dict[int, int] = {}
+    tries = 0
+    for k in keyings:
+        if k.state == "Connecting":
+            out[id(k)] = min(len(LEVELS_S) - 1, tries // 2)
+            tries += 1
+        else:
+            tries = 0
     return out
 
 

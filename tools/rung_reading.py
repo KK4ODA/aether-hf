@@ -459,16 +459,18 @@ def transmissions(
     ]
     used: set[int] = set()
     out: list[Transmission] = []
+    first = role_of(sender.doc) == "slave"
     for k in sender.keyings:
         if not (began - 0.01 <= k.key < ended) or not k.records:
             continue
-        # the slave's acceptance goes out as its role begins: a lone data frame, no header
-        if (
-            k.key <= began + 0.5
-            and len(k.records) == 1
-            and all(str(s.get("kind")) == "data" for s in k.records)
-        ):
+        lone_data = len(k.records) == 1 and all(str(s.get("kind")) == "data" for s in k.records)
+        # the slave's acceptance goes out as its role begins: a lone data frame, no header — in
+        # the slot the call granted, half a second later or more when the call was a later try
+        # at a higher gap level (KK4ODA-1's to WC4Y's fourth try keyed 0.95 s in, 2026-10-24)
+        if lone_data and (first or k.key <= began + 0.5):
+            first = False
             continue
+        first = False
         assert k.rf_start is not None
         at = k.rf_start
         frames: list[Frame] = []

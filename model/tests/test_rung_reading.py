@@ -170,7 +170,9 @@ def head(count: int, rung: int, measure: bool = False, base: int = 0, bitmap: in
     )
 
 
-def session(tmp_path: Path) -> tuple[Path, Path]:
+def session(tmp_path: Path, accept_at: float = 8.0) -> tuple[Path, Path]:
+    """``accept_at``: where the slave keys its acceptance, on the master's clock (its role
+    begins at 7.9)."""
     b = Builder()
     # before the session: the call the slave seeds from (the master seeds from the acceptance
     # the slave keys below, read at 8 dB)
@@ -181,7 +183,7 @@ def session(tmp_path: Path) -> tuple[Path, Path]:
     b.events["M"].append({"event": "role", "detail": "master", "t_s": 9.5})
     b.events["S"].append({"event": "role", "detail": "slave", "t_s": 5.9 - OFFSET + OFFSET})
     # the slave's acceptance goes out as its role begins: a lone data frame the tool skips
-    b.keying("S", 8.0, [data(0)], [decoded()])
+    b.keying("S", accept_at, [data(0)], [decoded()])
 
     def exchange(
         key: float, frames: list[dict[str, Any]], heard: list[dict[str, Any] | None], reply: str
@@ -272,6 +274,15 @@ def test_every_frame_sent_is_matched_and_numbered(tmp_path: Path) -> None:
     assert [len(blocks[s].copies) for s in range(4)] == [1, 2, 2, 1]
     assert blocks[2].delivered_by is not None and blocks[2].delivered_by.copy == 2
     assert not down.flagged
+
+
+def test_an_acceptance_keyed_late_in_its_slot_is_not_read_as_data(tmp_path: Path) -> None:
+    # the call was a later try at a higher gap level, so its slot opened half a second later:
+    # KK4ODA-1 keyed its acceptance to WC4Y's fourth try 0.95 s into its role (2026-10-24)
+    master, slave = session(tmp_path, accept_at=8.85)
+    up = rr.read_session(master, slave).directions[1]
+    assert up.data_transmissions == 0 and not up.flagged
+    assert not any(acc.sends for acc in up.accounts.values())
 
 
 def test_the_ladder_is_read_both_ways(tmp_path: Path) -> None:

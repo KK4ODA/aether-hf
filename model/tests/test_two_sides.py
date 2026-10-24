@@ -317,3 +317,39 @@ def test_an_answer_belongs_to_the_last_transmission_before_it() -> None:
     )
     [row] = two_sides.answers(master, slave, 0.0)
     assert row["master_key"] == 6.3 and row["late"] == pytest.approx(0.09)
+
+
+def test_a_call_s_acceptance_is_judged_at_the_level_its_try_granted() -> None:
+    def keying(key: float, rf: float | None, frames: float, state: str) -> two_sides.Keying:
+        return two_sides.Keying(
+            "M", key, key + frames + 0.3, frames, TAIL, LATENCY, 0.0, rf_start=rf, state=state
+        )
+
+    # WC4Y's Test of 2026-10-24: a probe, then four tries of the call, the families alternating;
+    # the slave recorded only the fourth, which granted level 1 (up one every second try)
+    tries = [
+        keying(0.0, None, 5.36, "Idle"),
+        keying(14.0, None, 5.36, "Connecting"),
+        keying(35.0, None, 1.05, "Connecting"),
+        keying(46.0, None, 5.36, "Connecting"),
+        keying(79.0, 79.25, 1.05, "Connecting"),
+    ]
+    assert [two_sides.call_levels(tries).get(id(k)) for k in tries] == [None, 0, 0, 1, 1]
+    master = two_sides.Side("M", {"frames": []}, np.zeros(1), FS, two_sides.NARROW, tries)
+    gap = two_sides.DECODE_BUDGET_S[0] + two_sides.KEY_S + two_sides.GUARD_S
+    accepted = 79.25 + 1.05 + gap + two_sides.LEVELS_S[1] + 0.09
+    slave = two_sides.Side(
+        "S",
+        {"frames": []},
+        np.zeros(1),
+        FS,
+        two_sides.NARROW,
+        [two_sides.Keying("S", accepted - 0.3, accepted + 5.66, 5.36, TAIL, LATENCY, 0.0,
+                          rf_start=accepted)],
+    )  # fmt: skip
+    [row] = two_sides.answers(master, slave, 0.0)
+    assert row["late"] == pytest.approx(0.09)
+    # a call made again after a session starts its tries over
+    again = [*tries, keying(200.0, 200.25, 3.2, "Connected"), keying(240.0, None, 5.36,
+                                                                   "Connecting")]  # fmt: skip
+    assert two_sides.call_levels(again)[id(again[-1])] == 0
