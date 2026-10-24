@@ -159,7 +159,7 @@ fn build(trace: &Value, n: usize) -> Prototype {
                     [row[0], row[1], row[2]]
                 })
                 .collect();
-            Prototype::Delivery(DeliveryController::for_table(
+            let mut c = DeliveryController::for_table(
                 &thresholds,
                 &payload,
                 &capacity,
@@ -167,7 +167,17 @@ fn build(trace: &Value, n: usize) -> Prototype {
                 int(&trace["floor_modes"]),
                 &penalties,
                 &echo_limit,
-            ))
+            );
+            let control = floats(&trace["control_s"]);
+            if let [floor, ordinary] = control[..] {
+                c.price_exchanges(
+                    floor,
+                    ordinary,
+                    num(&trace["gap_s"]),
+                    &ints(&trace["burst_frames"]),
+                );
+            }
+            Prototype::Delivery(c)
         }
         other => panic!("trace {n}: no prototype {other:?} in the port"),
     }
@@ -206,12 +216,19 @@ fn check_state(ctl: &Prototype, op: &Value, at: &str) {
         }
         Prototype::Delivery(c) => {
             let want = floats(&op["estimates"]);
+            let values = floats(&op["values"]);
             for (k, &mode) in c.modes().iter().enumerate() {
                 assert!(
                     close_opt(Some(c.estimate(mode)), Some(want[k])),
                     "{at}: rung {mode}'s estimate {} against the model's {}",
                     c.estimate(mode),
                     want[k]
+                );
+                assert!(
+                    close_opt(Some(c.value(mode)), Some(values[k])),
+                    "{at}: rung {mode}'s value {} against the model's {}",
+                    c.value(mode),
+                    values[k]
                 );
             }
         }
@@ -241,6 +258,15 @@ fn the_prototypes_decide_as_the_model_does() {
                 ctl.observe_echo(opt(share), num(&op["snr_in"]));
             } else if let Some(snr) = op.get("observe_snr") {
                 ctl.observe_snr(opt(snr));
+            } else if let Some(families) = op.get("families") {
+                let Prototype::Delivery(c) = &mut ctl else {
+                    panic!("trace {n} op {i}: families for C2");
+                };
+                let both = families.as_array().expect("two families");
+                c.set_families(
+                    both[0].as_bool().expect("own"),
+                    both[1].as_bool().expect("other"),
+                );
             } else {
                 panic!("trace {n} op {i}: unknown input");
             }

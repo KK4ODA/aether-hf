@@ -173,6 +173,22 @@ class DeliveryController(RateController):
     one below that (``04-results.md`` §3.4). ``0`` turns it off."""
     _family: dict[bool, float] = field(default_factory=dict)
     """The families' offsets, by whether the family is the floor's."""
+    control_s: dict[bool, float] = field(default_factory=dict)
+    """A control frame's length, by whether it is the floor's. With :attr:`burst_frames` and
+    :attr:`gap_s` the rungs are ranked per second of a whole exchange (:meth:`value`): a full
+    transmission's data frames, its header, the answer and the two gaps. The header and the
+    answer go in the families the two stations ask of each other (:attr:`families`), whatever
+    the data's rung — so on a lopsided path whose answers go on the floor, the 500 Hz air's
+    first OFDM rung (six 1.05 s frames and a 3.2 s answer) carries less than the floor's top
+    (five 5.36 s frames) with nothing lost, where per second of frame air it looked 24 % better
+    (``04-results.md`` §3.10). Empty: per second of frame air, as before."""
+    gap_s: float = 0.0
+    """The two gaps of an exchange: to the answer's slot, and to the next key after it."""
+    burst_frames: dict[int, int] = field(default_factory=dict)
+    """Per rung, the data frames a full transmission at it carries (``burst_capacity``)."""
+    families: tuple[bool, bool] | None = None
+    """Whether this station's control frames go on the floor, and whether the other's do (what
+    each asked of the other), as the engine last said; ``None``: both in the data's family."""
     cautious_start: bool = False
     """The first rung is the four channels' mean's best (:func:`path_decode_probability`), not
     the optimistic prior's, and the rung above it is tried at the next transmission. Built for
@@ -248,6 +264,21 @@ class DeliveryController(RateController):
         w = self.prior_frames
         return (acc.bytes + w * prior) / (acc.air_s + w * air)
 
+    def value(self, mode: int) -> float:
+        """What the rungs are ranked by: :meth:`estimate` per second of a full exchange at
+        ``mode`` (:attr:`control_s`), or of its frames' air when the engine gave no lengths."""
+        return self._priced(mode, self.estimate(mode))
+
+    def _priced(self, mode: int, per_air: float) -> float:
+        n = self.burst_frames.get(mode)
+        if not n or not self.control_s:
+            return per_air
+        floor = mode < self.floor_modes
+        own, other = self.families if self.families is not None else (floor, floor)
+        over = self.control_s[own] + self.control_s[other] + self.gap_s
+        air = n * self.frame_air_s.get(mode, 1.0)
+        return per_air * air / (air + over)
+
     def _prior_p(self, mode: int, snr_db: float) -> float:
         """The prior's chance a frame at ``mode`` decodes at ``snr_db``, its family's offset
         under the reading."""
@@ -286,7 +317,7 @@ class DeliveryController(RateController):
         """What frames at ``mode``, above the current rung, said: whether it now beats the
         current rung. If not, the next try of it waits twice as long."""
         here = self.modes[self._index]
-        if self.estimate(mode) > self.estimate(here):
+        if self.value(mode) > self.value(here):
             self._probe_wait[mode] = self.probe_every
             return True
         wait = self._probe_wait.get(mode, self.probe_every)
@@ -306,12 +337,12 @@ class DeliveryController(RateController):
         if not here:
             self._index = 0
             return
-        self._index = max(here, key=lambda i: (self.estimate(self.modes[i]), -i))
+        self._index = max(here, key=lambda i: (self.value(self.modes[i]), -i))
         up = self._index + 1
         if not self._usable(up):
             return
         mode = self.modes[up]
-        if self.lossless(mode) <= self.estimate(self.modes[self._index]):
+        if self._priced(mode, self.lossless(mode)) <= self.value(self.modes[self._index]):
             return
         if self._since_probe.get(mode, 0) >= self._probe_wait.get(mode, self.probe_every):
             self._probing = mode
@@ -330,9 +361,7 @@ class DeliveryController(RateController):
             self._probe_tries = 0
         if self._echo_out(self._index):
             below = [i for i in range(self._index) if self._usable(i)]
-            self._index = (
-                max(below, key=lambda i: (self.estimate(self.modes[i]), -i)) if below else 0
-            )
+            self._index = max(below, key=lambda i: (self.value(self.modes[i]), -i)) if below else 0
 
     def silent(self, steps: int) -> None:
         """A transmission of this station's went unanswered (C1-S): the rung steps down, as the
@@ -351,7 +380,7 @@ class DeliveryController(RateController):
         four channels' mean when :attr:`cautious_start`, by the optimistic prior otherwise."""
         saved = self.snr_db
         self.snr_db = snr_db
-        value = self._start_estimate if self.cautious_start else self.estimate
+        value = self._start_estimate if self.cautious_start else self.value
         best = max(
             (i for i in range(len(self.modes)) if not self._echo_out(i)),
             key=lambda i: (value(self.modes[i]), -i),

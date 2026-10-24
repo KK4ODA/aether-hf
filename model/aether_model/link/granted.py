@@ -1434,15 +1434,27 @@ class GrantedEngine:
     def _disc_patience(self) -> float:
         return max(self.cfg.disc_patience_s, self.cfg.disc_patience_exchanges * self._exchange_s())
 
+    def _price(self) -> None:
+        """The families both stations' control frames go in now — this station's own and the
+        one it asks of the other — for a prototype that ranks rungs per second of a whole
+        exchange (C1, the rate controller's review): the header and the answer of a transmission
+        at any rung."""
+        own = self._hdr_floor if self.role is Role.MASTER else self._ans_sticky
+        families = (own, self._wants_floor())
+        for ctl in (self.rate, self._sender):
+            if isinstance(ctl, DeliveryController):
+                ctl.families = families
+
     def _heard(self, frame: SoftFrame) -> None:
         """A decoded frame of the session: the link is alive, and what it read of the path's
         echo goes to the rate controller (ADR-0087) — the call or the acceptance first."""
+        self._heard_db = frame.snr_db
+        self._heard_recent = [*self._heard_recent, frame.snr_db][-self.cfg.family_readings :]
+        self._price()
         self.rate.observe_echo(frame.echo, frame.snr_db)
         if self._sender is not None:
             # the sender's own choice keeps the echo exclusions too (ADR-0087)
             self._sender.observe_echo(frame.echo, frame.snr_db)
-        self._heard_db = frame.snr_db
-        self._heard_recent = [*self._heard_recent, frame.snr_db][-self.cfg.family_readings :]
         self._heard_at = self.now
         self._arm_at("link", self.now + self._link_timeout())
 
@@ -1579,13 +1591,22 @@ class GrantedEngine:
         capacity = self.timing.data_capacity or {}
         payload = capacity or {m: 0 for m in table}
         frame_s = {m: self.timing.data_frame_s_for(m) for m in table}
+        priced: dict[str, object] = {}
+        if issubclass(kind, DeliveryController):
+            # an exchange's cost beyond its data frames, by the protocol's lengths: a control
+            # frame each way (:meth:`_price`) and the two gaps (the decode budgets are alike)
+            priced = {
+                "control_s": {fl: self._ctl_s(fl) for fl in (True, False)},
+                "gap_s": self._slot_start(0.0, True, 0, 0.0) + self._after(0.0, True, 0.0),
+                "burst_frames": {m: self.burst_capacity(frame_s[m]) for m in table},
+            }
         return kind(
             thresholds=table,
             modes=usable_modes(table, payload, frame_s),
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
-            **{**floor, **self.cfg.rate},  # type: ignore[arg-type]
+            **{**floor, **priced, **self.cfg.rate},  # type: ignore[arg-type]
         )
 
     def _rate_controller(self) -> RateController:
@@ -2978,6 +2999,7 @@ class GrantedEngine:
             capacity = data_capacity(self.timing.capacity(mode))
             outcomes.append(FrameOutcome(mode, air, capacity, True, ok, False, None))
         self._sent_copies = []
+        self._price()
         self._sender.observe_frames(outcomes[::-1], self.peer_snr_db)
 
     # ── receiving data ────────────────────────────────────────────────
@@ -3222,6 +3244,7 @@ class GrantedEngine:
         snr = sum(snrs) / len(snrs) if snrs else None
         modes = [r.frame.mode for r in records]
         if isinstance(self.rate, (DeliveryController, OuterLoopController)):
+            self._price()
             self.rate.observe_frames(self._outcomes(records), snr)
             return snr
         if not modes:

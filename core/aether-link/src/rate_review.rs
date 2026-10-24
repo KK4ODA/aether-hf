@@ -441,6 +441,17 @@ pub struct DeliveryController {
     prior_margin_db: f64,
     echo_weight: f64,
     echo_min_snr_db: f64,
+    /// A control frame's length, `[floor, ordinary]`: with `burst_frames` and `gap_s` the rungs
+    /// are ranked per second of a whole exchange ([`value`](Self::value)); `None`, per second of
+    /// frame air.
+    control_s: Option<[f64; 2]>,
+    /// The two gaps of an exchange: to the answer's slot, and to the next key after it.
+    gap_s: f64,
+    /// By rung, the data frames a full transmission at it carries; empty: none given.
+    burst_frames: Vec<usize>,
+    /// Whether this station's control frames go on the floor, and whether the other's do, as
+    /// the engine last said; `None`: both in the data's family.
+    families: Option<(bool, bool)>,
 }
 
 impl DeliveryController {
@@ -493,7 +504,62 @@ impl DeliveryController {
             prior_margin_db: 3.0,
             echo_weight: 0.4,
             echo_min_snr_db: -6.0,
+            control_s: None,
+            gap_s: 0.0,
+            burst_frames: Vec::new(),
+            families: None,
         }
+    }
+
+    /// Ranks the rungs per second of a whole exchange: a full transmission's data frames
+    /// (`burst_frames`, by rung), its header, the answer (`control_floor_s` or
+    /// `control_ordinary_s` by their families) and the two gaps (`gap_s`).
+    pub fn price_exchanges(
+        &mut self,
+        control_floor_s: f64,
+        control_ordinary_s: f64,
+        gap_s: f64,
+        burst_frames: &[usize],
+    ) {
+        self.control_s = Some([control_floor_s, control_ordinary_s]);
+        self.gap_s = gap_s;
+        self.burst_frames = burst_frames.to_vec();
+    }
+
+    /// The families both stations' control frames go in now: this station's own, and the one
+    /// it asks of the other.
+    pub const fn set_families(&mut self, own_floor: bool, other_floor: bool) {
+        self.families = Some((own_floor, other_floor));
+    }
+
+    /// The families the engine last said both stations' control frames go in.
+    #[must_use]
+    pub const fn families(&self) -> Option<(bool, bool)> {
+        self.families
+    }
+
+    /// What the rungs are ranked by: [`estimate`](Self::estimate) per second of a full
+    /// exchange at `mode`, or of its frames' air when no lengths were given.
+    #[must_use]
+    pub fn value(&self, mode: usize) -> f64 {
+        self.priced(mode, self.estimate(mode))
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn priced(&self, mode: usize, per_air: f64) -> f64 {
+        let n = self.burst_frames.get(mode).copied().unwrap_or(0);
+        let Some(control) = self.control_s else {
+            return per_air;
+        };
+        if n == 0 {
+            return per_air;
+        }
+        let floor = mode < self.floor_modes;
+        let (own, other) = self.families.unwrap_or((floor, floor));
+        let len = |fl: bool| control[usize::from(!fl)];
+        let over = len(own) + len(other) + self.gap_s;
+        let air = n as f64 * self.frame_s.get(mode).copied().unwrap_or(1.0);
+        per_air * air / (air + over)
     }
 
     /// Data bytes a second of a rung's frames carries, nothing lost.
@@ -736,7 +802,7 @@ impl DeliveryController {
     /// rung. If not, the next try of it waits twice as long.
     fn judge_try(&mut self, mode: usize) -> bool {
         let here = self.modes[self.index];
-        if self.estimate(mode) > self.estimate(here) {
+        if self.value(mode) > self.value(here) {
             self.probe_wait[mode] = Some(self.probe_every);
             return true;
         }
@@ -757,7 +823,7 @@ impl DeliveryController {
             if i > self.index && self.account(self.modes[i]).frames < 1.0 {
                 continue;
             }
-            let value = self.estimate(self.modes[i]);
+            let value = self.value(self.modes[i]);
             if best.is_none_or(|(_, b)| value > b) {
                 best = Some((i, value));
             }
@@ -772,7 +838,7 @@ impl DeliveryController {
             return;
         }
         let mode = self.modes[up];
-        if self.lossless(mode) <= self.estimate(self.modes[self.index]) {
+        if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
             return;
         }
         if self.since(mode) >= self.wait(mode) {
@@ -805,7 +871,7 @@ impl DeliveryController {
                 if !self.usable(i) {
                     continue;
                 }
-                let value = self.estimate(self.modes[i]);
+                let value = self.value(self.modes[i]);
                 if best.is_none_or(|(_, b)| value > b) {
                     best = Some((i, value));
                 }
@@ -843,7 +909,7 @@ impl DeliveryController {
             let value = if self.cautious_start {
                 self.start_estimate(self.modes[i], snr_db)
             } else {
-                self.estimate_at(self.modes[i], Some(snr_db))
+                self.priced(self.modes[i], self.estimate_at(self.modes[i], Some(snr_db)))
             };
             if best.is_none_or(|(_, b)| value > b) {
                 best = Some((i, value));

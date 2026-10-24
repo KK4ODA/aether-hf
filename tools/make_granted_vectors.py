@@ -39,6 +39,7 @@ from aether_model.link.frames import DataKind, GrantFrame, GrantKind, decode_dat
 from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine, Transmit
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
+from aether_model.link.rate_review import DeliveryController
 from aether_model.link.sim import TwoStationSim
 
 
@@ -176,7 +177,7 @@ def action_doc(a: object) -> dict[str, Any]:
 def digest(e: GrantedEngine) -> dict[str, Any]:
     """What the engine says of itself — compared after every input, so a port that goes wrong
     is caught at the input it went wrong on."""
-    return {
+    out = {
         "state": e.state.value,
         "role": e.role.value,
         "session": e.session,
@@ -194,6 +195,12 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "last_data": None if e.last_data is None else vars(e.last_data),
         "stats": dict(vars(e.stats)),
     }
+    # C1 of the rate controller's review (bench-only): the families it prices exchanges by, as
+    # the engine last told it — written only for its sessions, so the shipped vectors keep theirs
+    c1 = next((c for c in (e.rate, e._sender) if isinstance(c, DeliveryController)), None)
+    if c1 is not None:
+        out["families"] = None if c1.families is None else list(c1.families)
+    return out
 
 
 class _Proxy:
