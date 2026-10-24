@@ -45,15 +45,21 @@ from aether_model.waveform import NARROW_500, WIDE_2300, WaveformParams
 
 AUDIO_RATE = 48_000
 
-RULES = ("r0", "r1", "r2")
-"""The rules the bench compares (``00-plan.md`` §2): R0 as built, R1 under test, R2 the offline
-rule, measured because R1 missed K2."""
+RULES = ("r0", "r1", "r2", "r0e", "r3")
+"""The rules the bench compares (``00-plan.md`` §2 and §6): R0 as built, R1 under test, R2 the
+offline rule, measured because R1 missed K2; R0e the rule as built with the end guard alone, and
+R3 R1 with it, measured because every M3 loss was the span's end."""
 
 
 def receiver(params: WaveformParams, rule: str) -> StreamingReceiver:
     if rule not in RULES:
         raise ValueError(f"no rule {rule!r}")
-    return StreamingReceiver(params, weak_spans_hide=rule == "r0", strongest_wins=rule == "r2")
+    return StreamingReceiver(
+        params,
+        weak_spans_hide=rule in ("r0", "r0e"),
+        strongest_wins=rule == "r2",
+        end_guard=params.symbol_samples if rule in ("r0e", "r3") else 0,
+    )
 
 
 @dataclass(frozen=True)
@@ -733,7 +739,9 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--bandwidth", type=int, choices=(500, 2300))
     f.add_argument("--block-ms", type=float, default=20.0)
     f.add_argument("--list", action="store_true", help="list every frame the rule under test found")
-    f.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
+    f.add_argument(
+        "--rule", choices=("r1", "r2", "r0e", "r3"), default="r1", help="the rule under test"
+    )
     f.set_defaults(run=field)
     s = sub.add_parser("synth", help="M2: a false candidate, then a real frame inside its span")
     s.add_argument("--out", required=True, help="CSV, appended to as trials finish")
@@ -741,7 +749,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--trials", type=int, default=20, help="per cell")
     s.add_argument("--seed", type=int, default=1000)
     s.add_argument("--jobs", type=int, default=4)
-    s.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
+    s.add_argument(
+        "--rule", choices=("r1", "r2", "r0e", "r3"), default="r1", help="the rule under test"
+    )
     s.set_defaults(run=synth)
     sm = sub.add_parser("synth-summary", help="the M2 table from a CSV")
     sm.add_argument("csv")
@@ -754,7 +764,9 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--seconds", type=float, default=120.0, help="of air per condition")
     t.add_argument("--seed", type=int, default=5000)
     t.add_argument("--jobs", type=int, default=4)
-    t.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
+    t.add_argument(
+        "--rule", choices=("r1", "r2", "r0e", "r3"), default="r1", help="the rule under test"
+    )
     t.set_defaults(run=traffic_cmd)
     ts = sub.add_parser("traffic-summary", help="the M3 table from a CSV")
     ts.add_argument("csv")
@@ -766,7 +778,9 @@ def main(argv: list[str] | None = None) -> None:
     n.add_argument("--seconds", type=float, default=600.0, help="per chunk")
     n.add_argument("--seed", type=int, default=9000)
     n.add_argument("--jobs", type=int, default=4)
-    n.add_argument("--rule", choices=("r1", "r2"), default="r1", help="the rule under test")
+    n.add_argument(
+        "--rule", choices=("r1", "r2", "r0e", "r3"), default="r1", help="the rule under test"
+    )
     n.set_defaults(run=noise_cmd)
     args = ap.parse_args(argv)
     args.run(args)

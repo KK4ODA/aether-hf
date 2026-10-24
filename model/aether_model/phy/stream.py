@@ -69,6 +69,7 @@ class StreamingReceiver:
         *,
         weak_spans_hide: bool = True,
         strongest_wins: bool = False,
+        end_guard: int = 0,
     ) -> None:
         self.p = params
         self.modem = Modem(params, blank_impulses=False)  # blanking happens here, once
@@ -97,6 +98,12 @@ class StreamingReceiver:
         decoded hides only a candidate no stronger than itself, whatever either's confidence —
         what :meth:`Modem.decode_buffer` does, taking the strongest first. Overrides
         :attr:`weak_spans_hide`. Bench-only."""
+        self.end_guard = end_guard
+        """Samples at the end of a known frame's span in which a candidate is not inside it. A
+        burst's frames go back to back, so the next frame starts where this one ends; when this
+        one's timing locked on a later ray (2 ms on ITU Poor) the next one's start falls inside
+        its span and is hidden, and its copy a symbol late is taken and fails. Found by the
+        hidden-frame bench's traffic runs (``docs/research/hidden-frames/``). Bench-only."""
         self._tone_keep = max(k.samples for k in self.modem.air.tone_data) + 4000
         """Samples always kept for the tone floor: its longest frame and half a second — a
         tone frame is taken a symbol after it ends and refined against its own samples."""
@@ -159,7 +166,8 @@ class StreamingReceiver:
                     pend.sync.detect_confidence(self.modem.air),
                 )
                 inside_decoded = (not self.weak_spans_hide or self.strongest_wins) and any(
-                    d.decoded and d.start - self.p.symbol_samples < done.start < d.end
+                    d.decoded
+                    and d.start - self.p.symbol_samples < done.start < d.end - self.end_guard
                     for d in self._done
                 )
                 self._done = [*self._done, done][-20:]
@@ -206,7 +214,7 @@ class StreamingReceiver:
             (p.sync.start, p.end_abs, None, p.sync.detect_confidence(self.modem.air))
             for p in self._pending
         ] + [(d.start, d.end, d.decoded, d.confidence) for d in self._done]
-        inside = [k for k in known if k[0] - self.p.symbol_samples < start < k[1]]
+        inside = [k for k in known if k[0] - self.p.symbol_samples < start < k[1] - self.end_guard]
         confidence = new.sync.detect_confidence(self.modem.air)
         if inside and self.strongest_wins:
             return any(abs(start - k[0]) < self.p.symbol_samples for k in inside) or any(
