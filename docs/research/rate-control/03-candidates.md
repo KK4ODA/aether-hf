@@ -244,4 +244,19 @@ Notes on the criteria:
 
 ### 5.2 The start pair
 
-(To be filled.)
+Three draws each, all six complete (`80m-start-*-reading-500`, seeds 223, 1223, 2223). The call's
+reading is the slave's of the call it decoded (a floor frame: a lower bound, ADR-0016); the
+settled rung is K3's.
+
+| draw | low start: call read, settled, file bit/s | high start: call read, settled, file bit/s | settled apart |
+|---|---|---|---|
+| seed 223 | −1.3 dB, rung 9, 186 | +4.3 dB, rung 7, 183 | **2** |
+| seed 1223 | +5.8 dB, rung 9, 194 | +9.4 dB, rung 10, 203 | 1 |
+| seed 2223 | +3.1 dB, rung 9, 241 | +8.0 dB, rung 7, 195 | **2** |
+
+**The current controller fails K3 in two draws of three**, and the wrong way round: the session
+that heard the better call settled lower. Started higher, it climbed into the rungs the path does
+not carry, its margin learned the failures, and it stayed two rungs down for the rest of the Test
+— report 16's pair (the 13.4 dB call settled one rung *above* the 6.2 dB one there) and
+`01-evidence.md` §5 item 3's walk down, reproduced on one path. The 4 dB the scenarios put between
+the starts reads as 3.6–5.6 dB at the slave, through the floor frame's own lower bound.
