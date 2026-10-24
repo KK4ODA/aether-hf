@@ -1,9 +1,9 @@
 # Gate 2: candidates and criteria
 
-*In progress: §5 is filled as the baseline runs finish. The rate controller's review (`00-brief.md` §6), 2026-10-24. The candidates for Gate 3, what
-each removes and adds, and the criteria they will be judged by — registered here, with the
-current controller's own numbers (§5), before any candidate is run. The author agrees the
-criteria before Gate 3 begins.*
+*In progress: §5.1 is filled as the baseline runs finish. The rate controller's review
+(`00-brief.md` §6), 2026-10-24. The candidates for Gate 3, what each removes and adds, and the
+criteria they will be judged by — registered here, with the current controller's own numbers
+(§5), before any candidate is run. The author agreed the criteria on 2026-10-24 (§4).*
 
 ## 0. Summary
 
@@ -22,9 +22,9 @@ criteria before Gate 3 begins.*
   * **C4, the start**: the first rung from the prior, with the first transmission's exploration,
     in place of two rungs in hand.
   * A sixth, **C5, a soft reading as the prior**, waits on an instrument check (§2.6).
-* **Seven criteria with numbers** (§3): regret against the oracle, no scenario slower, start
-  independence, completion and no new overlap, the real-modem link bench, the field replay, and
-  fewer parameters and rules.
+* **Seven criteria with numbers** (§3), agreed by the author (§4): regret against the oracle,
+  no scenario slower, start independence, completion and no new overlap, the real-modem link
+  bench, the field replay, and fewer parameters and rules.
 * **What it costs to judge**: about 20 scenarios × 3 draws × (the current controller + each
   candidate) on the harness, the full scenario matrix × 3 draws for the best two, the link bench,
   and the field replay; the oracle's fixed-rung runs are made once (§5).
@@ -158,8 +158,8 @@ C1 and C2 are each built twice:
   (`02-survey.md` §4.3).
 
 A sender-side decision changes what a recommendation means on the wire only by being advice; the
-older build reading it as an order still interoperates. Whether the sender may send faster than
-the receiver recommends is a question for the author (§4).
+older build reading it as an order still interoperates. The sender may send faster than the
+receiver recommends, one frame in *P* (the author, §4).
 
 ### 2.4 C2 — outer-loop adaptation to a derived target
 
@@ -226,13 +226,15 @@ Notes on the criteria:
 * **K6 is open-loop**: it judges decisions on the same evidence, not outcomes; a sender-side
   candidate is replayed on the sender's record of its acknowledgements.
 * **A failing criterion stops the step** (`00-brief.md` §7): it is explained with a trace before
-  anything changes.
+  anything changes. A narrow miss goes to the author, case by case (§4).
 
-## 4. Questions for the author
+## 4. The author's answers (2026-10-24)
 
-1. **The criteria** (§3): agree them, or change the numbers, before Gate 3.
-2. **May the sender send faster than the receiver recommends?** C1-S's single-frame probe does,
-   one frame in *P*. If not, C1 is built at the receiver only, and its probes cost a transmission.
+1. **The criteria** (§3) **are agreed** as written. A candidate that misses one narrowly is
+   brought to the author with the criterion, by how much it missed and the trace, and decided case
+   by case; it does not pass by rule, and a miss is still explained before anything changes.
+2. **The sender may send faster than the receiver recommends**, one frame of a transmission in
+   *P*, as C1-S's single-frame probe. C1 is built at both places (§2.3).
 
 ## 5. The current controller's own numbers
 
