@@ -2503,14 +2503,56 @@ document.addEventListener("visibilitychange", scopesWanted);
 
 // ── capabilities and devices ────────────────────────────────────────
 
-/// The fastest-mode list, from the mode table the modem reports. The table is the
-/// running waveform's ladder; when the operator picks the other bandwidth the list shrinks
-/// or grows to that ladder's size (fifteen rungs at 500 Hz, twenty at 2300) and the modem
-/// reports the real names once it has restarted into it.
+/// What a configured `max_mode` of 19 is: the wide ladder's top, which the modem holds to the
+/// top of whichever ladder it runs (`RadioSection::fastest_mode`) — so "the fastest" at either
+/// bandwidth.
+const FASTEST_MODE = 19;
+
+/// The fastest-mode list's entries the chosen bandwidth has: the bandwidth handler hides the
+/// rest.
+function maxModeOptions() {
+  return [...$("radio-max-mode").options].filter((option) => !option.hidden);
+}
+
+/// Whether the fastest-mode list shows its last entry: "the fastest this bandwidth has".
+function maxModeAtTop() {
+  const options = maxModeOptions();
+  return options.length > 0 && $("radio-max-mode").value === options[options.length - 1].value;
+}
+
+/// Show a configured `max_mode`: that rung, or the list's last entry when the mode is past
+/// this ladder (19 while the modem runs 500 Hz).
+function selectMaxMode(value) {
+  const options = maxModeOptions();
+  if (options.length === 0) return;
+  $("radio-max-mode").value = options.some((o) => o.value === value)
+    ? value
+    : options[options.length - 1].value;
+}
+
+/// What the fastest-mode list says to save: the rung chosen, or 19 for its last entry, which
+/// then stays the fastest when the bandwidth changes. Saving the rung itself wrote 14 into every
+/// file saved while the station ran 500 Hz — the list holds the running ladder only — and
+/// KQ4SAX, WC4Y and KK4ODA-1 ran 2300 Hz five rungs under their top (report 17 §3).
+function maxModeToSave() {
+  if ($("radio-max-mode").value === "") return null;
+  return maxModeAtTop() ? FASTEST_MODE : Number($("radio-max-mode").value);
+}
+
+/// The fastest-mode list, from the mode table the modem reports. The table is the running
+/// waveform's ladder: fifteen rungs at 500 Hz, twenty at 2300. Picking the other bandwidth in
+/// Setup hides the rungs a narrower ladder lacks and cannot add the ones a wider ladder has, so
+/// the list's last entry stands for the fastest (`maxModeToSave`); the modem reports the real
+/// names once it runs the bandwidth.
 function fillModes() {
   const select = $("radio-max-mode");
   if (select.options.length === modeTable.length && modeTable.length > 0) return;
-  const before = select.value || (configuredMaxMode == null ? "" : String(configuredMaxMode));
+  // the fastest stays the fastest as the list changes ladder: a profile switch or a move to
+  // another bandwidth refills it, and the old list's top is not the new one's
+  const wasTop = maxModeAtTop();
+  const before = wasTop
+    ? ""
+    : select.value || (configuredMaxMode == null ? "" : String(configuredMaxMode));
   select.replaceChildren();
   for (const mode of modeTable) {
     const option = document.createElement("option");
@@ -2520,8 +2562,7 @@ function fillModes() {
   }
   // the one the configuration holds, or the ladder's top when it is past this ladder — never
   // whatever the browser shows first
-  if (before && [...select.options].some((o) => o.value === before)) select.value = before;
-  else if (select.options.length > 0) select.value = select.options[select.options.length - 1].value;
+  selectMaxMode(before || String(FASTEST_MODE));
 }
 
 async function loadCapabilities() {
@@ -2714,7 +2755,7 @@ async function loadConfig() {
   select($("radio-bandwidth"), String(radio.bandwidth ?? 2300));
   $("radio-answer-only").checked = radio.answer_only === true;
   configuredMaxMode = radio.max_mode ?? null;
-  select($("radio-max-mode"), String(radio.max_mode ?? 19));
+  selectMaxMode(String(radio.max_mode ?? FASTEST_MODE));
   $("radio-compress").checked = radio.compress === true;
   $("radio-wait").checked = radio.wait_for_clear !== false;
   $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);
@@ -3036,7 +3077,11 @@ function keyingChanges() {
 
 /// A number typed into a field, or nothing when it is not one.
 function numberIn(id) {
-  const value = Number($(id).value);
+  // an empty field is no number: Number("") is 0, and an empty Power box was saved as 0 W,
+  // which the modem refuses — Setup could not be saved at all with it left empty
+  const text = $(id).value.trim();
+  if (text === "") return null;
+  const value = Number(text);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -3064,9 +3109,8 @@ function formChanges() {
   changes["radio.answer_only"] = $("radio-answer-only").checked;
   // an empty list says nothing about the fastest mode: Number("") is 0, rung 0, and saving it
   // held a station at the bottom of the ladder for good
-  if ($("radio-max-mode").value !== "") {
-    changes["radio.max_mode"] = Number($("radio-max-mode").value);
-  }
+  const fastest = maxModeToSave();
+  if (fastest != null) changes["radio.max_mode"] = fastest;
   changes["radio.compress"] = $("radio-compress").checked;
   changes["radio.wait_for_clear"] = $("radio-wait").checked;
   for (const [id, key] of [
@@ -5186,12 +5230,18 @@ function wire() {
     button.addEventListener("click", () => sortHeard(button.dataset.sort));
   }
   $("radio-bandwidth").addEventListener("change", () => {
-    // the narrow ladder has fifteen rungs and the wide one twenty (ADR-0014, ADR-0015): a
-    // fastest mode past the ladder would be refused on save
+    // the narrow ladder has fifteen rungs and the wide one twenty (ADR-0014, ADR-0015): the
+    // rungs a narrower ladder lacks are hidden, and a choice past it, or the fastest, becomes
+    // its last entry — which saves as the fastest (`maxModeToSave`); the modem would clamp a
+    // rung past its ladder, not refuse it
     const modes = $("radio-bandwidth").value === "500" ? 15 : 20;
     const fastest = $("radio-max-mode");
+    const wasTop = maxModeAtTop();
     for (const option of fastest.options) option.hidden = Number(option.value) >= modes;
-    if (Number(fastest.value) >= modes) fastest.value = String(modes - 1);
+    const options = maxModeOptions();
+    if ((wasTop || Number(fastest.value) >= modes) && options.length > 0) {
+      fastest.value = options[options.length - 1].value;
+    }
   });
   $("btn-compact").addEventListener("click", () => {
     setCompact(!document.body.classList.contains("compact"));

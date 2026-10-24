@@ -147,7 +147,8 @@ port's address, the panel's port, the log file and the recordings folder.
 - **License class**: decides which frequencies are yours.
 - **Sideband**: USB, the convention for data. On LSB the signal lands below the dial, mirrored.
 - **For the field log**: grid (six characters lets the log work out the distance), rig, power in
-  watts, antenna. They go into every recording, so a report needs no follow-up.
+  watts, antenna. They go into every recording, so a report needs no follow-up. Each may be left
+  empty.
 
 What the rules check, and why, is in [FCC regulatory controls](fcc-regulatory-controls.md).
 Aether keys nothing the rules refuse, but you remain the control operator.
@@ -190,8 +191,12 @@ the sound card's own noise.
   idle, with no restart. A host program's `BW500` or `BW2300` moves it while the program is
   attached.
 - **Answer only**: take calls and answer probes, but make no call and send no beacon.
-- **Fastest mode**: the highest rung the link may climb to. The rules may hold it lower on some
-  frequencies.
+- **Fastest mode**: the highest rung the link may climb to. The last entry is the fastest your
+  bandwidth has, and stays the fastest when you change bandwidth. Choose a lower one only to cap
+  the link. The rules may hold it lower on some frequencies.
+  - Before 0.2.0-beta.123, saving Setup while running 500 Hz could leave a 2300 Hz station at
+    rung 14 of 19. If yours shows 14 at 2300 Hz and you did not choose it, choose the last entry
+    and save.
 - **Compress**: off by default. It compresses the whole session, so on a weak path one lost
   frame can spoil the rest. Use it only on a solid link.
 - **Busy channel**: *wait for a clear channel before calling*, and how far above the noise floor
