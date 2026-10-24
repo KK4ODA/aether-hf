@@ -433,6 +433,9 @@ pub struct DeliveryController {
     probe_wait: Vec<Option<usize>>,
     probing: Option<usize>,
     probe_tries: usize,
+    /// Frames at the rung being tried since the try began: a try is decided once they outweigh
+    /// the prior ([`try_over`](Self::try_over)).
+    try_frames: usize,
     half_life: f64,
     prior_frames: f64,
     probe_every: usize,
@@ -496,6 +499,7 @@ impl DeliveryController {
             probe_wait: vec![None; n],
             probing: None,
             probe_tries: 0,
+            try_frames: 0,
             half_life: 12.0,
             prior_frames: 2.0,
             probe_every: 6,
@@ -641,8 +645,7 @@ impl DeliveryController {
     /// A transmission of this station's went unanswered (C1 at the sender): the choice steps
     /// down, as the engine steps its own (R9), to a rung the echo allows, and a try ends.
     pub fn silent(&mut self, steps: usize) {
-        self.probing = None;
-        self.probe_tries = 0;
+        self.cancel_try();
         let to = self.index.saturating_sub(steps);
         self.index = (0..=to).rev().find(|&i| self.usable(i)).unwrap_or(0);
     }
@@ -766,21 +769,34 @@ impl DeliveryController {
         }
         if let Some(probe) = self.probing {
             self.probe_tries += 1;
-            let measured = sent.contains(&probe);
-            if measured || self.probe_tries >= 2 {
-                self.end_probe(measured);
+            self.try_frames += frames.iter().filter(|f| f.mode == probe).count();
+            if self.try_over() {
+                self.end_probe(self.try_frames > 0);
             }
         }
-        if self.probing.is_none() {
-            self.decide();
-        }
+        self.decide();
+    }
+
+    /// A try is decided once its own frames outweigh the prior — more than `prior_frames` of
+    /// them — or, a frame or none a transmission, after twice the transmissions that takes: one
+    /// frame is a coin toss either way (the model's `_try_over`).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    const fn try_over(&self) -> bool {
+        let enough = self.prior_frames as usize + 1;
+        self.try_frames >= enough || self.probe_tries >= 2 * enough
+    }
+
+    const fn cancel_try(&mut self) {
+        self.probing = None;
+        self.probe_tries = 0;
+        self.try_frames = 0;
     }
 
     fn end_probe(&mut self, measured: bool) {
-        let Some(mode) = self.probing.take() else {
+        let Some(mode) = self.probing else {
             return;
         };
-        self.probe_tries = 0;
+        self.cancel_try();
         if !measured {
             return;
         }
@@ -814,13 +830,13 @@ impl DeliveryController {
 
     fn decide(&mut self) {
         // down to any rung (the estimate of one never sent is the prior); up only to a rung
-        // measured — by a try, or by frames the sender put there itself
+        // whose own frames outweigh its prior — a try's, or frames the sender put there itself
         let mut best: Option<(usize, f64)> = None;
         for i in 0..self.modes.len() {
             if !self.usable(i) {
                 continue;
             }
-            if i > self.index && self.account(self.modes[i]).frames < 1.0 {
+            if i > self.index && self.account(self.modes[i]).frames <= self.prior_frames {
                 continue;
             }
             let value = self.value(self.modes[i]);
@@ -830,10 +846,17 @@ impl DeliveryController {
         }
         let Some((index, _)) = best else {
             self.index = 0;
+            self.cancel_try();
             return;
         };
         self.index = index;
         let up = self.index + 1;
+        if let Some(probe) = self.probing {
+            if !self.usable(up) || self.modes[up] != probe {
+                self.cancel_try(); // the choice moved from under the try
+            }
+            return;
+        }
         if !self.usable(up) {
             return;
         }
@@ -862,8 +885,7 @@ impl DeliveryController {
             && let Some(at) = self.modes.iter().position(|&m| m == probe)
             && self.echo_out(at)
         {
-            self.probing = None;
-            self.probe_tries = 0;
+            self.cancel_try();
         }
         if self.echo_out(self.index) {
             let mut best: Option<(usize, f64)> = None;

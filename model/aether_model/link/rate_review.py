@@ -203,6 +203,9 @@ class DeliveryController(RateController):
     _probing: int | None = None
     """The rung being tried — what is recommended until a transmission carrying it is seen."""
     _probe_tries: int = 0
+    _try_frames: int = 0
+    """Frames at the rung being tried since the try began: a try is decided once they outweigh
+    the prior (:meth:`_try_over`)."""
 
     # ── what the engine feeds it ──────────────────────────────────────
 
@@ -248,10 +251,10 @@ class DeliveryController(RateController):
                 self._judge_try(mode)
         if self._probing is not None:
             self._probe_tries += 1
-            if self._probing in sent or self._probe_tries >= 2:
-                self._end_probe(self._probing in sent)
-        if self._probing is None:
-            self._decide()
+            self._try_frames += sum(1 for f in frames if f.mode == self._probing)
+            if self._try_over():
+                self._end_probe(self._try_frames > 0)
+        self._decide()
 
     # ── the estimate ──────────────────────────────────────────────────
 
@@ -300,10 +303,25 @@ class DeliveryController(RateController):
     def _usable(self, index: int) -> bool:
         return 0 <= index < len(self.modes) and not self._echo_out(index)
 
-    def _end_probe(self, measured: bool) -> None:
-        mode, self._probing = self._probing, None
-        assert mode is not None
+    def _try_over(self) -> bool:
+        """A try is decided once its own frames outweigh the prior — more than
+        :attr:`prior_frames` of them — or, a frame or none a transmission, after twice the
+        transmissions that takes. The sender tries with one frame a transmission, and one frame
+        is a coin toss: one lucky decode put seventeen frames on OFDM over a 7 ms echo, two
+        unlucky ones shut rung 7 from a low start for a whole session (``04-results.md``
+        §3.14)."""
+        enough = int(self.prior_frames) + 1
+        return self._try_frames >= enough or self._probe_tries >= 2 * enough
+
+    def _cancel_try(self) -> None:
+        self._probing = None
         self._probe_tries = 0
+        self._try_frames = 0
+
+    def _end_probe(self, measured: bool) -> None:
+        mode = self._probing
+        assert mode is not None
+        self._cancel_try()
         if not measured:
             return
         if self._judge_try(mode):
@@ -327,18 +345,26 @@ class DeliveryController(RateController):
 
     def _decide(self) -> None:
         # down to any rung (the estimate of one never sent is the prior); up only to a rung
-        # measured — by a try, or by frames the sender put there itself
+        # whose own frames outweigh its prior — a try's, or frames the sender put there itself
         here = [
             i
             for i in range(len(self.modes))
             if self._usable(i)
-            and (i <= self._index or self._accounts.get(self.modes[i], _Account()).frames >= 1.0)
+            and (
+                i <= self._index
+                or self._accounts.get(self.modes[i], _Account()).frames > self.prior_frames
+            )
         ]
         if not here:
             self._index = 0
+            self._cancel_try()
             return
         self._index = max(here, key=lambda i: (self.value(self.modes[i]), -i))
         up = self._index + 1
+        if self._probing is not None:
+            if not self._usable(up) or self.modes[up] != self._probing:
+                self._cancel_try()  # the choice moved from under the try
+            return
         if not self._usable(up):
             return
         mode = self.modes[up]
@@ -357,8 +383,7 @@ class DeliveryController(RateController):
         w = self.echo_weight
         self.echo = share if self.echo is None else (1.0 - w) * self.echo + w * share
         if self._probing is not None and self._echo_out(self.modes.index(self._probing)):
-            self._probing = None
-            self._probe_tries = 0
+            self._cancel_try()
         if self._echo_out(self._index):
             below = [i for i in range(self._index) if self._usable(i)]
             self._index = max(below, key=lambda i: (self.value(self.modes[i]), -i)) if below else 0
@@ -368,8 +393,7 @@ class DeliveryController(RateController):
         engine steps its own (R9), to a rung the echo allows, and a try ends. Stepped by the
         ladder's index alone it landed on the rungs a 7 ms echo rules out (ADR-0087), and blocks
         cut there stayed for their four copies (``04-results.md`` §3.10)."""
-        self._probing = None
-        self._probe_tries = 0
+        self._cancel_try()
         below = [i for i in range(max(0, self._index - steps) + 1) if self._usable(i)]
         self._index = below[-1] if below else 0
 
