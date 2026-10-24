@@ -163,6 +163,16 @@ class DeliveryController(RateController):
     """The prior is the AWGN curve this far under the reading (:func:`prior_probability`): on
     the real modem it beat the four channels' mean, ×0.942 of the current controller's session
     time against ×1.095 (``04-results.md`` §2)."""
+    family_gain_db: float = 0.5
+    """How far a frame moves its family's offset, per unit of surprise: the prior of every rung of
+    a family is read that far under the reading, the offset moved by every frame of the family
+    (not combined) by ``gain × (p − decoded)`` — up by nearly the gain for a failure the prior
+    was sure of, down by nearly it for a success it ruled out. Without it a rung never sent at
+    keeps the optimistic prior whatever its family's rungs have shown: on the harness's NVIS
+    paths C1 stepped down from a failing OFDM rung to the OFDM rung below, unmeasured, and the
+    one below that (``04-results.md`` §3.4). ``0`` turns it off."""
+    _family: dict[bool, float] = field(default_factory=dict)
+    """The families' offsets, by whether the family is the floor's."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, int] = field(default_factory=dict)
     _probe_wait: dict[int, int] = field(default_factory=dict)
@@ -178,11 +188,21 @@ class DeliveryController(RateController):
         self.observe_snr(snr_db)
 
     def observe_frames(self, frames: list[FrameOutcome], snr_db: float | None) -> None:
-        """A transmission's data frames: each rung's account takes its frames, a try ends, and
-        the recommendation is the best estimate around the current rung."""
+        """A transmission's data frames: each moves its family's offset and its rung's account,
+        a try ends, and the recommendation is the best estimate around the current rung."""
         self.observe_snr(snr_db)
         if not frames:
             return
+        if self.family_gain_db and self.snr_db is not None:
+            for f in frames:
+                if f.combined or f.mode not in self.thresholds:
+                    continue
+                floor = f.mode < self.floor_modes
+                p = self._prior_p(f.mode, self.snr_db)
+                offset = self._family.get(floor, 0.0) + self.family_gain_db * (
+                    p - (1.0 if f.decoded else 0.0)
+                )
+                self._family[floor] = min(20.0, max(-5.0, offset))
         decay = 0.5 ** (1.0 / self.half_life)
         for f in frames:
             acc = self._accounts.setdefault(f.mode, _Account())
@@ -215,19 +235,22 @@ class DeliveryController(RateController):
         """Data bytes a second of air at ``mode`` delivers, measured and prior together."""
         cap = float(self.capacity.get(mode, 0))
         air = self.frame_air_s.get(mode, 1.0)
-        if self.snr_db is None:
-            prior = 0.0
-        else:
-            prior = cap * prior_probability(
-                self.snr_db,
-                self.thresholds[mode],
-                self.penalties.get(mode, ()),
-                self.slope_db,
-                self.prior_margin_db,
-            )
+        prior = 0.0 if self.snr_db is None else cap * self._prior_p(mode, self.snr_db)
         acc = self._accounts.get(mode, _Account())
         w = self.prior_frames
         return (acc.bytes + w * prior) / (acc.air_s + w * air)
+
+    def _prior_p(self, mode: int, snr_db: float) -> float:
+        """The prior's chance a frame at ``mode`` decodes at ``snr_db``, its family's offset
+        under the reading."""
+        offset = self._family.get(mode < self.floor_modes, 0.0)
+        return prior_probability(
+            snr_db - offset,
+            self.thresholds[mode],
+            self.penalties.get(mode, ()),
+            self.slope_db,
+            self.prior_margin_db,
+        )
 
     def lossless(self, mode: int) -> float:
         return float(self.capacity.get(mode, 0)) / self.frame_air_s.get(mode, 1.0)
