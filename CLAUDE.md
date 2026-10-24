@@ -2255,7 +2255,7 @@ the transmission's family), the air each rung spent and the data per second of i
 recommendations over time, the ladder both ways, the neighbours' measured delivery and the
 regret; a `/4` sidecar is read with the old 500 Hz ladder, `--tree` with the model of the build
 the session ran (a worktree of its tag), `--timeline` lists every transmission. `--replay` runs
-that build's own `RateController` as the engine feeds it: 203 of 203 slave and 129 of 129 master
+that build's own `RateController` as the engine feeds it: 208 of 208 slave and 129 of 129 master
 recommendations reproduced over the nine two-sided sessions in hand (2026-10-14 … 10-23), once
 four things were right — the engine's own controller (beta.120's cap), re-encodes resetting the
 RVs, phantoms before the first decoded frame of a headerless transmission counted as the engine
@@ -2272,9 +2272,40 @@ decodes (three sessions, 15–77 % left at the top), the first OFDM rungs chosen
 top carried more (four sessions, up to 4×), a strong session walked from rung 12 to 5 at steady
 +8 … +13 dB readings, a third of rung 7's frames never detected on 2300 Hz; seven of the eleven
 adjustments rested on the fading pipe, four on it alone. The uploads live in `field/inbox/`
-(git-ignored, `python -I`; `fetch_uploads.py get`, one at a time). Owed: `seq` and `combined` on
-the sidecar's records would make the reading exact without reconstruction (outside the
-controller). Next: Gate 1, the survey (`02-survey.md`).
+(git-ignored, `python -I`; `fetch_uploads.py get`, one at a time).
+
+**What a recording says from beta.122, and Gate 1 (2026-10-24; the author's "go ahead with
+Gate 1, add, wait for Gate 2").** No wire change, nothing the controller decides. A sidecar's
+`sent` data frames carry `seq` (and `measure`, `piece`); its received data frames carry `seq` (the
+header's, or the one the engine filed a failed copy under), `measure`, `combined` and `rescued` —
+what the engine made of the frame, which it now says itself (`GrantedEngine.last_data` /
+`last_data()`, `DataHeard`, model first; `granted_vectors.json`'s digests compare it at every
+input, a planted fault fails them); every control frame a station decides records a `rate` event
+(`snr S margin M`, `Station::record_rate`). `rung_reading.py` takes the recorded numbers when every
+data frame has one (and still reports how many the reconstruction numbers alike), the receiver's
+word on combining, and with `--replay` checks the controller's *state* at each step. Checked on
+three harness sessions: the reconstruction numbered every frame as sent, and the replay matched
+rung and state at every step inside the session — after three fixes the field had not exercised
+(a failure judged at the RV read off the chips; a frame neither decoded nor trusted is nothing,
+its misread rung included; strays only from inside the session) and one the harness forced:
+**a harness recording's `started` stamp is wall-clock and the harness runs 2–5× faster than the
+air**, so the tool now guesses the clock offset from the master's control frames the slave
+decoded (`heard_offset`) when the stamps disagree by over a second. The nine field sessions read
+exactly as before. **The survey** (`02-survey.md`, read in three passes, reading level per
+source): cellular OLLA, HARQ-aware MCS (Wu and Jindal: with IR the first-copy error should be
+"quite large"; Sassioui: the switch between rates at PER ≈ 1 − R_{l−1}/R_l, 10–36 % between
+Aether's neighbours), EESM/MIESM, Wi-Fi (SampleRate, Minstrel-HT's free single-try probe, RRAA's
+derived thresholds, CHARM/SGRA calibration, SoftRate, unimodal bandits), HF (MIL-STD-188-110's
+penalty growing 5 → 10 dB with rate, 141's HDL incremental redundancy, STANAG 5066 Ed4's sender
+choosing on the receiver's advice, Kille's skywave measurement: SNR averaging beat FER stepping
+88–95 % against 59–76 % of achievable, Schulze's per-rate table, ARDOP, FreeDATA, Mercury's
+carousel goodput argmax with silence scored as loss); VARA: nothing published found. The current
+controller's margin balances at 4–8 % frame error (simulated from its rules) and its climb needs
+the next rung's 10 % AWGN point + margin (≥ 1.5) + 1.5 dB — a 0 % target on AWGN. Ranking: choose
+by measured delivery per rung with an SNR prior and exploration on frames sent anyway; a soft
+per-frame reading as the prior; derived thresholds if a threshold rule survives. Next: Gate 2,
+the candidates and criteria (`03-candidates.md`, registered before any run; the oracle's three
+draws with it).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
