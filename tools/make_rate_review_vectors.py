@@ -195,15 +195,19 @@ def lopsided(
     return run
 
 
-def floor_in_flight(seed: int) -> granted.Callable[[], list[granted.Recorder]]:
-    """A 500 Hz call read 12 dB low starts C1 on the floor, and every third floor data frame is
-    lost, so a floor frame is always in flight when C1 at the sender tries OFDM: the try takes
-    the transmission (``granted._data_frames``' ``across``) — before, it never went."""
+def floor_in_flight(
+    seed: int, air: AirInterface = NARROW, snr: float = 8.0, size: int = 4000
+) -> granted.Callable[[], list[granted.Recorder]]:
+    """A call read 12 dB low starts C1 on the floor, and every third floor data frame is lost,
+    so a floor frame is always in flight when C1 at the sender tries OFDM: the try takes the
+    transmission (``granted._data_frames``' ``across``) — before, it never went. Short of data
+    at the end, a try with nothing to cut at its rung lets the floor frames go instead
+    (``_can_cut``): before, the transmissions went empty and the try never ended."""
 
     def run() -> list[granted.Recorder]:
-        a, b, ra, rb = granted._pair(NARROW)
+        a, b, ra, rb = granted._pair(air)
         rng = random.Random(seed)
-        timing = phy_timing(NARROW.params)
+        timing = phy_timing(air.params)
         count = [0]
 
         def offset(frame: TxFrame) -> float:
@@ -217,8 +221,8 @@ def floor_in_flight(seed: int) -> granted.Callable[[], list[granted.Recorder]]:
                 return -40.0 if count[0] % 3 == 0 else 0.0
             return 0.0
 
-        sim = TwoStationSim(a, b, snr_db=8.0, seed=seed, frame_snr_offset=offset)
-        granted._exchange(sim, a, b, granted._message(rng, 4000), granted._message(rng, 200))
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed, frame_snr_offset=offset)
+        granted._exchange(sim, a, b, granted._message(rng, size), granted._message(rng, 200))
         return [ra, rb]
 
     return run
@@ -230,6 +234,7 @@ EXTRA = {
     "lopsided-narrow": lopsided(NARROW, 43, 6.0),
     "lopsided-wide": lopsided(WIDE, 44, 4.0),
     "floor-in-flight": floor_in_flight(45),
+    "edge-at-the-end": floor_in_flight(46, WIDE, 6.0, 1000),
 }
 """Sessions of this file's own."""
 
@@ -250,6 +255,7 @@ SESSIONS = (
     "lopsided-narrow",
     "lopsided-wide",
     "floor-in-flight",
+    "edge-at-the-end",
 )
 """The sessions that build their stations with ``_pair`` and exercise the controller: a clean
 path, a weak one, the three fading channels, an outage, false detections, a ramp, stranded

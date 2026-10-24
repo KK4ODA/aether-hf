@@ -7,13 +7,14 @@ nothing for the current controller — whose own behaviour the granted vectors p
 
 from __future__ import annotations
 
+import math
 from itertools import pairwise
 
 import pytest
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.frames import data_capacity
-from aether_model.link.granted import GrantConfig, GrantedEngine
+from aether_model.link.frames import data_capacity, seq_after
+from aether_model.link.granted import GrantConfig, GrantedEngine, State, _TxRecord
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container
 from aether_model.link.rate import RateController
@@ -272,3 +273,30 @@ def test_a_slave_on_its_own_floor_rung_is_granted_floor_slots(
     b.send(reply)
     sim.run(until=600.0)
     assert sim.delivered(0) == reply, f"{len(sim.delivered(0))} of 300 bytes"
+
+
+def test_a_try_across_the_floors_edge_with_nothing_to_cut_lets_the_floor_frames_go() -> None:
+    """A try across the floor's edge takes the whole transmission for new data at the try's
+    rung; with nothing left to cut, the floor frames waiting for an answer go as before. They
+    had been held out of every transmission, no frame went at the try's rung to decide it, and
+    the master sent empty headers until the Test ran out of time (``04-results.md`` §3.20)."""
+    a, b = _pair(NARROW, "delivery-s")
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    assert a.state is State.CONNECTED
+    ctl = a._sender
+    assert isinstance(ctl, DeliveryController)
+    ctl.observe_snr(0.0)
+    top = max(m for m in ctl.modes if m < ctl.floor_modes)
+    ofdm = min(m for m in ctl.modes if m >= ctl.floor_modes)
+    ctl._index = ctl.modes.index(top)
+    ctl._probing = ofdm
+    seq = a._tx_next
+    a._records[seq] = _TxRecord(seq, bytes(20), top, origin=top, tx_count=1)
+    a._tx_next = seq_after(seq)
+    assert not a._tx_queue
+    assert [f.mode for f in a._data_frames(math.inf)] == [top]
+    a._tx_queue.extend(bytes(500))
+    frames = a._data_frames(math.inf)
+    assert frames and {f.mode for f in frames} == {ofdm}  # with data to cut, the try's

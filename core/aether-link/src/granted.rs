@@ -4161,6 +4161,14 @@ impl GrantedEngine {
         seqs
     }
 
+    /// Whether a new block can be cut for this transmission: data queued, the window open, no
+    /// measurement asked for.
+    fn can_cut(&self) -> bool {
+        !self.tx_queue.is_empty()
+            && self.measure_ask.is_none()
+            && seq_distance(self.tx_next, self.tx_base) < WINDOW
+    }
+
     /// This station's data for a transmission, laid out as protocol 7 laid out a burst: the
     /// unacknowledged frames first — re-encoded when stranded (ADR-0038), or in pieces
     /// (ADR-0086) — then new ones, one family a transmission, as many as `room_s` and [`MAX_DATA`] allow. Each frame states how
@@ -4181,10 +4189,15 @@ impl GrantedEngine {
         if let Some(rung) = probe
             && self.timing.is_floor(rung) != self.timing.is_floor(mode)
         {
-            // across the floor's edge a try is a whole transmission
-            mode = rung;
+            if self.can_cut() {
+                // across the floor's edge a try is a whole transmission
+                mode = rung;
+                across = true;
+            }
+            // of new data: with none to cut at the try's rung the transmission is not the
+            // try's, or the other family's frames in flight never went (the model's
+            // `_data_frames`)
             probe = None;
-            across = true;
         }
         let recommendation = self.recommended.min(self.cap());
         // what an unheard answer would have said is not resent blind: it waits for an answer —

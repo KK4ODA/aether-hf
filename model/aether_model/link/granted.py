@@ -2779,8 +2779,14 @@ class GrantedEngine:
         probe = self._probe_rung(mode)
         across = False
         if probe is not None and self.timing.is_floor(probe) != self.timing.is_floor(mode):
-            # across the floor's edge a try is a whole transmission
-            mode, probe, across = probe, None, True
+            if self._can_cut():
+                # across the floor's edge a try is a whole transmission
+                mode, probe, across = probe, None, True
+            else:
+                # of new data: with none to cut at the try's rung the transmission is not the
+                # try's, or the other family's frames in flight never went — C1 at the sender
+                # sent empty headers for 160 s, the try never decided (04-results.md §3.20)
+                probe = None
         recommendation = min(self._recommended, self._cap())
         # what an unheard answer would have said is not resent blind: it waits for an answer —
         # through one silent slot. Two in a row and the answers are not getting through, and
@@ -2885,6 +2891,15 @@ class GrantedEngine:
                 self._sent_copies.append((rec.seq, origin, air))
         self.stats.frames_sent += len(frames)
         return frames
+
+    def _can_cut(self) -> bool:
+        """Whether a new block can be cut for this transmission: data queued, the window open,
+        no measurement asked for."""
+        return (
+            bool(self._tx_queue)
+            and self._measure_ask is None
+            and seq_distance(self._tx_next, self._tx_base) < WINDOW
+        )
 
     def _piece_frames(self, seqs: list[int], room: int) -> list[TxFrame]:
         """A transmission of pieces, and of nothing else: the receiver gives a frame that does
