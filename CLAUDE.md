@@ -2300,6 +2300,34 @@ per-frame reading as the prior; derived thresholds if a threshold rule survives.
 the candidates and criteria (`03-candidates.md`, registered before any run; the oracle's three
 draws with it).
 
+**Gate 2 and the start of Gate 3 (2026-10-24; the author agreed the criteria, and "if we have a
+case that is close to the rules, we might consider it on a case by case basis").**
+`03-candidates.md`: five candidates — C0 the current controller with its hysteresis, dwell,
+stride, decay schedule, re-seed, steps in hand and partial rule taken out in turn; C1 choose by
+measured delivery (per rung, data delivered per second of the air its frames took, frames never
+detected included, an SNR prior, tries of the rung above); C2 one offset per family toward a
+target error rate derived from the rungs' rate ratios; C3 each at the receiver and at the sender
+(**the sender may send one frame of a transmission faster than the receiver recommends**, the
+author's answer); C4 the start; C5 a soft reading, only if an instrument check passes — and seven
+criteria K1–K7 (§3). A narrow miss goes to the author with its trace, case by case; it does not
+pass by rule. The baseline, beta.122's daemon, three draws (seeds s, s+1000, s+2000): **the
+current controller's median regret against the best fixed rung is +45.2 %** over 20 scenarios
+(K1(a) asks +22.6 % or less; on draws alone the statistic moves +36…+50 %), and **it fails start
+independence (K3) in two draws of three** on the new pair `80m-start-low-reading-500` /
+`-high-` (Moderate 9 dB, the call heard 4 dB under and over; the better call settled two rungs
+lower). The oracle's runs are kept in the session's scratchpad, not the tree. **Gate 3** began the
+same day: `model/aether_model/link/rate_review.py` (bench-only, `GrantConfig.controller` =
+`current` | `delivery` | `delivery-s` | `olla`; the default unchanged, the granted vectors byte for
+byte), the engine handing a prototype each frame's outcome with frames never detected
+(`_outcomes`), `bench_link --link controller=NAME`, `tools/rate_k6.py` (K6, the field replay, open
+loop: a choice the session never measured is not judged); results in `04-results.md`. Found on the
+way: on the real modem the optimistic prior (the AWGN curve 3 dB under the reading) beats the four
+channels' mean, though the mean predicts the field's ladders better — a rung above found wanting
+costs one measured transmission, a rung under the path's best every wait for a try; and an
+open-loop replay judges a learning controller's untried choices as if it never learned. **Never
+`pkill -f` a pattern from a Bash call whose own command line contains it** (it kills the call's
+shell: exit 144); bracket the first letter (`pgrep -f "[i]terate.py"`).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

@@ -1,9 +1,9 @@
 # Gate 2: candidates and criteria
 
-*In progress: §5.1 is filled as the baseline runs finish. The rate controller's review
-(`00-brief.md` §6), 2026-10-24. The candidates for Gate 3, what each removes and adds, and the
-criteria they will be judged by — registered here, with the current controller's own numbers
-(§5), before any candidate is run. The author agreed the criteria on 2026-10-24 (§4).*
+*The rate controller's review (`00-brief.md` §6), 2026-10-24. The candidates for Gate 3, what
+each removes and adds, and the criteria they will be judged by — registered here, with the
+current controller's own numbers (§5), before any candidate is run. The author agreed the
+criteria on 2026-10-24 (§4).*
 
 ## 0. Summary
 
@@ -218,9 +218,11 @@ current" is the current controller on the same build, the same scenarios and the
 
 Notes on the criteria:
 
-* **K1(a)'s half** is set from the oracle's own spread (§5): the regret's floor is not zero — a
-  controller must find the path, the oracle knows it — and halving the median regret is the
-  smallest improvement that three draws a scenario can tell from noise.
+* **K1(a)'s half**: the regret's floor is not zero — a controller must find the path, the oracle
+  knows it — and half is a gain three draws a scenario tell from noise with room to spare: on
+  draws alone the statistic moves between +36 and +50 % about the current's +45 % (§5.1), and
+  half of it is +22.6 %. (This note had said half was the *smallest* gain three draws could
+  tell; the runs show a smaller one would show too. The criterion is unchanged.)
 * **K2 and K4 cover what K1 does not**: the scenarios with hosts, gateways, aborts, VOX and slow
   machines, where speed is not the point but a change can break the session.
 * **K6 is open-loop**: it judges decisions on the same evidence, not outcomes; a sender-side
@@ -238,11 +240,50 @@ Notes on the criteria:
 
 ## 5. The current controller's own numbers
 
-*Filled from the runs of 2026-10-24 (the harness at `HEAD`, three draws).*
+*Filled from the runs of 2026-10-24: the harness with beta.122's daemon (`91384bc`), three
+draws a scenario (the scenario's seed, +1000, +2000).*
 
 ### 5.1 Regret against the oracle
 
-(To be filled.)
+Each scenario's measure is the Test's file rate or the largest message's (`tools/rung_oracle.py`
+`metric`), for the controller and for every rung pinned (`rate.pin`). Draw 0 ran the coarse rungs
+(1, 3, 4, 5, 7, 9, 11, 13 at 500 Hz; 1, 3, 5, 7, 9, 11, 14, 16, 18 at 2 300 Hz) and then the best's
+neighbours; draws 1 and 2 ran every rung that delivered at least half draw 0's best, and the best's
+neighbours. The best fixed rung is the best of those in that draw; the regret is best / controller
+− 1. 284 runs, the 60 of the controller all complete (two runs of fixed rungs that faulted in the
+harness after a container restart were run again).
+
+| scenario | the controller, 3 draws (bit/s) | best fixed rung, 3 draws | regret, 3 draws | median |
+|---|---|---|---|---|
+| `quick-awgn-2300` | 1263 / 1263 / 1263 | 16: 2182 / 16: 2182 / 16: 2182 | +73 / +73 / +73 % | **+73 %** |
+| `40m-good-throughput-2300` | 2327 / 2286 / 2133 | 19: 2723 / 17: 2723 / 17: 2612 | +17 / +19 / +22 % | **+19 %** |
+| `80m-strong-moderate-500` | 151 / 260 / 244 | 13: 316 / 13: 347 / 13: 415 | +110 / +34 / +70 % | **+70 %** |
+| `20m-dx-500` | 146 / 151 / 144 | 11: 219 / 11: 226 / 10: 201 | +50 / +50 / +40 % | **+50 %** |
+| `20m-dx-moderate-2300` | 632 / 1000 / 600 | 14: 923 / 11: 1000 / 14: 1714 | +46 / 0 / +186 % | **+46 %** |
+| `80m-qsb-dropout-500` | 146 / 158 / 142 | 11: 198 / 13: 224 / 11: 196 | +36 / +42 / +38 % | **+38 %** |
+| `80m-weak-500` | 70 / 67 / 65 | 3: 82 / 3: 77 / 3: 82 | +17 / +15 / +26 % | **+17 %** |
+| `80m-flutter-500` | 129 / 120 / 127 | 9: 163 / 9: 184 / 7: 149 | +26 / +53 / +17 % | **+26 %** |
+| `15m-equatorial-flutter-2300` | 387 / 211 / 211 | 14: 800 / 14: 750 / 14: 750 | +107 / +255 / +255 % | **+255 %** |
+| `80m-nvis-evening-500` | 41 / 25 / 26 | 1: 39 / 1: 39 / 2: 41 | −5 / +56 / +56 % | **+56 %** |
+| `80m-thunderstorm-agc-2300` | 591 / 535 / 616 | 14: 826 / 15: 994 / 14: 984 | +40 / +86 / +60 % | **+60 %** |
+| `80m-weak-both-ways-ladder-500` | 78 / 84 / 72 | 4: 70 / 4: 84 / 4: 93 | −11 / 0 / +30 % | **0 %** |
+| `20m-polar-path-2300` | 198 / 198 / 172 | 9: 286 / 9: 296 / 9: 225 | +44 / +49 / +31 % | **+44 %** |
+| `80m-weak-wide-test-2300` | 167 / 168 / 175 | 5: 175 / 5: 175 / 5: 175 | +4 / +4 / 0 % | **+4 %** |
+| `40m-good-2300-rtty-crashes` | 425 / 442 / 496 | 14: 757 / 16: 772 / 14: 708 | +78 / +75 / +43 % | **+75 %** |
+| `80m-poor-500-pactor-signalink` | 66 / 74 / 72 | 9: 110 / 4: 117 / 4: 109 | +67 / +58 / +51 % | **+58 %** |
+| `80m-nvis-disturbed-500` | 38 / 44 / 36 | 2: 39 / 2: 43 / 2: 44 | +3 / −2 / +22 % | **+3 %** |
+| `40m-moderate-2300-vara-qrm` | 842 / 390 / 667 | 14: 1231 / 15: 821 / 14: 1103 | +46 / +111 / +65 % | **+65 %** |
+| `80m-lopsided-acks-500` | 77 / 76 / 83 | 4: 106 / 9: 93 / 4: 106 | +37 / +23 / +28 % | **+28 %** |
+| `80m-slow-machine-500` | 119 / 91 / 106 | 7: 127 / 11: 131 / 11: 164 | +7 / +44 / +54 % | **+44 %** |
+
+**The median over the 20 scenarios of the per-scenario median regret is +45.2 %** (mean +51.6 %):
+K1(a) asks a candidate for **+22.6 % or less**. A bootstrap over each scenario's three draws
+(4 000 resamples) puts the statistic between +36.0 and +49.6 % (5–95 %) on draws alone; the
+per-scenario range of the three draws is a median 30 points. A fixed rung beat the controller in
+54 of the 60 draws and tied it in three; the controller beat every fixed rung in three
+(`80m-nvis-evening-500`'s and `80m-weak-both-ways-ladder-500`'s first draws,
+`80m-nvis-disturbed-500`'s second), where a single rung cannot follow the path. K1(b) holds each
+scenario's median delivery to at least 85 % of the controller's column above.
 
 ### 5.2 The start pair
 
