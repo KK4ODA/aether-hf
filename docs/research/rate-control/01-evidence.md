@@ -16,7 +16,7 @@ ADR is accepted (the author, 2026-10-23); fixes outside the controller may ship.
   recommendations over time, the ladder's measurements, and what the rungs either side would have
   delivered where they were measured (§1.1, §3).
 * **The controller replays exactly.** Fed what the receiver recorded, as the engine feeds it,
-  the build's own controller reproduces every one of the 203 recommendations the slaves sent in
+  the build's own controller reproduces every one of the 208 recommendations the slaves sent in
   the nine sessions, and every one the masters sent (§4). A candidate controller can now be
   replayed open-loop on the field record.
 * **The oracle exists.** `rate.pin` fixes a station's rung for the benches, the harness pins
@@ -109,6 +109,18 @@ Four things had to be right for the replay to match, each found on a session tha
    station asked for, not the most common: a transmission of four stranded rung-10 copies and two
    new rung-6 frames is judged, and steps the link down.
 
+Three more came from the harness check of §1.5, which the field sessions had not exercised:
+
+5. a failure is judged at the redundancy version the receiver read off the chips, as the rung
+   is: a rung-5 RV 0 copy read as rung 9 at RV 1 is no failure to the engine (RV 1 never
+   decodes alone);
+6. a frame neither decoded nor trusted is nothing at all, its misread rung included: the engine
+   drops it before it counts anything (`on_frame`);
+7. the frames taken without a header are the session's only: the call heard before the session
+   began is not one of them.
+
+None of the three changes a reading of the nine field sessions (§4).
+
 ### 1.3 The oracle: `rate.pin`, `pin_rung`, `tools/rung_oracle.py`
 
 * **`rate.pin {rung}`** (control API, `docs/spec/control-api.md` §4.2): a bench-only method.
@@ -130,6 +142,53 @@ Four things had to be right for the replay to match, each found on a session tha
 `tools/fetch_uploads.py` brought both sides of every protocol-8 session into `field/inbox/`
 (git-ignored, read with `python -I`): 17 uploads, 21 recordings, nine sessions with both sides
 (§2). The daemon's log, the diagnostic bundle and the audio came with each.
+
+### 1.5 What a recording says from beta.122, and the harness check (2026-10-24)
+
+The author's go of 2026-10-23 ("add"): the reconstruction of §1.1 is replaced by what the
+stations themselves know, whenever their sidecars say it. Nothing here changes what goes on the
+air or what the controller decides.
+
+* **The sender's numbers.** Every data frame in `sent` carries its sequence number (`seq`), and
+  `measure` or `piece` when it is a measurement frame (ADR-0077) or a piece of a block
+  (ADR-0086).
+* **What the receiver's engine made of each frame.** A data frame in `frames` carries `seq` —
+  its header's when it decoded, the one the engine gave it by its slot when it did not, which is
+  what its copies are combined under — `combined` when the engine combined it with copies it
+  held, and `rescued` when that combination decoded. The engine says so itself
+  (`GrantedEngine.last_data` in the model, `last_data()` in the port, `DataHeard`); the
+  trace-replay vectors compare it at every input (`granted_vectors.json`, regenerated), and a
+  planted fault in the port's `rescued` fails them.
+* **The controller's state.** Every control frame a station decides is recorded with its
+  controller's smoothed SNR and margin (a `rate` event), so a replay checks the state at every
+  step, not only the rung, and a drift shows where it starts.
+
+`tools/rung_reading.py` takes the sender's numbers when every data frame has one, and the
+receiver's word on combining when its sidecar records it; it then runs the reconstruction
+anyway and says how many frames it numbers alike. With `--replay` it checks the recorded state.
+
+**The check.** Three scenarios on the harness with this daemon (`80m-weak-wide-test-2300`,
+`80m-strong-moderate-500`, `20m-dx-500`, one draw each, both stations recorded). The first
+reading of them went wrong, for a reason the field never showed: the harness runs two to five
+times faster than the air, so the recordings' wall-clock start stamps put the two clocks
+seventeen seconds apart, and the loop latencies then paired the wrong keyings and agreed on it.
+The tool now also guesses the offset from the master's control frames the slave decoded against
+the master's keyings, and takes that guess when the stamps disagree with it by more than a
+second. With the clocks right, and items 5 to 7 above:
+
+| session | data frames numbered alike by the reconstruction | recommendations replayed | controller state as recorded |
+|---|---|---|---|
+| `80m-weak-wide-test-2300` | 44 of 44 | 11 of 11, 8 of 8 | 11 of 11, 10 of 10 |
+| `80m-strong-moderate-500` | 138 of 138 | 26 of 26, 26 of 26 | 27 of 27, 26 of 26 |
+| `20m-dx-500` | 201 of 201, 10 of 10 | 38 of 38, 37 of 37 | 42 of 42, 41 of 41 |
+
+The reconstruction used for the nine field sessions numbers every frame as its sender did, and
+the replay reproduces the controller's state to a hundredth of a decibel at every step inside
+the session. (After the session the closing frames are decided by a fresh controller, so the
+state is not compared there.)
+
+Of note for the oracle (§7): the strong-path scenario's controller run delivered its file at
+240 bit/s here, against 151 in the oracle's run of the same scenario. One draw is one draw.
 
 ## 2. The field record in hand
 
@@ -420,7 +479,7 @@ Every session, read with the model of the build it ran (`--tree`):
 | 10-23 16:04Z ND1J | beta.121 | 15 (1 unread) | 15 | 12 (1 unread) | 12 |
 | 10-23 16:07Z ND1J | beta.121 | 21 (2 unread) | 21 | 20 | 20 |
 
-203 of 203 and 129 of 129. "Unread" is a transmission the other station decoded no control frame
+208 of 208 and 129 of 129. "Unread" is a transmission the other station decoded no control frame
 of, so there is nothing to compare; the replayed controller runs through it as the engine did.
 
 What this establishes: the controller's inputs are all in the two sidecars, and the tool feeds
@@ -608,10 +667,10 @@ Read with the caution one draw deserves (§8):
 * **One path, mostly.** Eight of the nine sessions are 80 m NVIS between the author and two
   testers, at −10 … +13 dB; one is 2300 Hz. The oracle's scenarios cover the classes the field
   does not.
-* **The sidecars still record no sequence numbers and no combining.** The reconstruction holds
-  on these nine (no block decoded and unacknowledged); a `seq` and a `combined` field on the
-  sidecar's frame and sent records would make it exact for every session from the next beta on.
-  Outside the controller; it can ship.
+* **The nine field sessions are read by reconstruction.** Recordings from beta.122 on carry the
+  numbers, the combining and the controller's state (§1.5); the harness check found the
+  reconstruction exact on three sessions, but the field's own sessions cannot be checked until
+  a recording made with the new build comes back.
 * **The 2300 Hz record** is one session. The air at 2300 Hz is where the floor-to-OFDM choice
   cost the most (§5 item 2) and where the ladder record is thinnest.
 * **The oracle's two passes are one draw.** Its numbers rank the scenarios and size the gap;
