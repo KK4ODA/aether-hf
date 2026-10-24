@@ -39,10 +39,24 @@ from aether_model.waveform import WIDE_2300, WaveformParams
 ComplexArray = NDArray[np.complex128]
 
 
+TRUSTED_CONFIDENCE = 1.3
+"""How far over its threshold acquisition must see a frame to be believed on its own: the
+daemon's ``DETECT_CONFIDENCE_TRUSTED``. Every frame that decoded on the air cleared it, and the
+noise triggers sat just above the threshold."""
+
+
 @dataclass
 class _Pending:
     sync: FrameSync  # start is an absolute sample index
     end_abs: int
+
+
+@dataclass
+class _Done:
+    start: int
+    end: int
+    decoded: bool
+    confidence: float
 
 
 class StreamingReceiver:
@@ -52,6 +66,7 @@ class StreamingReceiver:
         max_buffer_s: float = 7.0,
         blank_impulses: bool = True,
         blanker: NoiseBlanker | None = None,
+        weak_spans_hide: bool = True,
     ) -> None:
         self.p = params
         self.modem = Modem(params, blank_impulses=False)  # blanking happens here, once
@@ -67,7 +82,14 @@ class StreamingReceiver:
         self._buf_abs0 = 0  # absolute index of buf[0]
         self._searched_abs = 0  # everything before this absolute index has been searched
         self._pending: list[_Pending] = []
-        self._done: list[tuple[int, int]] = []  # spans of frames already handed out
+        self._done: list[_Done] = []  # frames already handed out
+        self.weak_spans_hide = weak_spans_hide
+        """Whether a candidate starting inside a known frame's span is dropped whatever the two
+        were (the rule as built). ``False`` is the rule under test on the hidden-frame bench
+        (``docs/research/hidden-frames/``): a known frame acquired under
+        :data:`TRUSTED_CONFIDENCE` that has not decoded — still pending, or handed out and
+        failed — does not hide a candidate at or over it. A phantom's span hid a real header or
+        answer on the air three times (report 17 §6). Bench-only until the bench is judged."""
         self._tone_keep = max(k.samples for k in self.modem.air.tone_data) + 4000
         """Samples always kept for the tone floor: its longest frame and half a second — a
         tone frame is taken a symbol after it ends and refined against its own samples."""
@@ -113,8 +135,7 @@ class StreamingReceiver:
                 span = self.modem.rx.frame_span(replace(sync, start=0))[1]
                 new = _Pending(replace(sync, start=sync.start + search_abs0), 0)
                 new.end_abs = new.sync.start + span
-                spans = [(p.sync.start, p.end_abs) for p in self._pending] + self._done
-                if any(a - self.p.symbol_samples < new.sync.start < b for a, b in spans):
+                if self._hidden(new):
                     continue  # duplicate, or inside a frame we already know about
                 self._pending.append(new)
             self._searched_abs = max(self._searched_abs, self.samples_seen - self._lookback)
@@ -124,11 +145,24 @@ class StreamingReceiver:
         for pend in sorted(self._pending, key=lambda q: q.sync.start):
             if pend.end_abs + margin <= self.samples_seen:
                 rel = replace(pend.sync, start=pend.sync.start - self._buf_abs0)
-                self._done = [*self._done, (pend.sync.start, pend.end_abs)][-20:]
+                done = _Done(
+                    pend.sync.start,
+                    pend.end_abs,
+                    False,
+                    pend.sync.detect_confidence(self.modem.air),
+                )
+                inside_decoded = not self.weak_spans_hide and any(
+                    d.decoded and d.start - self.p.symbol_samples < done.start < d.end
+                    for d in self._done
+                )
+                self._done = [*self._done, done][-20:]
+                if inside_decoded:
+                    continue  # taken beside a weak frame that has since decoded: not a frame
                 try:
                     decoded = self.modem.decode_sync(self._buf, rel)
                 except (ValueError, IndexError):
                     continue
+                done.decoded = decoded.ok
                 assert decoded.frame is not None
                 decoded.frame.sync = pend.sync  # report absolute positions
                 out.append(decoded)
@@ -156,3 +190,23 @@ class StreamingReceiver:
             self._buf = self._buf[drop:]
             self._buf_abs0 += drop
         return sorted(out, key=lambda d: d.start)
+
+    def _hidden(self, new: _Pending) -> bool:
+        """Whether ``new`` duplicates, or starts inside, a frame already pending or handed out
+        that hides it (:attr:`weak_spans_hide`)."""
+        start = new.sync.start
+        known = [
+            (p.sync.start, p.end_abs, None, p.sync.detect_confidence(self.modem.air))
+            for p in self._pending
+        ] + [(d.start, d.end, d.decoded, d.confidence) for d in self._done]
+        inside = [k for k in known if k[0] - self.p.symbol_samples < start < k[1]]
+        if not inside or self.weak_spans_hide:
+            return bool(inside)
+        if new.sync.detect_confidence(self.modem.air) < TRUSTED_CONFIDENCE:
+            return True
+        # a duplicate of a frame already known is hidden however weak it was
+        if any(abs(start - k[0]) < self.p.symbol_samples for k in inside):
+            return True
+        return any(
+            decoded or confidence >= TRUSTED_CONFIDENCE for _, _, decoded, confidence in inside
+        )
