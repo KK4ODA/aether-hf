@@ -1201,6 +1201,7 @@ fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
                     &payload,
                     &capacity,
                     &frame_s,
+                    timing.floor_modes,
                     &timing.echo_limit,
                 ));
             }

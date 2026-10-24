@@ -328,13 +328,19 @@ pub struct Account {
 /// measured; the rung above is tried — one transmission recommended at it — when its lossless
 /// rate beats the current rung's estimate and `probe_every` transmissions have gone since the
 /// last try of it; a try that delivered less doubles the wait, one that delivered more moves
-/// there and tries the next at once. The model's `DeliveryController`.
+/// there and tries the next at once. The prior of a family's rungs is read `family_gain_db`
+/// times its surprises under the reading: every frame of the family, not combined, moves the
+/// family's offset by `gain × (p − decoded)`. The model's `DeliveryController`.
 #[derive(Debug, Clone)]
 pub struct DeliveryController {
     thresholds: Vec<f64>,
     modes: Vec<usize>,
     capacity: Vec<usize>,
     frame_s: Vec<f64>,
+    floor_modes: usize,
+    /// The families' offsets, `[floor, ordinary]`.
+    family: [f64; 2],
+    family_gain_db: f64,
     echo_limit: Vec<Option<f64>>,
     echo: Option<f64>,
     smoothed_snr_db: Option<f64>,
@@ -365,6 +371,7 @@ impl DeliveryController {
         payload: &[usize],
         capacity: &[usize],
         frame_s: &[f64],
+        floor_modes: usize,
         echo_limit: &[Option<f64>],
     ) -> Self {
         assert!(
@@ -380,6 +387,9 @@ impl DeliveryController {
             modes: usable_modes_by_rate(thresholds, payload, frame_s),
             capacity: capacity.to_vec(),
             frame_s: frame_s.to_vec(),
+            floor_modes,
+            family: [0.0, 0.0],
+            family_gain_db: 0.5,
             echo_limit: echo_limit.to_vec(),
             echo: None,
             smoothed_snr_db: None,
@@ -419,16 +429,27 @@ impl DeliveryController {
     fn estimate_at(&self, mode: usize, snr_db: Option<f64>) -> f64 {
         let cap = self.capacity.get(mode).copied().unwrap_or(0) as f64;
         let air = self.frame_s.get(mode).copied().unwrap_or(1.0);
-        let prior = snr_db.map_or(0.0, |snr| {
-            cap * decode_probability(
-                snr - self.prior_margin_db,
-                self.thresholds[mode],
-                self.slope_db,
-            )
-        });
+        let prior = snr_db.map_or(0.0, |snr| cap * self.prior_p(mode, snr));
         let acc = self.account(mode);
         let w = self.prior_frames;
         (acc.bytes + w * prior) / (acc.air_s + w * air)
+    }
+
+    /// The prior's chance a frame at `mode` decodes at `snr_db`, its family's offset under the
+    /// reading.
+    fn prior_p(&self, mode: usize, snr_db: f64) -> f64 {
+        let offset = self.family[usize::from(mode >= self.floor_modes)];
+        decode_probability(
+            snr_db - offset - self.prior_margin_db,
+            self.thresholds[mode],
+            self.slope_db,
+        )
+    }
+
+    /// The families' offsets, `[floor, ordinary]`.
+    #[must_use]
+    pub const fn family_offsets(&self) -> [f64; 2] {
+        self.family
     }
 
     /// A rung's account so far (zero for one never sent at).
@@ -524,6 +545,20 @@ impl DeliveryController {
         self.observe_snr(snr_db);
         if frames.is_empty() {
             return;
+        }
+        if self.family_gain_db != 0.0
+            && let Some(snr) = self.smoothed_snr_db
+        {
+            for f in frames {
+                if f.combined || f.mode >= self.thresholds.len() {
+                    continue;
+                }
+                let p = self.prior_p(f.mode, snr);
+                let slot = usize::from(f.mode >= self.floor_modes);
+                let offset = self.family[slot]
+                    + self.family_gain_db * (p - if f.decoded { 1.0 } else { 0.0 });
+                self.family[slot] = offset.clamp(-5.0, 20.0);
+            }
         }
         let decay = 0.5_f64.powf(1.0 / self.half_life);
         #[allow(clippy::cast_precision_loss)]

@@ -152,6 +152,7 @@ fn build(trace: &Value, n: usize) -> Prototype {
             &payload,
             &capacity,
             &frame_s,
+            int(&trace["floor_modes"]),
             &echo_limit,
         )),
         other => panic!("trace {n}: no prototype {other:?} in the port"),
