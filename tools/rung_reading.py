@@ -36,6 +36,7 @@ Only the standard library, numpy and the reference model; run from the repositor
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import dataclasses
 import itertools
@@ -201,6 +202,35 @@ def session_span(side: two_sides.Side) -> tuple[float, float]:
 # ── one clock ─────────────────────────────────────────────────────────
 
 
+GUESS_DISAGREES_S = 1.0
+"""How far the start stamps' offset may lie from the one the frames heard imply before the
+frames' is taken: the field's stamps agree with it within a few tenths."""
+
+
+def heard_offset(master: two_sides.Side, slave: two_sides.Side) -> float | None:
+    """The slave's recording clock to the master's from the master's control frames the slave
+    decoded against the master's keyings: the offset most of them agree on, within a tenth of a
+    second (a transmission's first frame is its control frame, on the air a keying lead after the
+    key). None when the slave decoded none."""
+    starts = [
+        float(f["start_s"])
+        for f in slave.doc.get("frames") or []
+        if f.get("kind") == "control" and f.get("decoded") and f.get("start_s") is not None
+    ]
+    keys = [k.key for k in master.keyings]
+    if not starts or not keys:
+        return None
+    diffs = [k - t for k in keys for t in starts if abs(k - t) < 120.0]
+    if not diffs:
+        return None
+    votes: dict[int, int] = {}
+    for d in diffs:
+        votes[round(d * 10)] = votes.get(round(d * 10), 0) + 1
+    best = max(votes, key=lambda b: (votes[b] + votes.get(b - 1, 0) + votes.get(b + 1, 0), -abs(b)))
+    near = [d for d in diffs if abs(d - best / 10) <= 0.15]
+    return statistics.median(near) + two_sides.KEY_LEAD_S
+
+
 def place(master: two_sides.Side, slave: two_sides.Side) -> two_sides.Offset:
     """Both stations' keyings on the master's recording clock, with the offset the loop
     latencies imply at each keying's time (``two_sides.py --from-loops``); a transmission the
@@ -209,6 +239,12 @@ def place(master: two_sides.Side, slave: two_sides.Side) -> two_sides.Offset:
     for side in (master, slave):
         side.keyings = two_sides.keyings(side)
     guess = two_sides.started_offset(master, slave)
+    heard = heard_offset(master, slave)
+    if heard is not None and abs(heard - guess) > GUESS_DISAGREES_S:
+        # the start stamps are wall-clock time, and the scenario harness runs faster than the
+        # air: its recordings' stamps put the clocks seconds apart, and the loops then pair the
+        # wrong keyings and agree on it
+        guess = heard
     two_sides.place(master, slave, guess)
     series = two_sides.loop_offsets(master, slave, guess)
     offset: two_sides.Offset = guess
@@ -252,6 +288,10 @@ class Frame:
     measure: bool = False
     combined: bool = False
     """The receiver held an earlier copy to combine it with (``_RxRecord.combined``)."""
+    sent_seq: int | None = None
+    """The sequence number its sender recorded (beta.122 on), or a measurement frame's index."""
+    sent_measure: bool = False
+    """Its sender recorded it as a measurement frame (beta.122 on)."""
 
     @property
     def detected(self) -> bool:
@@ -265,6 +305,10 @@ class Frame:
     @property
     def heard_rung(self) -> int | None:
         return None if self.heard is None else int(self.heard.get("mode") or 0)
+
+    @property
+    def heard_rv(self) -> int | None:
+        return None if self.heard is None else int(self.heard.get("rv") or 0)
 
     @property
     def snr(self) -> float | None:
@@ -424,6 +468,8 @@ def transmissions(
                 floor=bool(s.get("floor")) if kind == "control" else sender.air.is_floor(rung),
                 at=at,
                 seconds=seconds,
+                sent_seq=None if s.get("seq") is None else int(s["seq"]),
+                sent_measure=bool(s.get("measure")),
             )
             best = None
             for i, (start, rec) in enumerate(heard):
@@ -501,10 +547,92 @@ class Block:
         copies together did), or ``lost``."""
         if self.delivered_by is None:
             return "lost"
+        heard = self.delivered_by.heard or {}
+        if heard.get("rescued"):
+            return "combined"
         return "alone" if self.delivered_by.decoded else "combined"
 
 
+def numbered(txs: list[Transmission]) -> bool:
+    """Whether the sender recorded every data frame's sequence number (beta.122 on)."""
+    data = [f for tx in txs for f in tx.data]
+    return bool(data) and all(f.sent_seq is not None for f in data)
+
+
 def reconstruct(
+    txs: list[Transmission],
+    ladder: list[dict[str, Any]] | None = None,
+    *,
+    recorded: bool = True,
+    receiver_records: bool = False,
+) -> dict[int, Block]:
+    """Every data frame's block. ``recorded`` and :func:`numbered`: the numbers its sender
+    recorded; and with ``receiver_records``, whether copies combined into each is what the
+    receiver's engine said (``combined``, ``rescued``), not inferred. Otherwise reconstructed."""
+    if recorded and numbered(txs):
+        return _from_record(txs, receiver_records)
+    return _reconstructed(txs, ladder)
+
+
+def _from_record(txs: list[Transmission], receiver_records: bool) -> dict[int, Block]:
+    """The blocks from the sequence numbers the sender recorded: a number heard again before its
+    block was acknowledged is a copy of it, one heard after is a new block."""
+    blocks: dict[int, Block] = {}
+    base = 0
+    for tx in txs:
+        data = tx.data
+        if data and all(f.sent_measure for f in data):
+            tx.measure = True
+            for f in data:
+                f.measure = True
+                f.seq = f.sent_seq
+            for b in blocks.values():
+                b.held = 0  # the receiver drops what it holds to combine (ADR-0077)
+        else:
+            for f in data:
+                assert f.sent_seq is not None
+                block = blocks.get(f.sent_seq)
+                if block is None or block.delivered:
+                    block = Block(f.sent_seq)
+                    blocks[f.sent_seq] = block
+                elif f.rung != block.mode or f.rv != block.next_rv:
+                    block.held = 0  # re-encoded, or in pieces: the receiver starts over
+                    block.tx_count = 0
+                if receiver_records and f.heard is not None:
+                    f.combined = bool(f.heard.get("combined"))
+                else:
+                    f.combined = block.held > 0
+                block.copies.append(f)
+                block.tx_count += 1
+                f.seq = block.seq
+                f.copy = len(block.copies)
+                if f.detected and not f.decoded:
+                    block.held += 1
+        if tx.ack is not None:
+            tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index))
+            base = _advance(blocks, base)
+    return blocks
+
+
+def agreement(
+    txs: list[Transmission], ladder: list[dict[str, Any]] | None = None
+) -> tuple[int, int]:
+    """How many data frames the reconstruction numbers as their sender recorded, of how many:
+    the check of what the sessions before beta.122 were read with."""
+    trial = copy.deepcopy(txs)
+    for tx in trial:
+        tx.flagged = []
+        tx.measure = False
+    _reconstructed(trial, ladder)
+    pairs = [
+        (f.sent_seq, g.seq)
+        for tx, ty in zip(txs, trial, strict=True)
+        for f, g in zip(tx.data, ty.data, strict=True)
+    ]
+    return sum(1 for a, b in pairs if a == b), len(pairs)
+
+
+def _reconstructed(
     txs: list[Transmission], ladder: list[dict[str, Any]] | None = None
 ) -> dict[int, Block]:
     """Give every data frame its sequence number from the order the engine sends in: a
@@ -902,6 +1030,41 @@ class Step:
     failed: int
     snr_db: float | None
     mode: int | None
+    recorded: tuple[float | None, float] | None = None
+    """The station's own controller's smoothed SNR and margin as it decided the control frame
+    (its sidecar's ``rate`` event, beta.122 on): None when it recorded none."""
+
+    @property
+    def state_agrees(self) -> bool | None:
+        """Whether the replayed controller's state is the recorded one, to a hundredth of a
+        decibel; None when nothing was recorded."""
+        if self.recorded is None:
+            return None
+        snr, margin = self.recorded
+        same_snr = (snr is None and self.smoothed_db is None) or (
+            snr is not None and self.smoothed_db is not None and abs(snr - self.smoothed_db) < 0.01
+        )
+        return same_snr and abs(margin - self.margin_db) < 0.01
+
+
+RATE_EVENT = re.compile(r"snr (\S+) margin (\S+)")
+
+
+def rate_events(side: two_sides.Side) -> list[tuple[float, float | None, float]]:
+    """(t on the station's own clock, smoothed SNR, margin) at each control frame it decided."""
+    out = []
+    for e in side.doc.get("events") or []:
+        m = RATE_EVENT.match(str(e.get("detail") or "")) if e.get("event") == "rate" else None
+        if m:
+            out.append((float(e["t_s"]), None if m[1] == "-" else float(m[1]), float(m[2])))
+    return out
+
+
+def recorded_in(
+    events: list[tuple[float, float | None, float]], since: float, until: float
+) -> tuple[float | None, float] | None:
+    """The first recorded state inside [since, until), on the station's own clock."""
+    return next(((snr, margin) for t, snr, margin in events if since <= t < until), None)
 
 
 @dataclass
@@ -918,28 +1081,36 @@ class Observation:
 
 def observation(frames: list[Frame], blocks: dict[int, Block]) -> Observation:
     """What a transmission's data said to the controller, as ``granted._observe`` counts it:
-    a frame decoded (alone, or by combining: it was delivered by this copy) is ``ok``; one
-    detected, trusted, at a self-decodable RV or combined is a failure; the SNR is the mean over
-    the decoded and the trusted; the mode the most common rung, the slower of two as common."""
+    a frame neither decoded nor trusted is nothing; one decoded (alone, or by combining: it was
+    delivered by this copy) is ``ok``; one trusted, at a self-decodable RV or combined, a
+    failure; the SNR is the mean over the rest; the mode the most common rung read, the slower
+    of two as common."""
     ok = failed = 0
-    snrs = []
+    snrs: list[float] = []
+    modes: list[int] = []
     for f in frames:
         if not f.detected:
             continue
-        delivered_here = (
+        heard = f.heard or {}
+        delivered_here = bool(heard.get("rescued")) or (
             f.seq is not None
             and not f.measure
             and blocks[f.seq].delivered_by is f
             and not f.decoded
         )
+        if not (f.decoded or delivered_here or f.trusted):
+            continue  # untrusted and unread: the engine takes nothing of it, its rung neither
         if f.decoded or delivered_here:
             ok += 1
-        elif f.trusted and (f.rv in SELF_DECODABLE_RVS or f.combined):
+        elif f.heard_rv in SELF_DECODABLE_RVS or f.combined:
+            # the redundancy version as the receiver read it off the chips, as the rung: a
+            # misread copy is judged as the engine judged it
             failed += 1
-        if (f.decoded or delivered_here or f.trusted) and f.snr is not None:
+        if f.snr is not None:
             snrs.append(f.snr)
-    # the rung as the receiver read it off the chips: a misread copy counts at the rung read
-    modes = [r for f in frames if f.detected and (r := f.heard_rung) is not None]
+        # the rung as the receiver read it off the chips: a misread copy counts at the rung read
+        if f.heard_rung is not None:
+            modes.append(f.heard_rung)
     mode = max(sorted(set(modes)), key=modes.count) if modes else None
     return Observation(
         ok, failed, sum(snrs) / len(snrs) if snrs else None, mode, min(modes) if modes else None
@@ -991,11 +1162,15 @@ def stray_records(
     detections, and frames placed too far from where they were sent — as frames of their own,
     on the master's clock."""
     matched = {id(f.heard) for tx in txs for f in tx.frames if f.heard is not None}
+    # nothing heard before the session is of it: the call, a probe, another station's frames
+    began, _ = session_span(receiver)
     out = []
     for rec in receiver.doc.get("frames") or []:
         if rec.get("kind") != "data" or id(rec) in matched or rec.get("start_s") is None:
             continue
         start = float(rec["start_s"])
+        if start < began:
+            continue
         at = start + two_sides.offset_of(rx_offset, start)
         rung = int(rec.get("mode") or 0)
         out.append(
@@ -1037,6 +1212,12 @@ def replay_slave(
     asked: int | None = None
     steps = []
     strays = stray_records(slave, master_txs, rx_offset)
+    states = rate_events(slave)
+    _, slave_end = session_span(slave)  # after it, a fresh controller decides the closing
+
+    def own(t: float) -> float:
+        return t - two_sides.offset_of(rx_offset, t)
+
     for i, tx in enumerate(master_txs):
         _echoes(ctl, tx)
         if not (tx.header_read is True or any(f.decoded for f in tx.data)):
@@ -1053,6 +1234,7 @@ def replay_slave(
         rec = ctl.recommend()
         if tx.ack is not None:
             asked = rec if asked is None else max(asked, rec)
+        nxt = master_txs[i + 1].start if i + 1 < len(master_txs) else math.inf
         steps.append(
             Step(
                 tx.ack.t if tx.ack is not None else tx.key,
@@ -1064,6 +1246,7 @@ def replay_slave(
                 obs.failed,
                 obs.snr,
                 obs.mode,
+                recorded_in(states, own(tx.end) - 0.1, min(own(nxt), slave_end)),
             )
         )
     return steps
@@ -1085,6 +1268,9 @@ def replay_master(
     silent = 0
     steps = []
     granted = False
+    states = rate_events(master)
+    _, master_end = session_span(master)
+    previous_end = -math.inf
     for tx, nxt in zip(master_txs, [*master_txs[1:], None], strict=False):
         said = tx.header_said
         rec = ctl.recommend()
@@ -1103,8 +1289,10 @@ def replay_master(
                     0,
                     None,
                     None,
+                    recorded_in(states, previous_end, min(tx.key + 0.05, master_end)),
                 )
             )
+        previous_end = tx.end
         limit = nxt.start if nxt is not None else float("inf")
         in_slot = [s for s in slave_txs if tx.end <= s.start < limit]
         heard = tx.ack is not None or any(s.heard_any for s in in_slot)
@@ -1139,6 +1327,10 @@ class Direction:
     recommendations: list[tuple[float, int, float | None]]
     """(t on the sender's clock, rung, the receiver's reading) from the answers decoded."""
     steps: list[Step] = field(default_factory=list)
+    numbering: str = "reconstructed"
+    """``recorded`` when the sender's sidecar numbered its frames (beta.122 on)."""
+    agrees: tuple[int, int] | None = None
+    """When recorded: the data frames the reconstruction numbers alike, of all of them."""
 
     @property
     def answers_read(self) -> int:
@@ -1167,22 +1359,33 @@ class Reading:
     fmt: str = ""
 
 
+def records_engine(side: two_sides.Side) -> bool:
+    """Whether a station's sidecar records what its engine made of each data frame (beta.122
+    on): any data frame there carries a sequence number."""
+    return any(
+        f.get("seq") is not None for f in side.doc.get("frames") or [] if f.get("kind") == "data"
+    )
+
+
 def read_session(master_path: Path, slave_path: Path, replay_controller: bool = False) -> Reading:
     master, slave = load_side(master_path), load_side(slave_path)
     if role_of(master.doc) == "slave" or role_of(slave.doc) == "master":
         master, slave = slave, master
     offset = place(master, slave)
     test = (master.doc.get("session") or {}).get("test") or {}
+    ladder = test.get("ladder") or []
     down = transmissions(master, slave, offset)
     attach_acks(down, acks_of(master, ("Answer",)))
-    down_blocks = reconstruct(down, test.get("ladder") or [])
+    down_agrees = agreement(down, ladder) if numbered(down) else None
+    down_blocks = reconstruct(down, ladder, receiver_records=records_engine(slave))
     up = transmissions(slave, master, 0.0)
     attach_acks(up, acks_of(slave, ("Header",)))
-    up_blocks = reconstruct(up)
+    up_agrees = agreement(up) if numbered(up) else None
+    up_blocks = reconstruct(up, receiver_records=records_engine(master))
     directions = []
-    for sender, receiver, role, txs, blocks in (
-        (master, slave, "master", down, down_blocks),
-        (slave, master, "slave", up, up_blocks),
+    for sender, receiver, role, txs, blocks, agrees in (
+        (master, slave, "master", down, down_blocks, down_agrees),
+        (slave, master, "slave", up, up_blocks, up_agrees),
     ):
         accounts = account(sender.air, txs, blocks)
         if role == "master":
@@ -1197,6 +1400,8 @@ def read_session(master_path: Path, slave_path: Path, replay_controller: bool = 
             accounts,
             regrets(sender.air, accounts, txs),
             recs,
+            numbering="recorded" if agrees is not None else "reconstructed",
+            agrees=agrees,
         )
         if replay_controller:
             d.steps = (
@@ -1334,6 +1539,11 @@ def report(reading: Reading, markdown: bool = False, with_timeline: bool = False
             " slave decoded of what it detected, and what the master recorded, with its SNR)"
         )
         out.append(table(d.accounts, markdown))
+        if d.agrees is not None:
+            out.append(
+                f"  numbered as {d.sender} recorded; the reconstruction agrees on "
+                f"{d.agrees[0]} of {d.agrees[1]} data frames"
+            )
         if d.flagged:
             out.append("  flagged: " + "; ".join(f"transmission {i}: {w}" for i, w in d.flagged))
         if with_timeline:
@@ -1373,12 +1583,23 @@ def report(reading: Reading, markdown: bool = False, with_timeline: bool = False
                 f"  the controller replayed at {d.receiver}: {agree} of {len(compared)} "
                 f"recommendations as sent ({len(d.steps) - len(compared)} not read by {d.sender})"
             )
+            judged = [s for s in d.steps if s.state_agrees is not None]
+            if judged:
+                same = sum(1 for s in judged if s.state_agrees)
+                first = next((s for s in judged if not s.state_agrees), None)
+                out.append(
+                    f"  its state as {d.receiver} recorded it at {same} of {len(judged)} steps"
+                    + ("" if first is None else f"; first apart at {first.t:.1f}s")
+                )
             for s in d.steps:
                 mark = (
                     ""
                     if s.rung_sent is None
                     else ("  ok" if s.rung_sent == s.rung_replayed else "  DIFFERS")
                 )
+                if s.recorded is not None and not s.state_agrees:
+                    rs, rm = s.recorded
+                    mark += f"  (recorded {'-' if rs is None else f'{rs:+.1f}'} margin {rm:.1f})"
                 sent = "-" if s.rung_sent is None else str(s.rung_sent)
                 snr = "-" if s.snr_db is None else f"{s.snr_db:+.1f}"
                 smoothed = "-" if s.smoothed_db is None else f"{s.smoothed_db:+.1f}"
@@ -1430,6 +1651,8 @@ def as_json(reading: Reading) -> dict[str, Any]:
                 ],
                 "replay": [vars(s) for s in d.steps],
                 "flagged": [w for _, w in d.flagged],
+                "numbering": d.numbering,
+                "agrees": d.agrees,
             }
             for d in reading.directions
         ],

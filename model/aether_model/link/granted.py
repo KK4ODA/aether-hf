@@ -531,6 +531,24 @@ class _RxRecord:
     combined: bool = False
 
 
+@dataclass(frozen=True)
+class DataHeard:
+    """What the engine made of the last session data frame it was handed (:attr:`GrantedEngine.
+    last_data`): for a recording, never for a decision. A sidecar could only say whether a frame
+    decoded on its own; which block it was a copy of, and whether copies combined into it, had to
+    be reconstructed from the sends and the acknowledgements (``tools/rung_reading.py``,
+    ``docs/research/rate-control/01-evidence.md`` §8)."""
+
+    seq: int | None
+    """Its sequence number: its header's when it decoded, the one its slot gave it when it did
+    not — what its copies are combined under — or none (a measurement frame, a piece's
+    transmission, a frame off the transmission's grid)."""
+    combined: bool
+    """Combined with copies of its block the engine held."""
+    rescued: bool
+    """And the combination decoded: the block came by combining, not by this copy alone."""
+
+
 class _AckFields(TypedDict):
     base: int
     bitmap: int
@@ -622,6 +640,9 @@ class GrantedEngine:
         self.now = 0.0
         self.actions: list[Action] = []
         self.stats = GrantStats()
+        self.last_data: DataHeard | None = None
+        """The last frame handed to :meth:`on_frame`, if the engine filed it as this session's
+        data: what a recording keeps of it beside what the receiver made of it."""
         self._deadlines: dict[str, float] = {}
         self._cause = ""
         self._slot: _Slot | None = None
@@ -1217,6 +1238,7 @@ class GrantedEngine:
     def on_frame(self, frame: SoftFrame, now: float) -> None:
         self.now = max(self.now, now)
         self._cause = "frame"
+        self.last_data = None
         payload, _ = frame.decode(None)
         if frame.container is Container.CONTROL:
             if payload is None:
@@ -1974,6 +1996,7 @@ class GrantedEngine:
                     self._accept(_RxRecord(frame, 0), payload, late=True)
             return
         rec = self._take_data(frame)
+        self._note_data(rec)
         if rec.payload is None:
             return
         self._heard(frame)
@@ -2315,6 +2338,7 @@ class GrantedEngine:
                     self._accept(_RxRecord(frame, 0), payload, late=True)
             return
         rec = self._take_data(frame)
+        self._note_data(rec)
         if rec.payload is not None:
             self._heard(frame)
             self._measure_lateness(frame)
@@ -2890,6 +2914,14 @@ class GrantedEngine:
             self._harq[guess] = (buffer, 0, frame.mode)
         self.stats.frames_failed += 1
         return rec
+
+    def _note_data(self, rec: _RxRecord) -> None:
+        """What :meth:`_take_data` filed, for :attr:`last_data`; nothing for a frame it kept no
+        record of (off the grid, or decoded and not this session's)."""
+        if any(r is rec for r in self._rx):
+            self.last_data = DataHeard(
+                rec.seq, rec.combined, rescued=rec.combined and rec.payload is not None
+            )
 
     def _restart_rx(self) -> None:
         self._rx = []

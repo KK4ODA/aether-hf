@@ -1586,6 +1586,38 @@ def test_a_measurement_frame_goes_once_and_its_losses_cost_nothing() -> None:
     assert sim.overlaps() == []
 
 
+def test_the_engine_says_what_it_made_of_each_data_frame() -> None:
+    """A recording keeps, beside what the receiver made of a frame, what the engine filed it
+    under: its sequence number, and whether copies of its block combined into it — which a
+    sidecar could only reconstruct (``01-evidence.md`` §8). Pinned a rung above the path, the
+    slave combines copies, some in vain."""
+    a, b = _pair(WIDE)
+    notes: list[tuple[granted_module.DataHeard | None, bytes | None, Container]] = []
+    on_frame = b.on_frame
+
+    def heard(frame: SimFrame, now: float) -> None:
+        on_frame(frame, now)
+        payload, _ = frame.decode(None)
+        notes.append((b.last_data, payload, frame.container))
+
+    b.on_frame = heard  # type: ignore[method-assign]
+    sim = TwoStationSim(a, b, snr_db=4.0, seed=2)
+    a.connect("KK4XYZ")
+    a.pin_mode(12)
+    a.send(_message(random.Random(2), 4000))
+    sim.run(until=300.0)
+    assert sim.delivered(1) == _message(random.Random(2), 4000)
+    data = [(n, p) for n, p, c in notes if c is Container.DATA and n is not None]
+    assert all(n is None for n, _, c in notes if c is Container.CONTROL)
+    for note, payload in data:
+        if payload is not None and decode_data(payload)[0].kind is DataKind.DATA:
+            assert note.seq == decode_data(payload)[0].seq
+            assert not note.combined and not note.rescued  # decoded alone
+    assert sum(n.rescued for n, _ in data) == b.stats.harq_rescues > 0
+    assert any(n.combined and not n.rescued for n, _ in data)  # combined in vain
+    assert all(n.seq is not None for n, _ in data if n.combined)
+
+
 def test_a_measurement_leaves_nothing_to_combine() -> None:
     """A measurement frame that does not decode is never sent again, and the data that follows
     takes the sequence numbers a receiver would infer for it: a buffer kept for one would be

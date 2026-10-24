@@ -463,6 +463,11 @@ fn absorb(
             .rev()
             .find(|(from, _)| *from <= start)
             .map_or(0.0, |&(_, hz)| hz);
+        let (seq, measure) = if control {
+            (None, false)
+        } else {
+            crate::record::data_seq(decoded.payload.as_deref())
+        };
         found.push(FrameRecord {
             t_s: start,
             start_s: Some(start),
@@ -496,6 +501,11 @@ fn absorb(
             },
             capture_skip: false,
             echo: decoded.frame.echo(),
+            // the replay runs no engine: the header's own, and no combining
+            seq,
+            measure,
+            combined: false,
+            rescued: false,
         });
     }
     receiver.take_preambles();

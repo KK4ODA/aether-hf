@@ -449,6 +449,19 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         want["measuring"].as_bool() == Some(e.measuring()),
         e.measuring().to_string(),
     );
+    let note = &want["last_data"];
+    check(
+        "last_data",
+        match e.last_data() {
+            None => note.is_null(),
+            Some(heard) => {
+                note["seq"].as_u64().map(|s| s as u8) == heard.seq
+                    && note["combined"].as_bool() == Some(heard.combined)
+                    && note["rescued"].as_bool() == Some(heard.rescued)
+            }
+        },
+        format!("{:?}", e.last_data()),
+    );
     for (name, value) in stats(&e.stats) {
         if int(&want["stats"][name]) != value {
             wrong.push(format!(

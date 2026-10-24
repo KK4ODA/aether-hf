@@ -187,6 +187,7 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "echo": bits(e.echo),
         "identifier_owed": e.identifier_owed,
         "measuring": e.measuring,
+        "last_data": None if e.last_data is None else vars(e.last_data),
         "stats": dict(vars(e.stats)),
     }
 
