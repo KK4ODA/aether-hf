@@ -238,6 +238,21 @@ Notes on the criteria:
 2. **The sender may send faster than the receiver recommends**, one frame of a transmission in
    *P*, as C1-S's single-frame probe. C1 is built at both places (§2.3).
 
+The author's answers on C1 at the sender's failures (`04-results.md` §3.14; later the same day):
+
+3. **The speed test**: a try of the rung above is decided on a few frames, not one — the AGC
+   carrier's undelivered message and K3's draw 0 were each a try of one frame. Built and run on
+   the harness next.
+4. **The slow machine** (K1(b), 0.76): decided again with that run's numbers; nothing added for it
+   before then (a stall rule would cover only this station's own stalls).
+5. **K6's WC4Y session of 2026-10-22** (0.688): excused if the harness agrees — WC4Y's path
+   (`80m-floor-top-start-500`) joins the next run, and C1 at the sender must do at least as well
+   as the current controller there.
+6. **K7** counts only the candidate's own tunable parameters: the kept rules' (the echo
+   exclusions' two, the re-encode's two) and the engine's `silence_step` and `initial_mode` are in
+   neither count. The candidate stays at eight or under, a parameter derived from a measurement
+   (as the prior's slope from the AWGN curves) counting as none.
+
 ## 5. The current controller's own numbers
 
 *Filled from the runs of 2026-10-24: the harness with beta.122's daemon (`91384bc`), three
