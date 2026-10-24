@@ -320,3 +320,34 @@ K3 moved from pass to fail between C1 and C1 v2, a change that touches only unme
 priors: on three draws a settled rung is noisy (a change that moves the session's timing puts it
 on another stretch of the same fade, `00-brief.md` §8).
 
+### 3.8 C1 v2 on K2, K4 and K6 (2026-10-24)
+
+**K2 and K4**: every scenario in `bench/scenarios/` (60), three draws (seeds s, s+1000, s+2000),
+the current controller and C1 v2 on the same build (`3712e2e`, the default and a worktree with
+`Controller::Delivery`; the cautious start off, so C1 v2's behaviour), 180 runs each.
+
+* **Pooled air**: ×0.970 of the current's (48 586 against 50 100 s; the median of the
+  per-scenario ratios ×0.964). K2's pooled rule passes.
+* **Radiated overlaps**: 0 and 0. K4's overlap rule passes.
+* **Completion**: 178 of 180 against 180. Both failures are `80m-agc-carrier-outside-500` (draws
+  0 and 2: "message 1000: not within 300 s of air") — K4 fails.
+* **`scenario_trend.py`** against the current's three draws: *failing*
+  `80m-agc-carrier-outside-500` (1/3 against 3/3); *slower* `80m-nvis-disturbed-500` (air 310 s
+  against the current's 217–267) and `80m-nvis-evening-500` (file 28 bit/s against 39–47) — K2
+  fails; *faster* `20m-dx-moderate-2300`, `40m-drift-and-clocks-2300`,
+  `40m-long-attachment-cwid-2300`, `80m-capture-skips-500`, `80m-start-low-reading-500`.
+
+All three are 500 Hz paths on ITU's NVIS channel (7 ms, 1 Hz). **K6**: 1.139 of the current's
+measured delivery summed, the worst session 0.424 (WC4Y, 500 Hz, 2026-10-22, §2.5) — fails.
+
+**Why NVIS, and why not the echo table.** The 500 Hz OFDM rungs have no echo limit because the
+measurement does not give them one: on ITU NVIS at 20 dB rung 5 delivers 7.8 B/s of its frames
+against the floor's best 6.2 (`bench/baselines/echo.csv`; at 10 dB 5.2 against 6.2), so NVIS
+*carries* it by `bench_echo.limits`'s rule, while 3 ms at 10 Hz (echo 0.0019) refuses it — an
+echo reading cannot separate them. What NVIS costs C1 is what a try of OFDM costs beyond its own
+air: C1 tries a rung with a whole transmission, and every block of a failed try stays at its
+rung until it has gone four times (`max_combines`) before it can be re-encoded — up to 24 OFDM
+frames for one try — where C1's account charges the try only its own frames. The current
+controller never tries OFDM on these paths: its margin and its two steps in hand keep it on the
+floor.
+
