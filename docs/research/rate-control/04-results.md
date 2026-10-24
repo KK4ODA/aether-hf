@@ -23,10 +23,10 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   scenarios, the start pair and `80m-agc-carrier-outside-500`, three draws each. The leader is C1
   at the sender: with its silent step fixed (§3.10), 69 of 69 complete and K1(a), K1(b) and K3
   each a near miss; ranked per exchange (§3.11, §3.12), K1(a) passes, `80m-slow-machine-500`
-  fails K1(b) and one run fails to complete. Without its step down for silence (§3.12) it is
-  running.
-* **Next**: the decision on the near misses (the author's, case by case), then K2, K4, K5 and K7
-  for the candidate taken forward.
+  fails K1(b) and one run fails to complete; without its step down for silence it is worse
+  (§3.13, reverted). Where it stands: §3.14.
+* **Next**: the author's decision on §3.14's failures, case by case; then K2 and K5 for the
+  candidate taken forward.
 
 ## 1. What the engine hands a prototype
 
@@ -325,6 +325,7 @@ delivery is under 85 % of the current controller's (K1(b)).
 | C1 at the sender, echo kept (§3.10) | +25.16 % | 1 (disturbed NVIS 0.63) | 3, 1, 1 | 3 (the AGC carrier, all three) |
 | **C1 at the sender, its silent step fixed** (§3.10) | **+22.63 %** | **1 (disturbed NVIS 0.84)** | 3, 1, 1 | **0** |
 | C1 at the sender, priced per exchange (§3.12) | **+21.30 %** | 1 (slow machine 0.76) | 5, 1, 1 | 1 (the AGC carrier, draw 0) |
+| … and no step down for silence (§3.13, reverted) | +31.83 % | 1 (disturbed NVIS 0.66) | 5, 0, 0 | 2 (the AGC carrier, draws 0 and 2) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -524,6 +525,40 @@ copied into it (`silent`, §3.10) — onto the floor (rungs 2 and 4) for long st
 current controller, set straight by the receiver's next advice, stayed at OFDM rungs 5–9. **That
 step counts the silence twice**: the copies a silent transmission carried are judged at the next
 answer anyway, delivered or not, and a slot goes silent mostly for a lost control frame or a
-stalled station, which a slower data rung does not cure. It is gone (`bd81150`, model, port and
-replay; R9 still steps the engine's own recommendation). K6 without it: ×1.511 of the current, the
-worst session WC4Y's of 2026-10-22 at 0.688 — the open loop of §3.11, the only one under 0.9.
+stalled station, which a slower data rung does not cure. It was taken out (`bd81150`, model,
+port and replay; R9 still steps the engine's own recommendation) and run again (§3.13).
+
+### 3.13 Without the step down for silence: rejected (2026-10-24)
+
+`bd81150` on the same 69 runs: K1(a) **+31.83 %** (priced, with the step: +21.30 %); K1(b)
+`80m-nvis-disturbed-500` **0.66** (1.05), `80m-slow-machine-500` 0.87 (0.76); K3 5, 0 and 0
+apart; `80m-agc-carrier-outside-500` one run of three (two). The trace of the disturbed NVIS
+path, draw 0: without the step C1 at the sender sent its first three transmissions at OFDM rung 5
+(18 frames) before an answer judged them, and went back to rung 5 four times; with it, one
+transmission at rung 5 and the floor from 41 s (198 against 317 s for the message). On these
+paths a silent slot is what OFDM failing looks like — the copies are judged at the next answer,
+but the next answers are what fails — so the step is the timely signal, and the argument of §3.12
+was wrong. **Reverted** (`git revert`, the commit after `65b9576`). The slow machine's 0.76 stays
+open: there the silences are the station's stalls, and the same step that saves the NVIS paths
+puts the session on the floor after each one. K6 without the step was ×1.511 (worst 0.688); with
+it, ×1.455 (§3.11).
+
+### 3.14 Where C1 at the sender stands (2026-10-24)
+
+Priced per exchange, with the step for silence (`f9976ad`), against `03-candidates.md` §3:
+
+| criterion | result | verdict |
+|---|---|---|
+| K1(a) median regret ≤ half the current's | +21.30 % against +22.62 % | **passes** |
+| K1(b) no scenario under 0.85 of the current | `80m-slow-machine-500` 0.76 (149 / 63 / 81 against 119 / 91 / 106) | fails |
+| K3 start independence, ≤ 1 rung apart each draw | 5, 1, 1 (the current: 2, 1, 2) | fails |
+| K4 completion ≥ the current's | 68 of 69 (`80m-agc-carrier-outside-500` draw 0) against 69 | fails |
+| K6 field replay, sum ≥ current, no session under 0.9 | ×1.455; WC4Y 2026-10-22 at 0.688 (open loop, §3.11) | fails |
+| K2, K5 | not run for this form | — |
+| K7 | 7 tunables of its own plus the inherited SNR smoothing; 3 of the 5 rules removed (§3.11's note on what the cap counts) | the author's reading |
+
+The three failures on the harness have traces: the slow machine is the step for silence meeting
+a station's stalls (§3.12, §3.13); the AGC carrier's undelivered message and K3's draw 0 are both
+a try of one frame — one lucky decode put seventeen frames on OFDM rung 5 on a 7 ms echo, two
+unlucky ones shut rung 7 from a low start for the session (§3.10, §3.12). They are the author's to
+decide, case by case (`03-candidates.md` §4).
