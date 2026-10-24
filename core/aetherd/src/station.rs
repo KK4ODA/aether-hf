@@ -6763,7 +6763,7 @@ mod tests {
                     .expect("every data frame sent says its block")
             })
             .collect();
-        assert!(!sent.is_empty());
+        assert!(!sent.is_empty(), "the master sent no data frames");
         let heard: Vec<&serde_json::Value> = b["frames"]
             .as_array()
             .expect("frames")
