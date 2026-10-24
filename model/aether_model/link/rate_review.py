@@ -157,9 +157,12 @@ class DeliveryController(RateController):
     slope_db: float = 0.5
     penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
     """Per rung, its fading channels' 10 % points over its AWGN one (:data:`CLASS_PENALTY_DB`):
-    the prior is the mean of the four channels' curves at the reading, unless
-    :attr:`prior_margin_db` is set."""
-    prior_margin_db: float | None = None
+    the prior is the mean of the four channels' curves at the reading when
+    :attr:`prior_margin_db` is ``None``."""
+    prior_margin_db: float | None = 3.0
+    """The prior is the AWGN curve this far under the reading (:func:`prior_probability`): on
+    the real modem it beat the four channels' mean, ×0.942 of the current controller's session
+    time against ×1.095 (``04-results.md`` §2)."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, int] = field(default_factory=dict)
     _probe_wait: dict[int, int] = field(default_factory=dict)
@@ -334,8 +337,9 @@ class OuterLoopController(RateController):
     penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
     """As :attr:`DeliveryController.penalties`: the curve a rung's chance is read off is the
     mean of the four channels', its family's offset under it."""
-    prior_margin_db: float | None = None
-    """As :attr:`DeliveryController.prior_margin_db`."""
+    prior_margin_db: float | None = 3.0
+    """As :attr:`DeliveryController.prior_margin_db`: ×0.886 of the current controller's session
+    time against ×1.000 with the four channels' mean."""
     _offset: dict[bool, float] = field(default_factory=dict)
     _target: dict[bool, float] = field(default_factory=dict)
 
