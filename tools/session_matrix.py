@@ -482,7 +482,8 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         stdout=(run.dir / "channel.log").open("wb"),
         stderr=subprocess.STDOUT,
     )
-    for _ in range(200):
+    # 30 s: four servers starting at once on a loaded four-core runner have taken over 10
+    for _ in range(600):
         if port_file.exists() and port_file.read_text().strip():
             break
         time.sleep(0.05)
