@@ -2576,9 +2576,6 @@ impl GrantedEngine {
         let current = self.recommended.min(self.cap());
         let index = modes.iter().rposition(|&m| m <= current).unwrap_or(0);
         self.recommended = modes[index.saturating_sub(self.config.silence_step)];
-        if let Some(sender) = &mut self.sender {
-            sender.silent(self.config.silence_step);
-        }
     }
 
     #[allow(clippy::cast_precision_loss)]

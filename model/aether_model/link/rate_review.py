@@ -363,16 +363,6 @@ class DeliveryController(RateController):
             below = [i for i in range(self._index) if self._usable(i)]
             self._index = max(below, key=lambda i: (self.value(self.modes[i]), -i)) if below else 0
 
-    def silent(self, steps: int) -> None:
-        """A transmission of this station's went unanswered (C1-S): the rung steps down, as the
-        engine steps its own (R9), to a rung the echo allows, and a try ends. Stepped by the
-        ladder's index alone it landed on the rungs a 7 ms echo rules out (ADR-0087), and blocks
-        cut there stayed for their four copies (``04-results.md`` §3.10)."""
-        self._probing = None
-        self._probe_tries = 0
-        below = [i for i in range(max(0, self._index - steps) + 1) if self._usable(i)]
-        self._index = below[-1] if below else 0
-
     # ── the start ─────────────────────────────────────────────────────
 
     def first_mode(self, snr_db: float) -> int:
