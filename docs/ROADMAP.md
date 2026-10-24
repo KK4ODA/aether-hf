@@ -800,6 +800,30 @@ Acceptance: FM PHY passes the same harness contracts as HF; Pat/Winlink FM sessi
 VARA-FM-style commands. Nothing here is scheduled until the HF modem's second rung is
 measured on the air.
 
+**Level tolerance** (added 2026-10-24 at the author's request). From the author's experience
+of VARA FM: a link fails unless both stations' audio levels are right, and getting them right
+is hard, because an FM radio shows the operator no meter for their own deviation. On HF the
+drive is set against the ALC; on FM only the other station's receiver sees what was sent.
+Aether FM is built so that a wrong level costs speed, not the contact, and so that the far
+station does the measuring. P10-7 and P10-8 are not FM-specific and can come to HF at any
+time.
+
+| ID | Task | Depends on |
+|---|---|---|
+| P10-1 | **An FM channel with the radio in it.** The simulator's FM channel models what makes levels matter: the transmitter's deviation limiter, the receiver's IF filter (12.5 and 25 kHz channels), pre-emphasis and de-emphasis at either end or neither (a flat 9600 data port against an emphasized 1200 one), a tone-squelch high-pass under 300 Hz, and sound-card clipping at both ends. Each station's level is a scenario key, so the harness can set it wrong on purpose | §11 item 6 |
+| P10-2 | **A level-tolerant ladder.** The robust rungs are constant envelope and continuous phase (GMSK, or multi-level FSK decoded by energy like HF's tone rungs), so a level error changes the deviation and leaves the limiter nothing to distort. Rungs whose constellation depends on amplitude, such as §11's 16-QAM, are used only once the link has shown it is linear (P10-4) | P10-1 |
+| P10-3 | **The far station says how it heard you.** The probe (ADR-0006), the connect acknowledgement and the session's control frames carry the receiver's reading of the sender's audio: its level against the receiver's clipping point, compression, and the tilt across the audio band in dB, both ways, as ADR-0021's reports are. The panel names the side at fault ("ND1J hears you compressed, about 4 dB"; "your receive audio is clipping") in place of one level bar | P10-2 |
+| P10-4 | **Level control in the loop.** The receiver tells distortion from noise: noise does not change with the sender's level, compression does (outer constellation points pulled in, the preamble's peaks flattened). It marks a burst compressed in its acknowledgement, and the sender steps its own level down 2 dB, or up when the signal is clean but weak, within a window the operator sets around the calibrated level. Backing off also keeps an over-deviated signal out of the next channel | P10-3 |
+| P10-5 | **A level check with another station.** A panel button and control-API method shaped like the Test session's ladder, stepping level instead of rung: a short burst at about eight levels 2 dB apart, each way. The other station reports where the signal became too weak and where it began to distort, and both stations keep the middle of the good range as their calibrated level | P10-3 |
+| P10-6 | **The audio band measured and matched.** The receiver estimates the band's response from the preamble (emphasis mismatch, a radio's voice filters, a tone-squelch high-pass) and equalizes it; the handshake tells the sender, which can tilt its own audio to match | P10-2 |
+| P10-7 | **The sound card guarded** (HF too). The daemon remembers each device's operating-system volume from the last good session and says when it changes (Windows resets a USB codec's level after an update or a replug), restoring it on the operator's OK. It recognises clipped receive audio (runs of full-scale samples) and says how far to turn it down | — |
+| P10-8 | **Radio presets** (HF too). Known-good settings per radio (the data port mode and its menu items, a starting level) shared as profiles (ADR-0011), beside Setup's interface presets | — |
+
+Acceptance (level tolerance): on P10-1's channel, a session completes with either station's
+transmit level, or both, 10 dB above or below its best setting, and with the two stations'
+data-port emphasis mismatched; the curve of session time against level error is committed
+under `bench/baselines/`, as every performance claim is.
+
 ---
 
 ## 14. Next concrete tasks for Claude Code (in order, from 2026-09-15)
