@@ -176,3 +176,36 @@ a start pair, which is why it ranked C2 first; it gains both (`iterate2`).
 `15m-equatorial-flutter-2300` ×2.37), but one offset per family, moved 4:1, is not start-
 independent, and the optimistic prior goes back to a family the path has refused. Next: C1 on the
 extended iteration bench and then on the harness, with the same two scenarios as its first test.
+
+### 3.2 C0, everything taken out, on the harness (2026-10-24)
+
+The current controller with `up_hysteresis_db` 0, `up_dwell` 0, `max_up_step` 20, the decay a
+fixed 0.167 dB a clean burst (OLLA's step for a 10 % target), no re-seed, `first_mode_back` 0 and
+no partial rule — no new code, the defaults changed in a worktree's `RateConfig`. Same 66 runs.
+
+* **K1(a)**: +46.7 % (the current +45.2 %): no gain.
+* **K1(b)**: eight scenarios under 0.85 of the current's delivery, the worst
+  `40m-good-2300-rtty-crashes` at 0.69.
+* **K3**: settled 4, 1 and 0 rungs apart.
+
+The iteration bench had it ×0.961, and start-independent on the model's stand-in: the second time
+the model's benches ranked a candidate the harness does not. Two of the changes compound: without
+the partial rule a burst with any frame lost is a whole failure, and the fixed decay of 0.167 dB a
+*burst* is far slower than the current controller's accelerating one, so the margin stays high.
+C0 as registered removes the parts in turn; together is the wrong first test, and the order is
+the harness's business, not the model bench's.
+
+### 3.3 Where the current controller loses its +45 %
+
+Each fixed rung's delivery on the harness (Gate 2's runs) is flat near the top and peaks high:
+`40m-good-2300-rtty-crashes` rung 14 at 757 bit/s against the controller's 425,
+`80m-thunderstorm-agc-2300` rungs 14–15 at 826–994 against 535–616, `80m-strong-moderate-500`
+rung 13 at 316–415 against 151–260. Read with `tools/rung_reading.py`, the last: the readings sat
+at +8 … +12 dB the whole session while the controller walked 11 → 10 → 9 → 7; rung 11 delivered
+383 bit/s of frame air against rung 10's 223 with a quarter of its first copies lost, and a third
+of rung 10's frames were never detected at all (500 Hz OFDM acquisition, every rung alike). On a
+slowly fading path a rung held high through the fades delivers most — HARQ carries its frames
+through the dips — and a controller that steps down in every dip and climbs back slowly spends its
+time low. The operating point that pays has a first-copy loss of 25–30 %, as the survey's HARQ
+sources say (`02-survey.md` §2.3), where the current controller aims at about 5 %.
+
