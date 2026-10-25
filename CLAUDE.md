@@ -2360,6 +2360,24 @@ frames with a padded skip inside, all decoded (ADR-0089). Tool fixes: `two_sides
 call's acceptance at its try's gap level (`call_levels`), and `rung_reading.py` skips an
 acceptance keyed late in its slot.
 
+**The hidden-frame bench (2026-10-24/25, `docs/research/hidden-frames/`; beta.123 carries
+report 17's three small fixes).** `tools/bench_hidden.py` (`field`, `synth`, `traffic`, `noise`;
+`--rule`) on the model's stream, behind bench-only switches (`StreamingReceiver(weak_spans_hide=,
+strongest_wins=, end_guard=)`, keyword-only; the defaults are the rule as built). The criteria were
+registered before the runs, with two amendments (`00-plan.md` §4a, §4b). Found: **two faults in
+the stream's span test**, shared by the port's `known()` (`start < b`). A weak false candidate
+hides a real frame after it (five cases on the air now). And because a burst's frames go back to
+back, a frame whose timing locked on a later ray puts the next frame's start a few samples inside
+its span; that frame is hidden and its copy a symbol late is taken and fails. The second fault
+costs a sixth of the decodable frames on ITU Poor at either bandwidth. **R3h** (a known frame
+under 1.3 that has not decoded does not hide a candidate at 1.3 or more, plus a half-symbol guard
+at the span's end; one symbol admits the next frame's early sidelobe) passes K1, K3, K4 and K5:
+133 more frames on 7 467 of traffic, none lost, no false frame, noise unchanged. It misses K2
+(91/94 %) only where the false candidate reads 1.3 or more, which noise never does (≤ 1.07). R2
+(strongest wins) and the guard alone each fail. Six of report 15's 26 frames "never detected"
+were hidden by the span rule: for the rate review, "never detected" is partly the receiver.
+**Awaiting the author's decision** (`01-results.md` §8); nothing on the air changed.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
