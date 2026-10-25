@@ -67,6 +67,16 @@ const RESTART_EXIT_CODE: i32 = 75;
 /// How often the supervisor looks at the daemon it started.
 const WATCH_INTERVAL: Duration = Duration::from_millis(250);
 
+/// How often it looks at a daemon it adopted. That one is no child and cannot be waited on:
+/// its control port is what there is to look at, and a busy machine may take a moment to
+/// answer, so it is gone only when two looks this far apart both find the port shut.
+const ADOPTED_INTERVAL: Duration = Duration::from_secs(1);
+
+/// What the daemon writes on its way out when it asks to be started again (`run` in
+/// `aetherd`'s `main.rs`, beside `RESTART_EXIT_CODE`): an adopted daemon's exit status is
+/// nobody's to read, so its last words say which kind of exit it was.
+const RESTART_SAID: &str = "stopping to be started again";
+
 /// The daemon this shell is responsible for.
 ///
 /// Usually one it started. Failing that, one it found listening that runs from this same
@@ -400,8 +410,12 @@ fn watch_daemon(app: tauri::AppHandle) {
     std::thread::Builder::new()
         .name("aether-daemon-watch".to_owned())
         .spawn(move || {
+            let mut adopted = AdoptedWatch::default();
             loop {
                 std::thread::sleep(WATCH_INTERVAL);
+                if adopted.look(&app) {
+                    continue;
+                }
                 let exited = {
                     let daemon = app.state::<Daemon>();
                     let Ok(mut slot) = daemon.child.lock() else {
@@ -443,6 +457,96 @@ fn watch_daemon(app: tauri::AppHandle) {
             }
         })
         .ok();
+}
+
+/// Watching a daemon this shell adopted (`Daemon::adopted`): one a window that is gone
+/// started — a window ended without stopping its daemon — and this one took over. It is
+/// started again when it went asking to be, as a child would
+/// be: a profile switch on such a window left the station with no modem for two and a half
+/// minutes, until the operator started Aether HF again (KK4ODA and KK4ODA-1, 2026-10-25). Gone
+/// for any other reason, it is explained, as a child's stop is.
+#[derive(Default)]
+struct AdoptedWatch {
+    /// When to look next.
+    next: Option<Instant>,
+    /// The last look found the port shut.
+    shut: bool,
+}
+
+impl AdoptedWatch {
+    /// Whether the daemon is an adopted one, looked after here; a child is `watch_daemon`'s.
+    fn look(&mut self, app: &tauri::AppHandle) -> bool {
+        let daemon = app.state::<Daemon>();
+        if !daemon.adopted.load(Ordering::SeqCst) {
+            *self = Self::default();
+            return false;
+        }
+        let now = Instant::now();
+        if self.next.is_some_and(|next| now < next) {
+            return true;
+        }
+        self.next = Some(now + ADOPTED_INTERVAL);
+        if reachable() {
+            self.shut = false;
+            return true;
+        }
+        if !std::mem::replace(&mut self.shut, true) {
+            return true;
+        }
+        // taken out of the shell's hands, as `stop_daemon` does: closing the window from here
+        // on asks nothing of a daemon that is not there, and nothing else starts another
+        if !daemon.adopted.swap(false, Ordering::SeqCst) {
+            return true;
+        }
+        *self = Self::default();
+        let said = config_path()
+            .map(|config| tail_of(&daemon_log_path(&config), 12))
+            .unwrap_or_default();
+        if said.contains(RESTART_SAID) {
+            // the port shuts before the process has let go of the sound card and the serial
+            // port; a daemon started now would find them held
+            wait_for_release(SHUTDOWN_TIMEOUT);
+            let resources = app.state::<Launch>().resources.clone();
+            match ensure_daemon(resources.as_deref()) {
+                Ok(Some(child)) => {
+                    if let Ok(mut slot) = daemon.child.lock() {
+                        *slot = Some(child);
+                    }
+                }
+                // one answers after all: it is still the one adopted
+                Ok(None) => daemon.adopted.store(true, Ordering::SeqCst),
+                Err(message) => explain(app, &message),
+            }
+        } else {
+            explain(
+                app,
+                &if said.is_empty() {
+                    "The modem daemon stopped without saying why.".to_owned()
+                } else {
+                    format!("The modem daemon stopped:\n\n{said}")
+                },
+            );
+        }
+        true
+    }
+}
+
+/// Wait, at most `patience`, for the daemon's binary to be free: a process still running
+/// from it holds it, so it is the sign the last one has gone (`release_daemon_binary`'s
+/// test, without asking or forcing anything).
+fn wait_for_release(patience: Duration) {
+    let Ok(binary) = daemon_path() else { return };
+    let deadline = Instant::now() + patience;
+    while Instant::now() < deadline {
+        if std::fs::OpenOptions::new()
+            .write(true)
+            .open(&binary)
+            .is_ok()
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// Close the main window, asking first when that would interrupt a session, a Test, a
@@ -780,4 +884,18 @@ fn ask_to_stop() {
         "{}",
     );
     let _ = stream.write_all(request.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RESTART_SAID;
+
+    #[test]
+    fn the_restart_an_adopted_daemon_asks_for_is_read_in_the_daemons_own_words() {
+        let daemon = include_str!("../../../core/aetherd/src/main.rs");
+        assert!(
+            daemon.contains(&format!("\"{RESTART_SAID}\"")),
+            "aetherd no longer says {RESTART_SAID:?} when it stops to be started again"
+        );
+    }
 }
