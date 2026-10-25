@@ -153,4 +153,9 @@ threshold tables, `usable_modes`, the echo exclusions, `silence_step`, `reencode
 **Owed, recorded here:** the dip and the climb's pace (§3) are the two places C1 is known to
 leave speed, and the advice is the current controller with its nineteen parameters, which K7
 asked to be gone: the next review's, not a patch. C1 at the receiver's optimism on NVIS (§3.8,
-§3.26, §3.27) is where that review starts.
+§3.26, §3.27) is where that review starts. Two engine rules were justified while the current
+controller chose the rung, and hold only in part under C1 at the sender (§3.28; the author kept
+both at Gate 5): answers on the floor after a silent slot (`floor_answer_memory`) still pay at
+500 Hz but cost a few seconds on the 2 300 Hz unit bench, and holding frames whose answer was
+lost (`hold_unknown`) still saves frames but no longer time. Their unit tests run under the
+current controller, as measured, until that review re-justifies or removes each.

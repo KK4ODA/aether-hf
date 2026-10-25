@@ -95,9 +95,8 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
 def config_doc(c: GrantConfig) -> dict[str, Any]:
     if c.rate:
         raise ValueError("the vectors use the rate controller's defaults")
-    # a prototype of the rate controller's review is named (tools/make_rate_review_vectors.py);
-    # the current controller is not, so this file is what it was
-    named = {} if c.controller == "current" else {"controller": c.controller}
+    # a controller other than the engine's default is named (tools/make_rate_review_vectors.py)
+    named = {} if c.controller == GrantConfig().controller else {"controller": c.controller}
     return {
         **named,
         "max_data_frames": c.max_data_frames,

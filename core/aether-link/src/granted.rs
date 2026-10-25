@@ -275,23 +275,25 @@ pub enum Role {
 
 // ── configuration and counters ────────────────────────────────────────
 
-/// Which rate controller a station runs: bench only (the rate controller's review, Gate 3,
-/// `docs/research/rate-control/04-results.md`). The model's `GrantConfig.controller`.
+/// Which rate controller a station runs (the model's `GrantConfig.controller`): ADR-0094's
+/// [`Controller::DeliveryS`] by default; the others are the rate controller's review's, bench
+/// only until Gate 6 deletes them (`docs/research/rate-control/04-results.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Controller {
-    /// The current controller ([`RateController`]).
-    #[default]
+    /// The current controller ([`RateController`]) in both roles.
     Current,
     /// C2, outer-loop adaptation to a derived target ([`OuterLoopController`]).
     Olla,
     /// C1, choose by measured delivery at the receiver ([`DeliveryController`]).
     Delivery,
-    /// C1 at the sender: the station chooses its own data's rung from what its acknowledgements
-    /// say of its copies, the other station's recommendation advice; a try is one new frame of
-    /// a transmission at the rung above.
+    /// ADR-0094, C1 at the sender: the station chooses its own data's rung from what its
+    /// acknowledgements say of its copies, the other station's recommendation advice; a try is
+    /// one new frame of a transmission at the rung above. The advice it gives is the current
+    /// controller's.
+    #[default]
     DeliveryS,
-    /// ADR-0094: C1 in both roles — at the sender, as [`Controller::DeliveryS`], and for the
-    /// advice in every control frame, as [`Controller::Delivery`].
+    /// C1 in both roles — at the sender, as [`Controller::DeliveryS`], and for the advice in
+    /// every control frame, as [`Controller::Delivery`] (rejected at Gate 5, ADR-0094 §4).
     C1,
 }
 
@@ -547,7 +549,7 @@ impl Default for GrantConfig {
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
             rate: RateConfig::default(),
-            controller: Controller::Current,
+            controller: Controller::DeliveryS,
             initial_mode: 0,
             max_mode: 19,
             ceiling: None,

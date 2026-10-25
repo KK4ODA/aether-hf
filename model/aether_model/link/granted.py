@@ -366,11 +366,13 @@ class GrantConfig:
     link_timeout_exchanges: float = 4.0
     """Silence ends a session after this many exchanges of the size in use, 45 s at least."""
     rate: dict[str, float | int | None] = field(default_factory=dict)
-    controller: str = "current"
-    """Bench only: which rate controller the station runs — the current one, or a prototype of
-    the rate controller's review (:mod:`aether_model.link.rate_review`): ``c1`` is ADR-0094's,
-    C1 choosing this station's own data rung and C1 giving the advice for the other's.
-    :attr:`rate` overrides its parameters either way."""
+    controller: str = "delivery-s"
+    """Which rate controller the station runs. ``delivery-s`` is ADR-0094's: C1
+    (:class:`aether_model.link.rate_review.DeliveryController`) chooses the rung this station's
+    own data goes at, and the current controller (:class:`RateController`) gives the advice for
+    the other station's. Bench only until Gate 6 deletes them: ``current`` (the current
+    controller in both roles) and the review's other prototypes. :attr:`rate` overrides the
+    current controller's parameters either way."""
     initial_mode: int = 0
     max_mode: int = 19
     ceiling: int | None = None

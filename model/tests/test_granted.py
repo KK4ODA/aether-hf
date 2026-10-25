@@ -620,10 +620,17 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
     slave's short ordinary answers (4 read of 15) and spared its floor ones (6 of 6), and the
     readings, from decoded frames alone, kept asking for ordinary ones; half the seeds ran out of
     time. With ``floor_answer_memory`` the master asks for floor answers while any recent slot
-    went silent: fewer slots go silent and the transfer is quicker."""
+    went silent: fewer slots go silent and the transfer is quicker.
+
+    Measured, and held here, with the current controller choosing the rung. Under C1 at the
+    sender (ADR-0094) the rule still pays at 500 Hz — 125 s to 88 s here, and on the PACTOR
+    scenario 10 of 10 runs complete with it against 7 of 10 — but at 2 300 Hz this seed takes
+    44 s with it against 41 s without (``04-results.md`` §3.28): owed to the next review."""
 
     def run(memory: int) -> tuple[int, float]:
-        a, b = _pair(AIRS[air], floor_answer_memory=memory, hold_unknown=False)
+        a, b = _pair(
+            AIRS[air], floor_answer_memory=memory, hold_unknown=False, controller="current"
+        )
         rng = random.Random(7)
 
         def bursts(frame: TxFrame) -> float:
@@ -655,10 +662,16 @@ def test_frames_whose_answer_went_unheard_are_not_resent_blind(air: str) -> None
     """10-step-3.md §3.4: on the PACTOR path protocol 8's slave decoded more frames than protocol
     7's and still finished later — the master resent every frame of a transmission whose answer
     it had not heard, and the slave had most of them. With ``hold_unknown`` those frames wait for
-    an answer to say what arrived: fewer frames for the same bytes, and sooner."""
+    an answer to say what arrived: fewer frames for the same bytes, and sooner.
+
+    Measured, and held here, with the current controller choosing the rung. Under C1 at the
+    sender (ADR-0094) the frames are still fewer, but the time is not: 1125 s blind against
+    1445 s held at 2 300 Hz over these eight seeds, 3310 against 3425 s at 500 Hz, and neutral on
+    the PACTOR scenario (2976 against 2944 s of air over ten draws, ``04-results.md`` §3.28):
+    owed to the next review."""
 
     def run(hold: bool, seed: int) -> tuple[int, float]:
-        a, b = _pair(AIRS[air], floor_answer_memory=4, hold_unknown=hold)
+        a, b = _pair(AIRS[air], floor_answer_memory=4, hold_unknown=hold, controller="current")
         rng = random.Random(seed)
         hits = random.Random(100 + seed)
 
@@ -766,7 +779,9 @@ def test_a_count_rescued_with_its_block_places_no_end(
 
     def overlapping_runs(header_above: bool = True) -> int:
         runs = 0
-        for seed in range(4):
+        # eight seeds: under C1 at the sender (ADR-0094) the master's case misled no one in the
+        # first four without the rule, five of sixteen
+        for seed in range(8):
             a, b = _pair(AIRS[air], header_above_recommendation=header_above)
             sender, receiver = (a, 1) if side == "slave" else (b, 0)
             hits = random.Random(900 + seed)

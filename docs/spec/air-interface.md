@@ -797,25 +797,30 @@ deadline. The rules, numbered as in the formal specification
    asked and its silence level, which two silent slots in a row raise one step and four slots
    answered on time lower one. A call's or a probe's level is in its capability bits 3–4 and
    rises every second try.
-9. **Rate.** Each station recommends the other's rung in every control frame, and the other
-   follows it, capped by its own regulatory ceiling (below), its `max_mode` and a pinned rung. A
+9. **Rate.** Each station recommends the other's rung in every control frame. The sender
+   chooses its own data's rung (ADR-0094): by the data each rung's frames delivered per second
+   of the air they took, frames never heard included, the recommendation as advice; capped by its
+   own regulatory ceiling (below), its `max_mode` and a pinned rung. It may send one new frame of
+   a transmission at the usable rung above its choice, to try it. A
    data slot heard silent steps the master's own rung down two usable rungs; two silent slots
    step the slave's too and put headers and answers on the floor. Control frames go on the floor
    unless the other station's last three reports cleared the ordinary control frame's threshold
    by 3 dB, and while any of the last four answer slots went silent. A copy goes at the next RV
    in the order 0, 0, 2, 3, then round again (ADR-0043: the second copy is RV 0 so that it
    decodes on its own when the first was never detected; the receiver reads the RV from the
-   chips and combines any order). A frame sent four times unacknowledged at a rung the
-   recommendation has since left, or after two copies one the other station measured further
-   under its rung than four copies can make up (ADR-0038), is re-encoded at the most robust
-   usable rung below its own, in the recommendation's family and no faster than the
-   recommendation, that carries its body (ADR-0085): a new codeword under the same sequence
+   chips and combines any order). Below, the *bound* is the lower of the recommendation and the
+   sender's own choice when it last read an answer (ADR-0094). A frame sent four times
+   unacknowledged at a rung the bound has since left, or after two copies one the other station
+   measured further under its rung than four copies can make up (ADR-0038), is re-encoded at the
+   most robust usable rung below its own, in the bound's family and no faster than the bound,
+   that carries its body (ADR-0085): a new codeword under the same sequence
    number, which the receiver does not combine with the old one. A body no such rung carries
    goes **in pieces** (ADR-0086) after one copy more — the receiver combines a fifth copy with the
    four it holds before it starts over — or after two when the report says combining cannot
-   reach, and only when the rung the other station itself last recommended — not a step down
-   for a silent slot — is below the frame's: at the usable rung of its family up to
-   that recommendation that cuts the body into the fewest pieces, the most robust of those (every
+   reach, and only when the lower of the rung the other station itself last recommended — not a
+   step down for a silent slot — and the sender's own choice when it last read an answer is below
+   the frame's: at the usable rung of its family up to that rung that cuts the body into the
+   fewest pieces, the most robust of those (every
    frame of a family is as long as the others, so the pieces are the air), each piece a full
    FRAGMENT frame (§7.1), in transmissions of pieces
    alone and always at RV 0, since the receiver gives a frame that does not decode a sequence

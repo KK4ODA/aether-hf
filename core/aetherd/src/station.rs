@@ -7890,7 +7890,9 @@ mod tests {
     /// `b`'s clock stood behind the air's after the pile, whether the two were ever keyed at
     /// once afterwards, and how many answers `b` dropped late.
     fn stalled_session(skip: bool, stall_s: f64) -> (f64, bool, usize) {
-        let message: Vec<u8> = (0..4000u32)
+        // enough that the caller's transmissions run long: C1 at the sender (ADR-0094) carried
+        // 4000 bytes in one short transmission, over before the stall could pass its slot
+        let message: Vec<u8> = (0..20000u32)
             .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
             .collect();
         let mut air = Air::new(1.0, 0.0005);
@@ -8105,7 +8107,9 @@ mod tests {
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
-        let message: Vec<u8> = (0..6000u32)
+        // 6000 bytes went in one 2.7 s transmission at the rung C1 at the sender (ADR-0094)
+        // chooses on this wire; 20000 make a transmission of 3.7 s
+        let message: Vec<u8> = (0..20000u32)
             .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
             .collect();
         air.a.send(&message);
@@ -10077,10 +10081,12 @@ mod tests {
         air.a.send(message);
         air.run(120.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received(), message);
-        // the frames the other end reported were narrow-table modes
+        // the frames the other end reported were narrow-table modes (fifteen, above: C1 at the
+        // sender reaches the top two on this wire, which the bound of 13 had predated)
         let reports = air.b.take_frame_reports();
         assert!(reports.iter().any(|r| r.kind == "data" && r.decoded));
-        assert!(reports.iter().all(|r| r.mode < 13), "{reports:?}");
+        let rungs = air.a.engine().timing().data_capacity.len();
+        assert!(reports.iter().all(|r| r.mode < rungs), "{reports:?}");
         air.a.disconnect();
         air.run(60.0, |a, b| {
             a.state() == State::Idle && b.state() == State::Idle

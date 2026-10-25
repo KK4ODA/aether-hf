@@ -42,6 +42,8 @@ def test_real_phy_harq_ir_rescue_below_threshold(timing: object) -> None:
     cfg = GrantConfig(initial_mode=rung, max_mode=rung, max_retries=40)
     a = GrantedEngine("W4ODA", timing, cfg, seed=1)
     b = GrantedEngine("KK4XYZ", timing, cfg, seed=2)
+    # pinned, not capped: C1 at the sender (ADR-0094) chooses its own rung under the cap
+    a.pin_mode(rung)
     sim = two_modem_sim(a, b, channel="awgn", snr_db=0.0, seed=3)
     msg = bytes((i * 91) % 256 for i in range(300))
     a.connect("KK4XYZ")

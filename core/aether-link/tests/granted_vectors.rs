@@ -108,9 +108,10 @@ fn pair(doc: &Value) -> [f64; 2] {
 
 fn config(doc: &Value) -> GrantConfig {
     let levels = doc["levels_s"].as_array().expect("levels");
-    // a prototype of the rate controller's review is named; the current controller is not
+    // a controller other than the engine's default is named
     let controller = match doc.get("controller").and_then(Value::as_str) {
-        None => Controller::Current,
+        None => Controller::default(),
+        Some("current") => Controller::Current,
         Some("olla") => Controller::Olla,
         Some("delivery") => Controller::Delivery,
         Some("delivery-s") => Controller::DeliveryS,

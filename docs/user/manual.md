@@ -46,8 +46,10 @@ Two things follow from that:
 
 A session starts slow and robust and climbs. The slowest steps are the **tone floor**, single
 tones that get through at −14 dB or lower. Above them are faster tone kinds, then OFDM modes up
-to 64-QAM. Each step is a **rung**. The receiving station measures every frame and tells the
-sender which rung to use next, so the link settles where the path allows.
+to 64-QAM. Each step is a **rung**. The receiving station measures every frame and advises the
+sender which rung to use. The sender chooses: it keeps count of how much data each rung has
+actually delivered for its airtime, and now and then tries the next rung up with one frame. So
+the link settles on the rung that moves the most data on this path.
 
 The application has two parts. The **daemon** (`aetherd`) is the modem itself. The **panel** is
 the window you see. On a desktop the application starts the daemon and opens the panel for you.
@@ -432,7 +434,8 @@ not touched.
 
 - **Signal analysis**: the constellation, spectrum and waterfall. **Undock** opens them in a
   window of their own, to keep in view from any tab. A tone frame has no constellation.
-- **Receiver**: the rate controller's smoothed SNR and margin, how the other station hears you,
+- **Receiver**: the smoothed SNR and margin behind the rung your station advises the other,
+  how the other station hears you,
   mode confidence (below 1.3 is a guess), every number behind the busy detector's decision (with
   *radio gain*, how far the radio's AGC holds its gain down when it does), and what host program,
   KISS programs and audio are attached.
@@ -644,7 +647,7 @@ what happened in an issue on GitHub or by email.
 
 ## 15. Glossary
 
-- **Acknowledgement (ACK)**: which frames arrived, how well, and which rung to use next. Each
+- **Acknowledgement (ACK)**: which frames arrived, how well, and which rung it advises next. Each
   station's goes with the next thing it sends: the caller's ahead of its frames, the called
   station's in its slot.
 - **Answer gap**: the least time Aether waits after the other station's transmission before its
