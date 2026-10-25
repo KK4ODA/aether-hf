@@ -37,7 +37,10 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   K4 now passes and K5 fails at one point instead of four; K1(a), K2's per-scenario check, K3,
   K5's one point and K6 still miss — the dip and the climb's pace, traced. Pooled it still beats
   the current controller (harness air ×0.995, real-modem session time ×0.896).
-* **Next**: Gate 4, the decision ADR — the author's call on adopting C1 at the sender.
+* **Gate 4, decided** (2026-10-25): the author adopted C1 at the sender, with C1 at the receiver
+  for the advice (`docs/adr/0094-the-rate-controller-chooses-by-measured-delivery.md`).
+* **Next**: Gate 5 — C1 in both roles as the engine's controller, the port, the harness A/B on
+  the registered criteria (the pair is new), then a beta and the air.
 
 ## 1. What the engine hands a prototype
 
