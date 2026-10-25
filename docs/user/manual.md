@@ -130,6 +130,8 @@ settings under a name: one per radio, per place, or per way of working (for exam
 - Pick a profile to switch to it. A `*` after the name means the running settings have changed
   since it was saved; switching asks first.
 - **Save** writes the current settings to the profile, **Save as…** keeps them under a new name.
+  Changes on the Setup tab that you have not saved yet are saved to the modem first, so the
+  profile gets them too.
 - **Export…** writes an `.aetherprofile` file to back up or carry to another computer;
   **Import…** brings one in. A sound card the other computer does not have is shown as *not on
   this computer* until you choose one.

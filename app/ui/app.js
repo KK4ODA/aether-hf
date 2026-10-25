@@ -3267,8 +3267,8 @@ function renderProfiles() {
   $("profile-save").disabled = !connected || !hasActive;
   $("profile-save").title = hasActive
     ? profiles.dirty
-      ? `Write the changes to ${profiles.name}`
-      : `${profiles.name} is up to date`
+      ? `Write the changes to ${profiles.name}; Setup's changes not yet saved go to the modem first`
+      : `${profiles.name} holds the running settings; Setup's changes not yet saved go to the modem and to ${profiles.name}`
     : "No profile is active: use Save as…";
   $("profile-rename").disabled = !hasActive;
   $("profile-duplicate").disabled = !hasActive;
@@ -3329,11 +3329,25 @@ async function profileFormOk() {
     return;
   }
   closeProfileForm();
+  // Save as… keeps what the modem runs, as Save does: Setup's changes not yet saved go first
+  let setupAnswer = null;
+  if (purpose === "save-as" && unsavedSettings().length > 0) {
+    setupAnswer = await saveSetupChanges();
+    if (!setupAnswer) {
+      noteProfile("Setup's changes could not be saved, so no profile was made: see the note by Save these settings.", "error");
+      return;
+    }
+  }
   try {
     if (purpose === "save-as") {
       applyProfiles(await call("profile.save", { name }));
-      noteProfile(`Saved as ${name}, now the active profile.`);
+      noteProfile(
+        setupAnswer
+          ? `Setup's changes saved, and the settings saved as ${name}, now the active profile.`
+          : `Saved as ${name}, now the active profile.`,
+      );
       log(`profile saved as ${name}`);
+      if (setupAnswer) await finishSetupSave(setupAnswer);
     } else if (purpose === "new") {
       const answer = await call("profile.create", { name });
       await afterProfileLoad(answer, `New profile ${name}: the defaults, with your callsign and operator details.`);
@@ -3491,16 +3505,35 @@ async function answerProfilePrompt(choice) {
   go();
 }
 
+/// The profile bar's Save. A profile holds what the modem runs, so Setup's changes not yet
+/// saved go to the modem first: pressed with two of them pending, this Save used to write the
+/// running settings to the profile and leave both changes where they were — "Saved to
+/// Default", and the save bar still saying they were not (KK4ODA's laptop, 2026-10-25).
 async function saveProfile() {
+  let setupAnswer = null;
+  if (unsavedSettings().length > 0) {
+    setupAnswer = await saveSetupChanges();
+    if (!setupAnswer) {
+      noteProfile("Setup's changes could not be saved, so the profile was not: see the note by Save these settings.", "error");
+      return;
+    }
+  }
   try {
     const answer = await call("profile.save", {});
     applyProfiles(answer);
-    noteProfile(`Saved to ${answer.saved?.name ?? profiles.name} at ${new Date().toLocaleTimeString()}.`);
+    const name = answer.saved?.name ?? profiles.name;
+    noteProfile(
+      setupAnswer
+        ? `Setup's changes saved, and the settings saved to ${name} at ${new Date().toLocaleTimeString()}.`
+        : `Saved to ${name} at ${new Date().toLocaleTimeString()}.`,
+    );
     log(`profile ${answer.saved?.name ?? ""} saved`);
   } catch (error) {
     noteProfile(error.message, "error");
     log(error.message, true);
   }
+  // a change the modem takes on only when it starts again restarts it once the profile has it
+  if (setupAnswer) await finishSetupSave(setupAnswer);
 }
 
 async function exportProfile() {
@@ -4147,35 +4180,47 @@ async function kissDisconnect(client) {
 }
 
 async function wizardSave() {
+  const answer = await saveSetupChanges();
+  if (answer) await finishSetupSave(answer);
+}
+
+/// Setup's form to the modem: the answer to `config.set`, or nothing when it was refused, the
+/// reason on the save bar. Shared by *Save these settings* and the profile bar's Save.
+async function saveSetupChanges() {
   $("wz-save-note").textContent = "";
   const call_ = $("wz-call").value.trim().toUpperCase();
   if (!call_) {
     $("wz-save-note").textContent = "A callsign is required.";
-    return;
+    return null;
   }
-  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES[MANUAL];
   // the fields are what is saved: an interface fills them in when it is picked, and never
   // again — a VOX interface shown in the list used to save "no keying" over a CAT port set
   // below it
-  const changes = formChanges();
   try {
-    const answer = await call("config.set", changes);
-    let note = `Saved. ${await applied(answer)}`;
-    if (profile.ptt === "serial" && $("dev-ptt").value === "") {
-      // the profile wants a keying line and none was chosen: the station is saved
-      // receive-only, which is safe, but the operator should know why the radio
-      // will not key
-      note += " No keying port is chosen, so the radio will not key: pick the interface's serial port under Keying below and save again.";
-    }
-    $("wz-save-note").textContent = note;
-    markStep(6, true);
-    log(`settings saved (${(answer.changed ?? []).join(", ")})`);
-    loadConfig();
-    refreshStatus();
+    return await call("config.set", formChanges());
   } catch (error) {
     $("wz-save-note").textContent = error.message;
     log(error.message, true);
+    return null;
   }
+}
+
+/// What follows a save the modem took: the restart a setting needs, the note that says so,
+/// and the form filled again from what the modem runs.
+async function finishSetupSave(answer) {
+  const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES[MANUAL];
+  let note = `Saved. ${await applied(answer)}`;
+  if (profile.ptt === "serial" && $("dev-ptt").value === "") {
+    // the profile wants a keying line and none was chosen: the station is saved
+    // receive-only, which is safe, but the operator should know why the radio
+    // will not key
+    note += " No keying port is chosen, so the radio will not key: pick the interface's serial port under Keying below and save again.";
+  }
+  $("wz-save-note").textContent = note;
+  markStep(6, true);
+  log(`settings saved (${(answer.changed ?? []).join(", ")})`);
+  loadConfig();
+  refreshStatus();
 }
 
 async function transmitTest(method, seconds, label) {
