@@ -35,12 +35,20 @@ impl HostPresence {
     }
 }
 
+/// How long after one line about answering calls the next waits, unless nothing has changed
+/// (`Station::say_answering`).
+const LISTEN_QUIET_S: f64 = 60.0;
+
 /// The host program's say, and what was last said of a call it kept unanswered.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Host {
     presence: HostPresence,
     /// The last caller left unanswered, and when that was said.
     said: Option<(String, f64)>,
+    /// When the log last said whether calls are answered.
+    listen_said: Option<f64>,
+    /// Times answering turned on or off since.
+    listen_turns: u32,
 }
 
 impl<P: Ptt> Station<P> {
@@ -48,6 +56,10 @@ impl<P: Ptt> Station<P> {
     /// its bandwidth with it: the station goes back to its own once idle (ADR-0026).
     pub fn set_host(&mut self, presence: HostPresence) {
         let was = self.host.presence;
+        self.say_answering(
+            presence.answering(),
+            presence.answering() != was.answering(),
+        );
         if presence == was {
             return;
         }
@@ -56,14 +68,42 @@ impl<P: Ptt> Station<P> {
             // what it asked for goes with it; withdrawing a request cannot fail
             let _ = self.host_bandwidth(None);
         }
-        if presence.answering() != was.answering() {
-            let detail = if presence.answering() {
-                "answering calls"
-            } else {
-                "not answering calls: the host program has not said LISTEN ON"
-            };
-            self.note("listen", detail);
+    }
+
+    /// Whether calls are answered, for the log: at once when it changes, then at most once
+    /// in [`LISTEN_QUIET_S`]. A scanning program (RMS Trimode) turns LISTEN off and on every
+    /// three and a half seconds, and a line at each turn was most of a night's log at
+    /// KK4ODA-1 (2026-10-25: 9 448 lines). The turns in between are counted, and the state
+    /// they leave is said when the quiet is over.
+    fn say_answering(&mut self, answering: bool, changed: bool) {
+        if changed {
+            self.host.listen_turns += 1;
         }
+        let now = self.now();
+        if self.host.listen_turns == 0
+            || self
+                .host
+                .listen_said
+                .is_some_and(|at| now - at < LISTEN_QUIET_S)
+        {
+            return;
+        }
+        let turns = std::mem::take(&mut self.host.listen_turns);
+        let state = if answering {
+            "answering calls"
+        } else {
+            "not answering calls: the host program has not said LISTEN ON"
+        };
+        let detail = if turns > 1 {
+            format!(
+                "{state} (LISTEN turned on and off {turns} times since the last line: the \
+                 program scans)"
+            )
+        } else {
+            state.to_owned()
+        };
+        self.note("listen", &detail);
+        self.host.listen_said = Some(now);
     }
 
     /// Whether a host program holds the command port now.

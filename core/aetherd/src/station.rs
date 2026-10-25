@@ -10701,6 +10701,42 @@ mod tests {
     }
 
     #[test]
+    fn a_scanning_host_is_said_to_scan_once_a_minute_not_at_every_turn() {
+        // RMS Trimode turns LISTEN off for half a second every three and a half, on one
+        // channel too: a line at each turn was 9 448 lines of one night's log at KK4ODA-1
+        let mut station = idle_station();
+        let mut out = vec![0.0f32; 4096];
+        let mut seed = 0;
+        while station.now() < 125.0 {
+            station.set_host(HostPresence {
+                attached: true,
+                listening: station.now() % 3.5 < 3.0,
+                chat: false,
+            });
+            station.playback(&mut out).expect("playback");
+            station.capture(&quiet_block(seed)).expect("capture");
+            seed += 1;
+        }
+        let said: Vec<String> = station
+            .take_events()
+            .into_iter()
+            .filter(|e| e.starts_with("listen:"))
+            .collect();
+        // the first turn at once, then a line a minute that counts the turns between
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert_eq!(
+            said[0],
+            "listen:not answering calls: the host program has not said LISTEN ON"
+        );
+        for line in &said[1..] {
+            assert!(
+                line.contains("times since the last line: the program scans"),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
     fn the_radios_turnaround_and_the_answer_gap_reach_the_engine() {
         // the turnaround is this radio's, declared in the next call or acceptance; the answer
         // gap is the least wait after the other station's frames, the larger of the
