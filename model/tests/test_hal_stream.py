@@ -19,8 +19,8 @@ from aether_model.hal.audio import (
 )
 from aether_model.phy.passband import AudioToBaseband
 from aether_model.phy.pipeline import Modem
-from aether_model.phy.stream import StreamingReceiver
-from aether_model.waveform import WIDE_2300
+from aether_model.phy.stream import TRUSTED_CONFIDENCE, StreamingReceiver
+from aether_model.waveform import NARROW_500, WIDE_2300, WaveformParams
 
 P = WIDE_2300
 FS = P.fs_baseband
@@ -162,6 +162,89 @@ def test_streaming_reports_absolute_positions(modem: Modem, rng: np.random.Gener
     assert len(starts) == 3
     assert starts[0] == 3000 + rx.delay_samples
     assert starts == sorted(starts) and len(set(starts)) == 3
+
+
+def _unit(x: np.ndarray) -> np.ndarray:
+    return x / np.sqrt(np.mean(np.abs(x) ** 2))
+
+
+def _noise_3k(rng: np.random.Generator, n: int, fs: float) -> np.ndarray:
+    """Noise against which a unit-power signal is at 0 dB in 3 kHz."""
+    sigma = np.sqrt(fs / 3000.0 / 2.0)
+    return sigma * (rng.standard_normal(n) + 1j * rng.standard_normal(n))
+
+
+def _stream(params: WaveformParams, x: np.ndarray) -> tuple[StreamingReceiver, list]:
+    rx = StreamingReceiver(params)
+    out = []
+    for i in range(0, len(x), 160):  # the daemon's 20 ms
+        out += rx.feed(x[i : i + 160])
+    return rx, out
+
+
+@pytest.mark.parametrize(
+    ("params", "false_db"), [(WIDE_2300, -6.0), (NARROW_500, -9.0)], ids=["2300", "500"]
+)
+def test_a_weak_false_detection_does_not_hide_a_frame_inside_its_span(
+    params: WaveformParams, false_db: float
+) -> None:
+    """ADR-0095. A false detection took the span of a frame not yet decoded, and a real frame
+    starting inside it was never looked at: a header and four answers on the air, 0.26–0.47 s
+    behind detections read 1.04–1.11. Here the false one is a control frame's two preamble
+    symbols with nothing after them, as a noise trigger is to the receiver. A known frame under
+    the trusted confidence that has not decoded hides no candidate at or over it — as offline
+    decoding, which takes the strongest first, never did."""
+    modem = Modem(params)
+    rng = np.random.default_rng(5)
+    payload = rng.integers(1, 256, modem.payload_bytes(None), dtype=np.uint8).tobytes()
+    real = _unit(modem.control_burst(payload))
+    cut = _unit(modem.control_burst(b"\x01"))[: 2 * params.symbol_samples]
+    fs = params.fs_baseband
+    lead, delay = 6000, int(0.3 * fs)
+    x = _noise_3k(np.random.default_rng(6), lead + delay + len(real) + 12000, fs)
+    x[lead : lead + len(cut)] += cut * 10 ** (false_db / 20)
+    x[lead + delay : lead + delay + len(real)] += real * 10 ** (1.0 / 20)
+    offline = [f.payload for f in Modem(params).decode_buffer(x, max_frames=4) if f.ok]
+    assert offline == [payload]
+    rx, got = _stream(params, x)
+    false = [
+        d
+        for d in got
+        if d.frame is not None
+        and abs(d.frame.sync.start - lead - rx.delay_samples) < params.symbol_samples
+    ]
+    assert len(false) == 1 and not false[0].ok, "the false detection is taken and fails"
+    assert 1.0 <= false[0].frame.sync.detect_confidence(modem.air) < TRUSTED_CONFIDENCE
+    assert [d.payload for d in got if d.ok] == [payload]
+
+
+@pytest.mark.parametrize(("params", "rung"), [(WIDE_2300, 8), (NARROW_500, 7)], ids=["2300", "500"])
+def test_a_bursts_next_frame_is_found_when_the_last_ones_timing_locked_late(
+    params: WaveformParams, rung: int
+) -> None:
+    """ADR-0095. A burst's frames go back to back, so the next starts where the last one ends.
+    A frame whose timing locks on a later, stronger ray (2 ms on ITU Poor) has its span reach
+    past the next frame's start; the next frame was hidden, and its copy a symbol late taken in
+    its place failed — a sixth of the decodable frames on Poor. A candidate in the last half
+    symbol of a known frame is not inside it."""
+    modem = Modem(params)
+    rng = np.random.default_rng(3)
+    n = modem.rung_payload_bytes(rung)
+    p1, p2 = (rng.integers(0, 256, n, dtype=np.uint8).tobytes() for _ in range(2))
+    f1, f2 = _unit(modem.rung_burst(p1, rung)), _unit(modem.rung_burst(p2, rung))
+    lead, late = 4000, 16
+    x = np.zeros(lead + len(f1) + len(f2) + 12000, dtype=complex)
+    x[lead : lead + len(f1)] += 0.4 * f1
+    x[lead + late : lead + late + len(f1)] += f1  # the later ray leads
+    x[lead + len(f1) : lead + len(f1) + len(f2)] += f2
+    x += _noise_3k(np.random.default_rng(4), len(x), params.fs_baseband) * 10 ** (-20 / 20)
+    assert [f.payload for f in Modem(params).decode_buffer(x, max_frames=4) if f.ok] == [p1, p2]
+    rx, got = _stream(params, x)
+    first = next(d for d in got if d.ok and d.payload == p1)
+    assert first.frame is not None
+    span_end = modem.rx.frame_span(first.frame.sync)[1]
+    assert span_end > lead + len(f1) + rx.delay_samples, "the first frame's span covers the next"
+    assert [d.payload for d in got if d.ok] == [p1, p2]
 
 
 # ── WAV backend ───────────────────────────────────────────────────────

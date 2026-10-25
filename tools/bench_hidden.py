@@ -1,11 +1,12 @@
 """The hidden-frame bench: whether a weak candidate's span may hide a stronger frame.
 
-The streaming receiver drops an OFDM candidate that starts inside a frame it already knows, so a
-false detection a few tenths of a second before a real frame takes the real frame's place, and
-the real one is never looked at. On the air it hid a header and two answers (reports 16 §3 and
-17 §6). The rule under test (``StreamingReceiver(weak_spans_hide=False)``): a known frame
-acquired under ``TRUSTED_CONFIDENCE`` that has not decoded does not hide a candidate at or over
-it. The plan and its criteria are ``docs/research/hidden-frames/00-plan.md``.
+The streaming receiver drops an OFDM candidate that starts inside a frame it already knows. Until
+ADR-0095 a false detection a few tenths of a second before a real frame took the real frame's
+place, and a burst's next frame was hidden whenever the last one's timing locked a few samples
+late. The model's receiver now runs R3h, the rule the bench chose; this bench rebuilds the rule
+before it (R0) and the rules it rejected in a subclass (``BenchReceiver``), so a later change can
+be measured against all of them. The plan, its criteria and the results are
+``docs/research/hidden-frames/``.
 
     python -I tools/bench_hidden.py field RECORDING.wav [--bandwidth 500] [--block-ms 20]
     python -I tools/bench_hidden.py synth --out m2.csv [--trials 20] [--jobs 4]
@@ -19,7 +20,7 @@ transmissions through the channel and counts the frames each rule loses, the fal
 rule under test adds and the decode attempts; ``noise`` (M4) counts candidates on noise alone.
 Each appends its rows to the CSV as they finish (losses and additions to ``<out>.notes.txt``),
 so a stopped run keeps what it had; ``synth-summary`` and ``traffic-summary`` tabulate a CSV.
-``--rule r2`` puts the offline rule (the stronger candidate wins) under test in place of R1.
+``--rule`` names the rule under test (R3h, the model's own, by default); R0 is the baseline.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ import wave
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,24 +48,49 @@ from aether_model.waveform import NARROW_500, WIDE_2300, WaveformParams
 AUDIO_RATE = 48_000
 
 RULES = ("r0", "r1", "r2", "r0e", "r3", "r0eh", "r3h")
-"""The rules the bench compares (``00-plan.md`` §2, §4a and §4b): R0 as built, R1 under test,
-R2 the offline rule, measured because R1 missed K2; R0e the rule as built with a one-symbol
-guard at a span's end, and R3 R1 with it, measured because every M3 loss was the span's end;
-R0eh and R3h the same with half a symbol, because a one-symbol guard admits the next frame's
-early sidelobe."""
+"""The rules the bench compares (``00-plan.md`` §2, §4a and §4b): R0 the rule before ADR-0095, R1
+the first under test, R2 the offline rule, measured because R1 missed K2; R0e R0 with a
+one-symbol guard at a span's end, and R3 R1 with it, measured because every M3 loss was the span's
+end; R0eh and R3h the same with half a symbol, because a one-symbol guard admits the next frame's
+early sidelobe. R3h is the model's receiver since ADR-0095."""
+
+GUARD_HALVES = {"r0": 0, "r1": 0, "r2": 0, "r0e": 2, "r3": 2, "r0eh": 1, "r3h": 1}
+"""Each rule's guard at a span's end, in half symbols."""
+
+
+class BenchReceiver(StreamingReceiver):
+    """The model's receiver under one of the bench's rules: its span test as the rule has it.
+    R3h is the model's own; the others replace :meth:`_hidden` and :meth:`_inside_decoded`."""
+
+    def __init__(self, params: WaveformParams, rule: str) -> None:
+        if rule not in RULES:
+            raise ValueError(f"no rule {rule!r}")
+        super().__init__(params)
+        self.rule = rule
+        self._end_guard = GUARD_HALVES[rule] * params.symbol_samples // 2
+
+    def _hidden(self, new: Any) -> bool:
+        if self.rule == "r2":
+            start = new.sync.start
+            confidence = new.sync.detect_confidence(self.modem.air)
+            inside = [k for k in self._known() if self._inside(start, k[0], k[1])]
+            return bool(inside) and (
+                any(abs(start - k[0]) < self.p.symbol_samples for k in inside)
+                or any(decoded or known >= confidence for _, _, decoded, known in inside)
+            )
+        if self.rule in ("r0", "r0e", "r0eh"):
+            # whatever the two frames were
+            return any(self._inside(new.sync.start, k[0], k[1]) for k in self._known())
+        return super()._hidden(new)
+
+    def _inside_decoded(self, done: Any) -> bool:
+        if self.rule in ("r0", "r0e", "r0eh"):
+            return False  # nothing inside a known frame was taken to begin with
+        return super()._inside_decoded(done)
 
 
 def receiver(params: WaveformParams, rule: str) -> StreamingReceiver:
-    if rule not in RULES:
-        raise ValueError(f"no rule {rule!r}")
-    return StreamingReceiver(
-        params,
-        weak_spans_hide=rule in ("r0", "r0e", "r0eh"),
-        strongest_wins=rule == "r2",
-        end_guard={"r0e": 2, "r3": 2, "r0eh": 1, "r3h": 1}.get(rule, 0)
-        * params.symbol_samples
-        // 2,
-    )
+    return StreamingReceiver(params) if rule == "r3h" else BenchReceiver(params, rule)
 
 
 @dataclass(frozen=True)
@@ -745,9 +772,9 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--list", action="store_true", help="list every frame the rule under test found")
     f.add_argument(
         "--rule",
-        choices=("r1", "r2", "r0e", "r3", "r0eh", "r3h"),
-        default="r1",
-        help="the rule under test",
+        choices=RULES[1:],
+        default="r3h",
+        help="the rule under test (R0, the rule before ADR-0095, is the baseline)",
     )
     f.set_defaults(run=field)
     s = sub.add_parser("synth", help="M2: a false candidate, then a real frame inside its span")
@@ -758,9 +785,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--jobs", type=int, default=4)
     s.add_argument(
         "--rule",
-        choices=("r1", "r2", "r0e", "r3", "r0eh", "r3h"),
-        default="r1",
-        help="the rule under test",
+        choices=RULES[1:],
+        default="r3h",
+        help="the rule under test (R0, the rule before ADR-0095, is the baseline)",
     )
     s.set_defaults(run=synth)
     sm = sub.add_parser("synth-summary", help="the M2 table from a CSV")
@@ -776,9 +803,9 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--jobs", type=int, default=4)
     t.add_argument(
         "--rule",
-        choices=("r1", "r2", "r0e", "r3", "r0eh", "r3h"),
-        default="r1",
-        help="the rule under test",
+        choices=RULES[1:],
+        default="r3h",
+        help="the rule under test (R0, the rule before ADR-0095, is the baseline)",
     )
     t.set_defaults(run=traffic_cmd)
     ts = sub.add_parser("traffic-summary", help="the M3 table from a CSV")
@@ -793,9 +820,9 @@ def main(argv: list[str] | None = None) -> None:
     n.add_argument("--jobs", type=int, default=4)
     n.add_argument(
         "--rule",
-        choices=("r1", "r2", "r0e", "r3", "r0eh", "r3h"),
-        default="r1",
-        help="the rule under test",
+        choices=RULES[1:],
+        default="r3h",
+        help="the rule under test (R0, the rule before ADR-0095, is the baseline)",
     )
     n.set_defaults(run=noise_cmd)
     args = ap.parse_args(argv)

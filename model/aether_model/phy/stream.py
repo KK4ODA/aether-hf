@@ -42,7 +42,9 @@ ComplexArray = NDArray[np.complex128]
 TRUSTED_CONFIDENCE = 1.3
 """How far over its threshold acquisition must see a frame to be believed on its own: the
 daemon's ``DETECT_CONFIDENCE_TRUSTED``. Every frame that decoded on the air cleared it, and the
-noise triggers sat just above the threshold."""
+noise triggers sat just above the threshold (at most 1.07 in half an hour of noise per air on the
+hidden-frame bench). A known frame under it that has not decoded hides no candidate at or over it
+(ADR-0095)."""
 
 
 @dataclass
@@ -66,10 +68,6 @@ class StreamingReceiver:
         max_buffer_s: float = 7.0,
         blank_impulses: bool = True,
         blanker: NoiseBlanker | None = None,
-        *,
-        weak_spans_hide: bool = True,
-        strongest_wins: bool = False,
-        end_guard: int = 0,
     ) -> None:
         self.p = params
         self.modem = Modem(params, blank_impulses=False)  # blanking happens here, once
@@ -86,24 +84,14 @@ class StreamingReceiver:
         self._searched_abs = 0  # everything before this absolute index has been searched
         self._pending: list[_Pending] = []
         self._done: list[_Done] = []  # frames already handed out
-        self.weak_spans_hide = weak_spans_hide
-        """Whether a candidate starting inside a known frame's span is dropped whatever the two
-        were (the rule as built). ``False`` is the rule under test on the hidden-frame bench
-        (``docs/research/hidden-frames/``): a known frame acquired under
-        :data:`TRUSTED_CONFIDENCE` that has not decoded — still pending, or handed out and
-        failed — does not hide a candidate at or over it. A phantom's span hid a real header or
-        answer on the air three times (report 17 §6). Bench-only until the bench is judged."""
-        self.strongest_wins = strongest_wins
-        """The bench's second rule (R2, measured because R1 missed K2): a known frame that has not
-        decoded hides only a candidate no stronger than itself, whatever either's confidence —
-        what :meth:`Modem.decode_buffer` does, taking the strongest first. Overrides
-        :attr:`weak_spans_hide`. Bench-only."""
-        self.end_guard = end_guard
-        """Samples at the end of a known frame's span in which a candidate is not inside it. A
-        burst's frames go back to back, so the next frame starts where this one ends; when this
-        one's timing locked on a later ray (2 ms on ITU Poor) the next one's start falls inside
-        its span and is hidden, and its copy a symbol late is taken and fails. Found by the
-        hidden-frame bench's traffic runs (``docs/research/hidden-frames/``). Bench-only."""
+        self._end_guard = params.symbol_samples // 2
+        """Samples at the end of a known frame's span in which a candidate is not inside it
+        (ADR-0095). A burst's frames go back to back, so the next frame starts where this one
+        ends; when this one's timing locked on a later ray (2 ms on ITU Poor, 7 on NVIS) the
+        next one's start falls inside its span, is hidden, and its copy a symbol late is taken
+        and fails. Longer than any delay spread a timing error comes from, shorter than the
+        symbol by which the next frame's early sidelobe leads it: a whole symbol lets that
+        sidelobe in where a header ends at its first data frame."""
         self._tone_keep = max(k.samples for k in self.modem.air.tone_data) + 4000
         """Samples always kept for the tone floor: its longest frame and half a second — a
         tone frame is taken a symbol after it ends and refined against its own samples."""
@@ -165,11 +153,7 @@ class StreamingReceiver:
                     False,
                     pend.sync.detect_confidence(self.modem.air),
                 )
-                inside_decoded = (not self.weak_spans_hide or self.strongest_wins) and any(
-                    d.decoded
-                    and d.start - self.p.symbol_samples < done.start < d.end - self.end_guard
-                    for d in self._done
-                )
+                inside_decoded = self._inside_decoded(done)
                 self._done = [*self._done, done][-20:]
                 if inside_decoded:
                     continue  # taken beside a weak frame that has since decoded: not a frame
@@ -206,24 +190,30 @@ class StreamingReceiver:
             self._buf_abs0 += drop
         return sorted(out, key=lambda d: d.start)
 
-    def _hidden(self, new: _Pending) -> bool:
-        """Whether ``new`` duplicates, or starts inside, a frame already pending or handed out
-        that hides it (:attr:`weak_spans_hide`)."""
-        start = new.sync.start
-        known = [
-            (p.sync.start, p.end_abs, None, p.sync.detect_confidence(self.modem.air))
+    def _inside(self, start: int, known_start: int, known_end: int) -> bool:
+        """Whether a candidate starting at ``start`` lies inside a known frame: from a symbol
+        before its start (its own early sidelobe, a duplicate) to half a symbol before its end
+        (the next frame of a burst, its timing a delay spread apart, is not inside)."""
+        return known_start - self.p.symbol_samples < start < known_end - self._end_guard
+
+    def _known(self) -> list[tuple[int, int, bool, float]]:
+        """Every frame pending or handed out: start, end, whether it decoded, its confidence."""
+        return [
+            (p.sync.start, p.end_abs, False, p.sync.detect_confidence(self.modem.air))
             for p in self._pending
         ] + [(d.start, d.end, d.decoded, d.confidence) for d in self._done]
-        inside = [k for k in known if k[0] - self.p.symbol_samples < start < k[1] - self.end_guard]
-        confidence = new.sync.detect_confidence(self.modem.air)
-        if inside and self.strongest_wins:
-            return any(abs(start - k[0]) < self.p.symbol_samples for k in inside) or any(
-                decoded or known_confidence >= confidence
-                for _, _, decoded, known_confidence in inside
-            )
-        if not inside or self.weak_spans_hide:
-            return bool(inside)
-        if confidence < TRUSTED_CONFIDENCE:
+
+    def _hidden(self, new: _Pending) -> bool:
+        """Whether ``new`` duplicates, or starts inside, a frame already pending or handed out
+        that hides it (ADR-0095). A frame that decoded, or that acquisition trusts, hides
+        everything inside it; one under :data:`TRUSTED_CONFIDENCE` that has not decoded hides
+        only what is no more trusted than itself, and its own duplicates — a false detection's
+        span had hidden real frames behind it on the air five times."""
+        start = new.sync.start
+        inside = [k for k in self._known() if self._inside(start, k[0], k[1])]
+        if not inside:
+            return False
+        if new.sync.detect_confidence(self.modem.air) < TRUSTED_CONFIDENCE:
             return True
         # a duplicate of a frame already known is hidden however weak it was
         if any(abs(start - k[0]) < self.p.symbol_samples for k in inside):
@@ -231,3 +221,8 @@ class StreamingReceiver:
         return any(
             decoded or confidence >= TRUSTED_CONFIDENCE for _, _, decoded, confidence in inside
         )
+
+    def _inside_decoded(self, done: _Done) -> bool:
+        """Whether a frame about to be decoded starts inside one that decoded: it was taken
+        beside a weak frame (:meth:`_hidden`) that turned out real, so it is not a frame."""
+        return any(d.decoded and self._inside(done.start, d.start, d.end) for d in self._done)
