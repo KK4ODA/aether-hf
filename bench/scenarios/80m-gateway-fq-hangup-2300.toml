@@ -1,0 +1,32 @@
+name = "80m-gateway-fq-hangup-2300"
+description = """The end of a Winlink check-in through an RMS Trimode gateway, as on 2026-10-25
+03:41Z (ADR-0096 §4: 80 m, 2300 Hz, about 0 dB both ways, KK4ODA's mobile calling KK4ODA-1): the
+gateway's welcome, the client's B2F reply with nothing to send, the gateway's FQ. The gateway
+then hangs up once the modem says the FQ is sent, the way a Trimode gateway's end reads under
+VARA. On the air it did not, and Winlink Express forced the disconnect 30 s later. The transfer
+column's hang-up time and each program's host.log say where the end's seconds go."""
+tags = ["80m", "host", "gateway"]
+bandwidth = 2300
+seconds = 900
+seed = 251
+
+[stations.a]
+callsign = "KK4ODA"
+host = true
+[stations.b]
+callsign = "KK4ODA-1"
+host = true
+
+[path]
+profile = "moderate"
+snr_db = 1.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a client", "host b trimode", "host-connect", "host-reply 225", "host-send 108", "host-reply 3", "host-hangup b"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true

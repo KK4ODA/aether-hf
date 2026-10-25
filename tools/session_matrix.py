@@ -345,6 +345,9 @@ class Host:
         self.cmd.settimeout(None)
         self.data.settimeout(None)
         self.lines: list[str] = []
+        # every line both ways and every data write and read, at its air time, as Trimode's
+        # VARA log keeps them ("In:"/"Out:"): written beside the station's files at the end
+        self.log: list[tuple[float, str, str]] = []
         self.received = 0
         self.calls_from = 0  # CONNECTEDs heard before a `host-call`
         self.listening = False
@@ -385,7 +388,22 @@ class Host:
     def send(self, line: str) -> None:
         if line.startswith("LISTEN"):
             self.listening = line != "LISTEN OFF"
+        self.note("Out:", line)
         self.cmd.sendall((line + "\r").encode())
+
+    def write(self, payload: bytes) -> None:
+        """Bytes on the data port, as a program hands the modem its data."""
+        self.note("Data out:", f"{len(payload)} bytes")
+        self.data.sendall(payload)
+
+    def note(self, what: str, line: str) -> None:
+        with self.lock:
+            self.log.append((self.run.air_s(), what, line))
+
+    def save_log(self, path: Path) -> None:
+        with self.lock:
+            rows = [f"{t:9.2f} {what} {line}" for t, what, line in self.log]
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     def _read_cmd(self) -> None:
         buffer = b""
@@ -400,6 +418,7 @@ class Host:
             while b"\r" in buffer:
                 raw, buffer = buffer.split(b"\r", 1)
                 line = raw.decode(errors="replace").strip()
+                self.note("In:", line)
                 with self.lock:
                     self.lines.append(line)
                 if line.startswith("CONNECTED"):
@@ -433,6 +452,7 @@ class Host:
                 return
             if not chunk:
                 return
+            self.note("Data in:", f"{len(chunk)} bytes")
             self.received += len(chunk)
 
     def _scan(self) -> None:
@@ -667,7 +687,7 @@ def step(run: Run, text: str) -> bool:
         )
         if not run.connected:
             return False
-        hb.data.sendall(b"Report: -03 dB")
+        hb.write(b"Report: -03 dB")
         ok = run.wait(
             "ping report",
             lambda: ha.received - before >= 14,
@@ -707,7 +727,7 @@ def step(run: Run, text: str) -> bool:
             tx, rx = rx, tx
         before = rx.received
         began = run.air_s()
-        tx.data.sendall(incompressible(n, salt=n + len(run.transfers)))
+        tx.write(incompressible(n, salt=n + len(run.transfers)))
         ok = run.wait(
             f"{word} {n}",
             lambda: rx.received - before >= n,
@@ -728,6 +748,31 @@ def step(run: Run, text: str) -> bool:
             lambda: ha.heard("DISCONNECTED") > was_a and hb.heard("DISCONNECTED") > was_b,
             120,
         )
+    if word == "host-hangup":
+        # `host-hangup [b]`: a gateway's end of a B2F session as it reads under VARA — after
+        # its `FQ` it hangs up once the modem says the last of its data is sent (Trimode's
+        # "disconnect on confirmed sent"): the first `BUFFER 0` after its last write, then
+        # `DISCONNECT`, and both programs hear `DISCONNECTED`
+        who = arg or "b"
+        h, other = run.hosts[who], run.hosts["a" if who != "a" else "b"]
+
+        def confirmed() -> bool:
+            with h.lock:
+                last = max((i for i, row in enumerate(h.log) if row[1] == "Data out:"), default=-1)
+                return any(row[1:] == ("In:", "BUFFER 0") for row in h.log[last + 1 :])
+
+        if not run.wait("BUFFER 0 after the last write", confirmed, 120):
+            return False
+        was_h, was_o = h.heard("DISCONNECTED"), other.heard("DISCONNECTED")
+        began = run.air_s()
+        h.send("DISCONNECT")
+        ended = run.wait(
+            "hung up",
+            lambda: h.heard("DISCONNECTED") > was_h and other.heard("DISCONNECTED") > was_o,
+            120,
+        )
+        run.transfers.append(f"hang-up {run.air_s() - began:.0f} s" if ended else "hang-up lost")
+        return ended
     if word == "send":
         # queued and left to go: what happens to it is for the steps after to see; `send b N`
         # queues it at the called station
@@ -1050,8 +1095,10 @@ def run_one(
         # step, and the whole shard went with it — its other runs and its CSV (nightly 34)
         run.faults.append(f"harness: {type(error).__name__}: {error}")
     finally:
-        for host in run.hosts.values():
+        for who, host in run.hosts.items():
             host.close()
+            with contextlib.suppress(OSError):
+                host.save_log(run.dir / who / "host.log")
         if run.channel and run.stalled_at is not None:
             # the daemons are waiting on a channel that will not move: let them go first
             run.channel.terminate()

@@ -127,9 +127,13 @@ and a `CONNECTED` it is told while not listening is a failure (ADR-0051), and `h
 VarAC-like program (`CHAT ON`, its `-T` alias in `MYCALL`, no `CWID`). Then `host-connect`
 (a's program calls b), `host-ping` (VarAC's ping: a `CONNECT` to b's `-T` alias, a 14-byte report
 back, a's `DISCONNECT`), `host-send N` / `host-reply N` (bytes over the data ports, a → b and
-b → a) and `host-disconnect` (a's program's `DISCONNECT`; both told `DISCONNECTED`). A program
-told `DISCONNECTED` before its station's closing identifier has gone out is a failure
-(ADR-0075).
+b → a), `host-disconnect` (a's program's `DISCONNECT`; both told `DISCONNECTED`) and
+`host-hangup [b]` (the program hangs up once the modem says its last data is sent, the first
+`BUFFER 0` after its last write, as a gateway does after its `FQ`; the transfer column says how
+long the end took). A program told `DISCONNECTED` before its station's closing identifier has
+gone out is a failure (ADR-0075). Each program's lines both ways, and its data port's writes and
+reads, are kept at their air times in `<run>/<station>/host.log`, laid out like RMS Trimode's VARA
+log (`In:`/`Out:`), so a run reads beside a real program's log.
 
 **More stations** (`[stations.c]`, `[stations.d]`, …: other clients of the gateway `b`). Each
 receiver hears its main peer — `b` for a client, `a` for `b` — through the path with its noise,
