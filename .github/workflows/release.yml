@@ -410,12 +410,23 @@ jobs:
       # The beta channel's endpoint is one rolling release that only ever holds the newest
       # beta's manifest, so a beta installation finds the next beta and a stable one never
       # sees it: stable reads `releases/latest`, which GitHub keeps clear of prereleases.
+      # Two tags pushed together build side by side, so an older beta's run can finish last:
+      # it leaves the channel alone (tools/channel_order.py).
       - name: Point the beta channel at this release
         if: env.CHANNEL == 'beta' && hashFiles('dist/latest.json') != ''
         run: |
           gh release view channel-beta > /dev/null 2>&1 \
             || gh release create channel-beta --prerelease --title "Beta channel" \
                  --notes "The updater manifest for the beta channel. The releases themselves are the vX.Y.Z-beta.N tags."
+          rm -rf channel-now
+          gh release download channel-beta --pattern latest.json --dir channel-now 2>/dev/null || true
+          status=0
+          python tools/channel_order.py dist/latest.json channel-now/latest.json || status=$?
+          if [ "$status" -eq 1 ]; then
+            echo "::notice::the beta channel already offers a newer beta; it stays as it is"
+            exit 0
+          fi
+          [ "$status" -eq 0 ] || exit "$status"
           gh release upload channel-beta dist/latest.json --clobber
           # a manifest is a promise: every URL in it must already resolve, or a beta
           # installation is offered an update it cannot download
