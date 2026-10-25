@@ -600,7 +600,7 @@ class OuterLoopController(RateController):
         self._index = self.modes.index(self.first_mode(snr_db))
 
 
-CONTROLLERS = ("current", "delivery", "olla", "delivery-s")
+CONTROLLERS = ("current", "delivery", "olla", "delivery-s", "c1")
 """The controllers :attr:`~aether_model.link.granted.GrantConfig.controller` names."""
 
 

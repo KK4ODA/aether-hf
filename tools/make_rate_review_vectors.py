@@ -35,8 +35,8 @@ from aether_model.link.rate_review import (
 )
 from aether_model.link.sim import TwoStationSim
 
-CONTROLLERS = ("olla", "delivery", "delivery-s")
-"""The prototypes the port has: C2, C1, and C1 at the sender."""
+CONTROLLERS = ("olla", "delivery", "delivery-s", "c1")
+"""The prototypes the port has: C2, C1, C1 at the sender, and C1 in both roles (ADR-0094)."""
 TRACED = ("olla", "delivery")
 """Those traced alone (C1 at the sender is C1's controller, fed by the sender's copies)."""
 

@@ -368,8 +368,9 @@ class GrantConfig:
     rate: dict[str, float | int | None] = field(default_factory=dict)
     controller: str = "current"
     """Bench only: which rate controller the station runs — the current one, or a prototype of
-    the rate controller's review (:mod:`aether_model.link.rate_review`). :attr:`rate` overrides
-    its parameters either way."""
+    the rate controller's review (:mod:`aether_model.link.rate_review`): ``c1`` is ADR-0094's,
+    C1 choosing this station's own data rung and C1 giving the advice for the other's.
+    :attr:`rate` overrides its parameters either way."""
     initial_mode: int = 0
     max_mode: int = 19
     ceiling: int | None = None
@@ -755,7 +756,7 @@ class GrantedEngine:
         self._last_rx_mode: int | None = None
         self._sender: DeliveryController | None = (
             self._delivery_controller(DeliveryController)
-            if self.cfg.controller == "delivery-s"
+            if self.cfg.controller in ("delivery-s", "c1")
             else None
         )
         """C1-S (the rate controller's review): this station's own choice of the rung its data
@@ -1616,7 +1617,9 @@ class GrantedEngine:
             floor["echo_limit"] = dict(self.timing.echo_limit)
         if self.cfg.controller not in CONTROLLERS:
             raise ValueError(f"no rate controller {self.cfg.controller!r}")
-        if self.cfg.controller == "delivery":
+        if self.cfg.controller in ("delivery", "c1"):
+            # the advice in every control frame: C1's choice for the frames received here
+            # (ADR-0094 §2 item 6)
             return self._delivery_controller(DeliveryController)
         if self.cfg.controller == "olla":
             return self._delivery_controller(OuterLoopController)

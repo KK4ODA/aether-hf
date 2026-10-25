@@ -65,12 +65,15 @@ def test_the_switch_builds_the_controller_it_names() -> None:
         "delivery": DeliveryController,
         "olla": OuterLoopController,
         "delivery-s": RateController,  # the receiver's advice is the current controller's
+        "c1": DeliveryController,  # ADR-0094: the advice is C1's too
     }
     for name, kind in kinds.items():
         a, _ = _pair(WIDE, name)
         assert type(a.rate) is kind, name
-    a, _ = _pair(WIDE, "delivery-s")
-    assert isinstance(a._sender, DeliveryController)
+    for name in ("delivery-s", "c1"):
+        a, _ = _pair(WIDE, name)
+        assert isinstance(a._sender, DeliveryController), name
+        assert a._sender is not a.rate, name
     with pytest.raises(ValueError, match="no rate controller"):
         _pair(WIDE, "nonesuch")
 

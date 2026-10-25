@@ -290,6 +290,9 @@ pub enum Controller {
     /// say of its copies, the other station's recommendation advice; a try is one new frame of
     /// a transmission at the rung above.
     DeliveryS,
+    /// ADR-0094: C1 in both roles — at the sender, as [`Controller::DeliveryS`], and for the
+    /// advice in every control frame, as [`Controller::Delivery`].
+    C1,
 }
 
 /// The rate controller in use.
@@ -1221,7 +1224,8 @@ fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
         Controller::Current | Controller::DeliveryS => {
             Rate::Current(rate_controller_for(timing, config.rate))
         }
-        Controller::Delivery => Rate::Delivery(delivery_for(timing)),
+        // the advice in every control frame: C1's choice for the frames received here
+        Controller::Delivery | Controller::C1 => Rate::Delivery(delivery_for(timing)),
         Controller::Olla => {
             // as the model builds it: the air's table, or the wide one's
             let thresholds = if timing.mode_threshold_db.is_empty() {
@@ -1424,8 +1428,8 @@ impl GrantedEngine {
         self.rate = rate_for(&self.timing, &self.config);
         self.asked = None;
         self.last_rx_mode = None;
-        self.sender =
-            (self.config.controller == Controller::DeliveryS).then(|| delivery_for(&self.timing));
+        self.sender = matches!(self.config.controller, Controller::DeliveryS | Controller::C1)
+            .then(|| delivery_for(&self.timing));
         self.price_controllers();
         self.sent_copies.clear();
         self.rx_base = 0;
