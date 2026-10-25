@@ -28,7 +28,7 @@ The two stations in this guide:
 |---|---|---|
 | Where | at home, nobody at the radio | the vehicle, the operator at the radio |
 | Programs | Aether, RMS Trimode | Aether, Winlink Express |
-| Callsign | the station's own, `KK4ODA-1` here | the plain registered callsign, `KK4ODA` |
+| Callsign | Site Setup the base callsign `KK4ODA`; the channel the station's own, `KK4ODA-1` (§2.2) | the plain registered callsign, `KK4ODA` |
 | Control (Setup step 1) | **Automatic** | **Local** |
 | Who keys the radio | Aether — CAT, a serial line, a CM108 pin, rigctld or FLRig | Aether |
 | Bandwidth (Setup step 4) | 2300 Hz | 2300 Hz |
@@ -61,13 +61,18 @@ VARA's, on the same two TCP ports.
 * The client's callsign is the **plain registered one**, with its password. No SSID in Winlink
   Express's own callsign: it proposes no messages to one, and the session ends with nothing sent.
 
-### 2.2 The gateway's callsign
+### 2.2 The gateway's callsigns
 
-Trimode's callsign may be the base callsign or an SSID of it. Use the gateway Aether station's
-**own callsign** (`KK4ODA-1` here): Trimode's `MYCALL` reaches the modem and is answered to in any
-case, and one name keeps the heard list, the sessions list, the recordings and the field log
-together. Not the packet gateway's SSID — that is another station on Winlink's map — and not the
-client's.
+Trimode asks for two. Its **Site Setup** takes the **base callsign** (`KK4ODA`): the Winlink
+account it logs in to the CMS with, the one the *Gateway Authorized* flag is on. Each **channel**
+then has a callsign of its own, and that is the one on the air: give it the gateway Aether
+station's **own callsign** (`KK4ODA-1` here). Trimode's `MYCALL` reaches the modem and is answered
+to in any case, and one name keeps the heard list, the sessions list, the recordings and the
+field log together. Not the packet gateway's SSID — that is another station on Winlink's map —
+and not the client's.
+
+Set up this way on 2026-10-24, not yet tried on the air. The host trace (§3.1) shows which
+callsign Trimode hands the modem in `MYCALL`; the client calls that one.
 
 ### 2.3 Frequency and bandwidth
 
@@ -156,8 +161,8 @@ The lines appear on the Log tab and in `aetherd.log`. Turn it off again once the
 Install it from winlink.org (*Sysop software*). Its settings menus name what follows; the words
 differ a little between versions.
 
-* **Site.** The callsign (`KK4ODA-1`), the grid square, the Winlink password of the base
-  callsign, the sysop's details, and the **service code**: the private one alone (§2.4).
+* **Site Setup.** The **base callsign** (`KK4ODA`) and its Winlink password, the grid square,
+  the sysop's details, and the **service code**: the private one alone (§2.4).
 * **Modes.** VARA HF only. No Pactor, ARDOP, Robust Packet or VARA FM.
 * **VARA HF.** TCP host `127.0.0.1`, command port `8300` — the data port is the next number up,
   as with VARA. Channel bandwidth **2300 Hz**; leave *accept 500 Hz connections* off for this
@@ -176,15 +181,16 @@ differ a little between versions.
   The first two have not been tried; the bench ran the third. Trimode closes what it launched
   when it exits — under the second way that is the panel, and the modem goes on running; the
   next Trimode start attaches to it again.
-* **Channel.** One channel: the dial frequency (3.590 MHz), VARA HF, 2300 Hz. No scanning
-  schedule.
+* **Channel.** One channel, with its own callsign `KK4ODA-1` (§2.2), the dial frequency
+  (3.590 MHz), VARA HF, 2300 Hz. No scanning schedule.
 * **Radio control: none.** Aether holds the radio's CAT port and keys the radio; Trimode changes
   no frequency. Set the dial from Aether's Session tab.
 * **RMS Relay.** Not needed: Trimode forwards to the CMS itself. Leave it off.
 * Session and daily-usage limits: the defaults.
 
-What Trimode says to Aether when it attaches (the Log tab, with the trace on): `MYCALL KK4ODA-1`,
-`BW2300`, `PUBLIC ON`, `CWID ON`, then `LISTEN ON` and `LISTEN OFF` about every 3.5 s. The
+What Trimode says to Aether when it attaches (the Log tab, with the trace on): `MYCALL` with the
+channel's callsign, `BW2300`, `PUBLIC ON`, `CWID ON`, then `LISTEN ON` and `LISTEN OFF` about
+every 3.5 s. The
 cycling is Trimode scanning its one channel, and it is normal: Aether answers a call only while
 `LISTEN` is on, and holds the `CONNECTED` for Trimode's next listening window, so that it is not
 missed in the half second Trimode is deaf (ADR-0051). The header's chip reading *host program ·
