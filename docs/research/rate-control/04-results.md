@@ -1013,3 +1013,34 @@ median moved a point the wrong way.
 
 The dip and the climb's pace are what separate the candidate from the per-scenario guards; pooled
 it beats the current controller everywhere it was measured.
+
+### 3.26 Gate 5: C1 in both roles on the harness (2026-10-25)
+
+ADR-0094 §5: the pair is new — under `delivery-s` the advice in every control frame was the current
+controller's — so `c1` (`e936039`, C1 at the sender and C1 for the advice) was judged before it
+becomes the default. The current's arms are §3.25's (the daemon's code differs only in the
+switch). K1/K3 six draws, K2/K4 every scenario × 3 draws, K5 the `c1` arm:
+
+| criterion | C1 at the sender, the current's advice (§3.25) | C1 in both roles | verdict |
+|---|---|---|---|
+| K1(a), six draws (line +19.41 %) | +27.85 % | +30.53 % | fails |
+| K1(b), six draws | lowest 0.88 | **`80m-nvis-disturbed-500` 0.76** | **fails** |
+| K2, pooled air | ×0.995 | **×1.004** | **fails** |
+| K2, `scenario_trend.py` | 2 slower | failing `80m-agc-carrier-outside-500`, `80m-leave-together-500`, `80m-trimode-gateway-client-vanishes-500` (each 2/3); slower `80m-nvis-disturbed-500`, `80m-nvis-evening-500`, `80m-slow-machine-500` | fails |
+| K3, six draws | 3, 1, 0, 1, 0, 0 | 2, 1, 0, 2, 1, 0 | fails, two draws |
+| K4, completion | 180 of 180 | **177 of 180** (and 143 of 144 in the K1 run) | **fails** |
+| K4, radiated overlaps | 0 | 0 | passes |
+| K5 | pooled ×0.896, one point | pooled ×0.894, the same point (2 300 Hz Poor +16 dB ×1.075) | fails at one point |
+| WC4Y's path, six draws | message ×1.05, file ×1.00 | message ×1.18, file ×0.96 | under the line on the file |
+
+Every new loss is a 500 Hz path, most of them ITU NVIS. **Traced** on `80m-leave-together-500`
+draw 0 (its second session, the 1000-byte message not delivered in 300 s of air): the session
+started at OFDM rung 6 from the call's reading and cut blocks 0–5 there; from 33 s the sender's
+own C1 was on the floor (every new block was cut at rungs 0–2), but blocks 0–5 went fourteen copies
+over 200 s at OFDM rungs 6 and 5 — 78 frames, 23 never detected, 22 bytes delivered. A stuck block
+is re-encoded only onto a rung under the **advice** (`recommendation < rec.mode`, ADR-0085), and
+the receiver's C1 advised rung 5 from 65 to 151 s at readings of −3 to +2 dB — the optimism
+§3.8 found in C1 at the receiver on these paths; at 151 s the advice fell to rung 2 and the
+blocks were split onto the floor at 208 s (ADR-0086's patience). Under the current controller's
+advice — the floor on NVIS, its learned margin — the same blocks came down after four copies. The
+failure is the advice deciding the sender's stuck frames, not the sender's own choice.
