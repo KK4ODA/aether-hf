@@ -28,6 +28,7 @@ mod aside;
 mod close;
 mod logs;
 mod signal;
+mod stand_in;
 mod update;
 
 use std::{
@@ -119,7 +120,30 @@ fn bring_up_the_window(app: &tauri::AppHandle, _args: Vec<String>, _cwd: String)
     }
 }
 
+/// The daemon this window looks after: one it started, or why it could not, or — whether it
+/// adopted — one already listening that runs from this installation. That one is ours to look
+/// after too: the first two updates after a relaunch both failed on a daemon nobody owned.
+fn start_or_adopt(resources: Option<&std::path::Path>) -> (Option<Child>, Option<String>, bool) {
+    let (started, failure) = match ensure_daemon(resources) {
+        Ok(child) => (child, None),
+        Err(message) => {
+            eprintln!("aether: {message}");
+            (None, Some(message))
+        }
+    };
+    let adopted = started.is_none()
+        && failure.is_none()
+        && daemon_binary_on_port()
+            .is_some_and(|running| daemon_path().is_ok_and(|ours| same_file(&running, &ours)));
+    (started, failure, adopted)
+}
+
 fn main() {
+    // started by a host program as its VARA program, this is the process it watches and kills,
+    // and nothing of Aether's (`stand_in.rs`)
+    if stand_in::stood_in(reachable, said_it_restarts) {
+        return;
+    }
     let context = tauri::generate_context!();
     aside::clear_beside_program();
     // Where the bundler put the panel: beside the binary on Windows, under /usr/lib on a
@@ -130,19 +154,7 @@ fn main() {
     let launch = Launch {
         resources: resources.clone(),
     };
-    let (started, failure) = match ensure_daemon(resources.as_deref()) {
-        Ok(child) => (child, None),
-        Err(message) => {
-            eprintln!("aether: {message}");
-            (None, Some(message))
-        }
-    };
-    // one already listening that runs from this installation is ours to look after; the
-    // first two updates after a relaunch both failed on a daemon nobody owned
-    let adopted = started.is_none()
-        && failure.is_none()
-        && daemon_binary_on_port()
-            .is_some_and(|running| daemon_path().is_ok_and(|ours| same_file(&running, &ours)));
+    let (started, failure, adopted) = start_or_adopt(resources.as_deref());
     let check_on_start = config_path().is_ok_and(|path| update::preferences(&path).check);
     let updater = update::Updater::new(
         config_path().ok(),
@@ -434,11 +446,15 @@ fn watch_daemon(app: tauri::AppHandle) {
                 if exited.code() == Some(RESTART_EXIT_CODE) {
                     let resources = app.state::<Launch>().resources.clone();
                     match ensure_daemon(resources.as_deref()) {
-                        Ok(child) => {
+                        Ok(Some(child)) => {
                             if let Ok(mut slot) = app.state::<Daemon>().child.lock() {
-                                *slot = child;
+                                *slot = Some(child);
                             }
                         }
+                        // one answers that another start of this program began meanwhile (a
+                        // host program launching it, KK4ODA-1 at 03:45:43): it is this
+                        // window's to look after now, or nobody watches it at all
+                        Ok(None) => app.state::<Daemon>().adopted.store(true, Ordering::SeqCst),
                         Err(message) => explain(&app, &message),
                     }
                 } else {
@@ -529,6 +545,14 @@ impl AdoptedWatch {
         }
         true
     }
+}
+
+/// Whether the daemon's log ends saying it is stopping to be started again: it is on its way
+/// back. Each run writes a fresh log, so the words are the last run's last.
+fn said_it_restarts() -> bool {
+    config_path()
+        .map(|config| tail_of(&daemon_log_path(&config), 12))
+        .is_ok_and(|said| said.contains(RESTART_SAID))
 }
 
 /// Wait, at most `patience`, for the daemon's binary to be free: a process still running

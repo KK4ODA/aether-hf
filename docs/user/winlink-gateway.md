@@ -179,11 +179,14 @@ differ a little between versions.
   3. The bench's way: a stand-in that stays running (Notepad, `C:\Windows\notepad.exe`, will
      do), and Aether started by hand before Trimode.
 
-  The bench ran the third; the first ran on the air on 2026-10-25. Trimode closes what it
-  launched when it exits — under the second way that is the panel, and the modem goes on
-  running; the next Trimode start attaches to it again. When a command goes unanswered Trimode
-  "restarts VARA": it launches the program again, so Aether's window comes forward, and opens
-  the ports again. Aether serves the new connection (the Log tab says *replaces it*).
+  The bench ran the third; the first ran on the air on 2026-10-25. Trimode starts the program
+  as `aether-hf.exe TCPIP 127.0.0.1 <port>`, and to restart "VARA" it kills what it started and
+  starts it again. Since 0.2.0-beta.125 Aether started that way is a stand-in with no window: it
+  starts Aether only if no modem is running, and stays while the modem runs, so Trimode's
+  restarts no longer close Aether's window or bring it forward (ADR-0097). Before that, each
+  restart closed the window and opened another. Closing Aether while Trimode runs ends the
+  stand-in a minute later, and Trimode starts Aether again, as it would VARA. When Trimode
+  opens the ports again, Aether serves the new connection (the Log tab says *replaces it*).
 * **Channel.** One channel, with its own callsign `KK4ODA-1` (§2.2), the dial frequency
   (3.590 MHz), VARA HF, 2300 Hz. No scanning schedule.
 * **Radio control: none.** Aether holds the radio's CAT port and keys the radio; Trimode changes
@@ -277,7 +280,8 @@ gateway being open to the public, nothing to do with the service code; Aether an
 | What you see | Where to look |
 |---|---|
 | Winlink Express cannot reach the TNC | Aether running? *Host programs* on, port 8300, saved? Another program on 8300? |
-| Trimode says the VARA program stopped, or keeps launching it | Trimode's log: `Restart Vara` after `Vara command wasn't acknowledged` is Trimode giving up on a command; Aether's Log tab shows each new connection (*replaces it*). Before 0.2.0-beta.125 the second connection was refused with `WRONG` until Trimode was restarted. Otherwise the program path (§3.2): try the next of the three ways |
+| Trimode says the VARA program stopped, or keeps launching it | Trimode's log: `Restart Vara` after `Vara command wasn't acknowledged` is Trimode giving up on a command; Aether's Log tab shows each new connection (*replaces it*). Before 0.2.0-beta.125 the second connection was refused with `WRONG` until Trimode was restarted, and each restart closed Aether's window and opened another. Otherwise the program path (§3.2): try the next of the three ways |
+| Aether's window closes when Winlink Express closes | Winlink Express's *auto-launch* is on and it started Aether: it ends what it started. Untick the launch in its Vara TNC Setup and start Aether yourself (§4.2) |
 | The call goes out and nobody answers (*no response*) | The gateway's dial and bandwidth (the Stations tab and the mismatch banner, at either end); Trimode listening (its window); the gateway's rules badge — *TX blocked* means the dial is outside the sub-band, or the radio's dial is not read (a serial line without *Dial is at*) |
 | *Connected*, then nothing, then the session times out | Trimode's log: `Ignoring CONNECTED while LISTEN=FALSE` or `… in scan state Deaf` is the race 0.2.0-beta.90 and 0.2.0-beta.125 closed (ADR-0051, ADR-0096) — update the gateway; otherwise the Log tab's *host* lines and the host trace (§3.1) say what Trimode was told and when |
 | *Connected* and the session ends with nothing sent | An SSID in Winlink Express's callsign; the message not posted to the outbox |

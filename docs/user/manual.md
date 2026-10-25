@@ -543,6 +543,11 @@ One program at a time uses the host port. If a program connects again, for examp
 restarted its modem, the new connection replaces the old one. The Log tab says so (*host:* lines),
 and says when a program attaches or leaves.
 
+RMS Trimode starts its modem itself and, to restart it, closes what it started. When Trimode
+starts Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no
+longer closes Aether's window. Winlink Express also closes the program it started: turn off its
+automatic launch and start Aether yourself.
+
 For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** and see
 [KISS programs](kiss.md).
 

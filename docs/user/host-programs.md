@@ -88,8 +88,10 @@ PTT **off**.
   RMS gateway that runs Aether, its callsign and dial entered by hand. Aether cannot reach a
   VARA RMS gateway — and an Aether gateway must never be listed as a VARA one.
 * **A plain registered callsign**: Winlink Express proposes nothing to an SSID.
-* *Vara HF* setup: the TNC path is Aether's application (above), with or without auto-launch;
-  host `127.0.0.1`, port `8300`.
+* *Vara HF* setup: the TNC path is Aether's application (above), host `127.0.0.1`, port
+  `8300`. Leave its automatic launch off and start Aether yourself: Winlink Express ends the
+  TNC it started when it closes, and with the launch on that was Aether's window (the truck's
+  laptop, 2026-10-25).
 * The bandwidth is Winlink Express's session setting: Aether moves to it when it is asked, and
   runs 2300 Hz for Winlink Express's widest, 2750.
 * Winlink Express keys the radio itself only when its *Radio Setup* names a PTT port: it then
