@@ -238,3 +238,7 @@ As `00-plan.md` §5: an ADR; the model's rule; the port's `known()` the same, wi
 in both suites (a weak candidate before a real frame; a burst whose first frame's timing is late
 by the delay spread); the field recordings through the port before and after; the scenario
 harness; then a beta. No wire change.
+
+Done (2026-10-25): the port's replays (ADR-0095 §4: 850 → 859 frames, none lost) and the harness
+(§5: 120 of 120 runs on each daemon, air −4.3 %, one radiated overlap after that the count
+reading caused, not the rule).

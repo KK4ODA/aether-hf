@@ -102,8 +102,32 @@ than this change.
 
 ## 5. On the scenario harness
 
-Two draws of all 60 scenarios on each daemon, before and after, are running; their numbers
-follow in this section.
+Two draws of all 60 scenarios (`--seeds 2`) on each daemon, before (`6a82774`) and after:
+
+* **120 of 120 runs pass on both.** Air time 33 524 → 32 084 s (−4.3 %): the 500 Hz scenarios
+  −5.4 %, the 2300 Hz ones −0.9 %. The median scenario is unchanged, and so are the Tests'
+  rates (message ×1.00, file ×1.00 over 19 Test scenarios). Most of the 2300 Hz scenarios ran
+  the same air to the tenth of a second on both daemons: nothing in them was hidden.
+* Against the baseline's ranges (`scenario_trend.py`), five more scenarios are faster than any
+  baseline run, all at 500 Hz: `20m-dx-500` (air 414 → 317 s), `80m-poor-500-pactor-signalink`
+  (330 → 195 s), `80m-winlink-exchange-500` (301 → 205 s), and the Tests' rates of
+  `80m-lopsided-acks-500` and `80m-slow-machine-500`. None is slower. Both daemons read
+  `80m-thunderstorm-agc-2300`'s message rate as slower than the baseline at the same 311 bit/s,
+  so that one predates this change. The baseline stays: being faster is not a fault, and a
+  baseline takes three draws.
+* **Radiated overlaps: none before, one after**, 0.32 s in `80m-flutter-500` (seed 1021). The
+  stream rule did not cause it. The master's header did not decode at the slave; its first three
+  data frames each said "3 or more follow" and the fourth, decoded on its own at a reported
+  −5 dB, said 1 where 2 were sent. The slave took the transmission's end from that count, one
+  frame early, and its answer went over the master's last frame. The frame was found at its true
+  start, where the rule as built would also have found it, and the count comes from the PHY's
+  chip phase, which this change does not touch. A count read wrong from a frame that decoded on
+  its own is rare: none in 9 984 such frames on both daemons' runs, none in 1 238 on the model's
+  flutter at +6 to +12 dB (OFDM mode 7 at 500 Hz, the scenario's rung). Ten reruns of the draw on
+  each daemon did not repeat it. The frames before it had already said the transmission ran at
+  least to its true end. A rule that never takes an end earlier than such a bound would have kept
+  the slot here. That is a protocol rule (R2 in `docs/research/link-architecture/04-formal-spec.md`),
+  so it is left to the author.
 
 ## 6. Consequences
 

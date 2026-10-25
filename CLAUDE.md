@@ -2383,7 +2383,16 @@ are gone from the receiver and `bench_hidden.py` rebuilds every rule it measured
 `BenchReceiver` (R0 the rule before), and `TRUSTED_CONFIDENCE` is `aether_phy::stream`'s, the
 daemon's `DETECT_CONFIDENCE_TRUSTED` that one number. Through the port, 16 recordings: 850 → 859
 decoded, none lost. The bench labels a data frame by its OFDM mode index (`m<n>`), the port's
-replay by its rung.
+replay by its rung. Harness, 60 scenarios × 2 draws on each daemon: 120/120 both, air −4.3 %
+(500 Hz −5.4 %, 2300 Hz −0.9 %), Test rates ×1.00, five 500 Hz scenarios past the baseline's
+fastest run, none slower; one radiated overlap after (`80m-flutter-500` s1021), a count read short
+(1 for 2) on a frame decoded alone in a transmission whose header was lost, while the three frames
+before it had said "3 or more" — the engine takes the end from the first decoded count under 3
+(`_slave_data`, `_master_data`) and ignores those bounds; none of 9 984 such counts wrong on the
+harness, none of 1 238 on the model's flutter. A rule keeping the end no earlier than any decoded
+"3 or more" bound is R2's, the author's call. To check counts on the harness, read each
+receiver's own sidecar (a decoded header's count, the data frames' positions after it): the
+stations' clocks differ, so matching against the sender's `sent` by `t_s` mismatches.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
