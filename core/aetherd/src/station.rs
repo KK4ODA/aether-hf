@@ -621,11 +621,12 @@ impl LevelMeter {
 /// threshold set on the statistic's maximum over *noise* implies.
 ///
 /// It gates what an *unconfirmed* acquisition is allowed to do — report an offset, mark
-/// the channel busy, extend the receive window, tell the engine a burst is arriving — and
-/// nothing about what the receiver decodes: every candidate is still pursued, and a frame
-/// that decodes is real whatever its acquisition looked like. Raising the detector's own
-/// threshold is ADR business, because it would cost weak-signal frames that do decode.
-pub const DETECT_CONFIDENCE_TRUSTED: f64 = 1.3;
+/// the channel busy, extend the receive window, tell the engine a burst is arriving. A frame
+/// that decodes is real whatever its acquisition looked like, and raising the detector's own
+/// threshold is ADR business, because it would cost weak-signal frames that do decode. The
+/// receiver's stream holds the same number for which candidates a weak frame not yet decoded
+/// may hide (ADR-0095), so it is one number, the stream's.
+pub const DETECT_CONFIDENCE_TRUSTED: f64 = aether_phy::stream::TRUSTED_CONFIDENCE;
 
 /// The carrier offset worth reporting. It is real when the frame decoded, or when
 /// acquisition itself was confident enough to trust; `None` for a probable noise trigger,

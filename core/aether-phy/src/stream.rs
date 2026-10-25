@@ -20,6 +20,16 @@
 //! The decoded output is the same as [`Modem::decode_buffer`] on the concatenated input, so
 //! real-time behaviour never diverges from the offline model — tests pin that.
 //!
+//! # Which candidates a known frame hides (ADR-0095)
+//!
+//! A candidate that starts inside a frame already known — pending or handed out — is not a
+//! frame of its own: a frame's own data symbols correlate with the preamble, and the lookback
+//! finds the same preamble again. But a frame acquired under [`TRUSTED_CONFIDENCE`] that has
+//! not decoded hides only what is no more trusted than itself and its own duplicates — a false
+//! detection's span had hidden real frames behind it on the air — and the last half symbol of a
+//! known frame's span is not inside it: a burst's next frame starts where the last one ends,
+//! and a frame whose timing locked on a later ray reaches a delay spread past it.
+//!
 //! # Frames, reported early
 //!
 //! [`take_preambles`](StreamingReceiver::take_preambles) reports a frame the moment
@@ -61,12 +71,30 @@ pub struct PendingFrame {
     pub control: bool,
 }
 
+/// How far over its threshold acquisition must see a frame to be believed on its own. Every
+/// frame that decoded on the air cleared it, and the noise triggers sat just above the
+/// threshold (at most 1.07 in half an hour of noise per air on the hidden-frame bench). A
+/// known frame under it that has not decoded hides no candidate at or over it (ADR-0095).
+pub const TRUSTED_CONFIDENCE: f64 = 1.3;
+
 /// An OFDM frame acquisition has located, in absolute sample indices.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Pending {
     sync: FrameSync,
     /// Absolute index one past the frame's last sample.
     end: usize,
+}
+
+/// A frame known to the stream — pending, or handed out and remembered — as the span test
+/// sees it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Known {
+    start: usize,
+    end: usize,
+    /// Whether it decoded; a pending frame has not.
+    decoded: bool,
+    /// Its acquisition's confidence.
+    confidence: f64,
 }
 
 /// Feed it baseband, take frames out.
@@ -82,7 +110,11 @@ pub struct StreamingReceiver {
     buffer_start: usize,
     searched: usize,
     pending: Vec<Pending>,
-    done: VecDeque<(usize, usize)>,
+    done: VecDeque<Known>,
+    /// Samples at the end of a known frame's span in which a candidate is not inside it:
+    /// half a symbol — longer than any delay spread a timing error comes from, shorter than
+    /// the symbol by which the next frame's early sidelobe leads it (ADR-0095).
+    end_guard: usize,
     announced: VecDeque<usize>,
     fresh: Vec<PendingFrame>,
     max_buffer: usize,
@@ -164,6 +196,7 @@ impl StreamingReceiver {
             searched: 0,
             pending: Vec::new(),
             done: VecDeque::new(),
+            end_guard: params.symbol_samples() / 2,
             announced: VecDeque::new(),
             fresh: Vec::new(),
             max_buffer: ((max_buffer_s * params.fs_baseband) as usize).max(tone_keep),
@@ -291,7 +324,7 @@ impl StreamingReceiver {
         let air = self.modem.air();
         for acquisition in &found {
             let frame = self.absolute(acquisition, search_start);
-            if self.known(&frame) {
+            if self.hidden(&frame) {
                 continue; // a duplicate, or inside a frame already known about
             }
             self.pending.push(frame);
@@ -316,6 +349,7 @@ impl StreamingReceiver {
         let seen = self.samples_seen();
         self.pending.sort_by_key(|p| p.sync.start);
 
+        let air = self.modem.air();
         let mut out = Vec::new();
         let mut still = Vec::new();
         for frame in std::mem::take(&mut self.pending) {
@@ -323,24 +357,34 @@ impl StreamingReceiver {
                 still.push(frame);
                 continue;
             }
-            self.done.push_back((frame.sync.start, frame.end));
+            let mut known = Known {
+                start: frame.sync.start,
+                end: frame.end,
+                decoded: false,
+                confidence: frame.sync.detect_confidence(&air),
+            };
+            // taken beside a weak frame that has since decoded: not a frame
+            if !self.inside_decoded(known.start) {
+                let local = FrameSync {
+                    start: frame.sync.start - self.buffer_start,
+                    ..frame.sync
+                };
+                let decoded = self.modem.decode_sync(&self.buffer, &local, None);
+                // A frame that will not demodulate — it ran off the end after all, or its
+                // length does not match the layout — is simply not a frame. Acquisition
+                // occasionally locks onto noise, and there is nothing to report about it.
+                if let Ok(mut decoded) = decoded {
+                    known.decoded = decoded.ok();
+                    if let Received::Ofdm(received) = &mut decoded.frame {
+                        received.sync = frame.sync; // report absolute positions
+                    }
+                    out.push(decoded);
+                    self.frames_decoded += 1;
+                }
+            }
+            self.done.push_back(known);
             if self.done.len() > DONE_MEMORY {
                 self.done.pop_front();
-            }
-            let local = FrameSync {
-                start: frame.sync.start - self.buffer_start,
-                ..frame.sync
-            };
-            let decoded = self.modem.decode_sync(&self.buffer, &local, None);
-            // A frame that will not demodulate — it ran off the end after all, or its
-            // length does not match the layout — is simply not a frame. Acquisition
-            // occasionally locks onto noise, and there is nothing to report about it.
-            if let Ok(mut decoded) = decoded {
-                if let Received::Ofdm(received) = &mut decoded.frame {
-                    received.sync = frame.sync; // report absolute positions
-                }
-                out.push(decoded);
-                self.frames_decoded += 1;
             }
         }
         self.pending = still;
@@ -393,15 +437,53 @@ impl StreamingReceiver {
         }
     }
 
-    /// Whether a frame duplicates, or starts inside, one already pending or handed out.
-    fn known(&self, frame: &Pending) -> bool {
+    /// Whether a candidate starting at `start` lies inside a known frame: from a symbol before
+    /// its start (its own early sidelobe, a duplicate) to half a symbol before its end (the next
+    /// frame of a burst, its timing a delay spread apart, is not inside).
+    fn inside(&self, start: usize, known: &Known) -> bool {
+        known.start.saturating_sub(self.params.symbol_samples()) < start
+            && start + self.end_guard < known.end
+    }
+
+    /// Whether a frame duplicates, or starts inside, one already pending or handed out that
+    /// hides it. A frame that decoded, or that acquisition trusts, hides everything inside
+    /// it; one under [`TRUSTED_CONFIDENCE`] that has not decoded hides only what is no more
+    /// trusted than itself, and its own duplicates.
+    fn hidden(&self, frame: &Pending) -> bool {
+        let air = self.modem.air();
         let symbol = self.params.symbol_samples();
         let start = frame.sync.start;
-        self.pending
+        let inside: Vec<Known> = self
+            .pending
             .iter()
-            .map(|p| (p.sync.start, p.end))
+            .map(|p| Known {
+                start: p.sync.start,
+                end: p.end,
+                decoded: false,
+                confidence: p.sync.detect_confidence(&air),
+            })
             .chain(self.done.iter().copied())
-            .any(|(a, b)| a.saturating_sub(symbol) < start && start < b)
+            .filter(|k| self.inside(start, k))
+            .collect();
+        if inside.is_empty() {
+            return false;
+        }
+        if frame.sync.detect_confidence(&air) < TRUSTED_CONFIDENCE {
+            return true;
+        }
+        // a duplicate of a frame already known is hidden however weak it was
+        if inside.iter().any(|k| start.abs_diff(k.start) < symbol) {
+            return true;
+        }
+        inside
+            .iter()
+            .any(|k| k.decoded || k.confidence >= TRUSTED_CONFIDENCE)
+    }
+
+    /// Whether a frame about to be decoded starts inside one that decoded: it was taken beside
+    /// a weak frame ([`hidden`](Self::hidden)) that turned out real, so it is not a frame.
+    fn inside_decoded(&self, start: usize) -> bool {
+        self.done.iter().any(|d| d.decoded && self.inside(start, d))
     }
 
     /// Report a frame to [`take_preambles`](Self::take_preambles), once per start.
@@ -456,6 +538,176 @@ mod tests {
         }
         out.extend(std::iter::repeat_n((0.0, 0.0), 4000));
         out
+    }
+
+    /// Deterministic complex Gaussian noise against which a unit-power signal is at 0 dB in
+    /// 3 kHz: Box–Muller over a small generator, so a failure repeats.
+    fn noise_3k(n: usize, fs: f64, seed: u64) -> Vec<Complex> {
+        let sigma = (fs / 3000.0 / 2.0).sqrt();
+        let mut state = seed | 1;
+        let mut next = || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let value = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+            ((value >> 11) as f64 / (1u64 << 53) as f64).mul_add(1.0 - 1e-12, 1e-12)
+        };
+        (0..n)
+            .map(|_| {
+                let (u1, u2) = (next(), next());
+                let r = sigma * (-2.0 * u1.ln()).sqrt();
+                let theta = 2.0 * std::f64::consts::PI * u2;
+                (r * theta.cos(), r * theta.sin())
+            })
+            .collect()
+    }
+
+    /// `x` scaled to unit mean power.
+    fn unit(x: &[Complex]) -> Vec<Complex> {
+        let power = x.iter().map(|&(re, im)| re * re + im * im).sum::<f64>() / x.len() as f64;
+        let k = power.sqrt().recip();
+        x.iter().map(|&(re, im)| (re * k, im * k)).collect()
+    }
+
+    /// `x[at..]` += `k`·`y`.
+    fn add(x: &mut [Complex], at: usize, y: &[Complex], k: f64) {
+        for (slot, &(re, im)) in x[at..at + y.len()].iter_mut().zip(y) {
+            slot.0 += k * re;
+            slot.1 += k * im;
+        }
+    }
+
+    /// How far a reported position lags the input: the band filter's group delay. The
+    /// blanker holds samples back but releases them at their own positions.
+    fn lag(rx: &StreamingReceiver) -> usize {
+        rx.delay_samples - rx.blanker_latency()
+    }
+
+    /// Everything a stream hands out over `x`, fed 20 ms at a time as the daemon does.
+    fn stream(params: WaveformParams, x: &[Complex]) -> (StreamingReceiver, Vec<DecodedFrame>) {
+        let mut rx = StreamingReceiver::new(params, 6.0, true);
+        let mut out = Vec::new();
+        for block in x.chunks(160) {
+            out.extend(rx.feed(block));
+        }
+        (rx, out)
+    }
+
+    /// A control frame 0.3 s behind a false detection: two preamble symbols of a control
+    /// frame with nothing after them, `false_db` in 3 kHz, as a noise trigger is to the
+    /// receiver. Returns the stream's input, the frame's payload and where the false one is.
+    fn behind_a_false_detection(
+        params: WaveformParams,
+        false_db: f64,
+    ) -> (Vec<Complex>, Vec<u8>, usize) {
+        let mut modem = Modem::new(params, true);
+        let payload: Vec<u8> = (0..modem.payload_bytes(None))
+            .map(|i| (i as u8).wrapping_mul(37).wrapping_add(11))
+            .collect();
+        let real = unit(&modem.control_burst(&payload, 0).expect("encode"));
+        let cut = unit(&modem.control_burst(&[1], 0).expect("encode"));
+        let cut = &cut[..2 * params.symbol_samples()];
+        let fs = params.fs_baseband;
+        let (lead, delay) = (6000, (0.3 * fs) as usize);
+        let mut x = noise_3k(lead + delay + real.len() + 12000, fs, 6);
+        add(&mut x, lead, cut, 10f64.powf(false_db / 20.0));
+        add(&mut x, lead + delay, &real, 10f64.powf(1.0 / 20.0));
+        (x, payload, lead)
+    }
+
+    #[test]
+    fn a_weak_false_detection_does_not_hide_a_frame_inside_its_span() {
+        // ADR-0095: a false detection took the span of a frame not yet decoded, and a real
+        // frame starting inside it was never looked at — a header and four answers on the air,
+        // 0.26–0.47 s behind detections read 1.04–1.11. A known frame under the trusted
+        // confidence that has not decoded hides no candidate at or over it.
+        for (params, false_db) in [(WIDE_2300, -7.5), (crate::waveform::NARROW_500, -9.0)] {
+            let air = Modem::new(params, true).air();
+            let (x, payload, lead) = behind_a_false_detection(params, false_db);
+            let offline: Vec<_> = Modem::new(params, true)
+                .decode_buffer(&x, 4)
+                .into_iter()
+                .filter_map(|d| d.payload)
+                .collect();
+            assert_eq!(offline, vec![payload.clone()], "offline finds the frame");
+            let (rx, got) = stream(params, &x);
+            let symbol = params.symbol_samples();
+            let false_ones: Vec<_> = got
+                .iter()
+                .filter_map(|d| d.frame.ofdm().map(|f| (f, d.ok())))
+                .filter(|(f, _)| f.sync.start.abs_diff(lead + lag(&rx)) < symbol)
+                .collect();
+            assert_eq!(
+                false_ones.len(),
+                1,
+                "{false_db} dB: the false detection is taken"
+            );
+            let (false_one, decoded) = false_ones[0];
+            assert!(!decoded, "{false_db} dB: and fails");
+            let confidence = false_one.sync.detect_confidence(&air);
+            assert!(
+                (1.0..TRUSTED_CONFIDENCE).contains(&confidence),
+                "{false_db} dB: read {confidence}"
+            );
+            let decoded: Vec<_> = got.into_iter().filter_map(|d| d.payload).collect();
+            assert_eq!(
+                decoded,
+                vec![payload],
+                "{false_db} dB: the frame behind it decodes"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bursts_next_frame_is_found_when_the_last_ones_timing_locked_late() {
+        // ADR-0095: a burst's frames go back to back, so the next starts where the last one
+        // ends. A frame whose timing locks on a later, stronger ray (2 ms on ITU Poor) has its
+        // span reach past the next frame's start; the next frame was hidden, and its copy a
+        // symbol late taken in its place failed. The last half symbol of a span is not inside.
+        for (params, rung) in [(WIDE_2300, 8), (crate::waveform::NARROW_500, 7)] {
+            let mut modem = Modem::new(params, true);
+            let n = modem.rung_payload_bytes(rung);
+            let p1: Vec<u8> = (0..n)
+                .map(|i| (i as u8).wrapping_mul(13).wrapping_add(5))
+                .collect();
+            let p2: Vec<u8> = (0..n)
+                .map(|i| (i as u8).wrapping_mul(29).wrapping_add(17))
+                .collect();
+            let f1 = unit(&modem.rung_burst(&p1, rung, 0).expect("encode"));
+            let f2 = unit(&modem.rung_burst(&p2, rung, 0).expect("encode"));
+            let (lead, late) = (4000, 16);
+            let mut x = noise_3k(lead + f1.len() + f2.len() + 12000, params.fs_baseband, 4);
+            for sample in &mut x {
+                sample.0 *= 0.1; // +20 dB
+                sample.1 *= 0.1;
+            }
+            add(&mut x, lead, &f1, 0.4);
+            add(&mut x, lead + late, &f1, 1.0); // the later ray leads
+            add(&mut x, lead + f1.len(), &f2, 1.0);
+            let offline: Vec<_> = Modem::new(params, true)
+                .decode_buffer(&x, 4)
+                .into_iter()
+                .filter_map(|d| d.payload)
+                .collect();
+            assert_eq!(
+                offline,
+                vec![p1.clone(), p2.clone()],
+                "rung {rung}: offline finds both"
+            );
+            let (rx, got) = stream(params, &x);
+            let first = got
+                .iter()
+                .find(|d| d.payload.as_deref() == Some(&p1[..]))
+                .and_then(|d| d.frame.ofdm())
+                .expect("the first frame decodes");
+            let span_end = modem.receiver().frame_span(&first.sync).1;
+            assert!(
+                span_end > lead + f1.len() + lag(&rx),
+                "rung {rung}: the first frame's span covers the next frame's start"
+            );
+            let decoded: Vec<_> = got.into_iter().filter_map(|d| d.payload).collect();
+            assert_eq!(decoded, vec![p1, p2], "rung {rung}: both decode");
+        }
     }
 
     fn payload_for(mode_index: usize, seed: u8) -> Vec<u8> {
