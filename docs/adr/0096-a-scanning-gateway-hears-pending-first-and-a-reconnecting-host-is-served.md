@@ -102,12 +102,24 @@ Trimode restarted would have been serving the newest.
 
 ## 4. Not done, and open
 
-* **The end of a B2F session.** After `FQ` each program waited for the other: Trimode started
-  its disconnect timer, and Winlink Express sent its `DISCONNECT` 30 s after `FQ` reached it —
-  or the operator did. The bench of 2026-10-07 ended a Trimode session within seconds of `FQ`.
-  Which program hangs up after `FQ` under VARA, and what Winlink Express waited for, is for its
-  session log of 03:42–03:44 and a Trimode log of a VARA session to say; nothing here changes
-  until they have.
+* **The end of a B2F session.** After `FQ` each program waited for the other. Winlink
+  Express's own log (the truck's laptop, added 2026-10-25) settles its side: it read `FQ` at
+  03:42:40, ended the B2F session there, and at 03:43:10 logged *Forced disconnect. B2 requested
+  disconnect with break* — it waits 30 s for the gateway to hang up, then sends `DISCONNECT`
+  itself, and again every 8–10 s (*Disconnect timer triggered*) until it hears `DISCONNECTED`.
+  Under VARA the gateway hangs up: in the author's VARA FM session to WD5EMA-15 (2026-10-22)
+  `FQ` came at 00:03:36 and the link was down at 00:03:37, with no disconnect of Winlink
+  Express's. Here Trimode never sent `DISCONNECT` — the gateway's daemon logged no
+  `disconnect` from it, and every call the adapter makes is logged — though its log reads
+  *Starting Vara disconnect on confirmed sent* as it relayed the client's opening lines, then
+  *Starting the disconnect timer* at `FQ` and again when its CMS link closed, 5 s later. What it
+  takes as "confirmed sent" is not in any log: its command log records neither `BUFFER` lines
+  nor its own `DISCONNECT`. The likeliest reading is a check of the modem's `BUFFER` when the
+  CMS link closes, which `FQ`, still 10 s from its acknowledgement then, failed. The next
+  session with `[host] trace = true` at the gateway (`winlink-gateway.md` §3.1) shows every line
+  both ways; nothing here changes until it has. On the bench of 2026-10-07 a whole Trimode
+  session, the disconnect included, took about 35 s at 15 dB: there the gateway did hang up
+  promptly.
 * **Three bytes took 14 s from the gateway to the client**: `FQ` missed the slot being decided
   by 0.1 s and went in the next one, a floor header and a rung-5 frame. The slot's answer is
   decided as soon as what it says is final (ADR-0069 render-ahead); waiting for late payload is
