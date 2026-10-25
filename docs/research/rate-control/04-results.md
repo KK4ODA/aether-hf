@@ -39,8 +39,11 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   the current controller (harness air ×0.995, real-modem session time ×0.896).
 * **Gate 4, decided** (2026-10-25): the author adopted C1 at the sender, with C1 at the receiver
   for the advice (`docs/adr/0094-the-rate-controller-chooses-by-measured-delivery.md`).
-* **Next**: Gate 5 — C1 in both roles as the engine's controller, the port, the harness A/B on
-  the registered criteria (the pair is new), then a beta and the air.
+* **Gate 5** (§3.26, §3.27): C1 in both roles failed the registered criteria on 500 Hz NVIS
+  paths; the stranded frames' bound by the sender's own choice (the author's call) restored
+  completion and pooled air, and a second pass showed the remaining losses are the C1 advice's,
+  not the harness's noise: C1 at the sender trails nothing with today's advice, and trails on
+  three scenarios and the start pair with C1's. The advisor is the author's call.
 
 ## 1. What the engine hands a prototype
 
@@ -1044,3 +1047,53 @@ the receiver's C1 advised rung 5 from 65 to 151 s at readings of −3 to +2 dB �
 blocks were split onto the floor at 208 s (ADR-0086's patience). Under the current controller's
 advice — the floor on NVIS, its learned margin — the same blocks came down after four copies. The
 failure is the advice deciding the sender's stuck frames, not the sender's own choice.
+
+### 3.27 Gate 5: the sender's own choice bounds its stranded frames, and the advice judged twice (2026-10-25)
+
+The author's call on §3.26: a stranded block is re-encoded, or split, below the lower of the
+advice and the sender's own C1 choice when it last read an answer (`c2dfa9f`; ADR-0094 item 6
+amended; the split's guard against silence alone keeps, since no answer is read on a dead band).
+The review's vectors gain `own-choice`, where only the rule delivers anything (1500 bytes against
+none in 900 s). The same runs as §3.26, `c2dfa9f` with `c1` as the default:
+
+| criterion | C1 at the sender, the current's advice (§3.25) | C1 in both roles (§3.26) | with the own-choice bound | verdict |
+|---|---|---|---|---|
+| K1(a), six draws (line +19.41 %) | +27.85 % | +30.53 % | +32.41 % | fails |
+| K1(b), six draws | lowest 0.88 | 0.76 | **0.73** `80m-strong-moderate-500`, 0.79 `80m-nvis-disturbed-500`, 0.80 `80m-slow-machine-500` | **fails** |
+| K2, pooled air | ×0.995 | ×1.004 | **×0.990** | passes |
+| K2, `scenario_trend.py` | 2 slower | 3 failing, 3 slower | 0 failing; slower `80m-floor-top-start-500` (file 77 against 93–104) | fails at one |
+| K3, six draws | 3, 1, 0, 1, 0, 0 | 2, 1, 0, 2, 1, 0 | 3, 0, 1, 3, 3, 0 | fails, three draws |
+| K4, completion; radiated overlaps | 180 of 180; 0 | 177 of 180; 0 | **180 of 180**; 0 | passes |
+| K5 | ×0.896, one point | ×0.894, one point | ×0.894, the same point (the rule never fires on the link bench) | fails at one point |
+| WC4Y's path, six draws, file | ×1.00 | ×0.96 | ×0.98 | under the line |
+
+The rule did what it was for: the three scenarios §3.26 lost a run in complete 3 of 3, and pooled
+air is under the current's. **But the rule fires seldom** (0–5 re-encodes and splits a run, most
+runs none), and K1(b) and K3 moved where it never fired. Where neither station of either build
+re-encoded or split a frame the two builds do the same thing, so their runs measure the harness
+itself: of 106 such pairs 75 were identical and 31 not, one in eleven more than 15 % apart —
+`80m-strong-moderate-500` draw 1 delivered 143 against 262 bit/s, the start pair's high reading
+261 against 141 (the daemons' threads under four parallel jobs; one build repeats itself only
+run alone).
+
+**The second pass.** The three K1(b) scenarios and the start pair, the same six draws again, for
+the three builds (`repeat/`; the current controller's from `1e212e7`, C1 at the sender from
+§3.25's daemon):
+
+| scenario | today's, median of 12 | C1 at the sender, the current's advice | C1 in both roles, the bound | run-to-run on one draw |
+|---|---|---|---|---|
+| `80m-strong-moderate-500` | 257 | ×1.02 | ×0.85 | up to ×2 |
+| `80m-nvis-disturbed-500` | 40 | ×0.88 | ×0.79 | none: both passes identical |
+| `80m-slow-machine-500` | 94 | ×1.11 | ×0.81 | up to ×1.8 |
+| K3, the second pass | 2, 2, 0, 1, 0, 2 | 2, 0, 0, 0, 1, 0 | 5, 4, 1, 0, 4, 2 | |
+
+The C1 advice's losses are real: on the one path the harness repeats exactly, and on the twelve
+runs of the others, C1's advice trails the current controller's, and the start pair settles
+further apart under it (K3 fails in four draws of the second pass, against one). **Traced** on
+`80m-nvis-disturbed-500` draw 0, which repeats exactly: the slave's C1 advised rung 5 (QPSK ½)
+from 76 to 95 s at readings of +1 to +3 dB, where today's advised rung 2 throughout; from the
+first answer the two sessions part (the first exchange 16.6 s against 25.2 s, every later
+transmission on another stretch of the fading). Under C1's advice the master's own C1 cut new
+blocks at rung 5 again at 84 and 127 s; rung 5 took 82 s of exchanges at 19 bit/s, where
+tone-36 delivered 33 and tone4x100-51 35 (under today's advice rung 5 took 47 s, and new blocks
+went to the floor from 92 s). The message took 305 s of air against 218 s.
