@@ -44,7 +44,10 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   completion and pooled air, and a second pass showed the remaining losses are the C1 advice's,
   not the harness's noise: C1 at the sender trails nothing with today's advice, and trails on
   three scenarios and the start pair with C1's. The author kept today's controller as the
-  advisor (2026-10-25), knowing it misses K7: ADR-0094 amended.
+  advisor (2026-10-25), knowing it misses K7: ADR-0094 amended. C1 at the sender, with the
+  stranded frames' bound, is the engine's default from 0.2.0-beta.124 (§3.28): the bound costs
+  one strong path and keeps blocks in pieces from sticking, and stays. Next: the air with the
+  testers, then Gate 6.
 
 ## 1. What the engine hands a prototype
 
@@ -1098,3 +1101,61 @@ transmission on another stretch of the fading). Under C1's advice the master's o
 blocks at rung 5 again at 84 and 127 s; rung 5 took 82 s of exchanges at 19 bit/s, where
 tone-36 delivered 33 and tone4x100-51 35 (under today's advice rung 5 took 47 s, and new blocks
 went to the floor from 92 s). The message took 305 s of air against 218 s.
+
+### 3.28 Gate 5: the build that shipped, measured (2026-10-25)
+
+`a7c00ef` made C1 at the sender the engine's default with the current controller's advice and
+§3.27's bound (a stranded frame re-encoded or split under the lower of the advice and the
+sender's own choice when it last read an answer). Another session cut 0.2.0-beta.124 on it at
+13:41Z, before this measurement finished. Its daemon, against §3.25's (the same form without the
+bound), on the registered criteria:
+
+| criterion | §3.25, no bound | beta.124's form, the bound | verdict |
+|---|---|---|---|
+| K1(a), six draws (line +19.41 %) | +27.85 % | +26.01 % | fails, as accepted |
+| K1(b), six draws | lowest 0.88 | **0.82** `80m-strong-moderate-500` | fails |
+| K2, pooled air | ×0.995 | ×0.997 | passes |
+| K2, `scenario_trend.py` | 2 slower | 4 slower: `40m-wide-calls-narrow`, `80m-lopsided-acks-500`, `80m-slow-machine-500`, `80m-start-low-reading-500` | fails |
+| K3, first and second pass | 3, 1, 0, 1, 0, 0 / 2, 0, 0, 0, 1, 0 | 3, 3, 0, 3, 0, 2 / 3, 1, 0, 3, 0, 2 | fails |
+| K4, completion; radiated overlaps | 180 of 180; 0 | 180 of 180; 0 | passes |
+| K5 | ×0.896, one point | ×0.896, the same point (the bound never fires there) | fails at one point |
+| WC4Y's path, six draws, file | ×1.00 | ×1.03 | passes |
+
+`40m-wide-calls-narrow` is slower under every C1 form (198/177/200 s without the bound, against
+164/169/151 s), only now past the tool's 30 s; the start pair never fired the bound, and its K3
+moved as much between `c1` and `c1own`, which differ only in the bound (§3.27). **The strong
+path did fire it.** Over twelve runs `80m-strong-moderate-500` delivered ×0.77 of the current
+controller's median against ×1.02 for §3.25's form, and the bound fired in three of the twelve,
+the three slowest (91, 108 and 115 bit/s against a median of 231 for the other nine). **Traced**
+on draw 0: from 150 s frames at rungs 9–11 went unheard and C1's own choice fell to the floor's
+top; at 176 s the bound re-encoded two blocks cut at rungs 9 and 10 onto rung 3, and the floor
+air of their copies was charged to the rungs they were cut at (`_sent_copies` charges a block's
+every copy to its first rung, by design: a try of OFDM whose blocks strand pays for all of them),
+so those OFDM accounts read worse than the path, and the choice climbed back to rungs 6–7 only,
+at +8 to +10 dB readings where rungs 10–11 had delivered twice as much. With the current
+controller's advice the bound bought nothing measurable on the NVIS paths it was made for:
+`80m-nvis-disturbed-500` ×0.86 against ×0.88.
+
+**Taking it out, tried and undone.** Without the bound two of ADR-0086's tests fail under C1 at
+the sender (`test_a_stuck_frame_goes_in_pieces_and_its_block_arrives`, `…_only_after_the_copy_its_
+receiver_combines_last`): the block never arrives in 900 s. Traced: the sender's C1 cut blocks at
+OFDM rung 12 on the call's 10 dB reading; they failed, the advice fell to rung 4, and the blocks
+were split onto rung 3, which the test's path refuses. A failed piece gets no sequence number at
+the receiver (ADR-0086), so its controller never counts it; it saw only the sender's floor frames,
+which decoded, and advised rungs 4–6 for the rest of the session, and a split block is split again
+only under the advice. The sender's own C1, which knew rung 3 failed (its choice: rung 0), is what
+the bound brings in. Under the current controller as sender the advice had fallen to rung 0 before
+the split. The harness never met it in 180 runs, but `80m-agc-carrier-outside-500` on CI's runner
+is where ADR-0086 came from. **The author's call: the bound stays** (a stuck block is worse than a
+slow strong path), and its strong-path cost, with its cause, is owed to the next review
+(ADR-0094 §5).
+
+**The two engine rules** measured while the current controller chose the rung, on the PACTOR
+scenario that justified them, ten draws of the shipping build: `floor_answer_memory` still pays
+(off: 7 of 10 complete, median air 331 s; on: 10 of 10, 290 s); `hold_unknown` is neutral (off:
+10 of 10, 2976 s of air in all; on: 2944 s). On their unit bench both still pay at 500 Hz under
+C1 and not at 2 300 Hz (the tests' docstrings carry the numbers). The author's call: both stay,
+their tests run under the current controller as measured, owed to the next review (ADR-0094 §5).
+
+0.2.0-beta.124 is the build. Gate 5 ends on the air: the testers' sessions, both sides uploaded
+and read with `tools/rung_reading.py`; then Gate 6.

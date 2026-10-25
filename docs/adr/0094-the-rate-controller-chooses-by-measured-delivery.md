@@ -60,8 +60,11 @@ rung it advises the other station's data to go at stays the current controller's
    (ADR-0085, ADR-0086) go by the lower of the advice and the sender's own choice when it last
    read an answer (the author's decision at Gate 5): with C1 giving the advice, on ITU NVIS at
    500 Hz the receiver's C1 advised OFDM while the sender's own had moved to the floor, and
-   blocks cut at OFDM went fourteen copies over 200 s (`04-results.md` §3.26). C1 for the advice
-   was built and measured (§3.26, §3.27) and is rejected (§4).
+   blocks cut at OFDM went fourteen copies over 200 s (`04-results.md` §3.26). With the current
+   controller's advice it is what keeps a block in pieces from sticking: the receiver never
+   counts a failed piece, so the advice never learns the pieces' rung fails, and without the
+   bound such a block went again at that rung for good (§3.28; the author kept it). C1 for the
+   advice was built and measured (§3.26, §3.27) and is rejected (§4).
 7. **Kept from today:** the AWGN threshold tables, the usable rungs, the echo exclusions
    (ADR-0087), the 0.7/0.3 SNR smoothing, the ceiling, the stuck-frame rules.
 
@@ -158,4 +161,9 @@ controller chose the rung, and hold only in part under C1 at the sender (§3.28;
 both at Gate 5): answers on the floor after a silent slot (`floor_answer_memory`) still pay at
 500 Hz but cost a few seconds on the 2 300 Hz unit bench, and holding frames whose answer was
 lost (`hold_unknown`) still saves frames but no longer time. Their unit tests run under the
-current controller, as measured, until that review re-justifies or removes each.
+current controller, as measured, until that review re-justifies or removes each. And the bound
+of item 6 costs a strong path (§3.28: `80m-strong-moderate-500` ×0.77 of the current
+controller against ×1.02 without it, over twelve runs): when it moves a block cut at OFDM onto
+the floor in a brief dip, the floor air of its copies is charged to the OFDM rung it was cut at,
+which then reads worse than the path and is climbed back slowly. Charging a copy to the rung it
+went at is the fix to judge; it changes how C1 judges a path, so it is that review's.
