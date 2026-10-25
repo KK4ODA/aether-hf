@@ -98,5 +98,5 @@ context → decision → alternatives considered → consequences.
 | [0091](0091-a-beacon-waits-out-the-other-stations-closing-identifier.md) | A beacon waits out the other station's closing identifier | accepted |
 | [0092](0092-a-measurement-whose-slot-went-silent-is-measured-again.md) | A measurement whose slot went silent is measured again | accepted |
 | [0093](0093-the-first-ofdm-rung-is-held-to-the-learned-margin.md) | The first OFDM rung is held to the learned margin on both airs | accepted |
-| [0094](0094-the-rate-controller-chooses-by-measured-delivery.md) | The rate controller chooses by measured delivery, at the sender and the receiver | accepted for building |
+| [0094](0094-the-rate-controller-chooses-by-measured-delivery.md) | The rate controller chooses by measured delivery, at the sender | accepted for building (amended at Gate 5) |
 | [0095](0095-a-weak-frame-hides-no-strong-one-and-a-spans-end-is-outside-it.md) | A weak frame hides no strong one, and a span's last half symbol is outside it | accepted |

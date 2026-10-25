@@ -1,14 +1,18 @@
-# ADR-0094: The rate controller chooses by measured delivery, at the sender and the receiver
+# ADR-0094: The rate controller chooses by measured delivery, at the sender
 
 **Status:** accepted for building, 2026-10-25, the author's decision at Gate 4 of the rate
 controller's review (`docs/research/rate-control/00-brief.md` §7; the evidence in
 `01-evidence.md`, the survey in `02-survey.md`, the candidates and the registered criteria in
-`03-candidates.md`, the results in `04-results.md`). Gate 5 builds it into the daemon and proves
-it; Gate 6 deletes the current controller. When Gate 6 is done this ADR supersedes the rate
-controller's rules of ADR-0007, ADR-0008 (`first_mode_back`), ADR-0016's re-seed, ADR-0020's
-failure counting and the sender's-choice rule, ADR-0066's steps in hand, ADR-0084's partial rule
-and ADR-0093's edge rule. No wire change: the control frame's rung field keeps its meaning (the
-rung the sender of the frame would receive the other station's data at best).
+`03-candidates.md`, the results in `04-results.md`). **Amended at Gate 5** (2026-10-25, the
+author's decisions on `04-results.md` §3.26 and §3.27): C1 chooses at the sender only, the advice
+in every control frame stays the current controller's, and a stranded frame comes down under the
+lower of the advice and the sender's own choice. Gate 5 builds it into the daemon and proves it;
+Gate 6 deletes the prototypes not adopted. For the rung a station's own data goes at, this ADR
+supersedes the current controller (ADR-0007, ADR-0008's `first_mode_back`, ADR-0016's re-seed,
+ADR-0066's steps in hand, ADR-0084's partial rule, ADR-0093's edge rule); for the advice those
+rules stand, with ADR-0020's failure counting and the sender's-choice rule that feed it. No wire
+change: the control frame's rung field keeps its meaning (the rung the sender of the frame would
+receive the other station's data at best).
 
 ## 1. Context
 
@@ -28,8 +32,8 @@ first OFDM rungs where the floor's top carried more (`01-evidence.md`).
 
 ## 2. Decision
 
-Each station runs one controller, **C1** (`03-candidates.md` §2.2), for two jobs: choosing the
-rung its own data goes at, and the rung it advises the other station's data to go at.
+Each station chooses the rung its own data goes at with **C1** (`03-candidates.md` §2.2); the
+rung it advises the other station's data to go at stays the current controller's.
 
 1. **The account.** Per rung, the data its frames delivered per second of the air they took —
    every copy, every frame never detected — decayed with a half-life of twelve of the rung's own
@@ -50,19 +54,23 @@ rung its own data goes at, and the rung it advises the other station's data to g
    and tries the next at once.
 5. **The sender's choice** is its own C1 (C3, at the sender: `03-candidates.md` §2.3). A
    transmission no answer was heard for steps it down two rungs the echo allows (R9).
-6. **The advice** in every control frame is C1's choice for the frames the station receives: the
-   receiver's C1 (C1-R). The sender reads it as before for keeping a header on data above it
-   (ADR-0076), and does not take it as its own choice. A stuck frame's re-encode and split
-   targets (ADR-0085, ADR-0086) go by the lower of the advice and the sender's own choice when
-   it last read an answer (the author's decision at Gate 5, 2026-10-25): under the advice alone,
-   on ITU NVIS at 500 Hz the receiver's C1 advised OFDM while the sender's own had moved to the
-   floor, and blocks cut at OFDM went fourteen copies over 200 s (`04-results.md` §3.26).
+6. **The advice** in every control frame stays the current controller's (`RateController`, fed
+   as before). The sender reads it as before for keeping a header on data above it (ADR-0076),
+   and does not take it as its own choice. A stuck frame's re-encode and split targets
+   (ADR-0085, ADR-0086) go by the lower of the advice and the sender's own choice when it last
+   read an answer (the author's decision at Gate 5): with C1 giving the advice, on ITU NVIS at
+   500 Hz the receiver's C1 advised OFDM while the sender's own had moved to the floor, and
+   blocks cut at OFDM went fourteen copies over 200 s (`04-results.md` §3.26). C1 for the advice
+   was built and measured (§3.26, §3.27) and is rejected (§4).
 7. **Kept from today:** the AWGN threshold tables, the usable rungs, the echo exclusions
    (ADR-0087), the 0.7/0.3 SNR smoothing, the ceiling, the stuck-frame rules.
 
 Seven tunables of its own (`half_life`, `prior_frames`, `probe_every`, `probe_wait_max`,
-`slope_db`, `prior_margin_db`, `family_gain_db`) and the inherited SNR smoothing, where the
-current controller has nineteen (`03-candidates.md` §1.2).
+`slope_db`, `prior_margin_db`, `family_gain_db`) and the inherited SNR smoothing. **The station
+as a whole is not simpler:** the advice keeps the current controller's nineteen and the engine
+rules that feed it, so C1 is added beside it (about 350 lines in the model and as many in the
+port, beside about 500). K7 was met by C1 in both roles and is missed by what ships; the author
+chose the faster form knowing it (2026-10-25), and simplifying the advice is owed (§5).
 
 ## 3. What was measured
 
@@ -79,7 +87,7 @@ the current controller, on the criteria registered before any run (`03-candidate
 | K4, completion; radiated overlaps | 180 of 180; 0 | 180 of 180; 0 | passes |
 | K5, the real-modem link bench: completion; pooled time ≤ ×1.00; each point ≤ ×1.05 | 168 of 168; ×0.896; one point ×1.075 (2 300 Hz Poor +16 dB) | 168 of 168 | **missed** at one point |
 | K6, the field replay, open loop (≥ the current, no session under 0.9) | ×1.206 summed over nine sessions (§3.19's form: ×1.057 over report 17's five) | — | **missed** at WC4Y 2026-10-22 (0.688); the author's condition, WC4Y's path on the harness at least as well, at the line (message ×1.05, file ×1.00) |
-| K7, simpler (≤ 8 tunables; ≥ 3 of the 5 replaceable engine rules removed) | 8; 3 of 5 | 23 | passes |
+| K7, simpler (≤ 8 tunables; ≥ 3 of the 5 replaceable engine rules removed) | C1's own 8; with the advice the current's, about 26, and 0 or 1 of 5 removed | 23 | **missed**: accepted by the author at Gate 5 |
 
 **The misses, traced** (`04-results.md` §3.20, §3.24, §3.25):
 
@@ -106,8 +114,13 @@ the current controller, on the criteria registered before any run (`03-candidate
 * **C0**, the current controller with its hysteresis, dwell, stride, decay schedule, re-seed,
   steps in hand and partial rule taken out (§3.2): +46.7 %, eight scenarios under 0.85.
 * **C1 at the receiver alone** (§3.4–§3.8): K1(a) +22.55 % on three draws, but K2 failed on the
-  NVIS paths and the AGC carrier lost two messages; it was carried on at the sender (§3.9–§3.25),
-  and comes back here as the advice.
+  NVIS paths and the AGC carrier lost two messages; it was carried on at the sender (§3.9–§3.25).
+* **C1 in both roles**, its advice C1's (adopted at Gate 4, measured at Gate 5, §3.26–§3.27):
+  with the stranded frames' bound it completes every run and pooled air is ×0.990, but against
+  the current controller's advice it trails on `80m-nvis-disturbed-500` (×0.79 against ×0.88,
+  repeated exactly), `80m-slow-machine-500` (×0.81 against ×1.11 over twelve runs) and the start
+  pair (K3 fails in four draws of six against one): the receiver's C1 advises OFDM rung 5 at
+  +1 to +3 dB on NVIS where the floor carries twice as much.
 * **The cautious start** (§3.6): fixed `80m-nvis-disturbed-500` and cost every climb.
 * **No step down for silence** (§3.13): +31.8 %, two failed runs.
 * **The try past the dip** (§3.21–§3.22): above.
@@ -118,29 +131,26 @@ the current controller, on the criteria registered before any run (`03-candidate
 
 **Gate 5 (the port, the daemon, the proof):**
 
-1. Model first: C1 is the engine's controller in both roles (`granted.py`), the receiver's advice
-   from its own C1; the current `RateController` stays only until Gate 6.
-2. The port (`rate.rs`, `granted.rs`); the granted vectors regenerate for this deliberate change.
-3. The daemon's metrics: `margin_db` has no meaning under C1 — the panel's *Margin* reading, its
-   log line and the manual change with it (the manual rule); `rate_snr_db` stays.
-4. The harness A/B against the registered criteria, both roles C1 — the pair is new (C1-R was
-   measured as the receiver's choice, not as advice to a C1 sender).
+1. Model first: C1 at the sender is the engine's default (`GrantConfig.controller` =
+   `delivery-s`), the advice `RateController` as before; the stranded frames' bound (`c2dfa9f`).
+2. The port (`granted.rs`); the granted vectors regenerate for this deliberate change.
+3. The daemon's metrics keep their meaning: `rate_snr_db` and `margin_db` are the advice's, the
+   panel's *Receiver* line describes them, and `sending_rung` is C1's choice. Nothing the operator
+   sees changes.
+4. The harness A/B of the build that ships, against the registered criteria.
 5. A beta, its tag the author's to push; then the air with the testers, both sides uploaded and
    read with `tools/rung_reading.py`.
 
-**Gate 6 (delete):** `RateController`'s learned margin and its bounds and schedule
-(`margin_db`, `min_margin_db`, `max_margin_db`, `up_step_db`, `max_jump_db`, `down_step_db`,
-`decay_growth`, `max_down_step_db`, `decay_every`), the hysteresis, dwell and stride
-(`up_hysteresis_db`, `up_dwell`, `max_up_step`), `first_mode_back`, `partial_share`,
-`reseed_margin_db`, the edge rule (`_at_edge`), the burst-count path (`observe(snr, ok, failed)`)
-and the engine rules that fed it — what counts as a failure (ADR-0020's trusted RV 0/3 or
-combined), the sender's-choice rule (`_asked`), the slave's silence rule (`observe(None, 0, 1)`),
-`_first_move`'s steps in hand — with their tests; `GrantConfig.rate`'s overrides of them; the
-bench-only prototypes not adopted (`OuterLoopController`, `cautious_start`, the `controller`
-switch and its `delivery`/`olla` names) and `rate_review.py` folded into `rate.py`. Kept: the
-threshold tables, `usable_modes`, the echo exclusions, the SNR smoothing, `silence_step`,
-`reencode_early_after`, `reencode_hopeless_db`, the ceiling and the stuck-frame rules.
+**Gate 6 (delete):** the bench-only prototypes not adopted — `OuterLoopController`, C1 at the
+receiver (the `delivery` and `c1` names), `cautious_start`, the `controller` switch and its
+names — with their tests and vectors, and the sender's own uses of the current controller that C1
+replaces (the master's first rung from `first_mode` on the acceptance, and whatever of
+`_first_move` only moved it), each checked in the code at Gate 6. `rate_review.py` becomes C1's
+module. Kept: `RateController` whole, for the advice, with the engine rules that feed it; the
+threshold tables, `usable_modes`, the echo exclusions, `silence_step`, `reencode_early_after`,
+`reencode_hopeless_db`, the ceiling and the stuck-frame rules.
 
-**Owed, recorded here:** the dip and the climb's pace (§3) are the two places C1 is
-known to leave speed; any change to them is a change to how C1 judges a path, and is the next
-review's, not a patch.
+**Owed, recorded here:** the dip and the climb's pace (§3) are the two places C1 is known to
+leave speed, and the advice is the current controller with its nineteen parameters, which K7
+asked to be gone: the next review's, not a patch. C1 at the receiver's optimism on NVIS (§3.8,
+§3.26, §3.27) is where that review starts.

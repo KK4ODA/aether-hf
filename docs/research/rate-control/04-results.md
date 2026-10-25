@@ -43,7 +43,8 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   paths; the stranded frames' bound by the sender's own choice (the author's call) restored
   completion and pooled air, and a second pass showed the remaining losses are the C1 advice's,
   not the harness's noise: C1 at the sender trails nothing with today's advice, and trails on
-  three scenarios and the start pair with C1's. The advisor is the author's call.
+  three scenarios and the start pair with C1's. The author kept today's controller as the
+  advisor (2026-10-25), knowing it misses K7: ADR-0094 amended.
 
 ## 1. What the engine hands a prototype
 
