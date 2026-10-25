@@ -130,8 +130,9 @@ to.
    recording.
 2. **Radio interface.** **Aether keys the radio.** CAT on the radio's own port is best: it also
    reads the dial, which the rules check needs. A serial line, a CM108 pin, rigctld or FLRig all
-   work; with a serial line or a CM108 pin set **Dial is at** on the Session tab. Never *host
-   program*: Trimode, like Winlink Express, leaves keying to the modem.
+   work; with a serial line or a CM108 pin set **Dial is at** on the Session tab. Not *host
+   program*: that is for a program set up to key the radio on Aether's `PTT ON`, and the rules
+   check needs Aether to read the dial, which it cannot do for a radio it does not hold.
 3. **Receive level.** *Good* on a quiet frequency.
 4. **Modem settings.** Bandwidth **2300 Hz**. *Wait for a clear channel* on. Fastest mode: the
    last entry. Turnaround 0 for CAT or a serial line (a VOX interface: its delay plus 100 ms).
@@ -229,10 +230,11 @@ gateway being open to the public, nothing to do with the service code; Aether an
 * Open a **Vara HF Winlink** session. In its window, *Settings › Vara TNC Setup*: host
   `127.0.0.1`, command port `8300`. The TNC path is Aether's `aether-hf.exe` with *auto-launch*
   off, Aether started first — the way that is known to work; never `VARA.exe`.
-* *Settings › Radio Setup*: radio **Manual**, COM port **None**. Aether keys the radio, and
-  Winlink Express tunes nothing — you set the dial yourself, to the gateway's. Only if Aether
-  keys by a serial line or a CM108 pin may Winlink Express have the radio's CAT port for
-  frequency control instead.
+* *Settings › Radio Setup*: radio **Manual**, COM port **None**, and no PTT port. Winlink
+  Express then neither tunes nor keys: Aether keys the radio, and you set the dial yourself, to
+  the gateway's. A PTT port there would make Winlink Express key the radio as well, on the
+  modem's `PTT ON` — one keyer, never both. Only if Aether keys by a serial line or a CM108 pin
+  may Winlink Express have the radio's CAT port for frequency control instead.
 * **Channel Selection › Update Table Via Internet** (a phone's hotspot does) lists the gateway
   under the private code; pick it. Without Internet, type the gateway's callsign and dial
   frequency into the session window by hand; Winlink Express works out the centre frequency

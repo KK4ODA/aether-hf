@@ -844,7 +844,9 @@ no-op step; fixture `0.2.0-beta.68-cat.toml`; `SCHEMA_HISTORY` gains beta.69 —
 compares the package version, so the schema line ships in the release push). The shell runs one
 instance (`tauri-plugin-single-instance`: a host program launching `aether-hf.exe` while it
 runs brings up the window). `docs/user/host-programs.md` is the setup guide for both ways.
-Winlink Express leaves keying to the modem, so it runs with Aether owning the radio.
+Winlink Express keys the radio on the modem's `PTT ON` only when its Radio Setup names a PTT
+port; set to radio *Manual*, COM port *None* (the author's mobile, 2026-10-24) it leaves keying
+to the modem, so it runs with Aether owning the radio — one keyer, never both.
 
 **Tier 2 of the drop-in (2026-09-26, after beta.69; the author: "pursue all the items that do not
 need my intervention").** VARA's published command list (EA5HVK, *VARA Protocol Native TNC

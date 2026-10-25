@@ -92,9 +92,12 @@ PTT **off**.
   host `127.0.0.1`, port `8300`.
 * The bandwidth is Winlink Express's session setting: Aether moves to it when it is asked, and
   runs 2300 Hz for Winlink Express's widest, 2750.
-* Winlink Express leaves keying to the modem, as with VARA: keep **Aether keying the radio**
-  (the second way above). If Aether keys on a serial line or a CM108 pin, Winlink Express can
-  still do its own frequency control on the radio's CAT port.
+* Winlink Express keys the radio itself only when its *Radio Setup* names a PTT port: it then
+  keys on the modem's `PTT ON`/`PTT OFF`, as VarAC does, and Aether's keying must be *host
+  program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
+  modem: keep **Aether keying the radio** (the second way above). One keyer, never both. If
+  Aether keys on a serial line or a CM108 pin, Winlink Express can still do its own frequency
+  control on the radio's CAT port.
 * The gateway end — RMS Trimode fed by an Aether station, and a Winlink Express client calling
   it from the field — is set up step by step in [winlink-gateway.md](winlink-gateway.md).
 
