@@ -33,7 +33,11 @@ criteria registered in `03-candidates.md` §3 (agreed 2026-10-24).*
   real-modem session time ×0.885), but K2, K4, K5 and K6 each fail on a few scenarios or points,
   every one traced to the start and tries on 500 Hz NVIS or the wait before the first try on a
   strong path. K1(a)'s miss is accepted as recorded by the author's call (§3.20).
-* **Next**: the author's call on §3.24.
+* **The last round** (§3.25, the author's call: one round on both causes, then the decision):
+  K4 now passes and K5 fails at one point instead of four; K1(a), K2's per-scenario check, K3,
+  K5's one point and K6 still miss — the dip and the climb's pace, traced. Pooled it still beats
+  the current controller (harness air ×0.995, real-modem session time ×0.896).
+* **Next**: Gate 4, the decision ADR — the author's call on adopting C1 at the sender.
 
 ## 1. What the engine hands a prototype
 
@@ -341,6 +345,8 @@ delivery is under 85 % of the current controller's (K1(b)).
 | … and the try past the dip (§3.21, `2db2fb8`) | +40.25 % (6 draws) | 3 (weak wide Test 0.23, weak both ways 0.52, polar path 0.82); WC4Y's path 0.31 | 0, 1, 2, 3, 1, 1 | 1 (the AGC carrier, draw 0) |
 | … and the try waits for data to cut (§3.21, `ca7587c`) | +30.18 % (6 draws) | 3 (weak wide Test 0.53, weak both ways 0.74, polar path 0.82); WC4Y's path 0.49 | 0, 1, 2, 1, 1, 2 | 0 (144 runs) |
 | … and a failed try holds the family back (§3.22, `55e5139`; 6 scenarios and the start pair, 3 draws) | — | 2 of 4 run (polar path 0.76, weak both ways 0.79); WC4Y's path 0.71 | 3, 0, 2 | 0 (24 runs) |
+| §3.19's form, dip fix out (§3.22–§3.24, `b53d0e6`) | +26.80 % (6 draws) | none | 2, 1, 1, 0, 1, 1 | 1 of 180 in K2 (the AGC carrier, draw 0) |
+| … and the climb on clean frames, accounts that age (§3.25, `1e212e7`) | +27.85 % (6 draws) | none (lowest 0.88) | 3, 1, 0, 1, 0, 0 | **0** (144 and 180 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -946,3 +952,61 @@ the optimistic prior, a rung let back in on an old, small sample), and the wait 
 try on a strong path. Pooled — air on the harness, session time on the real modem, the regret's
 median — the form beats the current controller; at the per-scenario and per-point guards it does
 not.
+
+### 3.25 The last round: the climb on clean frames, and accounts that age (2026-10-25)
+
+The author's call on §3.24: one round on both traced causes, its result into the decision ADR,
+no further rounds. `1e212e7`, model and port, no new setting (K7 stays at eight):
+
+* **The rung above, of the current rung's family, is tried at the next transmission** when
+  every frame of the last one at the current rung decoded alone, the estimate rates the rung
+  above higher, and no try of it has failed since it last carried (`_clean_climb`). Across the
+  floor's edge the wait stays: a try there takes the transmission and its leftovers (§3.22).
+* **A rung's account ages with the air sent at any rung**, a half-life of twelve of its own
+  frames' air (`observe_frames`): before, only frames sent at the rung aged it.
+
+Judged as §3.24 was. K1 and K3 on the 24 scenarios, six draws (144 runs, all complete); K2 and K4
+with both arms on the same build (`1e212e7`, 180 runs each — another session's `6ec4fa5` had
+changed how a Test calls, so the current's §3.24 runs could not stand in); K5 the candidate's
+arm against §3.24's current arm (the model's controller and receiver are unchanged by default:
+`stream.py`'s new rules are bench-only switches); K6 the nine sessions in this container's inbox.
+
+| criterion | §3.24's form | the last round | verdict |
+|---|---|---|---|
+| K1(a), six draws (line +19.41 %) | +26.80 % | **+27.85 %** | fails |
+| K1(b), six draws | lowest 0.86 | lowest `80m-nvis-disturbed-500` 0.88 | passes |
+| K2, pooled air | ×0.982 | ×**0.995** (49 686 against 49 912 s) | passes |
+| K2, `scenario_trend.py` | 1 failing, 2 slower, 5 faster | **none failing**; slower `80m-lopsided-acks-500` and `80m-slow-machine-500`; faster five | fails |
+| K3, six draws | 2, 1, 1, 0, 1, 1 | 3, 1, 0, 1, 0, 0 | near miss, one draw |
+| K4, completion | 179 of 180 | **180 of 180** (the current 180) | passes |
+| K4, radiated overlaps | 0 | 0 | passes |
+| K5, completion | 168 of 168 | 168 of 168 | passes |
+| K5, pooled session time | ×0.885 | ×**0.896** | passes |
+| K5, per point (≤ ×1.05) | 4 points over | **1**: 2 300 Hz Poor +16 dB ×1.075 | fails |
+| K6, the field replay | ×1.455, worst 0.688 | ×1.206, worst WC4Y 2026-10-22 0.688 | fails |
+| WC4Y's path (K6's condition), six draws | message ×1.11, file ×0.98 | message ×1.05, file ×1.00 (median 92.6 against 92.65 bit/s) | at the line |
+| K7, simpler | eight | eight | passes |
+
+Per scenario the climb did what it was built for and cost elsewhere: `80m-strong-moderate-500`
++56 → +43 % regret, `80m-flutter-500` +32 → +18 %, `80m-nvis-disturbed-500` +23 → +13 %, against
+`80m-qsb-dropout-500` +17 → +45 %, `80m-weak-500` 0 → +9 %, `80m-nvis-evening-500` −5 → +12 %; the
+median moved a point the wrong way.
+
+**What is left, traced:**
+
+* `80m-slow-machine-500` (file 109.9 / 40.3 / 74.2 against 124.2 / 95.5 / 90.1 bit/s). Draw 1:
+  the slave's stalls left slots silent, the steps for silence put the candidate on the floor's
+  rungs 3–4 at 94 s, and it stayed there for 200 s — from the floor's top the first OFDM rung,
+  priced with floor answers, never beats it (the dip of §3.19, whose fix was taken out). The
+  current stayed on rungs 5 and 7.
+* `80m-lopsided-acks-500`: the transfers were faster (message 103.4 / 131.5 / 104.0 against 65.3
+  / 119.3 / 72.4, file 105.8 / 87.8 / 105.8 against 77.1 / 91.7 / 104.5); the longer air is the
+  Test's ladder measuring further, as on WC4Y's path in §3.24.
+* K5's 2 300 Hz Poor +16 dB (63.0 / 67.6 / 67.6 against 74.7 / 59.3 / 62.9 s): the try now goes
+  at once on clean frames (trial 1: rungs 11 → 12 → 14, a try of 15 as the session ended), but one
+  rung a try of three frames, where the current controller climbs several rungs at once on the
+  reading.
+* K3's draw 0 (settled 4 against 7): the dip.
+
+The dip and the climb's pace are what separate the candidate from the per-scenario guards; pooled
+it beats the current controller everywhere it was measured.
