@@ -131,6 +131,27 @@ Order, set by what the four traces show: R3 first, then R0e, then R2 (M2 and M1;
 passes K2). The guard is one symbol because the start already has a symbol's tolerance: the
 detector's sidelobe lies a symbol early, and a frame's late copy a symbol late.
 
+## 4b. Second amendment: half a symbol (registered 2026-10-25, before the runs it names)
+
+R3's runs, M1–M3: K1 passes (the four hidden frames, and three frames the span's end had cost
+on the air: two of ND1J's rung-9 frames at KK4ODA-1 on 10-24, one of KQ4SAX's rung-6 frames on
+10-23); M2 as R1's (91.4 % and 94.5 %; 100 % and 99.8 % of the case R1 is for); on M3 133 more
+frames decoded than as built (+2.6 % at 2300 Hz, +3.7 % at 500 Hz), unmatched candidates 243 → 70,
+0.26 false frames added per 1 000 at 500 Hz and none at 2300 Hz, decode attempts +2.7 % and
++1.0 % — and one loss, which misses K3.
+
+The loss is the one-symbol guard's own. A header ends where its first data frame starts, and the
+data frame's early sidelobe — the detector's, a symbol before the start — lies in the header's
+last symbol: the guard lets it in, it is taken (1.08), and its span hides the data frame, which
+read 1.14 and so is not trusted by R1. Without the guard the sidelobe is inside the header and
+hidden. The guard has to be longer than the timing error that puts the next frame's start
+inside the last span (the delay spread: 16–56 samples on the ITU paths) and shorter than the
+sidelobe's offset (one symbol, 248 samples). Half a symbol does both.
+
+* **R0eh** and **R3h**: R0e and R3 with a half-symbol guard (124 samples). R3h is measured on M1,
+  M3 and M4 (M2's case is untouched by the guard: R3's M2 is R1's), R0eh on M1 and M3. The
+  one-symbol R0e is not run: it shares the flaw.
+
 ## 5. Then
 
 If R1 passes: an ADR; R1 made the model's rule; the port's `known()` the same, with a streaming
