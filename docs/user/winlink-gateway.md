@@ -179,9 +179,11 @@ differ a little between versions.
   3. The bench's way: a stand-in that stays running (Notepad, `C:\Windows\notepad.exe`, will
      do), and Aether started by hand before Trimode.
 
-  The first two have not been tried; the bench ran the third. Trimode closes what it launched
-  when it exits — under the second way that is the panel, and the modem goes on running; the
-  next Trimode start attaches to it again.
+  The bench ran the third; the first ran on the air on 2026-10-25. Trimode closes what it
+  launched when it exits — under the second way that is the panel, and the modem goes on
+  running; the next Trimode start attaches to it again. When a command goes unanswered Trimode
+  "restarts VARA": it launches the program again, so Aether's window comes forward, and opens
+  the ports again. Aether serves the new connection (the Log tab says *replaces it*).
 * **Channel.** One channel, with its own callsign `KK4ODA-1` (§2.2), the dial frequency
   (3.590 MHz), VARA HF, 2300 Hz. No scanning schedule.
 * **Radio control: none.** Aether holds the radio's CAT port and keys the radio; Trimode changes
@@ -193,9 +195,12 @@ What Trimode says to Aether when it attaches (the Log tab, with the trace on): `
 channel's callsign, `BW2300`, `PUBLIC ON`, `CWID ON`, then `LISTEN ON` and `LISTEN OFF` about
 every 3.5 s. The
 cycling is Trimode scanning its one channel, and it is normal: Aether answers a call only while
-`LISTEN` is on, and holds the `CONNECTED` for Trimode's next listening window, so that it is not
-missed in the half second Trimode is deaf (ADR-0051). The header's chip reading *host program ·
-not answering* for a moment now and then is that rhythm. `PUBLIC ON` is a VARA command about the
+`LISTEN` is on, tells Trimode `PENDING` the moment it takes the call (Trimode then stops
+scanning, as it does for VARA), and holds the `CONNECTED` for Trimode's next listening window
+if the call came at the end of one, so that it is not missed in the half second Trimode is
+deaf (ADR-0051, ADR-0096). The Log tab says *LISTEN turned on and off … the program scans* once
+a minute. The header's chip reading *host program · not answering* for a moment now and then is
+that rhythm. `PUBLIC ON` is a VARA command about the
 gateway being open to the public, nothing to do with the service code; Aether answers `OK`.
 
 ### 3.3 Before you leave
@@ -272,9 +277,9 @@ gateway being open to the public, nothing to do with the service code; Aether an
 | What you see | Where to look |
 |---|---|
 | Winlink Express cannot reach the TNC | Aether running? *Host programs* on, port 8300, saved? Another program on 8300? |
-| Trimode says the VARA program stopped, or keeps launching it | The program path (§3.2): try the next of the three ways |
+| Trimode says the VARA program stopped, or keeps launching it | Trimode's log: `Restart Vara` after `Vara command wasn't acknowledged` is Trimode giving up on a command; Aether's Log tab shows each new connection (*replaces it*). Before 0.2.0-beta.125 the second connection was refused with `WRONG` until Trimode was restarted. Otherwise the program path (§3.2): try the next of the three ways |
 | The call goes out and nobody answers (*no response*) | The gateway's dial and bandwidth (the Stations tab and the mismatch banner, at either end); Trimode listening (its window); the gateway's rules badge — *TX blocked* means the dial is outside the sub-band, or the radio's dial is not read (a serial line without *Dial is at*) |
-| *Connected*, then nothing, then the session times out | Trimode's log: `Ignoring CONNECTED while LISTEN=FALSE` is the race 0.2.0-beta.90 closed (ADR-0051) — update the gateway; otherwise the host trace (§3.1) says what Trimode was told and when |
+| *Connected*, then nothing, then the session times out | Trimode's log: `Ignoring CONNECTED while LISTEN=FALSE` or `… in scan state Deaf` is the race 0.2.0-beta.90 and 0.2.0-beta.125 closed (ADR-0051, ADR-0096) — update the gateway; otherwise the Log tab's *host* lines and the host trace (§3.1) say what Trimode was told and when |
 | *Connected* and the session ends with nothing sent | An SSID in Winlink Express's callsign; the message not posted to the outbox |
 | The gateway is not in the client's channel list | The service code at both ends; *Update Table Via Internet* done; Trimode logged in to the CMS (its log) |
 | Slow, or the transfer fails | The path, not the programs: the Status tab's SNR both ways; a Test session on the same path says more; try the other band |

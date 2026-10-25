@@ -8,8 +8,10 @@
 //!
 //! One host at a time. The published interface has no notion of several hosts sharing a
 //! radio, and two programs taking turns keying one transmitter is not a situation to invent
-//! semantics for: a second connection is accepted and then closed, so the client sees a clean
-//! refusal instead of a silent hang.
+//! semantics for. A new connection replaces the one attached, as it would on a VARA that had
+//! been restarted: RMS Trimode restarts its "VARA program" when a command goes unanswered and
+//! opens the ports again without closing the old ones, and a modem that refused the newcomer
+//! left the gateway deaf until Trimode itself was restarted (ADR-0096).
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -91,6 +93,26 @@ pub struct HostServer {
     /// Whether a host program holds the command port right now. Shared with the status
     /// display, which is how an operator sees that Winlink Express or Pat is attached.
     pub connected: Arc<AtomicBool>,
+    /// What the adapter has to say for the daemon's log, taken by the run loop
+    /// ([`take_notes`](Self::take_notes)): a program attaching, leaving or replaced, and a
+    /// `CONNECTED` held for a scanning one.
+    pub notes: Notes,
+}
+
+/// Lines for the daemon's log, kept by the adapter's threads until the run loop takes them.
+pub type Notes = Arc<Mutex<Vec<crate::kiss::Note>>>;
+
+/// Keep a line for the log; the oldest go first if nobody is taking them.
+fn note(notes: &Notes, warn: bool, text: impl Into<String>) {
+    if let Ok(mut notes) = notes.lock() {
+        if notes.len() >= 256 {
+            notes.remove(0);
+        }
+        notes.push(crate::kiss::Note {
+            warn,
+            text: text.into(),
+        });
+    }
 }
 
 impl std::fmt::Debug for HostServer {
@@ -143,16 +165,20 @@ impl HostServer {
         let pipe: Arc<Mutex<DataPipe>> = Arc::new(Mutex::new(DataPipe::default()));
         let busy = Arc::new(AtomicBool::new(false));
         let connected = Arc::clone(&flags.attached);
+        let notes: Notes = Arc::default();
 
         spawn_data_loop(data, Arc::clone(&pipe), Arc::clone(&running))?;
         spawn_command_loop(
             command,
-            handle,
-            pipe,
-            busy,
-            Arc::clone(&running),
-            flags,
-            config.trace,
+            Shared {
+                handle,
+                pipe,
+                busy,
+                running: Arc::clone(&running),
+                flags,
+                notes: Arc::clone(&notes),
+                trace: config.trace,
+            },
         )?;
 
         Ok(Self {
@@ -160,8 +186,30 @@ impl HostServer {
             data_address,
             running,
             connected,
+            notes,
         })
     }
+
+    /// The adapter's lines for the log since the last call.
+    #[must_use]
+    pub fn take_notes(&self) -> Vec<crate::kiss::Note> {
+        self.notes
+            .lock()
+            .map(|mut notes| std::mem::take(&mut *notes))
+            .unwrap_or_default()
+    }
+}
+
+/// What every connection of the command port shares.
+#[derive(Clone)]
+struct Shared {
+    handle: ControlHandle,
+    pipe: Arc<Mutex<DataPipe>>,
+    busy: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+    flags: crate::kiss::HostFlags,
+    notes: Notes,
+    trace: bool,
 }
 
 /// Bind the command port and the data port beside it.
@@ -294,20 +342,47 @@ fn spawn_data_loop(
     std::thread::Builder::new()
         .name("aetherd-host-data".to_owned())
         .spawn(move || {
+            // The connection served now, and a count of them: a newer one replaces it. A host
+            // that opens the data port again has let go of the old one whether it closed it or
+            // not — Trimode's restart of its "VARA program" does not — and a port that served
+            // the old one alone would never have read a byte from the new (ADR-0096).
+            let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let mut current: Option<TcpStream> = None;
             for stream in listener.incoming() {
                 if !running.load(Ordering::Relaxed) {
                     return;
                 }
                 let Ok(stream) = stream else { continue };
-                serve_data(&stream, &pipe, &running);
+                if let Some(old) = current.take() {
+                    let _ = old.shutdown(std::net::Shutdown::Both);
+                }
+                current = stream.try_clone().ok();
+                let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
+                let (pipe, running, generation) = (
+                    Arc::clone(&pipe),
+                    Arc::clone(&running),
+                    Arc::clone(&generation),
+                );
+                let _ = std::thread::Builder::new()
+                    .name("aetherd-host-data-conn".to_owned())
+                    .spawn(move || {
+                        serve_data(&stream, &pipe, &running, &|| {
+                            generation.load(Ordering::SeqCst) == mine
+                        });
+                    });
             }
         })
         .map(|_| ())
         .map_err(|e| HostError::Bind(format!("cannot start the data thread: {e}")))
 }
 
-/// Move payload bytes both ways for one data connection.
-fn serve_data(stream: &TcpStream, pipe: &Arc<Mutex<DataPipe>>, running: &AtomicBool) {
+/// Move payload bytes both ways for one data connection, while it is the current one.
+fn serve_data(
+    stream: &TcpStream,
+    pipe: &Arc<Mutex<DataPipe>>,
+    running: &AtomicBool,
+    current: &dyn Fn() -> bool,
+) {
     if stream.set_read_timeout(Some(POLL)).is_err() {
         return;
     }
@@ -316,7 +391,7 @@ fn serve_data(stream: &TcpStream, pipe: &Arc<Mutex<DataPipe>>, running: &AtomicB
     };
     let mut reader = stream;
     let mut buffer = [0u8; 8192];
-    while running.load(Ordering::Relaxed) {
+    while running.load(Ordering::Relaxed) && current() {
         match reader.read(&mut buffer) {
             Ok(0) => return, // the host closed the data port
             Ok(count) => {
@@ -340,44 +415,97 @@ fn serve_data(stream: &TcpStream, pipe: &Arc<Mutex<DataPipe>>, running: &AtomicB
     }
 }
 
-fn spawn_command_loop(
-    listener: TcpListener,
-    handle: ControlHandle,
-    pipe: Arc<Mutex<DataPipe>>,
-    busy: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
-    flags: crate::kiss::HostFlags,
-    trace: bool,
-) -> Result<(), HostError> {
-    let taken = Arc::clone(&flags.attached);
+/// How long a new connection waits for the one it replaces to let go.
+const TAKEOVER_WAIT: Duration = Duration::from_secs(3);
+
+fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostError> {
+    let taken = Arc::clone(&shared.flags.attached);
     std::thread::Builder::new()
         .name("aetherd-host-cmd".to_owned())
         .spawn(move || {
+            // the connection attached now, and when its program last said anything
+            let mut current: Option<(TcpStream, Arc<Mutex<Instant>>)> = None;
             for stream in listener.incoming() {
-                if !running.load(Ordering::Relaxed) {
+                if !shared.running.load(Ordering::Relaxed) {
                     return;
                 }
                 let Ok(stream) = stream else { continue };
-                if taken.swap(true, Ordering::SeqCst) {
-                    // one host at a time: refuse plainly rather than interleave two of them
-                    let _ = (&stream).write_all(b"WRONG\r");
-                    continue;
+                let peer = stream
+                    .peer_addr()
+                    .map_or_else(|_| "an unknown address".to_owned(), |peer| peer.to_string());
+                if taken.load(Ordering::SeqCst) {
+                    // One host at a time, the newest: a program that connects again has let
+                    // go of the old connection whether or not it closed it. RMS Trimode,
+                    // restarting its "VARA program", opened the port again every two minutes
+                    // and was told WRONG for nine, the gateway deaf, until it was restarted by
+                    // hand (KK4ODA-1, 2026-10-25). The old connection is shut and its thread
+                    // given a moment to put the flags back before this one takes them.
+                    let quiet = current
+                        .as_ref()
+                        .and_then(|(_, said)| said.lock().ok().map(|at| at.elapsed()))
+                        .map_or(0, |quiet| quiet.as_secs());
+                    if let Some((old, _)) = current.take() {
+                        let _ = old.shutdown(std::net::Shutdown::Both);
+                    }
+                    let deadline = Instant::now() + TAKEOVER_WAIT;
+                    while taken.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    if taken.load(Ordering::SeqCst) {
+                        note(
+                            &shared.notes,
+                            true,
+                            format!(
+                                "a program connected from {peer} and was refused: the one \
+                                 attached would not let go"
+                            ),
+                        );
+                        let _ = (&stream).write_all(b"WRONG\r");
+                        continue;
+                    }
+                    note(
+                        &shared.notes,
+                        true,
+                        format!(
+                            "a program connected from {peer} while another was attached \
+                             (quiet {quiet} s): it replaces it, as on a VARA started again"
+                        ),
+                    );
+                } else {
+                    note(
+                        &shared.notes,
+                        false,
+                        format!("a program attached from {peer}"),
+                    );
                 }
+                taken.store(true, Ordering::SeqCst);
+                // a newcomer starts with an empty pipe: what the last program wrote and was
+                // not sent, or was sent it and not read, was that program's
+                if let Ok(mut pipe) = shared.pipe.lock() {
+                    *pipe = DataPipe::default();
+                }
+                let said = Arc::new(Mutex::new(Instant::now()));
+                current = stream
+                    .try_clone()
+                    .ok()
+                    .map(|clone| (clone, Arc::clone(&said)));
                 // A connection is served on its own thread so the listener keeps accepting.
-                // Without that a second host would not be refused — it would simply never be
-                // answered, which looks to its operator exactly like a hung radio.
-                let handle = handle.clone();
-                let pipe = Arc::clone(&pipe);
-                let busy = Arc::clone(&busy);
-                let running = Arc::clone(&running);
-                let flags = flags.clone();
+                // Without that a second host would never be answered, which looks to its
+                // operator exactly like a hung radio.
+                let shared = shared.clone();
                 let spawned = std::thread::Builder::new()
                     .name("aetherd-host-conn".to_owned())
                     .spawn(move || {
-                        serve_commands(&stream, &handle, &pipe, &busy, &running, &flags, trace);
+                        serve_commands(&stream, &shared, &said);
+                        note(
+                            &shared.notes,
+                            false,
+                            format!("the program from {peer} left"),
+                        );
                         // what this host said about the KISS port and about answering calls
                         // goes with it; the station takes back its bandwidth too, on the run
                         // loop's next pass (ADR-0026)
+                        let flags = &shared.flags;
                         flags.chat.store(false, Ordering::SeqCst);
                         flags.ignore_dcd.store(false, Ordering::SeqCst);
                         flags.listening.store(false, Ordering::SeqCst);
@@ -392,17 +520,20 @@ fn spawn_command_loop(
         .map_err(|e| HostError::Bind(format!("cannot start the command thread: {e}")))
 }
 
-/// One host connection: commands in, replies and notifications out.
+/// One host connection: commands in, replies and notifications out. `said` is when the
+/// program last sent a line.
 #[allow(clippy::too_many_lines)]
-fn serve_commands(
-    stream: &TcpStream,
-    handle: &ControlHandle,
-    pipe: &Arc<Mutex<DataPipe>>,
-    busy: &AtomicBool,
-    running: &AtomicBool,
-    flags: &crate::kiss::HostFlags,
-    trace: bool,
-) {
+fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
+    let Shared {
+        handle,
+        pipe,
+        busy,
+        running,
+        flags,
+        notes,
+        trace,
+    } = shared;
+    let trace = *trace;
     if stream.set_read_timeout(Some(POLL)).is_err() {
         return;
     }
@@ -449,6 +580,15 @@ fn serve_commands(
     // the identifier has gone out (`identified`), or after `CLOSING_ID_WAIT` whatever happened.
     let mut disconnect_held: Option<Instant> = None;
     let mut scan = Scan::default();
+    // PENDING said for a call whose CONNECTED is held: should the session end before the
+    // CONNECTED is said, the host hears CANCELPENDING, as from VARA
+    let mut pending_said = false;
+    // A session is up, or its closing identifier still to go, that the program was not told
+    // of: the panel's, or a call answered while the program was not listening. A program that
+    // does not key the radio hears no PTT for it (ADR-0096).
+    let mut untold = false;
+    // the program was told PTT ON and has not been told PTT OFF
+    let mut ptt_told = false;
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
         if trace {
@@ -483,6 +623,9 @@ fn serve_commands(
             LineResult::Closed => return,
             LineResult::Idle => {}
             LineResult::Line => {
+                if let Ok(mut at) = said.lock() {
+                    *at = Instant::now();
+                }
                 let text = String::from_utf8_lossy(&line).to_string();
                 if trace {
                     eprintln!("host <- {}", text.trim());
@@ -518,18 +661,30 @@ fn serve_commands(
         // ── a connection held for the host's LISTEN to come back ───────
         // The command just read may have been the LISTEN on that lets a scanning host hear the
         // CONNECTED it would otherwise ignore; emit it now that it is listening.
+        // PENDING is said again with it: the first may have reached a program already deaf.
         if host.listening && pending_connected.is_some() && !scan.late(Instant::now()) {
             let data = pending_connected.take().unwrap_or_default();
+            note(
+                notes,
+                false,
+                format!(
+                    "CONNECTED for the call from {} said: the program is listening",
+                    remote_of(&data)
+                ),
+            );
+            pending_said = false;
             if !report_state(
                 &data,
                 &host,
                 &mut connected_to,
                 &mut calling,
+                false,
                 &mut writer,
                 &say,
             ) {
                 return;
             }
+            untold = connected_to.is_none();
         }
 
         // ── payload the host wrote on the data port ───────────────────
@@ -552,9 +707,26 @@ fn serve_commands(
         for event in events.try_iter() {
             match event.event.as_str() {
                 "ptt" => {
+                    // A program that keys the radio hears every keying. One that does not
+                    // hears its own business only, as from a VARA, which transmits for nothing
+                    // else: RMS Trimode sends no command while it believes the transmitter is
+                    // keyed, and a PTT ON for the acceptance of a call it had not been told of
+                    // held back its scan's LISTEN OFF for the whole floor frame. The command
+                    // timed out, the CONNECTED that followed was ignored "in scan state Deaf",
+                    // and Trimode restarted its VARA program (KK4ODA-1, 2026-10-25).
                     let on = event.data["on"].as_bool().unwrap_or(false);
-                    if !say(&mut writer, &Notification::Ptt(on).line()) {
-                        return;
+                    let host_keys = event.data["host_keys"].as_bool().unwrap_or(true);
+                    let tell = host_keys
+                        || if on {
+                            !untold && pending_connected.is_none()
+                        } else {
+                            ptt_told
+                        };
+                    if tell {
+                        ptt_told = on;
+                        if !say(&mut writer, &Notification::Ptt(on).line()) {
+                            return;
+                        }
                     }
                 }
                 // the program hears the payload of its own sessions only
@@ -575,6 +747,17 @@ fn serve_commands(
                     // placed is never held, LISTEN or no.
                     let detail = event.data["detail"].as_str().unwrap_or("");
                     let called = detail.split_whitespace().nth(1) == Some("(slave)");
+                    // PENDING at once, before the station keys its acceptance, as VARA says it
+                    // on hearing the call: heard while it listens, a scanning Trimode stops its
+                    // scan ("Holding scanner for 120 seconds") and takes the CONNECTED
+                    // whenever it comes. It had come with the CONNECTED, held past the end of
+                    // the listening window the call was answered in (ADR-0096).
+                    if name == "connected" && called && host.listening && !pending_said {
+                        if !say(&mut writer, &Notification::Pending.line()) {
+                            return;
+                        }
+                        pending_said = true;
+                    }
                     if name == "connected"
                         && called
                         && (!host.listening || scan.late(Instant::now()))
@@ -582,18 +765,47 @@ fn serve_commands(
                         if trace {
                             eprintln!("host (held CONNECTED until LISTEN on)");
                         }
+                        note(
+                            notes,
+                            false,
+                            format!(
+                                "CONNECTED for the call from {} held: the program {}",
+                                remote_of(&event.data),
+                                if host.listening {
+                                    "is at the end of a listening window (it scans)"
+                                } else {
+                                    "has LISTEN off"
+                                }
+                            ),
+                        );
                         pending_connected = Some(event.data.clone());
+                        untold = true;
                         continue;
                     }
                     // A disconnection cancels a connection still held for LISTEN: the host was
-                    // never told of it, so it is told of neither.
+                    // never told of it, so it is told of neither — only that the call PENDING
+                    // announced came to nothing. An untold session's closing identifier is
+                    // still not the program's.
                     if name == "disconnected" {
-                        pending_connected = None;
+                        if pending_connected.take().is_some() && pending_said {
+                            note(
+                                notes,
+                                false,
+                                "the call ended before the program was told CONNECTED: \
+                                 CANCELPENDING",
+                            );
+                            if !say(&mut writer, &Notification::CancelPending.line()) {
+                                return;
+                            }
+                        }
+                        pending_said = false;
+                        untold = untold && event.data["identifier_pending"].as_bool() == Some(true);
                     }
                     // The program's own session ended: it hears DISCONNECTED once the station's
                     // closing identifier has gone out — the last thing the station sends for
                     // the session, which a host keying the radio keys too (ADR-0075)
                     if name == "identified" {
+                        untold = false;
                         if disconnect_held.take().is_some()
                             && !say(&mut writer, &Notification::Disconnected.line())
                         {
@@ -624,10 +836,15 @@ fn serve_commands(
                         &host,
                         &mut connected_to,
                         &mut calling,
+                        pending_said,
                         &mut writer,
                         &say,
                     ) {
                         return;
+                    }
+                    if name == "connected" {
+                        pending_said = false;
+                        untold = connected_to.is_none();
                     }
                 }
                 // the other station's frames, as they arrive: the SNR each was received
@@ -760,15 +977,25 @@ fn bit_rates_of(capabilities: &serde_json::Value) -> Vec<u64> {
         .unwrap_or_default()
 }
 
+/// The other station of a `state` event: the first word of its detail, `"<call> (role)"`.
+fn remote_of(data: &serde_json::Value) -> &str {
+    data["detail"]
+        .as_str()
+        .and_then(|detail| detail.split_whitespace().next())
+        .unwrap_or("?")
+}
+
 /// Turn a state event into the lines the published interface uses.
 ///
 /// `connected_to` is the session the host was told of with `CONNECTED`; `calling`, a call it
-/// placed that has not come up.
+/// placed that has not come up; `pending_said`, that the host has heard the `PENDING` of this
+/// one already.
 fn report_state(
     data: &serde_json::Value,
     host: &HostState,
     connected_to: &mut Option<String>,
     calling: &mut bool,
+    pending_said: bool,
     writer: &mut &TcpStream,
     say: &impl Fn(&mut &TcpStream, &str) -> bool,
 ) -> bool {
@@ -808,9 +1035,9 @@ fn report_state(
             } else {
                 (mine.clone(), remote)
             };
-            // the called side hears PENDING first, as it would from any modem: the engine
-            // answers a call in one step, so the two arrive together
-            (!called || say(writer, &Notification::Pending.line()))
+            // the called side hears PENDING first, as it would from any modem — said already
+            // when the station took the call, unless the program was not listening then
+            (!called || pending_said || say(writer, &Notification::Pending.line()))
                 // a client that thinks the modem is speed-limited warns its user about it;
                 // this one is free software and has no such limit, so say so before the
                 // session
@@ -1377,6 +1604,161 @@ mod tests {
         drop(modem);
     }
 
+    /// A host that scans like Trimode, its beat learned by the adapter: windows of `window`
+    /// listening, 50 ms deaf; it is left listening, the last window just opened.
+    fn scan_like_trimode(client: &mut Client, window: Duration) {
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        for _ in 0..2 {
+            std::thread::sleep(window);
+            client.send("LISTEN OFF");
+            assert_eq!(client.expect(|l| l == "OK"), "OK");
+            std::thread::sleep(Duration::from_millis(50));
+            client.send("LISTEN ON");
+            assert_eq!(client.expect(|l| l == "OK"), "OK");
+        }
+    }
+
+    #[test]
+    fn pending_goes_at_once_and_a_held_connected_follows_at_the_next_window() {
+        // KK4ODA-1, 2026-10-25: a call answered in the last quarter of Trimode's listening
+        // window had its PENDING held with the CONNECTED. Trimode went deaf, its LISTEN OFF
+        // stuck behind the station's PTT ON, and the block it heard three seconds later was
+        // ignored "in scan state Deaf". PENDING now goes as the station takes the call, before
+        // it keys: heard while listening, it stops Trimode's scan (ADR-0096).
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        // windows long enough that a loaded runner's stretched sleeps keep the beat
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        // late in the window: the station takes the call and keys its acceptance
+        std::thread::sleep(Duration::from_millis(850));
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED") || l.starts_with("PTT")),
+            "PENDING"
+        );
+        // nothing more yet — no CONNECTED, and no PTT for an acceptance it was not told of
+        std::thread::sleep(Duration::from_millis(100));
+        client.send("VERSION");
+        let next = client.expect(|l| {
+            l.starts_with("VERSION") || l.starts_with("CONNECTED") || l.starts_with("PTT")
+        });
+        assert!(next.starts_with("VERSION"), "{next}");
+        // the scan comes round: LISTEN off, on, and the block follows with PENDING again
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
+            "PENDING"
+        );
+        assert_eq!(
+            client.expect(|l| l.starts_with("CONNECTED")),
+            "CONNECTED KK4XYZ W4ODA 2300"
+        );
+        // the PTT OFF of the keying it was not told of is not said either
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT ON");
+        let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
+        assert!(notes.iter().any(|n| n.contains("held")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_call_in_the_middle_of_a_window_hears_pending_and_connected_together() {
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
+            "PENDING"
+        );
+        // one PENDING, then the rest of the block
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("REGISTERED")),
+            "REGISTERED W4ODA"
+        );
+        assert!(
+            client
+                .expect(|l| l.starts_with("CONNECTED"))
+                .starts_with("CONNECTED KK4XYZ")
+        );
+        drop(server);
+    }
+
+    #[test]
+    fn a_call_that_ends_while_its_connected_is_held_is_cancelled() {
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(850));
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        assert_eq!(client.expect(|l| l == "PENDING"), "PENDING");
+        // the caller never heard the acceptance: the session ends before CONNECTED was said
+        modem.publish("state", ended("link timed out"));
+        assert_eq!(
+            client.expect(|l| l == "CANCELPENDING"
+                || l.starts_with("CONNECTED")
+                || l == "DISCONNECTED"),
+            "CANCELPENDING"
+        );
+        assert!(!told_disconnected_before_version(&mut client));
+        drop(server);
+    }
+
+    #[test]
+    fn a_program_that_does_not_key_hears_no_ptt_for_a_session_it_was_not_told_of() {
+        // the panel's Test while Trimode scans: Trimode keys nothing, and a PTT ON from the
+        // modem would hold back its scan's commands for as long as the transmitter is keyed
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "ND1J (master)", "callsign": "W4ODA"}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        // its closing identifier is the panel's too
+        modem.publish(
+            "state",
+            json!({"name": "disconnected", "detail": "closed", "state": "Idle",
+                   "callsign": "W4ODA", "remote": "ND1J", "identifier_pending": true}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        modem.publish("state", json!({"name": "identified", "detail": ""}));
+        std::thread::sleep(Duration::from_millis(200));
+        client.send("VERSION");
+        let next = client.expect(|l| l.starts_with("VERSION") || l.starts_with("PTT"));
+        assert!(next.starts_with("VERSION"), "{next}");
+        // a keying outside any session — a beacon — is said, as before
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT ON");
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT OFF");
+        drop(server);
+    }
+
     /// A stub modem the test scripts: `answer` gives each request's result, and publishes
     /// what the request set in motion before that — the order the daemon keeps — and the test
     /// publishes events of its own whenever it likes.
@@ -1704,19 +2086,66 @@ mod tests {
     }
 
     #[test]
-    fn a_second_host_is_refused_rather_than_interleaved() {
-        // two programs taking turns keying one transmitter is not a situation to invent
-        // semantics for, and a silent hang is the worst possible answer
-        let (server, worker, stop, _) = server();
+    fn a_program_that_connects_again_replaces_the_one_attached() {
+        // RMS Trimode restarts its "VARA program" when a command goes unanswered and opens
+        // the ports again without closing the old ones: told WRONG every two minutes, the
+        // gateway stayed deaf until Trimode was restarted by hand (KK4ODA-1, 2026-10-25). The
+        // newest connection is the program's, as on a VARA started again.
+        let (modem, server) = Modem::start(|_, _| json!({}));
         let mut first = Client::connect(&server);
-        first.send("MYCALL W4ODA");
+        assert_eq!(first.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        first.send("LISTEN ON");
         assert_eq!(first.expect(|l| l == "OK"), "OK");
+        let mut old_data = TcpStream::connect(server.data_address).expect("data port");
+        old_data
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("timeout");
 
         let mut second = Client::connect(&server);
-        assert_eq!(second.line(), "WRONG");
+        assert_eq!(second.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        // the old connection is closed under the program that left it
+        let mut rest = Vec::new();
+        let _ = first.reader.read_to_end(&mut rest);
+        // and what it said goes with it: the newcomer has not said LISTEN ON
+        assert!(!modem.flags.listening.load(Ordering::SeqCst));
+        second.send("MYCALL W4ODA");
+        assert_eq!(second.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(modem.flags.attached.load(Ordering::SeqCst));
 
-        stop.store(true, Ordering::Relaxed);
-        worker.join().expect("worker");
+        // the data port too: a second connection is served, the first shut
+        let mut new_data = TcpStream::connect(server.data_address).expect("data port");
+        let mut byte = [0u8; 1];
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match std::io::Read::read(&mut old_data, &mut byte) {
+                Ok(0) => break,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {}
+                other => panic!("the old data connection was not shut: {other:?}"),
+            }
+        }
+        second.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(second.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
+        );
+        assert!(
+            second
+                .expect(|l| l.starts_with("CONNECTED"))
+                .contains("KK4XYZ")
+        );
+        new_data.write_all(b"from the new one").expect("write");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !modem.methods().iter().any(|m| m == "send") {
+            assert!(Instant::now() < deadline, "{:?}", modem.methods());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
+        assert!(
+            notes.iter().any(|n| n.contains("it replaces it")),
+            "{notes:?}"
+        );
     }
 
     #[test]
@@ -1985,7 +2414,7 @@ mod tests {
             json!({"queued_bytes": 512, "channel_busy": false, "mode": 4,
                    "link": {"remote": "ND1J", "seconds": 3.0}}),
         );
-        modem.publish("ptt", json!({"on": true}));
+        modem.publish("ptt", json!({"on": true, "host_keys": true}));
         // the channel is taken for the whole session, between the frames too: a program that
         // waits for a clear channel to beacon waits for the session to end
         assert_eq!(client.expect(|l| l.starts_with("BUSY")), "BUSY ON");

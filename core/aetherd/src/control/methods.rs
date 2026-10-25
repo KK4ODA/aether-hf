@@ -210,6 +210,8 @@ pub struct HostStatus {
     pub data_address: String,
     /// Whether a host program is connected right now.
     pub connected: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The adapter's lines for the log, taken by the run loop.
+    pub notes: crate::host::server::Notes,
 }
 
 impl DaemonState {

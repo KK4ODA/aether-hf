@@ -661,6 +661,7 @@ fn start_servers(
             command_address: server.command_address.to_string(),
             data_address: server.data_address.to_string(),
             connected: std::sync::Arc::clone(&server.connected),
+            notes: std::sync::Arc::clone(&server.notes),
         });
         daemon.log.record(
             Level::Info,
@@ -678,6 +679,25 @@ fn start_servers(
         None
     };
     Ok((control, host))
+}
+
+/// The host adapter's lines (ADR-0096): a program attaching, leaving or replaced, and a
+/// `CONNECTED` held for a scanning one.
+fn log_host_notes(station: &Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
+    let Some(host) = &daemon.host else { return };
+    let notes = host
+        .notes
+        .lock()
+        .map(|mut notes| std::mem::take(&mut *notes))
+        .unwrap_or_default();
+    if notes.is_empty() {
+        return;
+    }
+    let state = format!("{:?}", station.state());
+    for note in notes {
+        let level = if note.warn { Level::Warn } else { Level::Info };
+        daemon.log.record(level, "host", &note.text, &state);
+    }
 }
 
 /// Keep the KISS port as the configuration says (ADR-0019): started, stopped, or started
@@ -1235,6 +1255,7 @@ fn serve(
         let pass_began = std::time::Instant::now();
         answer_commands(station, control, daemon, stopping, restarting);
         sync_kiss(station, daemon);
+        log_host_notes(station, daemon);
         // what the host program attached says about answering calls; one that has gone takes
         // its bandwidth with it (ADR-0026)
         station.set_host(host_presence(daemon));
@@ -1308,7 +1329,12 @@ fn serve(
                 if keyed { "keyed" } else { "released" },
                 &state_name(station),
             );
-            control.publish(&Event::new("ptt", json!({ "on": keyed })));
+            // and whether the host program keys it: one that does not hears the keyings of its
+            // own business only (ADR-0096)
+            control.publish(&Event::new(
+                "ptt",
+                json!({ "on": keyed, "host_keys": station.config().keyed_by_host }),
+            ));
         }
 
         note_audio_losses(

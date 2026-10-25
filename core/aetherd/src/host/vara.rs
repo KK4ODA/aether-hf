@@ -411,9 +411,14 @@ pub enum Notification {
         /// The bandwidth in use, in hertz.
         bandwidth_hz: u32,
     },
-    /// An incoming call is being answered: sent to the called side before `CONNECTED`,
-    /// which is the order every client expects the two in.
+    /// An incoming call is being answered: sent to the called side as soon as the station
+    /// takes the call, before it keys its acceptance and before `CONNECTED`. A scanning RMS
+    /// Trimode stops scanning when it hears it ("Connect pending received -- Holding scanner
+    /// for 120 seconds"), which is what lets the `CONNECTED` behind it land (ADR-0096).
     Pending,
+    /// A call `PENDING` announced came to nothing before `CONNECTED` was said: the host can
+    /// go back to what it was doing (VARA's word for it).
+    CancelPending,
     /// The link carries no encryption — a statement VARA makes after `CONNECTED` and at
     /// the end of a transmission, and one that is simply true of this modem.
     EncryptionDisabled,
@@ -473,6 +478,7 @@ impl Notification {
                 let _ = write!(out, "CONNECTED {caller} {called} {bandwidth_hz}");
             }
             Self::Pending => out.push_str("PENDING"),
+            Self::CancelPending => out.push_str("CANCELPENDING"),
             Self::EncryptionDisabled => out.push_str("ENCRYPTION DISABLED"),
             Self::Disconnected => out.push_str("DISCONNECTED"),
             Self::Buffer(bytes) => {
@@ -747,6 +753,7 @@ mod tests {
         assert_eq!(Notification::Busy(true).line(), "BUSY ON");
         assert_eq!(Notification::Disconnected.line(), "DISCONNECTED");
         assert_eq!(Notification::Pending.line(), "PENDING");
+        assert_eq!(Notification::CancelPending.line(), "CANCELPENDING");
         assert_eq!(
             Notification::EncryptionDisabled.line(),
             "ENCRYPTION DISABLED"

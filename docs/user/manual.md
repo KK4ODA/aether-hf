@@ -531,7 +531,13 @@ A Winlink gateway â€” RMS Trimode at the gateway, Winlink Express in the field â
 by step in [Winlink through an Aether gateway](winlink-gateway.md).
 
 The host program sees only its own sessions. A session you start from the panel is not reported
-to it, though the program's BUSY reads ON while it runs.
+to it, though the program's BUSY reads ON while it runs. Unless the program keys the radio, it is
+not told PTT for that session either: RMS Trimode stops sending commands while it thinks the
+radio is keyed.
+
+One program at a time uses the host port. If a program connects again, for example after it
+restarted its modem, the new connection replaces the old one. The Log tab says so (*host:* lines),
+and says when a program attaches or leaves.
 
 For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** and see
 [KISS programs](kiss.md).
