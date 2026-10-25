@@ -2376,7 +2376,14 @@ at the span's end; one symbol admits the next frame's early sidelobe) passes K1,
 (91/94 %) only where the false candidate reads 1.3 or more, which noise never does (≤ 1.07). R2
 (strongest wins) and the guard alone each fail. Six of report 15's 26 frames "never detected"
 were hidden by the span rule: for the rate review, "never detected" is partly the receiver.
-**Awaiting the author's decision** (`01-results.md` §8); nothing on the air changed.
+**ADR-0095 (the author's choice of R3h, K2's miss accepted):** the model's and the port's stream
+take the rule (`_hidden`/`hidden()`, `_inside_decoded`/`inside_decoded()`, a half-symbol
+`end_guard`; the port's finished frames keep `Known { decoded, confidence }`), the bench's switches
+are gone from the receiver and `bench_hidden.py` rebuilds every rule it measured in
+`BenchReceiver` (R0 the rule before), and `TRUSTED_CONFIDENCE` is `aether_phy::stream`'s, the
+daemon's `DETECT_CONFIDENCE_TRUSTED` that one number. Through the port, 16 recordings: 850 → 859
+decoded, none lost. The bench labels a data frame by its OFDM mode index (`m<n>`), the port's
+replay by its rung.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

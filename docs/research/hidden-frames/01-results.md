@@ -77,16 +77,16 @@ Hidden by a weak false candidate (the case of §1 of the plan), with the model's
 
 | recording | the false candidate | the frame it hid |
 |---|---|---|
-| ND1J, 10-23 16:07Z | 212.375 s, data r6, 1.04 | 212.846 s, KK4ODA-1's answer, 1.75, +11.4 dB |
+| ND1J, 10-23 16:07Z | 212.375 s, data, 1.04 | 212.846 s, KK4ODA-1's answer, 1.75, +11.4 dB |
 | KK4ODA-1, 10-23 16:04Z (new) | not traced | 137.329 s, ND1J's control frame, 1.72, +9.8 dB |
 | KK4ODA-1, 10-24 15:55Z | 206.184 s, control, 1.04 | 206.441 s, ND1J's header, 1.75, +8.4 dB, and the data frame after it |
-| ND1J, 10-24 15:55Z | 231.276 s, data r12, 1.11 | 231.608 s, KK4ODA-1's answer, 1.74, +11.2 dB |
+| ND1J, 10-24 15:55Z | 231.276 s, data, 1.11 | 231.608 s, KK4ODA-1's answer, 1.74, +11.2 dB |
 | KK4ODA-1, 10-24 16:00Z (new) | 106.818 s, control, 1.10 | 106.855 s, ND1J's control frame, 1.54, −5.0 dB: its own early copy, 37 ms ahead |
 
 Hidden by the span's end (§5), on the air: at KK4ODA-1 in ND1J's Test of 10-24 15:55Z, two
-rung-9 frames back to back at 88.60 and 89.65 s, lost as built to a copy of the first 31 ms late
-(88.627 s, read as r7 at 1.38, failed) whose span hid the second; at KK4ODA-1 in KQ4SAX's Test of
-10-23 21:18Z, a rung-6 frame at 117.32 s lost the same way (its late copy at 117.350 s, 1.34).
+rung-11 frames back to back at 88.60 and 89.65 s, lost as built to a copy of the first 31 ms late
+(88.627 s, 1.38, failed) whose span hid the second; at KK4ODA-1 in KQ4SAX's Test of
+10-23 21:18Z, a rung-12 frame at 117.32 s lost the same way (its late copy at 117.350 s, 1.34).
 
 **Report 15's "never detected".** In KK4ODA-1's side of WC4Y's Test of 10-23 00:52Z, R3h hands
 out six frames more than the rule as built, and all six fail. On WC4Y's clock (KK4ODA-1's
@@ -94,12 +94,12 @@ recording starts 19.7 s later) each falls on a data frame WC4Y sent and KK4ODA-1
 
 | R3h, KK4ODA-1's recording | WC4Y's clock | WC4Y's transmission, frame |
 |---|---|---|
-| 53.77 s, r7, 1.23, −3.6 dB | 73.5 s | 1, the sixth (#5, first copy) |
-| 78.32 s, r7, 1.31, −0.8 dB | 98.1 s | 3, the fifth (#9, second copy) |
-| 174.00 s, r7, 1.16, −2.3 dB | 193.7 s | 11, the third (#14, third copy) |
+| 53.77 s, rung 7, 1.23, −3.6 dB | 73.5 s | 1, the sixth (#5, first copy) |
+| 78.32 s, rung 7, 1.31, −0.8 dB | 98.1 s | 3, the fifth (#9, second copy) |
+| 174.00 s, rung 7, 1.16, −2.3 dB | 193.7 s | 11, the third (#14, third copy) |
 | 259.11 s, read as control, 1.04 | 278.8 s | 16, the ladder's rung 8, the third |
-| 299.25 s, r5, 1.02 | 319.0 s | 21, the ladder's rung 11, the first |
-| 301.36 s, r5, 1.11 | 321.1 s | 21, the third |
+| 299.25 s, rung 11, 1.02 | 319.0 s | 21, the ladder's rung 11, the first |
+| 301.36 s, rung 11, 1.11 | 321.1 s | 21, the third |
 
 `rung_reading.py --timeline` counts 26 frames never detected in that session (20 of them rung 7,
 six on the ladder); six were hidden by the span rule. They were weak and would not have decoded,
@@ -213,6 +213,8 @@ R3 (the one-symbol guard) passes K1, K4 and K5 and misses K3 by one loss (§5); 
 alone) passes K3–K5 on traffic and fails K1 on the air (§2.1).
 
 ## 8. The decision
+
+**The author took option 1 (2026-10-25): R3h, with K2's miss accepted.** ADR-0095.
 
 The plan sends a narrow miss to the author with its trace. R3h misses only K2, and the trace
 is §3: every trial it cannot recover has a false candidate read at 1.30–1.49, which R1 trusts by

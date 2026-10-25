@@ -134,7 +134,7 @@ detector's sidelobe lies a symbol early, and a frame's late copy a symbol late.
 ## 4b. Second amendment: half a symbol (registered 2026-10-25, before the runs it names)
 
 R3's runs, M1–M3: K1 passes (the four hidden frames, and three frames the span's end had cost
-on the air: two of ND1J's rung-9 frames at KK4ODA-1 on 10-24, one of KQ4SAX's rung-6 frames on
+on the air: two of ND1J's rung-11 frames at KK4ODA-1 on 10-24, one of KQ4SAX's rung-12 frames on
 10-23); M2 as R1's (91.4 % and 94.5 %; 100 % and 99.8 % of the case R1 is for); on M3 133 more
 frames decoded than as built (+2.6 % at 2300 Hz, +3.7 % at 500 Hz), unmatched candidates 243 → 70,
 0.26 false frames added per 1 000 at 500 Hz and none at 2300 Hz, decode attempts +2.7 % and

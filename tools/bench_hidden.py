@@ -107,7 +107,7 @@ class Found:
     snr_db: float
 
     def label(self) -> str:
-        kind = "tone" if self.tone else ("control" if self.control else f"data r{self.mode}")
+        kind = "tone" if self.tone else ("control" if self.control else f"data m{self.mode}")
         state = "decoded" if self.decoded else "failed"
         return (
             f"{self.start_s:9.3f} s  {kind:12} {state:7}  acq {self.detect_confidence:5.2f}  "
