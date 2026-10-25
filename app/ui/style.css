@@ -3575,12 +3575,21 @@ footer.bar > span {
   background: var(--text-3);
 }
 
-/* ── compact: a small front panel ─────────────────────────────────── */
+/* ── compact and mini: a small front panel ────────────────────────── */
 /*
- * The desktop shell sizes the window to the page (up to 520 px wide). Compact is not the
- * full panel shrunk: it is the display well on a row of its own — the state and the lamps —
- * and under it one meter bridge of the four readings that matter (rung, SNR, throughput,
- * the other station), with the mark, the verdict and the callsign above. Nothing else. */
+ * The desktop shell sizes the window to the page (up to 640 px wide for Compact, 520 for
+ * Mini). Neither is the full panel shrunk: each is the display well on a row of its own — the
+ * state and the lamps — and under it one meter bridge of the four readings that matter (rung,
+ * SNR, throughput, the other station), with the mark, the verdict and the callsign above.
+ * Compact adds the channel's activity over the last two minutes, the live trace of what the
+ * radio hears and when this station keyed (`body.compact`); Mini is the readings alone
+ * (`body.compact.mini`). */
+
+.view-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 
 body.compact {
   min-height: 0;
@@ -3681,6 +3690,32 @@ body.compact .reading .sub {
   display: none;
 }
 
+/* Compact: the activity chart under the readings, without its card or its neighbour */
+body.compact:not(.mini) #history-card {
+  display: flex;
+  margin-top: var(--s2);
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+body.compact:not(.mini) #history-card > .card-head,
+body.compact:not(.mini) #history-card .charts > .chart:first-child,
+body.compact:not(.mini) #history-card .chart figcaption {
+  display: none;
+}
+
+body.compact:not(.mini) #history-card .charts {
+  display: block;
+}
+
+body.compact:not(.mini) #history-card canvas {
+  flex: none;
+  height: 120px;
+  min-height: 0;
+}
+
 @media (max-width: 470px) {
   body.compact #readings-link {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3697,6 +3732,27 @@ body.compact .reading .sub {
 }
 
 /* ── narrower windows ───────────────────────────────────────────── */
+
+/* A laptop's screen: the Status tab gives up some of its plots' height and some padding, so
+   the readings, both plots and the counters fit a window of about 680 px without scrolling */
+@media (max-height: 820px) {
+  main {
+    padding-top: var(--s3);
+  }
+
+  .history-card canvas {
+    min-height: 96px;
+  }
+
+  .reading .value {
+    font-size: clamp(14px, 12cqi, var(--fs-xl));
+  }
+
+  .tile {
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+}
 
 /* the display well gives up its readings before it wraps: the rung first, then the SNR and
    the dial (both are on the Status and Session tabs), and on a phone it takes a row */

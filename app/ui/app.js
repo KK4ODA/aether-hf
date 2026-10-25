@@ -1161,6 +1161,8 @@ function legendRows(ctx, plotWidth, items) {
 /// Horizontal grid lines every `step`, labelled at the left.
 function drawValueAxis(f, low, high, step) {
   const { ctx, c } = f;
+  // a short plot (Compact's activity chart) keeps its labels 18 px apart at least
+  while (step > 0 && Math.abs(f.y(low) - f.y(low + step)) < 18) step *= 2;
   ctx.lineWidth = 1;
   ctx.textAlign = "right";
   for (let value = Math.ceil(low / step) * step; value <= high; value += step) {
@@ -2228,29 +2230,41 @@ function renderFrames() {
   }
 }
 
-// ── compact ─────────────────────────────────────────────────────────
+// ── views: full, compact, mini ──────────────────────────────────────
 
+// The header's switch: every tab; the readings with the channel's activity, the live trace of
+// what the radio hears; the readings alone. Compact and Mini share `body.compact`, and Mini
+// adds `mini`.
+const VIEWS = ["full", "compact", "mini"];
+// how wide each small view's window is at most, in logical pixels
+const VIEW_WIDTH = { compact: 640, mini: 520 };
+let currentView = "full";
 let sizeBeforeCompact = null;
 
-// In the desktop shell the window follows the view: compact fits the state strip and
-// the four readings, and coming back restores what the operator had. In a browser tab
-// there is no window to size; the layout still compacts.
-async function fitShellWindow(on) {
+// In the desktop shell the window follows the view: a small view fits the state strip, the
+// four readings and, in Compact, the activity chart; coming back restores what the operator
+// had. In a browser tab there is no window to size; the layout still compacts.
+async function fitShellWindow(view) {
   const tauri = window.__TAURI__;
   const getWindow = tauri?.window?.getCurrentWindow;
   const LogicalSize = tauri?.dpi?.LogicalSize ?? tauri?.window?.LogicalSize;
   if (!getWindow || !LogicalSize) return;
   try {
     const win = getWindow();
-    if (on) {
-      const scale = await win.scaleFactor();
-      const size = await win.innerSize();
-      sizeBeforeCompact = { width: size.width / scale, height: size.height / scale };
-      // let the compact layout settle before measuring what it needs
+    if (view !== "full") {
+      // from one small view to the other, the full view's size is the one kept
+      if (!sizeBeforeCompact) {
+        const scale = await win.scaleFactor();
+        const size = await win.innerSize();
+        sizeBeforeCompact = { width: size.width / scale, height: size.height / scale };
+      }
+      // let the small layout settle before measuring what it needs
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const height = Math.ceil(document.body.getBoundingClientRect().height) + 4;
       await win.setMinSize(new LogicalSize(360, 120));
-      await win.setSize(new LogicalSize(Math.min(sizeBeforeCompact.width, 520), height));
+      await win.setSize(
+        new LogicalSize(Math.min(sizeBeforeCompact.width, VIEW_WIDTH[view]), height),
+      );
     } else if (sizeBeforeCompact) {
       await win.setMinSize(new LogicalSize(420, 300));
       await win.setSize(new LogicalSize(sizeBeforeCompact.width, sizeBeforeCompact.height));
@@ -2258,6 +2272,75 @@ async function fitShellWindow(on) {
     }
   } catch {
     // the shell refused (an older shell without the panel's capability) or a browser
+  }
+}
+
+// The full view's window, kept between launches: sized once, it opens that way again. Without
+// it the window opened at its first size and grew to fit the Status tab's plots at every start,
+// which on a laptop's screen was most of the screen (KK4ODA, 2026-10-25).
+const WINDOW_KEY = "aether.window";
+let windowSaveTimer = null;
+
+function rememberWindowSize() {
+  if (!window.__TAURI__) return;
+  clearTimeout(windowSaveTimer);
+  windowSaveTimer = setTimeout(async () => {
+    if (currentView !== "full") return;
+    try {
+      if (await window.__TAURI__.window.getCurrentWindow().isMaximized()) return;
+      localStorage.setItem(
+        WINDOW_KEY,
+        JSON.stringify({ width: window.innerWidth, height: window.innerHeight }),
+      );
+    } catch {
+      // nothing kept: the next start fits the window as the first did
+    }
+  }, 600);
+}
+
+function savedWindowSize() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WINDOW_KEY) || "null");
+    if (saved && saved.width >= 420 && saved.height >= 300) return saved;
+  } catch {
+    // nothing kept, or something unreadable
+  }
+  return null;
+}
+
+// At the first open of a launch: the size the operator left the full view at, never larger
+// than the screen; when nothing was kept, the fit to the plots below.
+async function openWindow() {
+  const tauri = window.__TAURI__;
+  const getWindow = tauri?.window?.getCurrentWindow;
+  const LogicalSize = tauri?.dpi?.LogicalSize ?? tauri?.window?.LogicalSize;
+  const saved = savedWindowSize();
+  if (!getWindow || !LogicalSize || !saved) {
+    await fitWindowToCharts();
+    return;
+  }
+  try {
+    if (sessionStorage.getItem("aether-fitted") === "1") return;
+    sessionStorage.setItem("aether-fitted", "1");
+  } catch {
+    // storage may be unavailable: size it anyway, at worst on a reload too
+  }
+  const chrome = Math.max(0, window.outerHeight - window.innerHeight);
+  const size = {
+    width: Math.min(saved.width, window.screen?.availWidth || saved.width),
+    height: Math.min(saved.height, (window.screen?.availHeight || 10000) - chrome),
+  };
+  // a small view open already: this is the size to come back to
+  if (currentView !== "full") {
+    sizeBeforeCompact = size;
+    return;
+  }
+  try {
+    const win = getWindow();
+    if (await win.isMaximized()) return;
+    await win.setSize(new LogicalSize(size.width, size.height));
+  } catch {
+    // an older shell without the panel's window capability, or a refusal: keep its size
   }
 }
 
@@ -2303,13 +2386,19 @@ async function fitWindowToCharts() {
   }
 }
 
-function setCompact(on) {
-  document.body.classList.toggle("compact", on);
-  $("btn-compact").setAttribute("aria-pressed", String(on));
-  if (on) selectTab($("tab-status"));
-  fitShellWindow(on);
+function setView(view) {
+  if (!VIEWS.includes(view)) view = "full";
+  currentView = view;
+  document.body.classList.toggle("compact", view !== "full");
+  document.body.classList.toggle("mini", view === "mini");
+  for (const button of document.querySelectorAll("#view-switch [data-view]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.view === view));
+  }
+  if (view !== "full") selectTab($("tab-status"));
+  fitShellWindow(view);
   try {
-    localStorage.setItem("aether.compact", on ? "1" : "0");
+    localStorage.setItem("aether.view", view);
+    localStorage.removeItem("aether.compact");
   } catch {
     // a browser that keeps nothing keeps nothing
   }
@@ -5288,16 +5377,20 @@ function wire() {
       fastest.value = options[options.length - 1].value;
     }
   });
-  $("btn-compact").addEventListener("click", () => {
-    setCompact(!document.body.classList.contains("compact"));
-  });
-  let compact = false;
+  for (const button of document.querySelectorAll("#view-switch [data-view]")) {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  }
+  let view = "full";
   try {
-    compact = localStorage.getItem("aether.compact") === "1";
+    // before the three views, Compact was the smallest: Mini now
+    view =
+      localStorage.getItem("aether.view") ??
+      (localStorage.getItem("aether.compact") === "1" ? "mini" : "full");
   } catch {
     // nothing kept
   }
-  if (compact) setCompact(true);
+  if (view !== "full") setView(view);
+  window.addEventListener("resize", rememberWindowSize);
   // the stations' "3 min ago", the dial and the rules' verdict on it move on their own: a dial
   // turned on the radio shows its LEGAL / WARNING / TX BLOCKED within five seconds
   setInterval(() => {
@@ -6525,4 +6618,4 @@ wire();
 setLink(false);
 connect();
 // under the splash, once the first status has laid the tab out
-setTimeout(fitWindowToCharts, 1500);
+setTimeout(openWindow, 1500);

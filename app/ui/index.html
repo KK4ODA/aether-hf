@@ -49,7 +49,11 @@
         <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, KISS programs on the KISS port" role="status" hidden></span>
         <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: a host program asked for it, or a call came in it" role="status" hidden></span>
         <span class="lamp modem-lamp" id="lamp-link" title="Modem: whether this panel is connected to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
-        <button class="ghost" id="btn-compact" aria-pressed="false" title="Compact view: the state and the four readings that matter, in a small window">Compact</button>
+        <div class="view-switch" id="view-switch" role="group" aria-label="View" title="How much of the panel to show: all of it, the readings with the channel's activity, or the readings alone">
+          <button class="ghost" id="btn-view-full" data-view="full" aria-pressed="true" title="Full view: every tab, in the window you choose">Full</button>
+          <button class="ghost" id="btn-compact" data-view="compact" aria-pressed="false" title="Compact view: the state, the four readings that matter and the channel's activity over the last two minutes, in a small window">Compact</button>
+          <button class="ghost" id="btn-view-mini" data-view="mini" aria-pressed="false" title="Mini view: the state and the four readings alone, in the smallest window">Mini</button>
+        </div>
         <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
       </div>
     </header>
