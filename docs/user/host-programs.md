@@ -54,9 +54,10 @@ radio's port (which also reads the dial), a serial RTS/DTR line, a CM108 interfa
 `rigctld` or FLRig — and step 1 has your rules, control and licence class.
 
 In the **host program**, turn its radio control off: VarAC's *RIG* tab *PTT* and *Frequency
-Control* **None**; Winlink Express's radio setup to none. Only one program can hold the radio's
-CAT port: if Aether keys by a serial line or a CM108 pin instead, the program can keep its
-frequency control on CAT. Tune by picking a dial from the Session tab's dial list, or by hand.
+Control* **None**; Winlink Express's *Radio Setup* to radio **Manual**, COM port **None**. Only
+one program can hold the radio's CAT port: if Aether keys by a serial line or a CM108 pin
+instead, the program can keep its frequency control on CAT. Tune by picking a dial from the
+Session tab's dial list, or by hand.
 
 ## Sharing the radio through rigctld or FLRig
 

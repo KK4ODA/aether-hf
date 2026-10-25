@@ -228,9 +228,11 @@ gateway being open to the public, nothing to do with the service code; Aether an
   under **Service Codes** the private code beside the public one: `PUBLIC AETHER`.
 * Open a **Vara HF Winlink** session. In its window, *Settings › Vara TNC Setup*: host
   `127.0.0.1`, command port `8300`. The TNC path is Aether's `aether-hf.exe` with *auto-launch*
-  off, Aether started first — the way that is known to work; never `VARA.exe`. *Radio Setup*:
-  PTT none (Aether keys), and frequency control none while Aether holds the CAT port (on the
-  radio's CAT port if Aether keys by a serial line).
+  off, Aether started first — the way that is known to work; never `VARA.exe`.
+* *Settings › Radio Setup*: radio **Manual**, COM port **None**. Aether keys the radio, and
+  Winlink Express tunes nothing — you set the dial yourself, to the gateway's. Only if Aether
+  keys by a serial line or a CM108 pin may Winlink Express have the radio's CAT port for
+  frequency control instead.
 * **Channel Selection › Update Table Via Internet** (a phone's hotspot does) lists the gateway
   under the private code; pick it. Without Internet, type the gateway's callsign and dial
   frequency into the session window by hand; Winlink Express works out the centre frequency
