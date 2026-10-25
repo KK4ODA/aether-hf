@@ -51,9 +51,12 @@ rung its own data goes at, and the rung it advises the other station's data to g
 5. **The sender's choice** is its own C1 (C3, at the sender: `03-candidates.md` §2.3). A
    transmission no answer was heard for steps it down two rungs the echo allows (R9).
 6. **The advice** in every control frame is C1's choice for the frames the station receives: the
-   receiver's C1 (C1-R). The sender reads it as before — for a stuck frame's re-encode and split
-   targets (ADR-0085, ADR-0086) and for keeping a header on data above it (ADR-0076) — and does
-   not take it as its own choice.
+   receiver's C1 (C1-R). The sender reads it as before for keeping a header on data above it
+   (ADR-0076), and does not take it as its own choice. A stuck frame's re-encode and split
+   targets (ADR-0085, ADR-0086) go by the lower of the advice and the sender's own choice when
+   it last read an answer (the author's decision at Gate 5, 2026-10-25): under the advice alone,
+   on ITU NVIS at 500 Hz the receiver's C1 advised OFDM while the sender's own had moved to the
+   floor, and blocks cut at OFDM went fourteen copies over 200 s (`04-results.md` §3.26).
 7. **Kept from today:** the AWGN threshold tables, the usable rungs, the echo exclusions
    (ADR-0087), the 0.7/0.3 SNR smoothing, the ceiling, the stuck-frame rules.
 

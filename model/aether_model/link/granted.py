@@ -718,6 +718,10 @@ class GrantedEngine:
         self._peer_rung: int | None = None
         """The rung the other station last recommended, before any step down for silence: a
         stranded frame goes in pieces only below it (ADR-0086)."""
+        self._own_rung: int | None = None
+        """C1 at the sender's own choice when it last read an answer: a stranded frame comes
+        down, or goes in pieces, only below the lower of it and the other station's advice
+        (ADR-0094 §2.6)."""
         self.peer_snr_db: float | None = None
         """How the other station says it hears this one (every control frame carries it)."""
         self._heard_db: float | None = None
@@ -2791,6 +2795,14 @@ class GrantedEngine:
                 # sent empty headers for 160 s, the try never decided (04-results.md §3.21)
                 probe = None
         recommendation = min(self._recommended, self._cap())
+        asked = None if self._peer_rung is None else min(self._peer_rung, self._cap())
+        if self._own_rung is not None:
+            # the sender's own choice bounds its stranded frames as the advice does: on ITU
+            # NVIS at 500 Hz the receiver's C1 advised OFDM rung 5 while the sender's own had
+            # gone to the floor, and blocks cut at OFDM went fourteen copies over 200 s
+            # (04-results.md §3.26)
+            recommendation = min(recommendation, self._own_rung)
+            asked = None if asked is None else min(asked, self._own_rung)
         # what an unheard answer would have said is not resent blind: it waits for an answer —
         # through one silent slot. Two in a row and the answers are not getting through, and
         # the frames go again rather than not at all
@@ -2813,7 +2825,6 @@ class GrantedEngine:
                     # own rung until the session timed out. Not on silence alone: with the band
                     # gone, frames of a fast rung split onto the floor made each try 25 s, and
                     # the master tried past where the timed-out slave reckons it gives up
-                    asked = None if self._peer_rung is None else min(self._peer_rung, self._cap())
                     if asked is None or asked >= rec.mode:
                         continue
                     # and not before the copy the receiver combines with every one it holds
@@ -3015,6 +3026,8 @@ class GrantedEngine:
             self._peer_rung = ctl.rung
             if self._sender is not None and self._sent_copies:
                 self._judge_copies(newly)
+            if self._sender is not None and self._sender.snr_db is not None:
+                self._own_rung = self._sender.modes[self._sender._index]
 
     def _judge_copies(self, newly: set[int]) -> None:
         """C1-S: what an acknowledgement says of the copies sent since the last one — a block

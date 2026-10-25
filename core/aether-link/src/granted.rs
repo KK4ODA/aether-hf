@@ -1074,6 +1074,10 @@ pub struct GrantedEngine {
     /// The rung the other station last recommended, before any step down for silence: a
     /// stranded frame goes in pieces only below it (ADR-0086).
     peer_rung: Option<usize>,
+    /// C1 at the sender's own choice when it last read an answer: a stranded frame comes down,
+    /// or goes in pieces, only below the lower of it and the other station's advice (ADR-0094
+    /// §2.6).
+    own_rung: Option<usize>,
     peer_snr_db: Option<f64>,
     heard_db: Option<f64>,
     /// The readings of the last `family_readings` frames of the other's decoded.
@@ -1304,6 +1308,7 @@ impl GrantedEngine {
             last_data: None,
             recommended: config.initial_mode,
             peer_rung: None,
+            own_rung: None,
             timing,
             config,
             rng: Draws::new(seed),
@@ -1409,6 +1414,7 @@ impl GrantedEngine {
         self.tx_next = 0;
         self.recommended = self.config.initial_mode;
         self.peer_rung = None;
+        self.own_rung = None;
         self.peer_snr_db = None;
         self.heard_db = None;
         self.heard_recent.clear();
@@ -1428,8 +1434,11 @@ impl GrantedEngine {
         self.rate = rate_for(&self.timing, &self.config);
         self.asked = None;
         self.last_rx_mode = None;
-        self.sender = matches!(self.config.controller, Controller::DeliveryS | Controller::C1)
-            .then(|| delivery_for(&self.timing));
+        self.sender = matches!(
+            self.config.controller,
+            Controller::DeliveryS | Controller::C1
+        )
+        .then(|| delivery_for(&self.timing));
         self.price_controllers();
         self.sent_copies.clear();
         self.rx_base = 0;
@@ -4203,7 +4212,14 @@ impl GrantedEngine {
             // `_data_frames`)
             probe = None;
         }
-        let recommendation = self.recommended.min(self.cap());
+        let mut recommendation = self.recommended.min(self.cap());
+        let mut asked = self.peer_rung.map(|rung| rung.min(self.cap()));
+        if let Some(own) = self.own_rung {
+            // the sender's own choice bounds its stranded frames as the advice does (the
+            // model's `_data_frames`, 04-results.md §3.26)
+            recommendation = recommendation.min(own);
+            asked = asked.map(|rung| rung.min(own));
+        }
         // what an unheard answer would have said is not resent blind: it waits for an answer —
         // through one silent slot. Two in a row and the answers are not getting through, and
         // the frames go again rather than not at all
@@ -4241,7 +4257,7 @@ impl GrantedEngine {
                 // frame of its own at that rung (ADR-0086). Not on silence alone: with the band
                 // gone, frames of a fast rung split onto the floor made each try 25 s, and the
                 // master tried past where the timed-out slave reckons it gives up
-                let Some(asked) = self.peer_rung.map(|rung| rung.min(self.cap())) else {
+                let Some(asked) = asked else {
                     continue;
                 };
                 if asked >= rec_mode {
@@ -4557,6 +4573,11 @@ impl GrantedEngine {
             self.peer_rung = Some(usize::from(ctl.rung));
             if self.sender.is_some() && !self.sent_copies.is_empty() {
                 self.judge_copies(&newly);
+            }
+            if let Some(sender) = &self.sender
+                && sender.snr_db().is_some()
+            {
+                self.own_rung = Some(sender.choice());
             }
         }
     }

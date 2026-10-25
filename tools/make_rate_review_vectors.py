@@ -17,6 +17,7 @@ import json
 import random
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -25,7 +26,7 @@ from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.frames import DataKind, GrantFrame, GrantKind, data_capacity, decode_data
 from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing
-from aether_model.link.phy import Container, TxFrame
+from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.rate_review import (
     NARROW_CLASS_PENALTY_DB,
     WIDE_CLASS_PENALTY_DB,
@@ -228,6 +229,47 @@ def floor_in_flight(
     return run
 
 
+class _OfdmUnheard(TwoStationSim):
+    """Every OFDM data frame to station 1 never reported, whatever the channel."""
+
+    def __init__(self, *args: Any, timing: PhyTiming, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self._timing = timing
+
+    def _deliver(self, rx: int, frame: TxFrame, t0: float, t1: float, *, cut: bool = False) -> None:
+        if (
+            rx == 1
+            and frame.container is Container.DATA
+            and not self._timing.is_floor(frame.mode)
+            and decode_data(frame.payload)[0].kind is DataKind.DATA
+        ):
+            return
+        super()._deliver(rx, frame, t0, t1, cut=cut)
+
+
+def own_choice(seed: int) -> granted.Callable[[], list[granted.Recorder]]:
+    """C1 at the sender brings blocks stranded at OFDM down under its own choice (ADR-0094
+    §2.6): every OFDM data frame to the called station is lost, and its answers to the caller
+    are lost from 30 to 90 s, so the caller's own C1 steps down for the silent slots while the
+    advice in the answers, from frames never heard, stays on OFDM. Under the advice alone the
+    stranded blocks stayed at OFDM and nothing arrived in 900 s (``04-results.md`` §3.26)."""
+
+    def run() -> list[granted.Recorder]:
+        a, b, ra, rb = granted._pair(WIDE)
+        rng = random.Random(seed)
+
+        def unheard(rx: int, container: Container, t0: float) -> bool:
+            return rx == 0 and container is Container.CONTROL and 30.0 < t0 < 90.0
+
+        sim = _OfdmUnheard(
+            a, b, snr_db=10.0, seed=seed, timing=phy_timing(WIDE.params), unheard=unheard
+        )
+        granted._exchange(sim, a, b, granted._message(rng, 1500), granted._message(rng, 100))
+        return [ra, rb]
+
+    return run
+
+
 EXTRA = {
     "unheard-wide": unheard(WIDE, 41, 10.0),
     "unheard-narrow": unheard(NARROW, 42, 4.0),
@@ -235,6 +277,7 @@ EXTRA = {
     "lopsided-wide": lopsided(WIDE, 44, 4.0),
     "floor-in-flight": floor_in_flight(45),
     "edge-at-the-end": floor_in_flight(46, WIDE, 6.0, 1000),
+    "own-choice": own_choice(47),
 }
 """Sessions of this file's own."""
 
@@ -261,6 +304,10 @@ SESSIONS = (
 path, a weak one, the three fading channels, an outage, false detections, a ramp, stranded
 frames, an echo, a header cut short — and two of this file's own, with frames never detected."""
 
+SENDER_SESSIONS = ("own-choice",)
+"""Sessions only C1 at the sender runs (``delivery-s``, ``c1``): what they exercise is its own
+choice, and without it they deliver nothing."""
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -269,7 +316,8 @@ def main() -> int:
     sessions = []
     for controller in CONTROLLERS:
         granted.PROTOTYPE["controller"] = controller
-        for name in SESSIONS:
+        sender = controller in ("delivery-s", "c1")
+        for name in SESSIONS + (SENDER_SESSIONS if sender else ()):
             recorders = {**granted.SESSIONS, **EXTRA}[name]()
             sessions.append(
                 {"name": f"{controller}:{name}", "stations": [r.doc() for r in recorders]}

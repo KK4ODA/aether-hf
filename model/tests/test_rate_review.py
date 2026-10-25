@@ -328,3 +328,41 @@ def test_a_try_across_the_floors_edge_with_nothing_to_cut_lets_the_floor_frames_
     a._tx_queue.extend(bytes(500))
     frames = a._data_frames(math.inf)
     assert frames and {f.mode for f in frames} == {ofdm}  # with data to cut, the try's
+
+
+@pytest.mark.parametrize("controller", ["delivery-s", "c1"])
+def test_a_stranded_frame_comes_down_under_the_senders_own_choice(controller: str) -> None:
+    """A sender whose own C1 has moved to the floor while the other station still advises OFDM
+    brings a block stranded at OFDM down, as it would under the advice. Under the advice alone,
+    blocks cut at OFDM on ITU NVIS at 500 Hz went fourteen copies over 200 s while every new
+    block went on the floor (``04-results.md`` §3.26)."""
+    a, b = _pair(NARROW, controller)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    assert a.state is State.CONNECTED
+    # 500 Hz: OFDM rung 5 carries 22 bytes, rung 7 36; the floor's rung 1 (tone-36) 33
+    first, seventh, own = 5, 7, 1
+    assert data_capacity(a.timing.capacity(own)) == 33 and a.timing.is_floor(own)
+
+    def stranded(mode: int, body_len: int) -> int:
+        seq = a._tx_next
+        a._records[seq] = _TxRecord(
+            seq, bytes(body_len), mode, origin=mode, tx_count=a.cfg.max_combines + 1
+        )
+        a._tx_next = seq_after(seq)
+        return seq
+
+    a._recommended = a._peer_rung = seventh
+    # without the sender's own choice the advice keeps both where they are
+    a._own_rung = None
+    kept = [stranded(first, 22), stranded(seventh, 36)]
+    a._data_frames(math.inf)
+    assert [a._records[s].mode for s in kept] == [first, seventh]
+    # with it, the one the floor's rung 1 carries whole is re-encoded there, the other split
+    # (two pieces at rung 1 or rung 0: the more robust, ADR-0086)
+    a._own_rung = own
+    a._data_frames(math.inf)
+    assert [a._records[s].mode for s in kept] == [own, 0]
+    assert a._records[kept[0]].pieces is None and a._records[kept[1]].pieces is not None
+    assert a.stats.frames_reencoded >= 1 and a.stats.frames_split >= 1
