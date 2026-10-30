@@ -43,6 +43,11 @@ CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3
 - Performance claims only with a committed benchmark curve behind them.
 - Design from public standards (3GPP, IEEE, ITU-R, MIL-STD) and open literature; never
   from VARA internals. Host-interface compatibility uses VARA's *published* command set.
+- **VARA is a black box in every file** (the author's rule, 2026-10-30): cite its published
+  documents (the TNC command list, the KISS notes, the quick guide, the published
+  specification) and nothing else — never an analysis of its signal, its timing on the air or a
+  recording of it, and never a design argued from what it seems to do. `VERSION` answers with
+  Aether's own name, always, on a bench too.
 - Conventional Commits; short-lived branches, **fast-forwarded** into `master` (no squash:
   the release notes are generated from the commits by git-cliff). Push after each commit.
 - Code style: ruff (line length 100), mypy strict for new modules, docstrings explain *why*.

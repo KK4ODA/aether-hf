@@ -104,7 +104,7 @@ Every one of these has cost the project a day at some point; none is decoration.
    table in `bench/README.md`; for a link or timing change, the scenarios
    (`tools/session_matrix.py`, `bench/scenarios/`) before and after.
 7. **Public sources only.** Nothing derived from VARA's internals, from decompiling, or
-   from "I captured VARA's audio and matched it". Ask where a design came from when it is
+   from its signal on the air ("I captured VARA's audio and matched it"). Ask where a design came from when it is
    not obvious; a reference to a standard, a paper or an open implementation is the
    answer you want. Compatibility work targets VARA's *published* host command set.
 8. **Licence.** Contributions are MIT OR Apache-2.0 (`CONTRIBUTING.md` §Ground rules). A
