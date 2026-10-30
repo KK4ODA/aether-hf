@@ -1709,7 +1709,7 @@ scenarios `40m-closing-identifiers-2300` (two US callsigns) and `-ve3-` (one non
 endings each, and `80m-varac-chat-and-ping-500` (a `host a varac` emulator and `host-ping`).
 Three draws of all 50 scenarios: 150/150, no radiated overlap; the closing costs a median 8.4 s
 (3.6 % of air, ×1.042 against beta.110); the nightly baseline is these runs. **Those identifier
-checks never ran** from a607247 until 2026-10-20: `config::EXAMPLE` still said `schema_version =
+checks never ran** from d0c813a until 2026-10-20: `config::EXAMPLE` still said `schema_version =
 12`, the harness's `schema_of` reads it, and `identifier_faults` and `Host._check_identified`
 skip a station under 13 — the 150/150, the mixed pairs and every nightly were unjudged on them.
 The example says 13 now and `the_example_file_says_the_schema_this_version_writes` holds it to
@@ -1888,9 +1888,9 @@ keeps its workload with `GrantConfig` policies. A `ConnectBody` is protocol 9's 
 otherwise; a call of another version is still read, refused and said so (the crafted-call test).
 Moving the left-session list found the model spelling it `closed (no disc ack)` against its own
 end reason `closed (no DISC_ACK)` (the port had it right; fixed, with a test). The granted
-vectors regenerate byte for byte. **`research/link_arch` is frozen at `886f102`**, the last tree
+vectors regenerate byte for byte. **`research/link_arch` is frozen at `b0d422c`**, the last tree
 with `LinkEngine`, excluded from lint like the audit probes (`git worktree add ../aether-research
-886f102`). `docs/spec/air-interface.md` §3.2, §7 and §9 now describe protocol 9 (granted slots,
+b0d422c`). `docs/spec/air-interface.md` §3.2, §7 and §9 now describe protocol 9 (granted slots,
 the exact counts, the control frame, measurement frames); they had described protocol 7.
 
 **Three timing debts (2026-10-20, after Step 5).** *The Test's deadlines*: the probe's and the
@@ -2008,7 +2008,7 @@ no slower rung (72 bytes at rung 3, which this path decodes 2 in 20) is stranded
 either build; splitting it needs a wire change. *On the harness* (ADR-0084 §3): ADR-0082…0085 against beta.117,
 56 scenarios × 2 draws, 112 of 112 pass, no radiated overlap, air −6.5 %, Tests' file rate
 ×1.14; a third draw 56/56, and `bench/baselines/scenarios.csv` is the three draws (build
-`6389257`). Two draws ran slower (`20m-dx-500` s1058, `40m-winlink-exchange-2300` s1031): one
+`83eabd0`). Two draws ran slower (`20m-dx-500` s1058, `40m-winlink-exchange-2300` s1031): one
 followed frame each set the session on another course (a scratch daemon logged 6 and 1 frames
 followed, all at w 0.14–0.20); offline, the cap leaves 4 of ~1 350 ITU frames followed at 500 Hz
 and none of ~1 500 at 2 300 Hz, none with a changed decode (ADR-0082 §3). To isolate one change

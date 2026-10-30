@@ -53,9 +53,9 @@ today's (`base`), the chat request ADR-0027 adopted (`request`), and its two rej
 candidates (`handover`, `handover+request`), which meet the fault on every line and so measure it.
 Two engines before, each with this change after:
 
-* **ADR-0027's** — `master` at ce23476, the engine the finding was made on (the runs used the
+* **ADR-0027's** — `master` at 96e29be, the engine the finding was made on (the runs used the
   chat branch's copy, which differs only by ADR-0026's `set_air`, never called on the bench);
-* **today's** — `master` at f17fec5, with ADR-0030.
+* **today's** — `master` at 207dffc, with ADR-0030.
 
 On each: **the drop run**, 100 fresh sessions a point (`first_trial` 100) at −12, −6 and 0 dB on
 Good, Moderate and Poor, both airs — 1 800 sessions a policy, ADR-0027's drop run — and **the

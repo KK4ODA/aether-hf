@@ -321,7 +321,7 @@ he says so.
 * **A container restart stops detached harness runs.** Each finished run keeps its
   `result.json`: rebuild the CSV from them, and never start a second resume of an arm while the
   first still runs.
-* **The baseline.** `bench/baselines/scenarios.csv` is the nightly's (build `6389257`, three
+* **The baseline.** `bench/baselines/scenarios.csv` is the nightly's (build `83eabd0`, three
   draws). `scenario_trend.py --update` rewrites it only when a change is meant to alter timing.
 
 ## 9. Reporting

@@ -168,13 +168,13 @@ It is faster than ADR-0068 on bulk and exchange traffic.
 
 ## Reproduction
 
-**The research code runs at `886f102`**, the last tree with protocol 7's engine
+**The research code runs at `b0d422c`**, the last tree with protocol 7's engine
 (`aether_model.link.engine.LinkEngine`), which ADR-0069's Step 5 deleted on 2026-10-20. Every
 experiment compares against it, so the code is frozen there, as `tools/audit_probe_*.py` is at
 the tree it probes, and excluded from lint. To run it, check that tree out beside this one:
 
 ```
-git worktree add ../aether-research 886f102
+git worktree add ../aether-research b0d422c
 cd ../aether-research
 python -m uv sync
 ```

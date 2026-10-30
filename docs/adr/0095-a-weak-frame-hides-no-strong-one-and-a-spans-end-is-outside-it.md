@@ -90,7 +90,7 @@ control frame 0.3 s behind a cut preamble read 1.0–1.3, and two data frames ba
 through two rays whose later one leads by 16 samples — and fail on the old rule.
 
 Every recording in hand (16, both sides of eight Tests) through `aetherd --replay … --expect`,
-muted where the station was keyed as on the day, on the daemon before this change (`6a82774`) and
+muted where the station was keyed as on the day, on the daemon before this change (`760c161`) and
 after: **850 → 859 frames decoded, none lost**. The nine are the bench's: the five frames behind
 false detections — KK4ODA-1's answers at ND1J on 10-23 and 10-24, ND1J's headers at KK4ODA-1 on
 10-23, 10-24 15:55Z (with the data frame after it) and 10-24 16:00Z — and the three the span's end
@@ -102,7 +102,7 @@ than this change.
 
 ## 5. On the scenario harness
 
-Two draws of all 60 scenarios (`--seeds 2`) on each daemon, before (`6a82774`) and after:
+Two draws of all 60 scenarios (`--seeds 2`) on each daemon, before (`760c161`) and after:
 
 * **120 of 120 runs pass on both.** Air time 33 524 → 32 084 s (−4.3 %): the 500 Hz scenarios
   −5.4 %, the 2300 Hz ones −0.9 %. The median scenario is unchanged, and so are the Tests'

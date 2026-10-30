@@ -63,7 +63,7 @@ under every policy.
 `tools/bench_link.py` (2 kB, Good, Moderate and Poor, −12 to +12 dB, both airs, 20 sessions a
 point): identical in all 600 sessions.
 
-ADR-0031, ADR-0032 and this one together, against the engine at `f17fec5`, over the same 5 400
+ADR-0031, ADR-0032 and this one together, against the engine at `207dffc`, over the same 5 400
 chat sessions: 17 drops and one stall → 4 drops, lines lost 157 → 41. By cause: "no response"
 6 → 0, link timeouts 11 → 4, stalls 1 → 0.
 

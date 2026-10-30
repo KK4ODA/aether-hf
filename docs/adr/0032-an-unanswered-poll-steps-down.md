@@ -9,7 +9,7 @@ No frame, link protocol or configuration-file change.
 ADR-0030 §3 and ADR-0028 §4 (on its branch) traced the chat-bench drops that their fixes left
 to one fault: an idle sender's ordinary poll and the other station's ordinary answer, lost
 together in a slow ITU Good fade. On the 500 Hz air at −6 dB (the drop run's trials 122 and 188),
-today's turn-taking, the engine at `f17fec5`:
+today's turn-taking, the engine at `207dffc`:
 
 | time (s) | |
 |---|---|

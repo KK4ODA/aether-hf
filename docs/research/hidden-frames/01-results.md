@@ -2,7 +2,7 @@
 
 *2026-10-25. The plan, its criteria and its two amendments are `00-plan.md`; every run is
 `tools/bench_hidden.py` on the model's streaming receiver, fed 20 ms blocks as the daemon feeds
-it, at the tree of `f9ac90d` (the bench's switches; the receiver as built is unchanged). The runs'
+it, at the tree of `63fe53b` (the bench's switches; the receiver as built is unchanged). The runs'
 CSVs are not in the tree; the commands are below each table, and the seeds are the tool's
 defaults.*
 

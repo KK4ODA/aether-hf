@@ -77,7 +77,7 @@ chose the faster form knowing it (2026-10-25), and simplifying the advice is owe
 
 ## 3. What was measured
 
-C1 at the sender, its advice the current controller's (`1e212e7`, `04-results.md` §3.25), against
+C1 at the sender, its advice the current controller's (`11d1343`, `04-results.md` §3.25), against
 the current controller, on the criteria registered before any run (`03-candidates.md` §3):
 
 | criterion | C1 at the sender | the current | verdict |
@@ -135,7 +135,7 @@ the current controller, on the criteria registered before any run (`03-candidate
 **Gate 5 (the port, the daemon, the proof):**
 
 1. Model first: C1 at the sender is the engine's default (`GrantConfig.controller` =
-   `delivery-s`), the advice `RateController` as before; the stranded frames' bound (`c2dfa9f`).
+   `delivery-s`), the advice `RateController` as before; the stranded frames' bound (`42d7d9a`).
 2. The port (`granted.rs`); the granted vectors regenerate for this deliberate change.
 3. The daemon's metrics keep their meaning: `rate_snr_db` and `margin_db` are the advice's, the
    panel's *Receiver* line describes them, and `sending_rung` is C1's choice. Nothing the operator

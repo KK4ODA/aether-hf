@@ -180,7 +180,7 @@ the example file (`config::EXAMPLE`, what `aetherd --example-config` prints) at
 `tools/session_matrix.py`), so it took this build for schema 12. The identifier invariants above
 (`identifier_faults`) and the host emulator's check that `DISCONNECTED` comes after the
 identifier (`Host._check_identified`) returned early for every station, on every run from
-a607247 until the fix: the 150 of 150 here, the mixed pairs of §5 and every nightly since. The
+d0c813a until the fix: the 150 of 150 here, the mixed pairs of §5 and every nightly since. The
 endings in the table were read off the account of the air, which was right. Operators lost
 nothing: a file written from the example is migrated forward at load. The example says 13 now,
 and a test holds it to `SCHEMA_VERSION`

@@ -324,12 +324,12 @@ the rate control are settled on `--fading` from P9-6 on.
 
 `tools/bench_chat.py` (ADR-0027's keyboard-to-keyboard bench) for today's turn-taking
 (`policy` = `base`) and ADR-0027's (`request`), on four engines (`engine`): `before` (the model at
-`7345694` and ADR-0027's), `adr-0028` (this wait alone), `adr-0030` (ADR-0030's hold alone, as it
+`0e6b75a` and ADR-0027's), `adr-0028` (this wait alone), `adr-0030` (ADR-0030's hold alone, as it
 landed) and `adr-0030+adr-0028` (master with this wait). Runs (`run`): `grid`, −12 to +12 dB on
 the four classes at both bandwidths, 30 sessions a point (`first_trial` 0); `drops`, −12, −6 and
 0 dB on Good, Moderate and Poor, 100 a point (`first_trial` 100); `drops200`, the same points, 200
 more a point (`first_trial` 200); `missed-preambles`, the `drops` run with a fifth of all preamble
-announcements missed (the frames still arrive). Rows not run at `f17fec5` or on this change's
+announcements missed (the frames still arrive). Rows not run at `207dffc` or on this change's
 commit ran the same code patched onto the model, which reproduces both commits' `drops` rows
 exactly. The wait alone: 15 → 5 sessions dropped of 1 800 (126 → 28 lines lost) with today's
 turn-taking and 13 → 7 (104 → 34) with the request; on top of ADR-0030's hold, a few sessions
@@ -558,7 +558,7 @@ tables.
 The engine before and after its burst and poll retries wait for a frame heard arriving, on the
 fading pipe with the floor's reading cap, both airs, the same seeds. `wait_out_chat.csv` is
 `tools/bench_chat.py` on Good, Moderate and Poor: today's turn-taking (`policy` `base`, on the
-model at `7345694`, before ADR-0027 landed) and ADR-0027's request (`request`, on its branch at
+model at `0e6b75a`, before ADR-0027 landed) and ADR-0027's request (`request`, on its branch at
 `fe13ca7`), 30 sessions a point from −12 to +12 dB (`first_trial` 0) and 100 a point at −12, −6
 and 0 dB (`first_trial` 100); `engine` says which. Drops 15 → 9 and 13 → 1 of 1 800, latency and
 keyed time unchanged. `wait_out_link.csv` is `bench_link.py --fading --floor-cap`, 2 kB, 20
@@ -566,20 +566,20 @@ sessions a point: 546 of 600 identical, none slower by more than 0.4 %. ADR-0030
 
 ## A TURN heard again (`turn_offer.csv`, ADR-0029)
 
-`tools/bench_chat.py` before and after ADR-0029 (`engine`) on two masters (`base`: ce23476, the
-engine of ADR-0027 where the fault was found; f17fec5, with ADR-0030), for today's policy, the chat
+`tools/bench_chat.py` before and after ADR-0029 (`engine`) on two masters (`base`: 96e29be, the
+engine of ADR-0027 where the fault was found; 207dffc, with ADR-0030), for today's policy, the chat
 request and the two handover candidates, both airs: `run` `drops` is 100 fresh sessions a point
 (`first_trial` 100) at −12, −6 and 0 dB on Good, Moderate and Poor; `run` `grid` is 30 a point on
-the four classes from −12 to +12 dB; on f17fec5 the handover candidates' drop run also ablated
+the four classes from −12 to +12 dB; on 207dffc the handover candidates' drop run also ablated
 (`answer-alone`, `without-answer`). On ADR-0027's engine the handover candidates' lost sessions
-fall from 72 and 66 of 1 800 to 17 and 18; on f17fec5, where ADR-0030 had taken them to 12 and 5,
+fall from 72 and 66 of 1 800 to 17 and 18; on 207dffc, where ADR-0030 had taken them to 12 and 5,
 the drop run's "no response" goes from 10 to 2 and none of the six that were two senders is left.
 A line's delay and the keyed time are unchanged for every policy. `bench_link.py`'s transfers are
 identical in every column. ADR-0029 has the tables.
 
 ## A frame re-encoded and left out of its burst (`reencoded_chat.csv`, `reencoded_link.csv`, ADR-0031)
 
-The engine at `f17fec5` and with a frame that went on the air under an earlier codeword counted
+The engine at `207dffc` and with a frame that went on the air under an earlier codeword counted
 as sent, on the fading pipe with the floor's reading cap, bursts held to the key time, the same
 seeds. `reencoded_chat.csv` is `tools/bench_chat.py` on Good, Moderate and Poor, both airs:
 today's turn-taking (`policy` `base`) and ADR-0027's request (`request`), 30 sessions a point
@@ -609,11 +609,11 @@ change, the six that dropped at 0 dB on the 500 Hz air, and all six complete: dr
 5 400, lines lost 75 → 41, latency and keyed time unchanged; the four left are the slow fade
 at −12 dB on ITU Good. `link_deadline_link.csv` is `bench_link.py --fading --floor-cap`:
 identical in all 600 sessions. ADR-0033 has the table, and the three changes against
-`f17fec5`: 17 drops and a stall → 4 drops, lines lost 157 → 41.
+`207dffc`: 17 drops and a stall → 4 drops, lines lost 157 → 41.
 
 ## An answer that did not read its frame (`answer_unread_chat.csv`, `answer_unread_link.csv`, ADR-0034)
 
-The engine at `ea81ae7` (`engine` `before`, with ADR-0028…0033) and with a POLL or TURN the other
+The engine at `a0f5ed4` (`engine` `before`, with ADR-0028…0033) and with a POLL or TURN the other
 station answered without reading sent again at once on the floor (`after`), the same runs as
 ADR-0031's: today's turn-taking and ADR-0027's request, the grid (`first_trial` 0) and the drop
 run (`first_trial` 100). Beside them, on the drop run's −6 and 0 dB points, the rules not taken:

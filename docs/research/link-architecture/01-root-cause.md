@@ -3,7 +3,7 @@
 Every finding below is labelled with its strength:
 
 * **Confirmed** findings are backed by a measurement in this review's simulator campaign, a
-  TLC counterexample, or code read at `7546df3`.
+  TLC counterexample, or code read at `2032456`.
 * **Hypotheses** are consistent with the evidence but not tested against the scenario harness
   or the air.
 

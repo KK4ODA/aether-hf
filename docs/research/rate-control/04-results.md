@@ -152,7 +152,7 @@ the author with the harness's numbers.
 
 ### 3.1 C2 on the harness: K1 and K3 (2026-10-24)
 
-C2 in the daemon (a worktree of `b2b0efb` with `GrantConfig::default().controller` = `Olla`,
+C2 in the daemon (a worktree of `c9cc3d8` with `GrantConfig::default().controller` = `Olla`,
 its own target directory), the 20 regret scenarios and the start pair, three draws each (the
 scenario's seed, +1000, +2000); 66 runs, all complete. The fixed rungs are Gate 2's
 (`03-candidates.md` §5.1).
@@ -238,7 +238,7 @@ sources say (`02-survey.md` §2.3), where the current controller aims at about 5
 
 ### 3.4 C1 on the harness (2026-10-24)
 
-C1 at the receiver in the daemon (`559baaa`, `Controller::Delivery`), the same 66 runs.
+C1 at the receiver in the daemon (`1c83728`, `Controller::Delivery`), the same 66 runs.
 
 | scenario | current, 3 draws | C1, 3 draws | C1's regret, median | the current's | C1 / current |
 |---|---|---|---|---|---|
@@ -278,7 +278,7 @@ current controller stayed on the floor's rungs 1–2. The disturbed NVIS: the sa
 at the start. **The failures of one OFDM rung said nothing to the prior of the OFDM rung below
 it.**
 
-**The change** (C1 v2, `8b21148`): the prior of a family's rungs carries the family's offset,
+**The change** (C1 v2, `745f9d0`): the prior of a family's rungs carries the family's offset,
 moved by every frame of the family by `gain × (p − decoded)` (0.5 dB) — up by nearly the gain for
 a failure the prior was sure of, down by nearly it for a success it ruled out. A measured rung is
 still judged by its own account; the offset reshapes only the prior. One setting added; C2's one
@@ -286,7 +286,7 @@ good idea (a family's evidence) without its single-offset choice. On the harness
 
 ### 3.5 C1 v2 (the family's offset) on the harness, and v3 (2026-10-24)
 
-C1 with the family offset (`8b21148`), the same 66 runs.
+C1 with the family offset (`745f9d0`), the same 66 runs.
 
 * **K1(a) passes by a hair**: +22.55 % against +22.62 % asked (the current +45.24 %) — inside the
   statistic's own spread on draws alone (±7 points), so a case for the author, not a pass by rule.
@@ -303,7 +303,7 @@ refuses OFDM — the engine's re-encode rule, which every candidate keeps (`03-c
 upward (the first try waited `probe_every`, six transmissions); the high start went 9 → 6 and
 climbed to 12–14 only late.
 
-**The change** (C1 v3, `6eb8b1d`): the first rung is the best by the four channels' mean
+**The change** (C1 v3, `3345338`): the first rung is the best by the four channels' mean
 (`cautious_start`; the tables are in the port, `class_penalty_db`, held to the model's), and the
 rung above it is tried at the next transmission. The optimistic prior stays for every choice
 after the start. The reason is the asymmetry the iteration found (§2.4): after the start a rung
@@ -312,7 +312,7 @@ its rung before anything is measured.
 
 ### 3.6 C1 v3 (the cautious start) on the harness: rejected (2026-10-24)
 
-C1 with the first rung by the four channels' mean and the first try at once (`6eb8b1d`), the same
+C1 with the first rung by the four channels' mean and the first try at once (`3345338`), the same
 66 runs. It did what it was built for — `80m-nvis-disturbed-500` 0.76 → 1.03 — and cost more
 everywhere a climb is the job:
 
@@ -352,11 +352,11 @@ delivery is under 85 % of the current controller's (K1(b)).
 | … and the wait between tries in air at the rung tried (§3.17) | +24.41 % | 1 (polar path 0.81; slow machine 0.87) | 6, 1, 2 | 0 (72 runs) |
 | … and a slave on its own floor rung asks for floor slots (§3.19) | +23.76 % | 1 over 3 draws (polar path 0.81); **none over 6** | 2, 1, 1, 0, 1, 1 (6 draws) | **0** (144 runs) |
 | the same, K1(a) over six draws (§3.20) | **+26.80 %** against +19.41 % | none | — | — |
-| … and the try past the dip (§3.21, `2db2fb8`) | +40.25 % (6 draws) | 3 (weak wide Test 0.23, weak both ways 0.52, polar path 0.82); WC4Y's path 0.31 | 0, 1, 2, 3, 1, 1 | 1 (the AGC carrier, draw 0) |
-| … and the try waits for data to cut (§3.21, `ca7587c`) | +30.18 % (6 draws) | 3 (weak wide Test 0.53, weak both ways 0.74, polar path 0.82); WC4Y's path 0.49 | 0, 1, 2, 1, 1, 2 | 0 (144 runs) |
-| … and a failed try holds the family back (§3.22, `55e5139`; 6 scenarios and the start pair, 3 draws) | — | 2 of 4 run (polar path 0.76, weak both ways 0.79); WC4Y's path 0.71 | 3, 0, 2 | 0 (24 runs) |
-| §3.19's form, dip fix out (§3.22–§3.24, `b53d0e6`) | +26.80 % (6 draws) | none | 2, 1, 1, 0, 1, 1 | 1 of 180 in K2 (the AGC carrier, draw 0) |
-| … and the climb on clean frames, accounts that age (§3.25, `1e212e7`) | +27.85 % (6 draws) | none (lowest 0.88) | 3, 1, 0, 1, 0, 0 | **0** (144 and 180 runs) |
+| … and the try past the dip (§3.21, `4fded29`) | +40.25 % (6 draws) | 3 (weak wide Test 0.23, weak both ways 0.52, polar path 0.82); WC4Y's path 0.31 | 0, 1, 2, 3, 1, 1 | 1 (the AGC carrier, draw 0) |
+| … and the try waits for data to cut (§3.21, `a59377f`) | +30.18 % (6 draws) | 3 (weak wide Test 0.53, weak both ways 0.74, polar path 0.82); WC4Y's path 0.49 | 0, 1, 2, 1, 1, 2 | 0 (144 runs) |
+| … and a failed try holds the family back (§3.22, `6a4a6e1`; 6 scenarios and the start pair, 3 draws) | — | 2 of 4 run (polar path 0.76, weak both ways 0.79); WC4Y's path 0.71 | 3, 0, 2 | 0 (24 runs) |
+| §3.19's form, dip fix out (§3.22–§3.24, `e694c2a`) | +26.80 % (6 draws) | none | 2, 1, 1, 0, 1, 1 | 1 of 180 in K2 (the AGC carrier, draw 0) |
+| … and the climb on clean frames, accounts that age (§3.25, `11d1343`) | +27.85 % (6 draws) | none (lowest 0.88) | 3, 1, 0, 1, 0, 0 | **0** (144 and 180 runs) |
 
 The C1-at-the-sender rows count `80m-agc-carrier-outside-500`'s three runs too (69 runs).
 
@@ -367,7 +367,7 @@ on another stretch of the same fade, `00-brief.md` §8).
 ### 3.8 C1 v2 on K2, K4 and K6 (2026-10-24)
 
 **K2 and K4**: every scenario in `bench/scenarios/` (60), three draws (seeds s, s+1000, s+2000),
-the current controller and C1 v2 on the same build (`3712e2e`, the default and a worktree with
+the current controller and C1 v2 on the same build (`4b8dfce`, the default and a worktree with
 `Controller::Delivery`; the cautious start off, so C1 v2's behaviour), 180 runs each.
 
 * **Pooled air**: ×0.970 of the current's (48 586 against 50 100 s; the median of the
@@ -397,7 +397,7 @@ floor.
 
 ### 3.9 C1 at the sender on the harness (2026-10-24)
 
-C1 at the sender (`78e6a12`, `Controller::DeliveryS`): the station chooses its own data's rung
+C1 at the sender (`2bf1b5b`, `Controller::DeliveryS`): the station chooses its own data's rung
 with C1, fed by what each acknowledgement says of the copies sent since the last; the other
 station's recommendation is advice; a try is one new frame at the rung above (across the floor's
 edge, a whole transmission). The same 66 runs and `80m-agc-carrier-outside-500`'s three.
@@ -412,7 +412,7 @@ edge, a whole transmission). The same 66 runs and `80m-agc-carrier-outside-500`'
 after transmission — the rungs the 7 ms echo rules out (ADR-0087). Its own controller had never
 been told the echo readings: the engine gave them to the receive-side controller only (`_heard`).
 **A defect**, not a finding: every candidate keeps the echo exclusions (`03-candidates.md` §1.1).
-Fixed in `64296a7`, with one design change beside it: every copy of a block, re-encoded or not,
+Fixed in `092f99f`, with one design change beside it: every copy of a block, re-encoded or not,
 is now charged to the rung the block was cut at, so a try of OFDM whose blocks strand and go
 again on the floor costs that choice all of it — what C1 at the receiver could not charge (it
 sees frames, not blocks' histories) and what made the NVIS paths cost (§3.8). On the harness
@@ -420,16 +420,16 @@ in §3.10.
 
 ### 3.10 C1 at the sender: the echo kept, then its silent step (2026-10-24)
 
-**With the echo kept** (`64296a7`): K1(a) +25.16 %, K1(b) `80m-nvis-disturbed-500` 0.63, K3 3, 1
+**With the echo kept** (`092f99f`): K1(a) +25.16 %, K1(b) `80m-nvis-disturbed-500` 0.63, K3 3, 1
 and 1 apart, and `80m-agc-carrier-outside-500` none of three still. Its trace: transmission after
 transmission at rungs 3 and 4 again, each after a silent slot. The engine's own step down after
 silence (R9, `_back_off`) told C1 to step too (`DeliveryController.silent`), and C1 stepped by
 the ladder's index alone — from rung 5 on a 7 ms echo, onto rung 4, which the echo rules out.
 **A defect**: a step down after silence now lands on the highest rung at or under it that the
-echo allows (`d3bf27b`, model and port, a test in each; the vectors never take such a step and
+echo allows (`ca5c867`, model and port, a test in each; the vectors never take such a step and
 regenerate byte for byte).
 
-**With the step fixed** (`d3bf27b`), all 69 runs:
+**With the step fixed** (`ca5c867`), all 69 runs:
 
 | scenario | current, 3 draws | C1 at the sender, 3 draws | regret | candidate / current (medians) |
 |---|---|---|---|---|
@@ -505,14 +505,14 @@ times in 15) the answers go on the floor. The 500 Hz rungs, nothing lost, in bit
 
 (control frames 0.43 s ordinary and 3.2 s on the floor; the two gaps 1.05 s.) Per frame second
 the first OFDM rung looked 24 % better than the floor's top; per exchange with floor answers it
-is 16 % worse. **C1 now ranks rungs per second of a whole exchange** (`f7159e7`): the engine hands
+is 16 % worse. **C1 now ranks rungs per second of a whole exchange** (`cff5575`): the engine hands
 it the protocol's lengths — a control frame by family, the two gaps, the frames a full
 transmission carries at each rung — and, before each decision, the families both stations'
 control frames go in (its own, and the one it asks of the other: `GrantedEngine._price`). No tuned
 number is added. The port does the same; the review's vectors gain a families input in the
 traces, lopsided sessions at both bandwidths and the families in each prototype session's digest,
 and planted faults in the price and in the engine's wiring each fail them. The replays give C1 the
-session's families too (`787abaf`).
+session's families too (`61f2eeb`).
 
 K6 with the price (open loop, the nine two-sided sessions):
 
@@ -529,7 +529,7 @@ of the time. The harness judges the closed loop (§3.12).
 
 ### 3.12 C1 at the sender, priced per exchange, on the harness (2026-10-24)
 
-`f9976ad`, the same 69 runs. Changed from §3.10 (delivery in bit/s, three draws):
+`131a55e`, the same 69 runs. Changed from §3.10 (delivery in bit/s, three draws):
 
 | scenario | current | §3.10 | priced | priced / current (medians) |
 |---|---|---|---|---|
@@ -556,12 +556,12 @@ copied into it (`silent`, §3.10) — onto the floor (rungs 2 and 4) for long st
 current controller, set straight by the receiver's next advice, stayed at OFDM rungs 5–9. **That
 step counts the silence twice**: the copies a silent transmission carried are judged at the next
 answer anyway, delivered or not, and a slot goes silent mostly for a lost control frame or a
-stalled station, which a slower data rung does not cure. It was taken out (`bd81150`, model,
+stalled station, which a slower data rung does not cure. It was taken out (`0af0b63`, model,
 port and replay; R9 still steps the engine's own recommendation) and run again (§3.13).
 
 ### 3.13 Without the step down for silence: rejected (2026-10-24)
 
-`bd81150` on the same 69 runs: K1(a) **+31.83 %** (priced, with the step: +21.30 %); K1(b)
+`0af0b63` on the same 69 runs: K1(a) **+31.83 %** (priced, with the step: +21.30 %); K1(b)
 `80m-nvis-disturbed-500` **0.66** (1.05), `80m-slow-machine-500` 0.87 (0.76); K3 5, 0 and 0
 apart; `80m-agc-carrier-outside-500` one run of three (two). The trace of the disturbed NVIS
 path, draw 0: without the step C1 at the sender sent its first three transmissions at OFDM rung 5
@@ -569,14 +569,14 @@ path, draw 0: without the step C1 at the sender sent its first three transmissio
 transmission at rung 5 and the floor from 41 s (198 against 317 s for the message). On these
 paths a silent slot is what OFDM failing looks like — the copies are judged at the next answer,
 but the next answers are what fails — so the step is the timely signal, and the argument of §3.12
-was wrong. **Reverted** (`git revert`, the commit after `65b9576`). The slow machine's 0.76 stays
+was wrong. **Reverted** (`git revert`, the commit after `8b8c505`). The slow machine's 0.76 stays
 open: there the silences are the station's stalls, and the same step that saves the NVIS paths
 puts the session on the floor after each one. K6 without the step was ×1.511 (worst 0.688); with
 it, ×1.455 (§3.11).
 
 ### 3.14 Where C1 at the sender stands (2026-10-24)
 
-Priced per exchange, with the step for silence (`f9976ad`), against `03-candidates.md` §3:
+Priced per exchange, with the step for silence (`131a55e`), against `03-candidates.md` §3:
 
 | criterion | result | verdict |
 |---|---|---|
@@ -598,7 +598,7 @@ decide, case by case (`03-candidates.md` §4).
 
 The author's answer 3 (`03-candidates.md` §4): a try of the rung above runs until its own frames
 outweigh the prior — more than `prior_frames`, so three — or twice the transmissions that takes,
-and a rung above becomes choosable only once its frames outweigh its prior (`995ff5e`; no new
+and a rung above becomes choosable only once its frames outweigh its prior (`da48bb9`; no new
 parameter). The 69 runs and WC4Y's path (`80m-floor-top-start-500`, the author's answer 5), 72:
 
 * **Completion**: 72 of 72; `80m-agc-carrier-outside-500` three of three (328, 336 and 371 s).
@@ -615,13 +615,13 @@ from 30 to 188 s — 27 frames — without one try of rung 5, while the receiver
 transmission goes in the family of its oldest unacknowledged frame, and on this path a floor frame
 was always in flight, so the try of OFDM — a whole transmission in the other family — never went
 and expired unmeasured, again and again. **A defect** of the try, not the path: a try across the
-edge now takes the transmission and the floor frames in flight wait it out (`25995cb`, model and
+edge now takes the transmission and the floor frames in flight wait it out (`d80daab`, model and
 port; the review's vectors gain a session with a floor frame always in flight, and removing the
 exception in the port fails them). On the harness next (§3.16).
 
 ### 3.16 The try across the edge takes the transmission (2026-10-24)
 
-`25995cb`, the same 72 runs:
+`d80daab`, the same 72 runs:
 
 * **Completion**: 72 of 72.
 * **K1(a)**: +23.46 % (§3.15: +21.85 %) — over the line by 0.84 points. Nothing changed for the
@@ -644,7 +644,7 @@ stall puts the session on the floor, and the next try of OFDM waits six floor tr
 ### 3.17 The wait between tries in air (2026-10-24)
 
 The author's answer of the same day: the wait is `probe_every` full transmissions *at the rung
-being tried*, in seconds of air (`275209a`; no new parameter). Building it found the model and the
+being tried*, in seconds of air (`7ed60a1`; no new parameter). Building it found the model and the
 port parting on a tie — six OFDM transmissions' air is the wait exactly, and Python's `sum()`
 compensates where the port's does not — so the model now adds in order and the comparison allows
 1e-9 s. The 72 runs:
@@ -669,7 +669,7 @@ on rung 3 (143 bit/s). How often to try OFDM from the floor is a trade between t
 ### 3.18 Six draws (2026-10-24)
 
 The author chose to measure before changing anything else: draws 3–5 (seeds +3000…+5000) of the
-24 scenarios for §3.17's form and for the current controller (master `144a384`, its default),
+24 scenarios for §3.17's form and for the current controller (master `d0bcfd1`, its default),
 judged over six draws against the current. K1(a) stays on draws 0–2 (it needs the fixed rungs'
 runs of every draw, some twelve hours more).
 
@@ -711,13 +711,13 @@ runs of every draw, some twelve hours more).
   for frames of it, was granted as many OFDM frames' air, which no 5.36 s floor frame fits, and
   sent nothing in any slot for 600 s (the current controller's slave sent the reply at rungs 7–8).
   The answer's `data_floor` bit, with no data after it, already tells the master the slave's data
-  can go only on the floor; C1's own floor choice now sets it too (`91e6144`, no wire change; a
+  can go only on the floor; C1's own floor choice now sets it too (`532cb76`, no wire change; a
   model test reproduces the deadlock and fails without the change; the review's vectors change and
   the port without the clause fails them). That form on all six draws is running.
 
 ### 3.19 C1 at the sender, all fixes, over six draws (2026-10-24)
 
-`91e6144` on the 24 scenarios, six draws (144 runs), against the current controller's six:
+`532cb76` on the 24 scenarios, six draws (144 runs), against the current controller's six:
 
 | criterion | result | verdict |
 |---|---|---|
@@ -785,7 +785,7 @@ else.
 
 The author's call on §3.19's K3 near miss: fix the dip. From the floor's top a try now goes to the
 rung of the OFDM family the reading rates best, not to the first OFDM rung (`_try_target`,
-`_try_reach`; a try under way goes on while its rung is in reach; `2db2fb8`, model, port, tests
+`_try_reach`; a try under way goes on while its rung is in reach; `4fded29`, model, port, tests
 and the review's vectors). That form (v10) on the 24 scenarios × six draws:
 
 * **One run did not complete** (`80m-agc-carrier-outside-500` draw 0, the message not delivered
@@ -797,7 +797,7 @@ and the review's vectors). That form (v10) on the 24 scenarios × six draws:
   the floor's edge takes the whole transmission (§3.16), so every transmission went out with no
   data frame — nothing of the try's family was left to cut, and the floor block could not ride
   with it — and the try never ended. The master sent empty headers for 160 s.
-* **The fix** (`ca7587c`, v11): the try takes the transmission only when a new block can be cut
+* **The fix** (`a59377f`, v11): the try takes the transmission only when a new block can be cut
   at its rung (`_can_cut`: data queued, no measurement asked, room in the window); otherwise the
   transmission is the floor's frames. A model test builds the state and fails on the old rule; a
   new vector session (`edge-at-the-end`) reaches it, and the port with the old rule fails
@@ -828,7 +828,7 @@ alone was in reach, its lossless rate did not beat the floor's top, and no try w
 
 The cascade is a defect of how the dip fix was built, not of the decision: the author's call was
 one try, at the rung the reading rates best. Now a failed try across the floor's edge doubles the
-wait of every rung of the family above (`55e5139`, model and port; two scripted controller
+wait of every rung of the family above (`6a4a6e1`, model and port; two scripted controller
 traces on the floor's top reach the rule, and the port with the old rule fails them). The same
 rule in a scratch daemon, on the six scenarios where v11 lost or that climb from the floor, and
 the start pair, draws 0–2 (24 runs, all complete), against §3.19's form (no dip fix) and v11:
@@ -852,7 +852,7 @@ from the floor's top costs a whole transmission and its leftovers, and it bought
 3, 0, 2 apart against §3.19's 2, 1, 1. **The dip fix, as built, fails K1(b) on three paths and
 does not pass K3.**
 
-**The author's call: take it out** (`b53d0e6`, reverting `2db2fb8` and `55e5139`). C1 at the
+**The author's call: take it out** (`e694c2a`, reverting `4fded29` and `6a4a6e1`). C1 at the
 sender is §3.19's form again — a try from the floor's top goes to the first OFDM rung, and only
 when its lossless rate beats the top's estimate — with v11's guard kept (a try across the edge
 takes the transmission only when a block can be cut at its rung; the `edge-at-the-end` vector
@@ -862,8 +862,8 @@ session still reaches it). K3's draw-0 dip stays a near miss.
 
 Five more two-sided Tests came in after §3.11's nine (`../link-architecture/17-five-tests-beta121.md`):
 KQ4SAX's two at 2300 Hz on 40 m, WC4Y's at 2300 Hz on 80 m and ND1J's two at 500 Hz on 40 m.
-`rate_k6.py --candidate delivery-s`, C1 at the sender as it stands at `109c519`, after §3.22's revert
-(`ca7587c` gives the same numbers), on those five alone (the nine of §3.11 were not rerun with
+`rate_k6.py --candidate delivery-s`, C1 at the sender as it stands at `dcd3f91`, after §3.22's revert
+(`a59377f` gives the same numbers), on those five alone (the nine of §3.11 were not rerun with
 this form here):
 
 | session | steps judged | current | C1 at the sender | ratio |
@@ -888,10 +888,10 @@ this form here):
   open loop is not held to a station's `max_mode`.
 ### 3.24 K2, K4, K5 and K6 for §3.19's form (2026-10-24)
 
-The form the author's calls left (`b53d0e6`: §3.19's rule with v11's guard), and the current
-controller, **on the same build** (`3e79008`, the default and a worktree with
+The form the author's calls left (`e694c2a`: §3.19's rule with v11's guard), and the current
+controller, **on the same build** (`5ffe3a3`, the default and a worktree with
 `Controller::DeliveryS`): every scenario in `bench/scenarios/` (60), three draws, 180 runs each.
-The current's earlier K2 runs (§3.8, build `3712e2e`) could not stand in: five of eight scenarios
+The current's earlier K2 runs (§3.8, build `4b8dfce`) could not stand in: five of eight scenarios
 sampled on today's build repeated their air time to the tenth of a second, but three with runner
 steps (a Test, host steps, a scheduled clear) did not, so both arms ran again.
 
@@ -966,7 +966,7 @@ not.
 ### 3.25 The last round: the climb on clean frames, and accounts that age (2026-10-25)
 
 The author's call on §3.24: one round on both traced causes, its result into the decision ADR,
-no further rounds. `1e212e7`, model and port, no new setting (K7 stays at eight):
+no further rounds. `11d1343`, model and port, no new setting (K7 stays at eight):
 
 * **The rung above, of the current rung's family, is tried at the next transmission** when
   every frame of the last one at the current rung decoded alone, the estimate rates the rung
@@ -976,7 +976,7 @@ no further rounds. `1e212e7`, model and port, no new setting (K7 stays at eight)
   frames' air (`observe_frames`): before, only frames sent at the rung aged it.
 
 Judged as §3.24 was. K1 and K3 on the 24 scenarios, six draws (144 runs, all complete); K2 and K4
-with both arms on the same build (`1e212e7`, 180 runs each — another session's `6ec4fa5` had
+with both arms on the same build (`11d1343`, 180 runs each — another session's `bb10696` had
 changed how a Test calls, so the current's §3.24 runs could not stand in); K5 the candidate's
 arm against §3.24's current arm (the model's controller and receiver are unchanged by default:
 `stream.py`'s new rules are bench-only switches); K6 the nine sessions in this container's inbox.
@@ -1024,7 +1024,7 @@ it beats the current controller everywhere it was measured.
 ### 3.26 Gate 5: C1 in both roles on the harness (2026-10-25)
 
 ADR-0094 §5: the pair is new — under `delivery-s` the advice in every control frame was the current
-controller's — so `c1` (`e936039`, C1 at the sender and C1 for the advice) was judged before it
+controller's — so `c1` (`57608e9`, C1 at the sender and C1 for the advice) was judged before it
 becomes the default. The current's arms are §3.25's (the daemon's code differs only in the
 switch). K1/K3 six draws, K2/K4 every scenario × 3 draws, K5 the `c1` arm:
 
@@ -1055,10 +1055,10 @@ failure is the advice deciding the sender's stuck frames, not the sender's own c
 ### 3.27 Gate 5: the sender's own choice bounds its stranded frames, and the advice judged twice (2026-10-25)
 
 The author's call on §3.26: a stranded block is re-encoded, or split, below the lower of the
-advice and the sender's own C1 choice when it last read an answer (`c2dfa9f`; ADR-0094 item 6
+advice and the sender's own C1 choice when it last read an answer (`42d7d9a`; ADR-0094 item 6
 amended; the split's guard against silence alone keeps, since no answer is read on a dead band).
 The review's vectors gain `own-choice`, where only the rule delivers anything (1500 bytes against
-none in 900 s). The same runs as §3.26, `c2dfa9f` with `c1` as the default:
+none in 900 s). The same runs as §3.26, `42d7d9a` with `c1` as the default:
 
 | criterion | C1 at the sender, the current's advice (§3.25) | C1 in both roles (§3.26) | with the own-choice bound | verdict |
 |---|---|---|---|---|
@@ -1081,7 +1081,7 @@ itself: of 106 such pairs 75 were identical and 31 not, one in eleven more than 
 run alone).
 
 **The second pass.** The three K1(b) scenarios and the start pair, the same six draws again, for
-the three builds (`repeat/`; the current controller's from `1e212e7`, C1 at the sender from
+the three builds (`repeat/`; the current controller's from `11d1343`, C1 at the sender from
 §3.25's daemon):
 
 | scenario | today's, median of 12 | C1 at the sender, the current's advice | C1 in both roles, the bound | run-to-run on one draw |
@@ -1104,7 +1104,7 @@ went to the floor from 92 s). The message took 305 s of air against 218 s.
 
 ### 3.28 Gate 5: the build that shipped, measured (2026-10-25)
 
-`a7c00ef` made C1 at the sender the engine's default with the current controller's advice and
+`5d87879` made C1 at the sender the engine's default with the current controller's advice and
 §3.27's bound (a stranded frame re-encoded or split under the lower of the advice and the
 sender's own choice when it last read an answer). Another session cut 0.2.0-beta.124 on it at
 13:41Z, before this measurement finished. Its daemon, against §3.25's (the same form without the

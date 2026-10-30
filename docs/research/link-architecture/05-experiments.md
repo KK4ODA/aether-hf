@@ -20,7 +20,7 @@ Every number is reproducible from `research/link_arch/` (§11).
 | Arm | Engine | What it is |
 |---|---|---|
 | Protocol 7 | `LinkEngine`, `stated_answers` off | the engine on the air today (beta.105) |
-| ADR-0068 | `LinkEngine`, `stated_answers` on | protocol 8 as built at `7546df3` |
+| ADR-0068 | `LinkEngine`, `stated_answers` on | protocol 8 as built at `2032456` |
 | ADR-0068, 6-frame | `engines/stated6.py` | candidate A: six-frame bursts, count 3 = "three or more" |
 | Granted slots | `engines/gs.py` | candidate D |
 | Fixed cycle | `engines/fc.py` | candidate C |

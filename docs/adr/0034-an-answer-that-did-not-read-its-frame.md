@@ -9,7 +9,7 @@ configuration change.
 
 ADR-0033 §3 left one drop of the chat bench's drop run on `master` that completes on either
 engine alone: 500 Hz, ITU Moderate, 0 dB, trial 184, today's turn-taking. Traced
-(`tools/bench_chat.py`, the engine at `ea81ae7`; B holds the turn with nothing to send, A
+(`tools/bench_chat.py`, the engine at `a0f5ed4`; B holds the turn with nothing to send, A
 receives):
 
 | time (s) | |
@@ -74,7 +74,7 @@ sends its line.
 
 ## 3. Alternatives measured
 
-Each rule on the engine at `ea81ae7`, on the chat bench's drop-run points at −6 and 0 dB (Good,
+Each rule on the engine at `a0f5ed4`, on the chat bench's drop-run points at −6 and 0 dB (Good,
 Moderate and Poor, both airs, 100 sessions a point, `first_trial` 100, both turn policies:
 2 400 sessions a rule), with the fading pipe, the floor's reading cap and bursts held to the key
 time; and on **the fade** of §5's end-to-end test — the path falling from 15 dB to −12 dB, below
@@ -85,7 +85,7 @@ change over the 0 dB sessions both engines completed.
 
 | Rule | drops | lines lost | a line at 0 dB | keyed a line at 0 dB | the fade, of 40 |
 |---|---|---|---|---|---|
-| none (`ea81ae7`) | 1 | 12 | — | — | 0 |
+| none (`a0f5ed4`) | 1 | 12 | — | — | 0 |
 | a floor answer to an ordinary POLL or TURN is a silence for ADR-0032's step-down | 0 | 0 | +0.03 s | +0.02 s | 0 |
 | the receiving station recommends at most the floor's top rung when it answers an ordinary control frame it could not read | 0 | 0 | +0.35 s | +0.46 s (+3 %) | 40 |
 | the next POLL or TURN in the family of an answer in the other family | 1 | 7 | +0.10 s | +0.13 s | 38 |
@@ -132,7 +132,7 @@ out. That is the case to look for in field recordings before a protocol change i
 
 ## 4. Measured
 
-The engine at `ea81ae7` (`engine` `before`) against this one, the same seeds, on the fading pipe
+The engine at `a0f5ed4` (`engine` `before`) against this one, the same seeds, on the fading pipe
 with the floor's reading cap and bursts held to the key time. `tools/bench_chat.py` on Good,
 Moderate and Poor, both airs, today's turn-taking (`base`) and ADR-0027's request (`request`);
 a line's median and 90th-percentile time and the keyed time a line as the median of the
@@ -182,7 +182,7 @@ chat file the rules of §3 on the drop run's −6 and 0 dB points (`engine` `sil
   ordinary again); and `an_answer_that_did_not_read_its_frame_sends_the_next_on_the_floor` (both
   airs, a line waiting and both stations idle: the fade from 15 dB to −12 dB with the called
   station holding the turn; before, both stations ended the session "link timeout" in every
-  run). Each fails on `ea81ae7`.
+  run). Each fails on `a0f5ed4`.
 * ADR-0030's `a_poll_is_not_repeated_over_its_answer_arriving` (both suites) built its case from
   a sender whose every poll stayed ordinary and was answered unread on the floor — the state
   this ADR ends. The sender's polls now alternate, ordinary and unread, then floor and read, and

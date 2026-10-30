@@ -71,7 +71,7 @@ airs, the same seeds before and after; sessions dropped and lines lost, and a li
 90th-percentile time and the keyed time per line as the ratio after/before
 (`bench/baselines/poll_wait.csv`).
 
-**On the engine as the study found it** (the model at `7345694` and ADR-0027's, without
+**On the engine as the study found it** (the model at `0e6b75a` and ADR-0027's, without
 ADR-0030):
 
 | Turn-taking, run | Sessions | Dropped | Lines lost |
@@ -91,7 +91,7 @@ was on the air: 1 484 of 44 914 polls, every one over an acknowledgement, in 594
 sessions — 95 and 96 of the 100 at −12 dB on Good, where every frame is the tone floor's —
 before; none after, and 6 % fewer polls.
 
-**On master, with ADR-0030's hold** (`f17fec5` against this change; the rows other than today's
+**On master, with ADR-0030's hold** (`207dffc` against this change; the rows other than today's
 100-a-point run and the missed announcements ran the same code patched onto the model, which
 reproduces both commits' 100-a-point rows for today's turn-taking exactly):
 

@@ -55,7 +55,7 @@ call, 1 000 bytes, a 500-byte reply, 1 000 bytes and a disconnect. Three seeds:
 
 | | passed | air time | the rig's offset at the end |
 |---|---|---|---|
-| before (`baf2b2a`) | 0 of 3 | 463–484 s, then a link timeout | — |
+| before (`f574681`) | 0 of 3 | 463–484 s, then a link timeout | — |
 | this ADR | 3 of 3 | 360–490 s | 245–295 Hz |
 
 Before, every seed carried the first 1 000 bytes in 103–124 s, while the rig was still inside

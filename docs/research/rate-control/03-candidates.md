@@ -255,7 +255,7 @@ The author's answers on C1 at the sender's failures (`04-results.md` §3.14; lat
 
 ## 5. The current controller's own numbers
 
-*Filled from the runs of 2026-10-24: the harness with beta.122's daemon (`91384bc`), three
+*Filled from the runs of 2026-10-24: the harness with beta.122's daemon (`32bdf64`), three
 draws a scenario (the scenario's seed, +1000, +2000).*
 
 ### 5.1 Regret against the oracle

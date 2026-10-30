@@ -8,7 +8,7 @@
 
 Found while measuring ADR-0032 on the chat bench (`tools/bench_chat.py`, ADR-0027): at 0 dB on
 the 500 Hz air a sending station went silent with data queued — no burst, no poll, no timer but
-the link timeout — until the session ended. Traced on the engine at `f17fec5` (trial 113 of the
+the link timeout — until the session ended. Traced on the engine at `207dffc` (trial 113 of the
 drop run, today's turn-taking, ITU Good):
 
 | time (s) | |
@@ -58,7 +58,7 @@ each burst as before.
 
 ## 3. Measured
 
-The engine before (`f17fec5`) and after, on the fading pipe with the floor's reading cap (P9-6,
+The engine before (`207dffc`) and after, on the fading pipe with the floor's reading cap (P9-6,
 ADR-0016), bursts held to the daemon's key time, the same seeds. `tools/bench_chat.py` on Good,
 Moderate and Poor, both airs: today's turn-taking (`base`) and ADR-0027's request (`request`).
 

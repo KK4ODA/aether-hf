@@ -43,7 +43,7 @@ announced 1.53 s after it — needs a longer wait, which ADR-0028 gives it.
 Both benches on the fading pipe with the floor's reading cap (P9-6, ADR-0016), the engine
 before (a worktree) against this one, the same seeds, run before ADR-0027 landed.
 `tools/bench_chat.py` is ADR-0027's, from its branch (`chat-handover`, `fe13ca7`): today's
-turn-taking on the model at `7345694`, with a copy that does without `LinkStats.turn_requests`,
+turn-taking on the model at `0e6b75a`, with a copy that does without `LinkStats.turn_requests`,
 which that model did not have; ADR-0027's request on its branch's model — the one that landed,
 less ADR-0026's `set_air`, which the bench never calls — with and without this change. Latency and keyed time are the ratio after/before: the
 median over the points, and their range.

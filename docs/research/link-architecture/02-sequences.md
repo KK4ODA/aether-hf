@@ -1,7 +1,7 @@
 # The current link protocol, exchange by exchange
 
 These diagrams show protocol 7 (the engine on the air, beta.105) and the ADR-0068 path
-(`LinkConfig.stated_answers`, protocol 8 candidate). They were drawn from the code at `7546df3`:
+(`LinkConfig.stated_answers`, protocol 8 candidate). They were drawn from the code at `2032456`:
 the model engine `model/aether_model/link/engine.py`, the port `core/aether-link/src/engine.rs`
 and the daemon `core/aetherd/src/station.rs`. The ADRs were checked against the code, not taken
 as the spec. Where ADR-0068 behaves differently, the diagram says so.
