@@ -267,17 +267,37 @@ pub fn shared_dir(config: &Path) -> PathBuf {
         .map_or_else(|| PathBuf::from("shared"), |dir| dir.join("shared"))
 }
 
-/// Keep the newest `keep` zips in `dir`: their names sort by time.
+/// Keep the newest `keep` zips in `dir`, by the time stamp in each name. The names start with
+/// the callsign (`aether-KK4ODA-2-20261102-153518.zip`), so sorting the names whole put a zip
+/// just written under a new callsign among the oldest, and it was deleted at once: a station
+/// whose folder held five zips of another callsign could send nothing ("That zip is not in the
+/// shared folder"). A name with no stamp counts as the oldest.
 pub fn prune(dir: &Path, keep: usize) {
-    let mut zips: Vec<PathBuf> = files_in(dir)
+    let mut zips: Vec<(u64, PathBuf)> = files_in(dir)
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip")))
+        .map(|p| {
+            let when = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(stamp_in)
+                .unwrap_or(0);
+            (when, p)
+        })
         .collect();
     zips.sort();
     let excess = zips.len().saturating_sub(keep);
-    for old in &zips[..excess] {
+    for (_, old) in &zips[..excess] {
         let _ = std::fs::remove_file(old);
     }
+}
+
+/// The last `YYYYMMDD-HHMMSS` stamp in a file name, as Unix milliseconds.
+fn stamp_in(name: &str) -> Option<u64> {
+    (0..name.len().saturating_sub(14))
+        .rev()
+        .filter(|&i| name.is_char_boundary(i) && name.is_char_boundary(i + 15))
+        .find_map(|i| stamp_ms(&name[i..i + 15]))
 }
 
 /// `20261005-004737`, in UTC, the way recordings are named.
@@ -607,6 +627,64 @@ mod tests {
             "{:?}",
             names(&got)
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The laptop's folder (2026-11-02): five zips sent as KK4ODA, then the callsign changed. The
+    /// zip just written, under KK2ODA or KK4ODA-2, sorted first by name and was pruned at once.
+    #[test]
+    fn the_newest_zips_stay_whatever_their_callsign() {
+        let dir = scratch("prune");
+        let older = [
+            "aether-KK4ODA-20261025-034400.zip",
+            "aether-KK4ODA-20261025-034427-debug.zip",
+            "aether-KK4ODA-20261025-051435.zip",
+            "aether-KK4ODA-20261026-120000.zip",
+            "aether-KK4ODA-20261027-120000.zip",
+        ];
+        for name in older {
+            std::fs::write(dir.join(name), b"zip").expect("write");
+        }
+        std::fs::write(dir.join("notes.zip"), b"zip").expect("write");
+        std::fs::write(dir.join("README.txt"), b"text").expect("write");
+        for newer in [
+            "aether-KK2ODA-20261102-153518.zip",
+            "aether-KK4ODA-2-20261102-153650.zip",
+        ] {
+            std::fs::write(dir.join(newer), b"zip").expect("write");
+            prune(&dir, KEEP);
+            assert!(
+                dir.join(newer).is_file(),
+                "{newer} was pruned as it was written"
+            );
+        }
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .expect("dir")
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "README.txt",
+                "aether-KK2ODA-20261102-153518.zip",
+                "aether-KK4ODA-2-20261102-153650.zip",
+                "aether-KK4ODA-20261025-051435.zip",
+                "aether-KK4ODA-20261026-120000.zip",
+                "aether-KK4ODA-20261027-120000.zip",
+            ],
+            "the five newest zips by their stamps, and nothing that is not a zip"
+        );
+        assert_eq!(
+            stamp_in("aether-KK4ODA-2-20261102-153650.zip"),
+            stamp_ms("20261102-153650")
+        );
+        assert_eq!(
+            stamp_in("aether-KK4ODA-20261025-034427-debug.zip"),
+            stamp_ms("20261025-034427")
+        );
+        assert_eq!(stamp_in("notes.zip"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
