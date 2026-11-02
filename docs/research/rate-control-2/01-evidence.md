@@ -21,7 +21,59 @@ runs: the granted vectors and C1's vector sessions regenerate identical.
 
 ## 3. The NVIS trace
 
-*(pending: three draws of each scenario are running.)*
+The two nightly scenarios and `80m-nvis-disturbed-500`, three draws each (the nightly's three
+variants: seeds *s*, *s* + 1000, *s* + 2000), today's daemon, read from both sidecars with
+`tools/rung_reading.py`. All three are ITU NVIS at 500 Hz: two rays 7 ms apart, where the floor's
+tone rungs carry and OFDM's 5 ms prefix does not.
+
+All nine passed this time; the nightly's failures are the slow tail of the same distribution.
+
+| run | transfer (budget) | OFDM: exchanges' air | sends | first copies | decoded alone | by combining | floor's exchanges' air |
+|---|---|---|---|---|---|---|---|
+| agc-carrier *s* | 219 s (300) | 51 s | 23 | 6 | 0 | 3 | 173 s |
+| agc-carrier *s* + 1000 | 201 s | 46 s | 23 | 6 | 0 | 1 | 160 s |
+| agc-carrier *s* + 2000 | **277 s** | **108 s** | 39 | 12 | 2 | 7 | 173 s |
+| nvis-disturbed *s* | 210 s (—) | 46 s | 13 | 6 | 4 | 2 | 160 s |
+| nvis-disturbed *s* + 1000 | 180 s | 0 | — | — | — | — | 184 s |
+| nvis-disturbed *s* + 2000 | 206 s | 63 s | 22 | 6 | 0 | 4 | 147 s |
+| trimode, the send *s* | 216 s (400) | 0 | — | — | — | — | 212 s |
+| trimode, the send *s* + 1000 | 202 s | 0 | — | — | — | — | 199 s |
+| trimode, the send *s* + 2000 | **273 s** | **75 s** | 29 | 9 | 1 | 3 | 194 s |
+
+In the Trimode runs the gateway's own replies (120 B each) went on OFDM as well: its first data
+of the client's first session at rungs 5–6 in all three draws (26–39 s of exchanges, 1–4 frames
+of 11–17 decoded alone), and its reply in the second session of draw *s* + 2000 (69 s, none
+alone).
+
+**What happened.**
+
+1. **The first data of a session goes on OFDM.** In seven of the nine runs, and in the gateway's
+   replies in all three Trimode runs, the sender's first data transmission went at rung 5 or 6,
+   a whole transmission of four to six frames. It was C1's first choice from the call's reading
+   (`DeliveryController.first_mode`): its prior is the AWGN curve 3 dB under the reading. The
+   floor's reading on this path is −2 to +1 dB (it saturates near there on a 7 ms echo,
+   ADR-0087) though the path is at 10 dB. From such a reading the prior rates the first OFDM
+   rungs best: rung 5 at −2 dB, rung 6 at −1 and 0 dB, rung 7 at +1 dB (computed from the
+   500 Hz engine's own `_delivery_controller()`; at 0 dB rung 6 is valued 21.8 against the
+   floor's top 13.6 and rung 2's 7.3). The echo limits (`NARROW_ECHO_LIMIT`) refuse only rungs
+   3–4, so nothing keeps OFDM out (`02-survey.md` §2).
+2. **Those blocks then take their copies there.** The first copies were followed by two to
+   three more transmissions of the same blocks at the same rung (RV 0, 2, 3), each a 13–14 s
+   exchange, before the blocks still missing were re-encoded onto the floor (ADR-0085). Combining
+   rescued some (1–7 a run); frames decoded alone were 0–4. No block was split into pieces in
+   these nine runs.
+3. **The slow draws went back.** The two slowest runs (277 s and 273 s) each made a second visit
+   to OFDM later in the session (128–210 s and 104–228 s): C1's try across the floor's edge. The
+   second visit alone cost 50–60 s of exchanges.
+4. **The advice was right.** The receiving station's recommendation, from the old controller,
+   stayed at rungs 0–2 throughout every run: it climbs one rung at a time, and with rungs 3–4
+   refused by the echo it never reaches OFDM. On this path the controller that ships as the
+   sender's choice is the one that goes wrong.
+
+**What it cost.** The OFDM air delivered 31–243 B a run. At the floor's own rate in the same run
+(40–45 bit/s of exchange air), those bytes need 6–43 s, so the OFDM visits cost about 30–65 s a
+run in which they occurred. Without them the slowest message (277 s) would have taken about
+210 s, inside K8's 240 s.
 
 ## 4. The field record since the first review
 
