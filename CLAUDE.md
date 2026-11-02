@@ -2417,7 +2417,7 @@ of their budgets: `80m-trimode-gateway-client-vanishes-500` (variant 0; its 1 00
 400 s budget) and `80m-agc-carrier-outside-500` (variant 2, s2031, and once the base draw in CI's
 quick set; its 1 000-byte message in 300 s). Local runs of one draw on each build (the time the
 send or message took): the baseline's build `83eabd0` (10-21) 229–264 s and 232–245 s; `760c161`
-(10-25, before ADR-0095) 166 s twice and 259–274 s; `d27e8bc` (ADR-0095, before C1 was the
+(10-25, before ADR-0095) 166 s twice and 331 s, and 259–274 s; `d27e8bc` (ADR-0095, before C1 was the
 default) 220 s, 310 s and one lost, 256–277 s; today's 296–367 s and 278 s every time. Each build
 also puts a session on another course, so a few runs per build say where time went, not which
 change cost it. Where it goes: the 10-21 build stayed on the floor's tone rungs; today's sends at
