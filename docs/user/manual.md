@@ -350,7 +350,9 @@ files ending in `_test`: a `.json` report and the `.wav` audio. See
 
 Click the box's heading to open it.
 
-- **Key 1 s**: keys the radio for one second with no audio, to check the PTT.
+- **Key 1 s**: keys the radio for one second with no audio, to check the PTT. The log then
+  says whether the radio's receive audio changed while it was keyed. A radio that transmits goes
+  quiet (or plays back its own signal). If it reads the same as the band, the radio did not key.
 - **Tuner tone, 10 s**: a steady tone for an antenna tuner. Do not set drive with it.
 - **Set drive, 4 bursts**: four six-second bursts of the real waveform, five seconds apart.
 - **Transmit level**: the slider, in dB below full scale. **Last transmit peak** is the modem's
@@ -649,6 +651,19 @@ everything after the gap stays in time. A frame across the gap may still not dec
 asks for it again. Once in a session is nothing to act on. If it happens often, close other
 programs, plug the radio into a USB port on the computer itself rather than a hub, and turn off
 USB power saving. Send your files to the project too: these lines are being studied.
+
+**The log says the radio's receive audio did not change while it was keyed.** Aether keyed the
+radio, but what the radio sent the sound card stayed the same as the band, so the radio probably
+did not transmit. The other station hears nothing, and a session can look connected on one side
+only. Check the keying in Setup step 2, and that the radio's own setting for it matches (on many
+radios, RTS or DTR keying works only on one of its two USB serial ports, or after a menu setting).
+Then press **Key 1 s** and watch the radio and the log. Aether says this once after three
+transmissions in a row, and again every ten minutes while it goes on.
+
+**The log says the sound card's playback skipped some milliseconds inside a transmission.** Your
+computer or its USB audio stalled while Aether was sending. What went on the air had a short
+hole, and the other station may not decode the frame across it; it asks again. The cures are the
+ones for capture skips above.
 
 **A host program says nothing is connected, or VARA is missing.** Check **Host programs** is on in
 step 5 and the program points at 127.0.0.1 and the right port. With *host program* keying, the

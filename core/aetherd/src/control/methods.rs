@@ -119,6 +119,9 @@ pub struct DaemonState {
     pub starved_audio: u64,
     /// What the capture stream's own timestamps say it skipped or repeated, since the start.
     pub capture_skips: crate::audio::CaptureSkips,
+    /// What the playback stream's own timestamps say it skipped inside transmissions, since
+    /// the start.
+    pub playback_skips: crate::audio::PlaybackSkips,
     /// The slowest pass of the run loop so far, in milliseconds, and what it was doing.
     pub loop_slowest_ms: f64,
     /// Which phase the slowest pass spent its time in: `commands`, `capture`, `playback`.
@@ -230,6 +233,7 @@ impl DaemonState {
             dropped_audio: 0,
             starved_audio: 0,
             capture_skips: crate::audio::CaptureSkips::default(),
+            playback_skips: crate::audio::PlaybackSkips::default(),
             loop_slowest_ms: 0.0,
             loop_slowest_phase: String::new(),
             loop_stalls: 0,
@@ -1027,6 +1031,12 @@ fn diagnostics<P: Ptt>(
                 "capture_padded_ms": (daemon.capture_skips.padded_s * 10_000.0).round() / 10.0,
                 "capture_repeats": daemon.capture_skips.repeated,
                 "capture_repeated_ms": (daemon.capture_skips.repeated_s * 10_000.0).round() / 10.0,
+                // inside transmissions, by the playback stream's own timestamps: a report only
+                "playback_skips": daemon.playback_skips.skipped,
+                "playback_skipped_ms": (daemon.playback_skips.skipped_s * 10_000.0).round() / 10.0,
+                "playback_largest_skip_ms":
+                    (daemon.playback_skips.largest_s * 10_000.0).round() / 10.0,
+                "playback_repeats": daemon.playback_skips.repeated,
             }),
         );
         object.insert(

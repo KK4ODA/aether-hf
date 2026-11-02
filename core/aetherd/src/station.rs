@@ -27,6 +27,7 @@ mod datagrams;
 mod fieldtest;
 mod gaps;
 mod host;
+mod keyed_audio;
 mod latency;
 mod radio_reads;
 mod reserve;
@@ -1102,6 +1103,10 @@ pub struct Station<P: Ptt> {
     recording_tail: Option<RecordingTail>,
     /// The radio's own readings for the recording running, and the operator's marks in it.
     radio_reads: radio_reads::RadioReads,
+    /// Whether the radio's audio changes when it is keyed (`keyed_audio.rs`): watched only on
+    /// a real radio ([`Self::watch_keyed_audio`]), never on a simulated channel, which carries
+    /// audio whether anything is keyed or not.
+    keyed_audio: Option<keyed_audio::KeyedAudio>,
     /// When the key last came up, for the receive trace after it (`trace_after_release`).
     released_at: f64,
     /// When that trace last wrote a line.
@@ -1335,6 +1340,7 @@ impl<P: Ptt> Station<P> {
             capture_skips_at: VecDeque::new(),
             recording_tail: None,
             radio_reads: radio_reads::RadioReads::default(),
+            keyed_audio: None,
             released_at: f64::NEG_INFINITY,
             traced_at: f64::NEG_INFINITY,
             device_latency_s: None,
@@ -2140,6 +2146,10 @@ impl<P: Ptt> Station<P> {
     /// the end of this station's deafness, and still leaves the busy detector deaf to the
     /// tail the card plays after it.
     fn forced_release(&mut self, now: f64, why: &str) {
+        if let Some(watch) = &mut self.keyed_audio {
+            // a key the watchdog or a failing interface brought down is no reading
+            watch.abandon();
+        }
         if let Some(recording) = &mut self.recording {
             let state = format!("{:?}", self.engine.state());
             recording.event(now, "ptt", "released", &state);
@@ -2926,6 +2936,7 @@ impl<P: Ptt> Station<P> {
     pub fn capture(&mut self, audio: &[f32]) -> Result<(), PttError> {
         self.audio_seen += audio.len();
         self.meter.push(audio);
+        self.hear_keyed_audio(audio);
         self.spectrum.push(audio);
         if self.recording.is_none() {
             let keep = (PREROLL_S * self.config.params.audio_rate as f64) as usize;
@@ -3113,6 +3124,9 @@ impl<P: Ptt> Station<P> {
                     lead: (self.config.key_lead_s * self.config.params.audio_rate as f64) as u64,
                 });
             self.transmitting = true;
+            if let Some(watch) = &mut self.keyed_audio {
+                watch.keyed(now);
+            }
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
             // deaf until the release: the receiver can move onto the session's station without
@@ -3377,6 +3391,7 @@ impl<P: Ptt> Station<P> {
         }
         self.released_at = now;
         self.ptt.unkey(now)?;
+        self.judge_keyed_audio(now);
         self.datagram_transmitted(cut);
         // the engine is told of its own transmissions only, with where the last frame ended
         // on the air: the tail's silence before the release less, the card's output latency
@@ -3534,6 +3549,62 @@ impl<P: Ptt> Station<P> {
             }
             _ => self.config.key_tail_s,
         }
+    }
+
+    /// Watch whether the radio's audio changes when it is keyed (`keyed_audio.rs`). For a
+    /// real radio only: the daemon calls it unless the channel is simulated or the run is dry.
+    pub fn watch_keyed_audio(&mut self) {
+        self.keyed_audio
+            .get_or_insert_with(keyed_audio::KeyedAudio::default);
+    }
+
+    /// One captured block's level, for the keyed-audio watch.
+    fn hear_keyed_audio(&mut self, audio: &[f32]) {
+        if self.keyed_audio.is_none() || audio.is_empty() {
+            return;
+        }
+        let power = audio
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            / audio.len() as f64;
+        let now = self.now();
+        let (transmitting, deaf) = (self.transmitting, now < self.deaf_until);
+        let seconds = audio.len() as f64 / self.config.params.audio_rate as f64;
+        let Some(watch) = &mut self.keyed_audio else {
+            return;
+        };
+        watch.block(
+            now,
+            seconds,
+            10.0 * power.max(1e-12).log10(),
+            transmitting,
+            deaf,
+        );
+    }
+
+    /// The key came down: say what the radio's audio did while it was up, when there is
+    /// anything to say.
+    fn judge_keyed_audio(&mut self, now: f64) {
+        let Some(said) = self
+            .keyed_audio
+            .as_mut()
+            .and_then(|watch| watch.released(now))
+        else {
+            return;
+        };
+        let (name, line) = said.line();
+        self.note(name, &line);
+        let detail = match said {
+            keyed_audio::Said::Test(r) | keyed_audio::Said::Unchanged(r, _) => format!(
+                "keyed {:.1} heard {:.1} to {:.1} unchanged {}",
+                r.keyed,
+                r.heard_low,
+                r.heard_high,
+                u8::from(r.unchanged())
+            ),
+        };
+        self.record_event("keyed_audio", &detail);
     }
 
     /// For [`RELEASE_TRACE_S`] after the key comes up, a line every [`RELEASE_TRACE_STEP_S`]
@@ -4513,6 +4584,10 @@ impl<P: Ptt> Station<P> {
     /// [`Self::render_audio`], with its account of the air.
     fn render_audio_tagged(&mut self, now: f64, samples: Vec<f32>, tone: bool) {
         let what = if tone { "tune" } else { "keying test" };
+        if !tone && let Some(watch) = &mut self.keyed_audio {
+            // judged on its own: the operator pressed it to find out (`keyed_audio.rs`)
+            watch.expect_test();
+        }
         self.render_audio(samples, tone);
         self.tx_tag = Some(self.tag(now, Origin::station(what), &[], false));
     }
@@ -10928,6 +11003,55 @@ mod tests {
         air.run(30.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected());
         assert!(air.a.beacon(None).is_err(), "it beaconed during a session");
+    }
+
+    /// A keying test on a station whose radio's audio, while keyed, is the same noise as
+    /// before (a key the radio ignores) or quiet (a receiver muted to transmit): what it says.
+    fn keying_test_with_audio(muted: bool) -> Vec<String> {
+        let mut station = idle_station();
+        station.watch_keyed_audio();
+        let mut out = vec![0.0f32; 4096];
+        let mut seed = 0;
+        // ten seconds of the band first
+        while station.now() < 10.0 {
+            station.playback(&mut out).expect("playback");
+            station.capture(&quiet_block(seed)).expect("capture");
+            seed += 1;
+        }
+        station.key_test(1.0).expect("idle");
+        while station.now() < 16.0 {
+            station.playback(&mut out).expect("playback");
+            let block = quiet_block(seed);
+            let heard: Vec<f32> = if muted && station.transmitting() {
+                block.iter().map(|x| x * 0.01).collect()
+            } else {
+                block
+            };
+            station.capture(&heard).expect("capture");
+            seed += 1;
+        }
+        station
+            .take_events()
+            .into_iter()
+            .filter(|e| e.starts_with("keyed:") || e.starts_with("keying:the keying test"))
+            .collect()
+    }
+
+    #[test]
+    fn a_keying_test_says_whether_the_radio_audio_changed() {
+        // KK4ODA, 2026-11-02: the VarAC profile keyed RTS on the FTDX10's CAT port, which the
+        // radio ignores, and the receive audio while "keyed" read as the band did
+        let ignored = keying_test_with_audio(false);
+        assert_eq!(ignored.len(), 1, "{ignored:?}");
+        assert!(
+            ignored[0]
+                .starts_with("keyed:the keying test did not change the radio's receive audio"),
+            "{ignored:?}"
+        );
+        // the same radio on CAT keying: −23 → −47 dBFS while keyed
+        let keyed = keying_test_with_audio(true);
+        assert_eq!(keyed.len(), 1, "{keyed:?}");
+        assert!(keyed[0].ends_with("the radio transmits"), "{keyed:?}");
     }
 
     #[test]

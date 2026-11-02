@@ -96,6 +96,12 @@ pub trait AudioIo {
     fn capture_skips(&self) -> CaptureSkips {
         CaptureSkips::default()
     }
+    /// What the playback stream's own timestamps say it skipped or repeated inside
+    /// transmissions since the device was opened ([`PlaybackSkips`]). None from a backend that
+    /// keeps no timestamps.
+    fn playback_skips(&self) -> PlaybackSkips {
+        PlaybackSkips::default()
+    }
     /// Hold the transmission just handed over to its slot (report 12, change 6): if the sample
     /// that leaves when the clock reads `guard.at` would leave the device after `guard.by`, drop
     /// it and everything queued behind it unplayed, and say so ([`Self::take_onset_drop`]).
@@ -224,6 +230,61 @@ impl CaptureSkips {
     }
 }
 
+/// What a playback stream's own timestamps say of the audio between its callbacks while a
+/// transmission plays: the playback side of [`CaptureSkips`], and a report only.
+///
+/// Each callback says when its first sample will leave the device. The next one's should be
+/// as much later as the samples this one took; a later one means the device's clock moved on
+/// without them — a hole in what went on the air, or the rest of the transmission played late
+/// — and an earlier one samples it never played. On 2026-11-02 the house station's sound card
+/// stalled for about 20 ms inside an acceptance it was sending (its capture skipped at the same
+/// instant); the truck received the acceptance at +12 dB with the hole in it and could not
+/// decode it, and nothing at the house said so. Counted only while the modem has a
+/// transmission to play: a skip in the silence between them puts nothing on the air.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct PlaybackSkips {
+    /// Jumps forward inside a transmission.
+    pub skipped: usize,
+    /// What they came to, in seconds.
+    pub skipped_s: f64,
+    /// The largest of them, in seconds.
+    pub largest_s: f64,
+    /// Jumps back: samples the device's clock says it never played.
+    pub repeated: usize,
+    /// What they came to, in seconds.
+    pub repeated_s: f64,
+}
+
+impl PlaybackSkips {
+    /// A callback whose first sample leaves the device `elapsed_s` after the previous
+    /// callback's, which held `frames` frames at `rate` Hz.
+    pub fn note(&mut self, elapsed_s: f64, frames: usize, rate: f64) {
+        if !elapsed_s.is_finite() || rate <= 0.0 {
+            return;
+        }
+        let jump = elapsed_s - frames as f64 / rate;
+        if jump >= SKIP_MIN_S {
+            self.skipped += 1;
+            self.skipped_s += jump;
+            self.largest_s = self.largest_s.max(jump);
+        } else if jump <= -SKIP_MIN_S {
+            self.repeated += 1;
+            self.repeated_s -= jump;
+        }
+    }
+}
+
+/// One playback callback's timestamps: noted against the last when a transmission is playing.
+/// `since_last` is how long after the last callback's first sample this one's leaves, and how
+/// many frames the last took. Kept apart from the callback so it can be tested without a card.
+fn note_playback(shared: &mut Shared, since_last: Option<(f64, usize)>, rate: f64) {
+    if shared.playing
+        && let Some((elapsed, frames)) = since_last
+    {
+        shared.played_skips.note(elapsed, frames, rate);
+    }
+}
+
 /// Seconds from `earlier` to `later`, negative if `later` is the earlier of the two.
 fn seconds_between(earlier: cpal::StreamInstant, later: cpal::StreamInstant) -> f64 {
     later.duration_since(&earlier).map_or_else(
@@ -262,6 +323,9 @@ struct Shared {
     latency_s: Option<f64>,
     /// What the capture stream's timestamps said it skipped (the capture queue only).
     skips: CaptureSkips,
+    /// What the playback stream's timestamps said it skipped inside transmissions (the
+    /// playback queue only).
+    played_skips: PlaybackSkips,
     /// The transmission queued now, held to its slot (the playback queue only).
     onset: Option<OnsetGuard>,
     /// How late the guarded sample would have left, when the callback dropped its
@@ -566,6 +630,8 @@ impl SoundCard {
 
         let play_queue = Arc::clone(&to_play);
         let out_rate = f64::from(out_config.sample_rate.0);
+        // when the last callback's first sample left the device, and how many frames it took
+        let mut last_out: Option<(cpal::StreamInstant, usize)> = None;
         let output = output_device
             .build_output_stream(
                 &out_config,
@@ -585,6 +651,10 @@ impl SoundCard {
                             Some(shared.latency_s.map_or(seconds, |s| s.max(seconds)));
                     }
                     let first_leaves = Instant::now() + delay.unwrap_or_default();
+                    let since_last =
+                        last_out.map(|(at, frames)| (seconds_between(at, stamp.playback), frames));
+                    last_out = Some((stamp.playback, data.len() / out_channels.max(1)));
+                    note_playback(&mut shared, since_last, out_rate);
                     fill_playback(&mut shared, data, out_channels, first_leaves, out_rate);
                 },
                 |error| eprintln!("aetherd: playback stream: {error}"),
@@ -657,6 +727,12 @@ impl AudioIo for SoundCard {
         self.captured
             .lock()
             .map_or_else(|_| CaptureSkips::default(), |shared| shared.skips)
+    }
+
+    fn playback_skips(&self) -> PlaybackSkips {
+        self.to_play
+            .lock()
+            .map_or_else(|_| PlaybackSkips::default(), |shared| shared.played_skips)
     }
 
     fn drains_at(&self) -> u64 {
@@ -930,6 +1006,35 @@ mod tests {
         assert_eq!(skips.padded, 2);
         assert_eq!(skips.note(1.01, 480, rate), 0);
         assert_eq!((skips.lost, skips.padded), (3, 2));
+    }
+
+    #[test]
+    fn a_jump_in_the_playback_timestamps_inside_a_transmission_is_a_skip_on_the_air() {
+        // the house station of 2026-11-02: its sound card stalled about 20 ms inside an
+        // acceptance it was sending; 10 ms callbacks at 48 kHz
+        let rate = 48_000.0;
+        let mut shared = Shared::default();
+        // between transmissions a stall plays nothing on the air: not counted
+        note_playback(&mut shared, Some((0.030, 480)), rate);
+        assert_eq!(shared.played_skips, PlaybackSkips::default());
+        shared.playing = true;
+        for elapsed in [0.010, 0.0103, 0.0097] {
+            note_playback(&mut shared, Some((elapsed, 480)), rate);
+        }
+        assert_eq!(
+            shared.played_skips,
+            PlaybackSkips::default(),
+            "jitter counted"
+        );
+        note_playback(&mut shared, Some((0.030, 480)), rate);
+        assert_eq!(shared.played_skips.skipped, 1);
+        assert!((shared.played_skips.skipped_s - 0.020).abs() < 1e-9);
+        assert!((shared.played_skips.largest_s - 0.020).abs() < 1e-9);
+        note_playback(&mut shared, Some((-0.010, 480)), rate);
+        assert_eq!(shared.played_skips.repeated, 1);
+        // the first callback has nothing to be judged against
+        note_playback(&mut shared, None, rate);
+        assert_eq!(shared.played_skips.skipped, 1);
     }
 
     #[test]

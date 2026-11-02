@@ -367,6 +367,10 @@ fn run() -> Result<Exit, String> {
         seed_from_callsign(&config.callsign),
     );
     seed_from_heard(&mut station, &daemon.heard);
+    if !daemon.simulated {
+        // a simulated channel carries audio whether anything is keyed or not
+        station.watch_keyed_audio();
+    }
     daemon.log.record(
         Level::Info,
         "ptt",
@@ -880,6 +884,10 @@ struct AudioLosses {
     /// jitter past the threshold would otherwise write a line every pass.
     skips_said: aetherd::audio::CaptureSkips,
     skips_said_at: Option<std::time::Instant>,
+    /// The playback skips inside transmissions, as last reported and as the log last said them.
+    played: aetherd::audio::PlaybackSkips,
+    played_said: aetherd::audio::PlaybackSkips,
+    played_said_at: Option<std::time::Instant>,
 }
 
 /// Report what the sound card lost since the last pass: captured audio the modem could not
@@ -938,6 +946,7 @@ fn note_audio_losses(
     }
     reported.skips = skips;
     daemon.capture_skips = skips;
+    note_playback_skips(daemon, audio, station, reported);
     let said = reported.skips_said;
     let due = reported
         .skips_said_at
@@ -981,6 +990,66 @@ fn note_audio_losses(
                 "the sound card's capture timestamps went back {ms:.0} ms: audio delivered twice, \
                  or a clock that stepped ({} so far)",
                 skips.repeated
+            ),
+            &state_name(station),
+        );
+    }
+}
+
+/// What the playback stream's own timestamps say it skipped inside a transmission: each one
+/// to the recording, where it is placed, and to the log at most every
+/// `LOOP_STALL_LOG_INTERVAL`. A report only: what went on the air cannot be taken back, but the
+/// other station's lost frame then has a reason on this side.
+fn note_playback_skips(
+    daemon: &mut DaemonState,
+    audio: &dyn AudioIo,
+    station: &mut Station<Box<dyn Ptt>>,
+    reported: &mut AudioLosses,
+) {
+    let played = audio.playback_skips();
+    if played.skipped > reported.played.skipped {
+        let skipped = played.skipped_s - reported.played.skipped_s;
+        station.record_event("playback_skip", &format!("skipped {skipped:.3}"));
+    }
+    if played.repeated > reported.played.repeated {
+        let repeated = played.repeated_s - reported.played.repeated_s;
+        station.record_event("playback_skip", &format!("repeated {repeated:.3}"));
+    }
+    reported.played = played;
+    daemon.playback_skips = played;
+    let said = reported.played_said;
+    let due = reported
+        .played_said_at
+        .is_none_or(|at| at.elapsed() >= LOOP_STALL_LOG_INTERVAL);
+    if played == said || !due {
+        return;
+    }
+    reported.played_said = played;
+    reported.played_said_at = Some(std::time::Instant::now());
+    if played.skipped > said.skipped {
+        let ms = (played.skipped_s - said.skipped_s) * 1000.0;
+        daemon.log.record(
+            Level::Warn,
+            "audio",
+            &format!(
+                "the sound card's playback skipped {ms:.0} ms inside a transmission, by its own \
+                 timestamps: a hole or a slip on the air, and the other station may lose the \
+                 frame across it ({} such skips so far, the largest {:.0} ms)",
+                played.skipped,
+                played.largest_s * 1000.0
+            ),
+            &state_name(station),
+        );
+    }
+    if played.repeated > said.repeated {
+        let ms = (played.repeated_s - said.repeated_s) * 1000.0;
+        daemon.log.record(
+            Level::Warn,
+            "audio",
+            &format!(
+                "the sound card's playback timestamps went back {ms:.0} ms inside a \
+                 transmission ({} so far)",
+                played.repeated
             ),
             &state_name(station),
         );
@@ -1213,7 +1282,7 @@ fn note_ptt_failure(
 fn level_of(name: &str) -> Level {
     match name {
         "error" => Level::Error,
-        "watchdog" | "timeout" | "failed" | "mismatch" | "disconnect" => Level::Warn,
+        "watchdog" | "timeout" | "failed" | "mismatch" | "disconnect" | "keyed" => Level::Warn,
         _ => Level::Info,
     }
 }
