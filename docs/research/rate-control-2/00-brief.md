@@ -169,3 +169,14 @@ from the runs that finished, and never let a wait loop's pattern match its own c
    this review's own Gate 6?
 4. **The air.** A few Tests on 80 m NVIS at 500 Hz with the testers, both sides uploaded, are the
    field evidence this review lacks.
+
+### The author's answers (2026-11-02)
+
+1. **Field builds hold still** for rate-controller changes until the decision ADR. Fixes outside
+   the controller may still ship as betas.
+2. **The advice may go** (D1), with a protocol bump if the design needs one.
+3. **Delete now** C2 (`OuterLoopController`, `"olla"`) and the cautious start, with their tests and
+   vectors. C1 at the receiver and C1 in both roles stay as comparison arms until this review's
+   Gate 6.
+4. **No field sessions for now.** The review works from the harness and the field record in hand
+   (§1.3).
