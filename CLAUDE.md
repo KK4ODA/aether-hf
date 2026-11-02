@@ -2429,6 +2429,9 @@ the advice sitting at rungs 4–5 at +8 to +13 dB readings under the RTTY QRM. A
 controller and its stuck-frame targets, owed to the next review (ADR-0094 §5), not patched; the
 budgets stay. `bench/baselines/scenarios.csv` is still `83eabd0`'s: refreshing it would record
 these slowdowns as normal.
+**The rate controller's second review started the same day** (the author's "start the rate
+controller review"): `docs/research/rate-control-2/00-brief.md` (scope, what the first review left
+and owed, the gates, four questions for the author); Gate 0's oracle on today's daemon runs first.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
