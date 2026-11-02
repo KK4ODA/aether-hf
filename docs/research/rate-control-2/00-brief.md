@@ -62,10 +62,13 @@ four things owed, and the nightly has since shown what they cost.
 
 ### 1.3 The field record
 
-No upload has arrived since 2026-10-25 14:37Z. The sessions on a C1 build are the author's own of
-2026-10-25 (two Winlink sessions through the gateway, the mobile's Test) and KQ4SAX's of the same
-morning. The review starts on the harness and reads those sessions; more Tests on 80 m NVIS at
-500 Hz, both sides uploaded, are what it most needs from the air (§6).
+No upload has arrived since 2026-10-25 14:37Z, and **no field session has run C1**: C1 at the
+sender became the default in beta.124 (2026-10-25 13:41Z), and every upload of 2026-10-25 (the
+author's two Winlink sessions through the gateway, the mobile's Test, KQ4SAX's) came from
+beta.122, the old controller. (This paragraph first said those sessions ran C1; corrected the same
+day from the builds' defaults.) The review starts on the harness; those sessions add to the first
+review's record of the old controller; more Tests on 80 m NVIS at 500 Hz, both sides uploaded,
+are what it most needs from the air (§6).
 
 ## 2. The job (unchanged; restate it better if the evidence says so)
 
@@ -108,7 +111,8 @@ Added for this review, from §1:
 3. **The NVIS trace.** On the two nightly scenarios and `80m-nvis-disturbed-500`: per rung,
    frames sent, never detected, decoded alone, combined; the air spent on OFDM; how many copies
    and rounds of pieces each stuck block took; what the advice said and when.
-4. **The field sessions on a C1 build** (§1.3), read with `tools/rung_reading.py`.
+4. **The field sessions since the first review** (§1.3, all on the old controller), read with
+   `tools/rung_reading.py`.
 5. **The count for K7**: today's tunables in both controllers, the engine rules around them, and
    the lines of code in the model and the port.
 
