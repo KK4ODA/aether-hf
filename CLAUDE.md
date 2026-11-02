@@ -2411,6 +2411,24 @@ was its slave (`_left`/`left` carry it; model first, the port, `granted_vectors.
 too big to download (the weekly's is 2 GB of audio) is read member by member over HTTP range
 requests: `zipfile` over a file object whose reads are `Range` requests on the artifact's
 download URL.
+**The nightly's other failures (2026-11-02, found and not fixed: the rate controller's).** Since
+beta.125 the nightly fails on about half the nights, on two 500 Hz ITU NVIS scenarios at the edge
+of their budgets: `80m-trimode-gateway-client-vanishes-500` (variant 0; its 1 000-byte send in a
+400 s budget) and `80m-agc-carrier-outside-500` (variant 2, s2031, and once the base draw in CI's
+quick set; its 1 000-byte message in 300 s). Local runs of one draw on each build (the time the
+send or message took): the baseline's build `83eabd0` (10-21) 229–264 s and 232–245 s; `760c161`
+(10-25, before ADR-0095) 166 s twice and 259–274 s; `d27e8bc` (ADR-0095, before C1 was the
+default) 220 s, 310 s and one lost, 256–277 s; today's 296–367 s and 278 s every time. Each build
+also puts a session on another course, so a few runs per build say where time went, not which
+change cost it. Where it goes: the 10-21 build stayed on the floor's tone rungs; today's sends at
+OFDM rungs the 7 ms echo kills (the advice at rung 5 from the first reading, C1's first choice or
+its tries across the floor's edge), and each block cut there goes four failing copies, then in
+OFDM pieces at rung 5 for four more rounds, before it reaches the floor (ADR-0085, ADR-0086). The
+trend's `40m-rtty-contest-2300` file at 116–133 bit/s (baseline 165–392, flagged since 10-22) is
+the advice sitting at rungs 4–5 at +8 to +13 dB readings under the RTTY QRM. All of it is the rate
+controller and its stuck-frame targets, owed to the next review (ADR-0094 §5), not patched; the
+budgets stay. `bench/baselines/scenarios.csv` is still `83eabd0`'s: refreshing it would record
+these slowdowns as normal.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
