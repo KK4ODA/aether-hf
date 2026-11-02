@@ -1377,6 +1377,9 @@ fn wound_down(
     daemon: &mut DaemonState,
     wind_down: &mut Option<std::time::Instant>,
 ) -> bool {
+    // a call that arrives while the session's end leaves the air would start a session the
+    // stop then cuts short
+    station.stop_answering();
     if wind_down.is_none() && !station.quiescent() {
         daemon.log.record(
             Level::Info,

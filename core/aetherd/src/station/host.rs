@@ -49,6 +49,9 @@ pub(super) struct Host {
     listen_said: Option<f64>,
     /// Times answering turned on or off since.
     listen_turns: u32,
+    /// The daemon is stopping (`Station::stop_answering`): no call or probe is answered while
+    /// its last session's end leaves the air.
+    stopping: bool,
 }
 
 impl<P: Ptt> Station<P> {
@@ -115,12 +118,20 @@ impl<P: Ptt> Station<P> {
     /// Whether calls to this station are answered now.
     #[must_use]
     pub fn answering(&self) -> bool {
-        self.host.presence.answering()
+        !self.host.stopping && self.host.presence.answering()
+    }
+
+    /// The daemon is stopping: answer no call or probe from now on. A stop first ends the
+    /// session on the air (the wind-down), and the station listens meanwhile; at KK4ODA
+    /// (2026-11-02 20:30Z) it answered a call that arrived in those seconds and was stopped
+    /// in the middle of the new session, leaving the caller to time out.
+    pub fn stop_answering(&mut self) {
+        self.host.stopping = true;
     }
 
     /// A decoded call or probe to this station that is not to be answered, because the host
-    /// program attached has not said `LISTEN ON`: counted, said once a minute for a caller,
-    /// and kept from the engine. Only while idle — the answer to this station's own call, or
+    /// program attached has not said `LISTEN ON` or the daemon is stopping: counted, said once
+    /// a minute for a caller, and kept from the engine. Only while idle — the answer to this station's own call, or
     /// anything in a session, is not an incoming call.
     pub(super) fn unanswered(&mut self, decoded: &aether_phy::DecodedFrame) -> bool {
         use aether_link::frames::{ConnectBody, DataKind, ProbeBody, decode_data};
@@ -156,12 +167,14 @@ impl<P: Ptt> Station<P> {
             .as_ref()
             .is_some_and(|(caller, at)| *caller == from && now - at < UNANSWERED_QUIET_S);
         if !repeated {
+            let why = if self.host.stopping {
+                "the modem is stopping"
+            } else {
+                "the host program has not said LISTEN ON"
+            };
             self.note(
                 "listen",
-                &format!(
-                    "a {what} from {from} to {to} not answered: the host program has not said \
-                     LISTEN ON"
-                ),
+                &format!("a {what} from {from} to {to} not answered: {why}"),
             );
             self.host.said = Some((from, now));
         }

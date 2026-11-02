@@ -10701,6 +10701,36 @@ mod tests {
     }
 
     #[test]
+    fn a_stopping_station_answers_no_call() {
+        // KK4ODA, 2026-11-02 20:30Z: asked to stop, the daemon aborted its session and, while
+        // that end left the air, answered a new call from KK2ODA; the stop then cut the new
+        // session short and left the caller to time out
+        let mut air = Air::new(1.0, 0.0005);
+        assert!(air.b.answering());
+        air.b.stop_answering();
+        assert!(!air.b.answering());
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |_, b| b.stats.calls_unanswered >= 2);
+        assert!(!air.b.connected());
+        assert!(air.b.stats.calls_unanswered >= 2);
+        let events = air.b.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e
+                    == "listen:a call from W4ODA to KK4XYZ not answered: the modem is stopping"),
+            "{events:?}"
+        );
+        // a host program saying LISTEN ON does not undo a stop
+        air.b.set_host(HostPresence {
+            attached: true,
+            listening: true,
+            chat: false,
+        });
+        assert!(!air.b.answering());
+    }
+
+    #[test]
     fn a_scanning_host_is_said_to_scan_once_a_minute_not_at_every_turn() {
         // RMS Trimode turns LISTEN off for half a second every three and a half, on one
         // channel too: a line at each turn was 9 448 lines of one night's log at KK4ODA-1
