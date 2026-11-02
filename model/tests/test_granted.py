@@ -880,6 +880,43 @@ def test_a_session_closed_without_its_disc_ack_is_left_unheard() -> None:
     assert [GrantFrame.decode(f.payload).kind for f in sent] == [GrantKind.DISC_ACK]
 
 
+@pytest.mark.parametrize("air", ["2300", "500"])
+def test_only_a_station_that_was_the_slave_answers_a_left_sessions_header(air: str) -> None:
+    """ADR-0098: a session whose path died leaves both stations remembering it (ADR-0052). A
+    header with its number is the master still there only to the station that was its slave;
+    the station that was its master hears one only from another pair's session — the number is
+    seven bits — and its DISC, in that header's slot, ended a gateway's next session with
+    another client twice in the weekly gateway day."""
+    timing = _timing(AIRS[air])
+    a, b = _pair(AIRS[air])
+    sim = TwoStationSim(a, b, snr_schedule=lambda t: 10.0 if t < 30.0 else -60.0, seed=5)
+    a.connect("KK4XYZ")
+    a.send(b"z" * 3000)
+    t = 0.0
+    while t < 900.0 and not (a.state is State.IDLE and b.state is State.IDLE):
+        t += 1.0
+        sim.run(until=t)
+    assert sim.events(0)[-1] == "disconnected:no response", sim.events(0)
+    assert sim.events(1)[-1] == "disconnected:link timeout", sim.events(1)
+
+    def answers(engine: GrantedEngine) -> list[GrantKind]:
+        """What ``engine`` sends to a header of the session it left, heard now."""
+        engine.drain()
+        header = GrantFrame(GrantKind.HEADER, a.session & 0x7F, fam=True, snr_db=10.0, n=1)
+        length = timing.control_frame_s_for(True)
+        now = sim.t
+        heard = SimFrame(
+            Container.CONTROL, 0, 0, 10.0, now, now + length, header.encode(), 0.0, floor=True
+        )
+        engine.on_frame(heard, now + length)
+        engine.tick(now + 30.0)
+        sent = [f for x in engine.drain() if isinstance(x, Transmit) for f in x.frames]
+        return [GrantFrame.decode(f.payload).kind for f in sent]
+
+    assert answers(a) == [], "the master that left answered another session's header"
+    assert answers(b) == [GrantKind.DISC], "the slave that left no longer tells the master"
+
+
 def test_a_peer_that_calls_again_ends_the_old_session() -> None:
     """ADR-0056: the master aborts and calls again under a new session number; the slave, still
     in the old session, ends it and answers the call."""

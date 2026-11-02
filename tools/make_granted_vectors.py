@@ -40,7 +40,7 @@ from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.rate_review import DeliveryController
-from aether_model.link.sim import TwoStationSim
+from aether_model.link.sim import SimFrame, TwoStationSim
 
 
 def bits(x: float | None) -> float | None:
@@ -1102,6 +1102,28 @@ def idle_identifier() -> list[Recorder]:
     return [ra, rb]
 
 
+def left_header() -> list[Recorder]:
+    """A session whose path dies, then a header of another pair's session that carries its
+    number: the station that was its slave answers with a DISC (ADR-0052), the station that was
+    its master with nothing — only a master sends headers (ADR-0098)."""
+    a, b, ra, rb = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_schedule=lambda t: 10.0 if t < 30.0 else -60.0, seed=5)
+    a.connect("KK4XYZ")
+    a.send(b"z" * 3000)
+    sim.run(until=200.0)  # no response at the master, a link timeout at the slave
+    header = GrantFrame(GrantKind.HEADER, a.session & 0x7F, fam=True, snr_db=10.0, n=1)
+    length = a.timing.control_frame_s_for(True)
+    now = sim.t
+    for engine in (a, b):
+        heard = SimFrame(
+            Container.CONTROL, 0, 0, 10.0, now, now + length, header.encode(), 0.0, floor=True
+        )
+        engine.on_frame(heard, now + length)
+        engine.tick(now + 30.0)
+        engine.drain()
+    return [ra, rb]
+
+
 SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "clean-wide": clean_wide,
     "weak-narrow": weak_narrow,
@@ -1134,6 +1156,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "rescued-count": rescued_count,
     "echo-path": echo_path,
     "measure-silent": measure_silent,
+    "left-header": left_header,
 }
 
 

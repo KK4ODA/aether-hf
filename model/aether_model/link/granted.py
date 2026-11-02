@@ -674,10 +674,12 @@ class GrantedEngine:
         self._hold_until = 0.0
         """Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
         while idle keys before this: the last slot it granted may still be in use."""
-        self._left: tuple[int, float, bool] | None = None
-        """A session this station has left: its number, until when its frames are answered, and
+        self._left: tuple[int, float, bool, bool] | None = None
+        """A session this station has left: its number, until when its frames are answered,
         whether the other station's DISC ended it (then only a DISC is answered, with its
-        DISC_ACK; otherwise a header is answered with a DISC — ADR-0052)."""
+        DISC_ACK; otherwise a header is answered with a DISC — ADR-0052), and whether this
+        station was its slave (only a master sends headers: to a station that was the master, a
+        header with the number is another session's — ADR-0098)."""
         self._leave_repeats = 0
         self._call_jitter = 0.0
         self._my_ident_s = 0.0
@@ -3397,11 +3399,12 @@ class GrantedEngine:
 
     def _answer_left(self, ctl: GrantFrame, frame: SoftFrame) -> None:
         """An idle station hears a control frame of a session it left: a DISC is answered with
-        its DISC_ACK, a header (the other station still in the session) with a DISC — in the
-        frame's slot, or not at all (ADR-0052). A DISC_ACK ends the leaving."""
+        its DISC_ACK, a header (the master it left still in the session) with a DISC if this
+        station was the slave — in the frame's slot, or not at all (ADR-0052, ADR-0098). A
+        DISC_ACK ends the leaving."""
         if self._left is None:
             return
-        session, until, disc_heard = self._left
+        session, until, disc_heard, was_slave = self._left
         if self.now > until:
             self._left = None
             return
@@ -3425,7 +3428,10 @@ class GrantedEngine:
             self._arm_at("ident", self.now + self._exchange_s())
         if ctl.kind is GrantKind.DISC:
             self._answer_disc(ctl, frame, GrantKind.DISC_ACK)
-        elif ctl.kind is GrantKind.HEADER and not disc_heard:
+        elif ctl.kind is GrantKind.HEADER and was_slave and not disc_heard:
+            # the master it left still in the session. A station that was the master hears a
+            # header with the number only from another pair's session — seven bits, one in 127:
+            # its DISC, in that header's slot, ended a gateway's next session (ADR-0098)
             self._answer_disc(ctl, frame, GrantKind.DISC)
 
     def _repeat_leave(self) -> None:
@@ -3437,7 +3443,7 @@ class GrantedEngine:
         if self.now < self._hold_until - 1e-9:
             self._arm_at("leave", self._hold_until)
             return
-        session, until, _ = self._left
+        session, until, _, _ = self._left
         if self.now > until:
             self._left = None
             self._identify_after_leaving()
@@ -3511,7 +3517,12 @@ class GrantedEngine:
     def _end_session(self, reason: str, *, disc_heard: bool = False, unread: bool = False) -> None:
         left = None
         if self.state is not State.CONNECTING and (reason in LEFT_UNHEARD or disc_heard):
-            left = (self.session, self.now + self._link_timeout(), disc_heard)
+            left = (
+                self.session,
+                self.now + self._link_timeout(),
+                disc_heard,
+                self.role is Role.SLAVE,
+            )
         # a session that came up ends with this station's closing identifier — unless the other
         # station ended it by calling again, which goes on in the session its call opens
         # (ADR-0055 §4); a call never answered is the daemon's to identify (ADR-0055)

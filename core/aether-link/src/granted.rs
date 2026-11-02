@@ -1035,9 +1035,11 @@ pub struct GrantedEngine {
     /// Nothing this station starts on its own — a call, a probe, a leaving DISC — or answers
     /// while idle keys before this: the last slot it granted may still be in use.
     hold_until: f64,
-    /// A session this station has left: its number, until when its frames are answered, and
-    /// whether the other station's DISC ended it (ADR-0052).
-    left: Option<(u8, f64, bool)>,
+    /// A session this station has left: its number, until when its frames are answered,
+    /// whether the other station's DISC ended it (ADR-0052), and whether this station was its
+    /// slave (only a master sends headers: to a station that was the master, a header with the
+    /// number is another session's — ADR-0098).
+    left: Option<(u8, f64, bool, bool)>,
     leave_repeats: usize,
     call_jitter: f64,
     /// This station's closing identifier's length for the session under way or just ended:
@@ -5120,10 +5122,11 @@ impl GrantedEngine {
     // ── the end ───────────────────────────────────────────────────────
 
     /// An idle station hears a control frame of a session it left: a DISC is answered with its
-    /// `DISC_ACK`, a header (the other station still in the session) with a DISC — in the
-    /// frame's slot, or not at all (ADR-0052). A `DISC_ACK` ends the leaving.
+    /// `DISC_ACK`, a header (the master it left still in the session) with a DISC if this
+    /// station was the slave — in the frame's slot, or not at all (ADR-0052, ADR-0098). A
+    /// `DISC_ACK` ends the leaving.
     fn answer_left(&mut self, ctl: &GrantFrame, frame: &Heard) {
-        let Some((session, until, disc_heard)) = self.left else {
+        let Some((session, until, disc_heard, was_slave)) = self.left else {
             return;
         };
         if self.now > until {
@@ -5159,7 +5162,10 @@ impl GrantedEngine {
         }
         if ctl.kind == GrantKind::Disc {
             self.answer_disc(ctl, frame, GrantKind::DiscAck);
-        } else if ctl.kind == GrantKind::Header && !disc_heard {
+        } else if ctl.kind == GrantKind::Header && was_slave && !disc_heard {
+            // the master it left still in the session. A station that was the master hears a
+            // header with the number only from another pair's session — seven bits, one in 127:
+            // its DISC, in that header's slot, ended a gateway's next session (ADR-0098)
             self.answer_disc(ctl, frame, GrantKind::Disc);
         }
     }
@@ -5167,7 +5173,7 @@ impl GrantedEngine {
     /// An aborting master's DISC, from idle: on the floor, granting the `DISC_ACK`'s slot, up
     /// to `leave_repeats` times, each once the last one's slot is over.
     fn repeat_leave(&mut self) {
-        let Some((session, until, _)) = self.left else {
+        let Some((session, until, _, _)) = self.left else {
             self.identify_after_leaving();
             return;
         };
@@ -5275,7 +5281,14 @@ impl GrantedEngine {
     fn end_session_with(&mut self, reason: &str, disc_heard: bool, unread: bool) {
         let left = (self.state != State::Connecting
             && (LEFT_UNHEARD.contains(&reason) || disc_heard))
-            .then(|| (self.session, self.now + self.link_timeout(), disc_heard));
+            .then(|| {
+                (
+                    self.session,
+                    self.now + self.link_timeout(),
+                    disc_heard,
+                    self.role == Role::Slave,
+                )
+            });
         // a session that came up ends with this station's closing identifier — unless the other
         // station ended it by calling again, which goes on in the session its call opens
         // (ADR-0055 §4); a call never answered is the daemon's to identify (ADR-0055)

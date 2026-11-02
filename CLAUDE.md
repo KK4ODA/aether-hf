@@ -2399,6 +2399,19 @@ harness, none of 1 238 on the model's flutter. A rule keeping the end no earlier
 receiver's own sidecar (a decoded header's count, the data frames' positions after it): the
 stations' clocks differ, so matching against the sender's `sent` by `t_s` mismatches.
 
+**The weekly gateway day and ADR-0098 (2026-11-02).** The Weekly run of 2026-11-01 failed twice in
+29 rounds the same way: ND1J, the master of a session the round's outage killed, closed "no
+response" and remembered it (ADR-0052); KE4QCM's next session with the same gateway drew a session
+number with the same low seven bits (control frames carry seven, no callsign); ND1J answered
+KE4QCM's first header with a DISC in the slot it granted the gateway, and KE4QCM closed. Only a
+master sends headers, so a left session's header is answered with a DISC only by the station that
+was its slave (`_left`/`left` carry it; model first, the port, `granted_vectors.json`'s
+`left-header`). The engine's draws (session numbers, call jitter) are seeded from the callsign
+(`seed_from_callsign`): a daemon restarted draws the same numbers in the same order. A CI artifact
+too big to download (the weekly's is 2 GB of audio) is read member by member over HTTP range
+requests: `zipfile` over a file object whose reads are `Range` requests on the artifact's
+download URL.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

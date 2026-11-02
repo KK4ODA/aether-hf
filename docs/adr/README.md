@@ -102,3 +102,4 @@ context → decision → alternatives considered → consequences.
 | [0095](0095-a-weak-frame-hides-no-strong-one-and-a-spans-end-is-outside-it.md) | A weak frame hides no strong one, and a span's last half symbol is outside it | accepted |
 | [0096](0096-a-scanning-gateway-hears-pending-first-and-a-reconnecting-host-is-served.md) | A scanning gateway hears PENDING first, and a host that reconnects is served | accepted |
 | [0097](0097-a-host-program-that-starts-aether-as-vara-starts-a-stand-in.md) | A host program that starts Aether as VARA starts a stand-in | accepted |
+| [0098](0098-only-a-left-sessions-slave-answers-its-header.md) | Only the station that was a left session's slave answers its header | accepted |
