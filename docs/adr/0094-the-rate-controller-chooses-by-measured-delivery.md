@@ -153,6 +153,12 @@ module. Kept: `RateController` whole, for the advice, with the engine rules that
 threshold tables, `usable_modes`, the echo exclusions, `silence_step`, `reencode_early_after`,
 `reencode_hopeless_db`, the ceiling and the stuck-frame rules.
 
+*Gate 6 in part (2026-11-02):* `OuterLoopController` and `cautious_start` are deleted, with their
+tests, vectors and the port's penalty tables that only the cautious start read (the author's
+answer 3 in `docs/research/rate-control-2/00-brief.md`). The rest of this list moves to the
+second review, whose own Gate 6 deletes what its decision leaves; C1 at the receiver and in both
+roles stay until then as its comparison arms.
+
 **Owed, recorded here:** the dip and the climb's pace (§3) are the two places C1 is known to
 leave speed, and the advice is the current controller with its nineteen parameters, which K7
 asked to be gone: the next review's, not a patch. C1 at the receiver's optimism on NVIS (§3.8,

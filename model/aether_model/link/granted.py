@@ -56,7 +56,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TypedDict, TypeVar
+from typing import TypedDict
 
 from aether_model.link.frames import (
     CAP_LEVEL_MASK,
@@ -94,10 +94,7 @@ from aether_model.link.rate_review import (
     CONTROLLERS,
     DeliveryController,
     FrameOutcome,
-    OuterLoopController,
 )
-
-_Prototype = TypeVar("_Prototype", DeliveryController, OuterLoopController)
 
 # ── what the engine hands its driver ──────────────────────────────────
 
@@ -763,9 +760,7 @@ class GrantedEngine:
         self._asked: int | None = None
         self._last_rx_mode: int | None = None
         self._sender: DeliveryController | None = (
-            self._delivery_controller(DeliveryController)
-            if self.cfg.controller in ("delivery-s", "c1")
-            else None
+            self._delivery_controller() if self.cfg.controller in ("delivery-s", "c1") else None
         )
         """C1-S (the rate controller's review): this station's own choice of the rung its data
         goes at, from what its acknowledgements say of its frames; the other station's
@@ -1590,7 +1585,7 @@ class GrantedEngine:
                     best = (mode, count)
         return None if best is None else best[0]
 
-    def _delivery_controller(self, kind: type[_Prototype]) -> _Prototype:
+    def _delivery_controller(self) -> DeliveryController:
         """A prototype of the rate controller's review on this air's tables."""
         thresholds = self.timing.mode_threshold_db
         floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
@@ -1600,16 +1595,14 @@ class GrantedEngine:
         capacity = self.timing.data_capacity or {}
         payload = capacity or {m: 0 for m in table}
         frame_s = {m: self.timing.data_frame_s_for(m) for m in table}
-        priced: dict[str, object] = {}
-        if issubclass(kind, DeliveryController):
-            # an exchange's cost beyond its data frames, by the protocol's lengths: a control
-            # frame each way (:meth:`_price`) and the two gaps (the decode budgets are alike)
-            priced = {
-                "control_s": {fl: self._ctl_s(fl) for fl in (True, False)},
-                "gap_s": self._slot_start(0.0, True, 0, 0.0) + self._after(0.0, True, 0.0),
-                "burst_frames": {m: self.burst_capacity(frame_s[m]) for m in table},
-            }
-        return kind(
+        # an exchange's cost beyond its data frames, by the protocol's lengths: a control
+        # frame each way (:meth:`_price`) and the two gaps (the decode budgets are alike)
+        priced: dict[str, object] = {
+            "control_s": {fl: self._ctl_s(fl) for fl in (True, False)},
+            "gap_s": self._slot_start(0.0, True, 0, 0.0) + self._after(0.0, True, 0.0),
+            "burst_frames": {m: self.burst_capacity(frame_s[m]) for m in table},
+        }
+        return DeliveryController(
             thresholds=table,
             modes=usable_modes(table, payload, frame_s),
             capacity={m: data_capacity(c) for m, c in capacity.items()},
@@ -1628,9 +1621,7 @@ class GrantedEngine:
         if self.cfg.controller in ("delivery", "c1"):
             # the advice in every control frame: C1's choice for the frames received here
             # (ADR-0094 §2 item 6)
-            return self._delivery_controller(DeliveryController)
-        if self.cfg.controller == "olla":
-            return self._delivery_controller(OuterLoopController)
+            return self._delivery_controller()
         if thresholds is None:
             return RateController(**{**floor, **self._current_rate()})  # type: ignore[arg-type]
         payload = self.timing.data_capacity or {m: 0 for m in thresholds}
@@ -3292,7 +3283,7 @@ class GrantedEngine:
         snrs = [r.frame.snr_db for r in records if r.payload is not None or r.frame.trusted]
         snr = sum(snrs) / len(snrs) if snrs else None
         modes = [r.frame.mode for r in records]
-        if isinstance(self.rate, (DeliveryController, OuterLoopController)):
+        if isinstance(self.rate, DeliveryController):
             self._price()
             self.rate.observe_frames(self._outcomes(records), snr)
             return snr

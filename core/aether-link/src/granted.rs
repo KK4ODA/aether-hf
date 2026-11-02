@@ -58,7 +58,7 @@ use crate::{
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
-    rate_review::{DeliveryController, FrameOutcome, OuterLoopController},
+    rate_review::{DeliveryController, FrameOutcome},
 };
 
 // ── what the engine hands its driver ──────────────────────────────────
@@ -276,14 +276,12 @@ pub enum Role {
 // ── configuration and counters ────────────────────────────────────────
 
 /// Which rate controller a station runs (the model's `GrantConfig.controller`): ADR-0094's
-/// [`Controller::DeliveryS`] by default; the others are the rate controller's review's, bench
-/// only until Gate 6 deletes them (`docs/research/rate-control/04-results.md`).
+/// [`Controller::DeliveryS`] by default; the others are the rate controller's reviews', bench
+/// only until the second review's Gate 6 (`docs/research/rate-control-2/00-brief.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Controller {
     /// The current controller ([`RateController`]) in both roles.
     Current,
-    /// C2, outer-loop adaptation to a derived target ([`OuterLoopController`]).
-    Olla,
     /// C1, choose by measured delivery at the receiver ([`DeliveryController`]).
     Delivery,
     /// ADR-0094, C1 at the sender: the station chooses its own data's rung from what its
@@ -301,7 +299,6 @@ pub enum Controller {
 #[derive(Debug, Clone)]
 enum Rate {
     Current(RateController),
-    Olla(OuterLoopController),
     Delivery(DeliveryController),
 }
 
@@ -309,7 +306,6 @@ impl Rate {
     fn snr_db(&self) -> Option<f64> {
         match self {
             Self::Current(c) => c.snr_db(),
-            Self::Olla(c) => c.snr_db(),
             Self::Delivery(c) => c.snr_db(),
         }
     }
@@ -317,7 +313,6 @@ impl Rate {
     fn margin_db(&self) -> f64 {
         match self {
             Self::Current(c) => c.margin_db(),
-            Self::Olla(c) => c.margin_db(),
             Self::Delivery(c) => c.margin_db(),
         }
     }
@@ -325,7 +320,6 @@ impl Rate {
     fn echo(&self) -> Option<f64> {
         match self {
             Self::Current(c) => c.echo(),
-            Self::Olla(c) => c.echo(),
             Self::Delivery(c) => c.echo(),
         }
     }
@@ -333,7 +327,6 @@ impl Rate {
     fn recommend(&self) -> usize {
         match self {
             Self::Current(c) => c.recommend(),
-            Self::Olla(c) => c.recommend(),
             Self::Delivery(c) => c.recommend(),
         }
     }
@@ -341,7 +334,6 @@ impl Rate {
     fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
         match self {
             Self::Current(c) => c.observe_echo(share, snr_db),
-            Self::Olla(c) => c.observe_echo(share, snr_db),
             Self::Delivery(c) => c.observe_echo(share, snr_db),
         }
     }
@@ -349,7 +341,6 @@ impl Rate {
     fn modes(&self) -> &[usize] {
         match self {
             Self::Current(c) => c.modes(),
-            Self::Olla(c) => c.modes(),
             Self::Delivery(c) => c.modes(),
         }
     }
@@ -357,7 +348,6 @@ impl Rate {
     fn threshold_db(&self, mode: usize) -> Option<f64> {
         match self {
             Self::Current(c) => c.threshold_db(mode),
-            Self::Olla(c) => c.threshold_db(mode),
             Self::Delivery(c) => c.threshold_db(mode),
         }
     }
@@ -365,7 +355,6 @@ impl Rate {
     fn seed(&mut self, snr_db: f64, lower_bound: bool) {
         match self {
             Self::Current(c) => c.seed(snr_db, lower_bound),
-            Self::Olla(c) => c.seed(snr_db),
             Self::Delivery(c) => c.seed(snr_db),
         }
     }
@@ -373,7 +362,6 @@ impl Rate {
     fn first_mode(&self, snr_db: f64) -> usize {
         match self {
             Self::Current(c) => c.first_mode(snr_db),
-            Self::Olla(c) => c.first_mode(snr_db),
             Self::Delivery(c) => c.first_mode(snr_db),
         }
     }
@@ -381,7 +369,6 @@ impl Rate {
     fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {
         match self {
             Self::Current(c) => c.observe(snr_db, ok, failed, mode),
-            Self::Olla(c) => c.observe(snr_db),
             Self::Delivery(c) => c.observe(snr_db),
         }
     }
@@ -389,7 +376,6 @@ impl Rate {
     fn observe_snr(&mut self, snr_db: Option<f64>) {
         match self {
             Self::Current(c) => c.observe_snr(snr_db),
-            Self::Olla(c) => c.observe_snr(snr_db),
             Self::Delivery(c) => c.observe_snr(snr_db),
         }
     }
@@ -1220,7 +1206,6 @@ fn delivery_for(timing: &PhyTiming) -> DeliveryController {
         &capacity,
         &frame_s,
         timing.floor_modes,
-        crate::rate_review::class_penalty_db(thresholds.len()),
         &timing.echo_limit,
     )
 }
@@ -1234,33 +1219,6 @@ fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
         }
         // the advice in every control frame: C1's choice for the frames received here
         Controller::Delivery | Controller::C1 => Rate::Delivery(delivery_for(timing)),
-        Controller::Olla => {
-            // as the model builds it: the air's table, or the wide one's
-            let thresholds = if timing.mode_threshold_db.is_empty() {
-                crate::rate::AWGN_THRESHOLD_DB.to_vec()
-            } else {
-                timing.mode_threshold_db.clone()
-            };
-            let payload = if timing.data_capacity.is_empty() {
-                vec![0; thresholds.len()]
-            } else {
-                timing.data_capacity.clone()
-            };
-            let frame_s: Vec<f64> = (0..thresholds.len())
-                .map(|m| timing.data_frame_s_for(m))
-                .collect();
-            let capacity: Vec<usize> = (0..thresholds.len())
-                .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
-                .collect();
-            Rate::Olla(OuterLoopController::for_table(
-                &thresholds,
-                &payload,
-                &capacity,
-                &frame_s,
-                timing.floor_modes,
-                &timing.echo_limit,
-            ))
-        }
     }
 }
 
@@ -4961,13 +4919,11 @@ impl GrantedEngine {
             .map(|r| r.frame.snr_db)
             .collect();
         let snr = (!snrs.is_empty()).then(|| snrs.iter().sum::<f64>() / snrs.len() as f64);
-        if matches!(self.rate, Rate::Olla(_) | Rate::Delivery(_)) {
+        if matches!(self.rate, Rate::Delivery(_)) {
             let outcomes = self.outcomes(records);
             self.price();
-            match &mut self.rate {
-                Rate::Olla(c) => c.observe_frames(&outcomes, snr),
-                Rate::Delivery(c) => c.observe_frames(&outcomes, snr),
-                Rate::Current(_) => {}
+            if let Rate::Delivery(c) = &mut self.rate {
+                c.observe_frames(&outcomes, snr);
             }
             return snr;
         }

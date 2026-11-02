@@ -8,7 +8,6 @@ nothing for the current controller — whose own behaviour the granted vectors p
 from __future__ import annotations
 
 import math
-from itertools import pairwise
 
 import pytest
 
@@ -22,7 +21,6 @@ from aether_model.link.rate_review import (
     CONTROLLERS,
     DeliveryController,
     FrameOutcome,
-    OuterLoopController,
     decode_probability,
 )
 from aether_model.link.sim import TwoStationSim
@@ -63,7 +61,6 @@ def test_the_switch_builds_the_controller_it_names() -> None:
     kinds = {
         "current": RateController,
         "delivery": DeliveryController,
-        "olla": OuterLoopController,
         "delivery-s": RateController,  # the receiver's advice is the current controller's
         "c1": DeliveryController,  # ADR-0094: the advice is C1's too
     }
@@ -117,18 +114,6 @@ def test_the_prior_passes_ninety_per_cent_at_the_threshold() -> None:
     assert decode_probability(-3.2, -3.2, 0.5) == pytest.approx(0.9)
     assert decode_probability(-6.2, -3.2, 0.5) < 0.05
     assert decode_probability(0.0, -3.2, 0.5) > 0.99
-
-
-def test_the_outer_loop_targets_derive_from_the_ladder() -> None:
-    """C2's target error rate is the rate ratio of each family's neighbours, never tuned."""
-    a, _ = _pair(WIDE, "olla")
-    ctl = a.rate
-    assert isinstance(ctl, OuterLoopController)
-    for floor in (True, False):
-        rungs = [m for m in ctl.modes if (m < ctl.floor_modes) == floor]
-        rates = [ctl.lossless(m) for m in rungs]
-        expected = sum(1 - lo / hi for lo, hi in pairwise(rates)) / (len(rates) - 1)
-        assert ctl._target[floor] == pytest.approx(min(0.5, max(0.05, expected)))
 
 
 def test_a_silent_step_lands_on_a_rung_the_echo_allows() -> None:

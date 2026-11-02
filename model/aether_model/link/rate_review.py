@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from itertools import pairwise
 
 from aether_model.link.rate import AWGN_THRESHOLD_DB, RateController
 
@@ -198,14 +197,6 @@ class DeliveryController(RateController):
     families: tuple[bool, bool] | None = None
     """Whether this station's control frames go on the floor, and whether the other's do (what
     each asked of the other), as the engine last said; ``None``: both in the data's family."""
-    cautious_start: bool = False
-    """The first rung is the four channels' mean's best (:func:`path_decode_probability`), not
-    the optimistic prior's, and the rung above it is tried at the next transmission. Built for
-    the harness's disturbed NVIS, where a first transmission at OFDM 5 cost 24 OFDM frames before
-    its blocks could go on the floor, and rejected there (``04-results.md`` §3.6): it took that
-    scenario from 0.76 to 1.03 of the current controller's delivery and cost more everywhere a
-    climb is the job — the median regret +22.6 → +28.7 %, three weak paths under 0.85, one Test
-    failed. Off; kept until the decision ADR says what goes."""
     _accounts: dict[int, _Account] = field(default_factory=dict)
     _since_probe: dict[int, float] = field(default_factory=dict)
     """Seconds of data air observed since each rung's last try (:meth:`_wait_s`)."""
@@ -458,141 +449,18 @@ class DeliveryController(RateController):
 
     def first_mode(self, snr_db: float) -> int:
         """The rung a session starts at from one reading, no steps in hand (C4): the best by the
-        four channels' mean when :attr:`cautious_start`, by the optimistic prior otherwise."""
+        optimistic prior. (A cautious start, by the four channels' mean, was rejected on the
+        harness and deleted: ``04-results.md`` §3.6.)"""
         saved = self.snr_db
         self.snr_db = snr_db
-        value = self._start_estimate if self.cautious_start else self.value
         best = max(
             (i for i in range(len(self.modes)) if not self._echo_out(i)),
-            key=lambda i: (value(self.modes[i]), -i),
+            key=lambda i: (self.value(self.modes[i]), -i),
             default=0,
         )
         self.snr_db = saved
         return self.modes[best]
 
-    def _start_estimate(self, mode: int) -> float:
-        """:meth:`estimate` with the four channels' mean as the prior."""
-        assert self.snr_db is not None
-        cap = float(self.capacity.get(mode, 0))
-        air = self.frame_air_s.get(mode, 1.0)
-        offset = self._family.get(mode < self.floor_modes, 0.0)
-        p = path_decode_probability(
-            self.snr_db - offset, self.thresholds[mode], self.penalties.get(mode, ()), self.slope_db
-        )
-        acc = self._accounts.get(mode, _Account())
-        w = self.prior_frames
-        return (acc.bytes + w * cap * p) / (acc.air_s + w * air)
-
-    def seed(self, snr_db: float, *, lower_bound: bool = False) -> None:
-        if self._smoothed is not None:
-            return
-        self._smoothed = self.snr_db = snr_db
-        self._index = self.modes.index(self.first_mode(snr_db))
-        if self.cautious_start and self._usable(self._index + 1):
-            above = self.modes[self._index + 1]
-            self._since_probe[above] = self._wait_s(above)
-
-
-@dataclass
-class OuterLoopController(RateController):
-    """C2-R: outer-loop adaptation to a derived target (``03-candidates.md`` §2.4).
-
-    One offset per family (the tone floor, OFDM), moved per frame sent at the rung recommended:
-    up by :attr:`step_db` when its copy failed or was never detected, down by
-    ``step_db · T / (1 − T)`` when it decoded — OLLA's fixed point, where the share failing is
-    ``T``. The target ``T`` is not tuned: it is the error rate at which a rung and the one below
-    it deliver alike, ``1 − R_{r−1}/R_r``, averaged over the family's neighbours. The rung is the
-    one with the most expected delivery, its payload rate times its chance of decoding at the
-    reading less its family's offset, read off a logistic through each rung's AWGN 10 % point.
-
-    It replaces the margin and its schedule, the hysteresis, the dwell, the stride, the partial
-    rule, the edge rule and the re-seed."""
-
-    capacity: dict[int, int] = field(default_factory=dict)
-    frame_air_s: dict[int, float] = field(default_factory=dict)
-    step_db: float = 0.5
-    slope_db: float = 0.5
-    start_offset_db: float = 0.0
-    penalties: dict[int, tuple[float, ...]] = field(default_factory=dict)
-    """As :attr:`DeliveryController.penalties`: the curve a rung's chance is read off is the
-    mean of the four channels', its family's offset under it."""
-    prior_margin_db: float | None = 3.0
-    """As :attr:`DeliveryController.prior_margin_db`: ×0.886 of the current controller's session
-    time against ×1.000 with the four channels' mean."""
-    _offset: dict[bool, float] = field(default_factory=dict)
-    _target: dict[bool, float] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        for floor in (True, False):
-            rungs = [m for m in self.modes if self._is_floor(m) == floor]
-            rates = [self.lossless(m) for m in rungs]
-            shares = [1.0 - lo / hi for lo, hi in pairwise(rates) if hi > 0]
-            self._target[floor] = min(0.5, max(0.05, sum(shares) / len(shares))) if shares else 0.1
-
-    def _is_floor(self, mode: int) -> bool:
-        return mode < self.floor_modes
-
-    def lossless(self, mode: int) -> float:
-        return float(self.capacity.get(mode, 0)) / self.frame_air_s.get(mode, 1.0)
-
-    def offset(self, mode: int) -> float:
-        return self._offset.get(self._is_floor(mode), self.start_offset_db)
-
-    def expected(self, mode: int, snr_db: float | None = None) -> float:
-        snr = self.snr_db if snr_db is None else snr_db
-        if snr is None:
-            return 0.0
-        p = prior_probability(
-            snr - self.offset(mode),
-            self.thresholds[mode],
-            self.penalties.get(mode, ()),
-            self.slope_db,
-            self.prior_margin_db,
-        )
-        return self.lossless(mode) * p
-
-    def observe(self, snr_db: float | None, ok: int, failed: int, mode: int | None = None) -> None:
-        self.observe_snr(snr_db)
-
-    def observe_frames(self, frames: list[FrameOutcome], snr_db: float | None) -> None:
-        asked = self.recommend()
-        self.observe_snr(snr_db)
-        for f in frames:
-            if f.mode != asked or f.combined:
-                continue  # a copy HARQ combined says nothing of the first copy's error rate
-            floor = self._is_floor(f.mode)
-            target = self._target[floor]
-            offset = self._offset.get(floor, self.start_offset_db)
-            if f.decoded:
-                offset -= self.step_db * target / (1.0 - target)
-            else:
-                offset += self.step_db
-            self._offset[floor] = min(20.0, max(-5.0, offset))
-        self._choose()
-
-    def observe_echo(self, share: float | None, snr_db: float | None) -> None:
-        """The echo reading moves the smoothed echo as the current controller's does (ADR-0087);
-        a choice it now rules out is chosen again among the rungs it allows."""
-        if share is None or snr_db is None or snr_db < self.echo_min_snr_db:
-            return
-        w = self.echo_weight
-        self.echo = share if self.echo is None else (1.0 - w) * self.echo + w * share
-        if self._echo_out(self._index):
-            self._choose()
-
-    def _choose(self) -> None:
-        usable = [i for i in range(len(self.modes)) if not self._echo_out(i)]
-        if not usable or self.snr_db is None:
-            self._index = 0
-            return
-        self._index = max(usable, key=lambda i: (self.expected(self.modes[i]), -i))
-
-    def first_mode(self, snr_db: float) -> int:
-        usable = [i for i in range(len(self.modes)) if not self._echo_out(i)]
-        best = max(usable, key=lambda i: (self.expected(self.modes[i], snr_db), -i), default=0)
-        return self.modes[best]
-
     def seed(self, snr_db: float, *, lower_bound: bool = False) -> None:
         if self._smoothed is not None:
             return
@@ -600,7 +468,7 @@ class OuterLoopController(RateController):
         self._index = self.modes.index(self.first_mode(snr_db))
 
 
-CONTROLLERS = ("current", "delivery", "olla", "delivery-s", "c1")
+CONTROLLERS = ("current", "delivery", "delivery-s", "c1")
 """The controllers :attr:`~aether_model.link.granted.GrantConfig.controller` names."""
 
 

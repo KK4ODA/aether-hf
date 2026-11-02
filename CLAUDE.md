@@ -2432,6 +2432,11 @@ these slowdowns as normal.
 **The rate controller's second review started the same day** (the author's "start the rate
 controller review"): `docs/research/rate-control-2/00-brief.md` (scope, what the first review left
 and owed, the gates, four questions for the author); Gate 0's oracle on today's daemon runs first.
+The author's answers (brief §6): field builds hold still for rate changes until the decision ADR
+(fixes outside the controller may ship); the advice may go, with a protocol bump if needed; no
+field sessions for now; and C2 (`OuterLoopController`, `olla`) and C1's `cautious_start` are
+deleted (model, port, tests, their vector sessions; the port's penalty tables went with them) —
+`delivery` and `c1` stay as comparison arms until this review's Gate 6.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -112,7 +112,6 @@ fn config(doc: &Value) -> GrantConfig {
     let controller = match doc.get("controller").and_then(Value::as_str) {
         None => Controller::default(),
         Some("current") => Controller::Current,
-        Some("olla") => Controller::Olla,
         Some("delivery") => Controller::Delivery,
         Some("delivery-s") => Controller::DeliveryS,
         Some("c1") => Controller::C1,

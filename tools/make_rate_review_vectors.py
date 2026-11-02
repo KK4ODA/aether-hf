@@ -2,12 +2,13 @@
 
     python tools/make_rate_review_vectors.py [--out core/aether-link/tests/data/rate_review_vectors.json]
 
-The granted engine's own trace sessions (``tools/make_granted_vectors.py``), run with C2 — the
-outer loop to a derived target, ``aether_model.link.rate_review.OuterLoopController`` — as each
-station's controller: every input and every action, which ``core/aether-link/tests/
-granted_vectors.rs`` replays input by input against ``aether_link::rate_review``. Bench-only: the
-harness's A/B of the prototype (``docs/research/rate-control/04-results.md``) is only as good as
-the port's agreement with the model.
+The granted engine's own trace sessions (``tools/make_granted_vectors.py``), run with C1 —
+choosing by measured delivery, ``aether_model.link.rate_review.DeliveryController`` — at the
+receiver, at the sender and in both roles: every input and every action, which
+``core/aether-link/tests/granted_vectors.rs`` replays input by input against
+``aether_link::rate_review``; and direct traces of C1 for ``rate_review_vectors.rs``. The harness's
+A/B of a prototype (``docs/research/rate-control/04-results.md``) is only as good as the port's
+agreement with the model.
 """
 
 from __future__ import annotations
@@ -28,17 +29,14 @@ from aether_model.link.granted import GrantConfig, GrantedEngine
 from aether_model.link.harness import phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.rate_review import (
-    NARROW_CLASS_PENALTY_DB,
-    WIDE_CLASS_PENALTY_DB,
     DeliveryController,
     FrameOutcome,
-    OuterLoopController,
 )
 from aether_model.link.sim import TwoStationSim
 
-CONTROLLERS = ("olla", "delivery", "delivery-s", "c1")
-"""The prototypes the port has: C2, C1, C1 at the sender, and C1 in both roles (ADR-0094)."""
-TRACED = ("olla", "delivery")
+CONTROLLERS = ("delivery", "delivery-s", "c1")
+"""The prototypes the port has: C1, C1 at the sender, and C1 in both roles (ADR-0094)."""
+TRACED = ("delivery",)
 """Those traced alone (C1 at the sender is C1's controller, fed by the sender's copies)."""
 
 
@@ -52,7 +50,7 @@ def controller_trace(
     next transmission's)."""
     timing = phy_timing(air.params)
     ctl = GrantedEngine("TOOL", timing, GrantConfig(controller=controller)).rate
-    assert isinstance(ctl, (OuterLoopController, DeliveryController))
+    assert isinstance(ctl, DeliveryController)
     modes = sorted(ctl.thresholds)
     rng = random.Random(seed)
     snr = rng.uniform(-10.0, 20.0)
@@ -60,12 +58,6 @@ def controller_trace(
 
     def state() -> dict[str, object]:
         common = {"recommend": ctl.recommend(), "snr": ctl.snr_db, "echo": ctl.echo}
-        if isinstance(ctl, OuterLoopController):
-            return {
-                **common,
-                "floor_offset": ctl._offset.get(True),
-                "offset": ctl._offset.get(False),
-            }
         return {
             **common,
             "estimates": [ctl.estimate(m) for m in ctl.modes],
@@ -110,7 +102,7 @@ def controller_trace(
             share = rng.choice([None, rng.uniform(0.0, 0.012)])
             ctl.observe_echo(share, snr)
             ops.append({"echo_in": share, "snr_in": snr, **state()})
-        elif roll < 0.9 and isinstance(ctl, DeliveryController):
+        elif roll < 0.9:
             # the control frames' families the engine says are in use (C1's exchange price)
             families = (rng.random() < 0.5, rng.random() < 0.5)
             ctl.families = families
@@ -127,22 +119,12 @@ def controller_trace(
         "capacity": [data_capacity(timing.capacity(m)) for m in modes],
         "frame_s": [timing.data_frame_s_for(m) for m in modes],
         "floor_modes": timing.floor_modes,
-        "penalties": [list(ctl.penalties.get(m, (0.0, 0.0, 0.0))) for m in modes]
-        if isinstance(ctl, DeliveryController)
-        else [],
         "echo_limit": [(timing.echo_limit or {}).get(m) for m in modes],
         # C1 ranks per second of a whole exchange (control frames [floor, ordinary], the gaps,
         # a full transmission's frames by rung); its families stay the data's in a trace
-        "control_s": [ctl.control_s[True], ctl.control_s[False]]
-        if isinstance(ctl, DeliveryController) and ctl.control_s
-        else [],
-        "gap_s": ctl.gap_s if isinstance(ctl, DeliveryController) else 0.0,
-        "burst_frames": [ctl.burst_frames.get(m, 0) for m in modes]
-        if isinstance(ctl, DeliveryController)
-        else [],
-        "targets": (
-            [ctl._target[True], ctl._target[False]] if isinstance(ctl, OuterLoopController) else []
-        ),
+        "control_s": [ctl.control_s[True], ctl.control_s[False]] if ctl.control_s else [],
+        "gap_s": ctl.gap_s,
+        "burst_frames": [ctl.burst_frames.get(m, 0) for m in modes],
         "modes": list(ctl.modes),
         "ops": ops,
     }
@@ -325,19 +307,16 @@ def main() -> int:
             print(f"{controller}:{name}: {sum(len(r.trace) for r in recorders)} steps")
     document = {
         "note": "Generated by tools/make_rate_review_vectors.py from the Python reference model: "
-        "the granted engine's trace sessions with the rate controller review's prototypes C2 "
-        "('olla') and C1 ('delivery') at both stations, and direct traces of each controller. "
+        "the granted engine's trace sessions with the rate controller review's C1 at both "
+        "stations ('delivery'), at the sender ('delivery-s') and in both roles ('c1'), and "
+        "direct traces of C1. "
         "Payloads are indices into blobs.",
         "blobs": granted.BLOBS.table,
         "sessions": sessions,
-        "class_penalty_db": {
-            str(len(table)): [list(table[m]) for m in sorted(table)]
-            for table in (WIDE_CLASS_PENALTY_DB, NARROW_CLASS_PENALTY_DB)
-        },
         "controller_traces": [
             controller_trace(air, seed, controller)
             for controller in TRACED
-            for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3))
+            for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3), (NARROW, 4))
         ],
     }
     out = Path(args.out)
