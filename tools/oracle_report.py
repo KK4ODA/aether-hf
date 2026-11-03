@@ -4,7 +4,7 @@
     python tools/oracle_report.py regret oracle/*/summary.csv [--skip SCENARIO …]
                                   [--markdown FILE] [--out FILE]
     python tools/oracle_report.py compare --base base/*/rows.csv --candidate cand/*/rows.csv
-                                  [--margin 0.10] [--markdown FILE] [--out FILE]
+                                  [--paired] [--margin 0.10] [--markdown FILE] [--out FILE]
 
 ``regret``: per scenario, the controller's delivery in each draw, the best fixed rung in
 hindsight and what it delivered, the regret (best / controller − 1) per draw and its median over
@@ -21,6 +21,13 @@ p-value each way (`docs/research/rate-control-2/03-candidates.md` §3). The runs
 unpaired: the simulated channel follows the air's clock, so two controllers on the same draw
 drift onto different stretches of it once their choices differ, and a paired test would claim
 more than the runs show. A lost transfer is an infinitely long one: it ranks last.
+
+``compare --paired`` pairs the two builds' runs by seed instead: the Hodges–Lehmann ratio is the
+median of the Walsh averages of the per-seed differences, its exact 90 % range from the Wilcoxon
+signed-rank distribution. The harness repeats a draw exactly when the controller makes the same
+choices, so a scenario a candidate never acted on reads 1.00 (1.00–1.00), where the unpaired range
+is as wide as the spread between draws (`04-results.md` §1.3). Which form judges K2 is the
+author's call.
 """
 
 from __future__ import annotations
@@ -172,6 +179,40 @@ def hodges_lehmann(
     return estimate, diffs[c], diffs[m * n - c - 1]
 
 
+@cache
+def signed_rank_counts(n: int) -> tuple[int, ...]:
+    """How many of the 2^n sign patterns of ``n`` ranked differences give each Wilcoxon signed-rank
+    sum T = 0 … n(n + 1)/2, under the null (no ties, no zeros)."""
+    counts = [1]
+    for k in range(1, n + 1):
+        out = [0] * (len(counts) + k)
+        for t, c in enumerate(counts):
+            out[t] += c
+            out[t + k] += c
+        counts = out
+    return tuple(counts)
+
+
+def paired_hodges_lehmann(diffs: list[float], level: float = LEVEL) -> tuple[float, float, float]:
+    """The paired shift (the median of the Walsh averages of ``diffs``) and its exact two-sided
+    range at ``level`` from the signed-rank distribution."""
+    n = len(diffs)
+    walsh = sorted(difference(diffs[i], -diffs[j]) / 2 for i in range(n) for j in range(i, n))
+    estimate = statistics.median(walsh)
+    tail = (1.0 - level) / 2.0
+    counts = signed_rank_counts(n)
+    total = sum(counts)
+    cumulative, c = 0, -1
+    for t, count in enumerate(counts):
+        if (cumulative + count) / total > tail + 1e-12:
+            break
+        cumulative += count
+        c = t
+    if c < 0:
+        return estimate, -math.inf, math.inf
+    return estimate, walsh[c], walsh[len(walsh) - c - 1]
+
+
 def log_time(row: dict[str, str]) -> float:
     """A run's transfer as the log of its time per bit (the inverse of its rate); a lost
     transfer is infinitely long."""
@@ -188,6 +229,47 @@ def ratio(log_shift: float) -> str:
     if math.isinf(log_shift):
         return "∞" if log_shift > 0 else "0"
     return f"{math.exp(log_shift):.2f}"
+
+
+def verdict(high: float, margin: float) -> str:
+    if math.exp(high) < 1.0:
+        return "faster"
+    if math.exp(high) <= 1.0 + margin:
+        return f"not slower (within {margin:.0%})"
+    return "may be slower: confirm on fresh draws"
+
+
+def paired_report(
+    base: dict[str, list[dict[str, str]]],
+    candidate: dict[str, list[dict[str, str]]],
+    margin: float = 0.10,
+) -> str:
+    """Each scenario both builds ran, paired by seed: the candidate's transfer time over the
+    base's on the same draw."""
+    lines = [
+        f"| scenario | pairs | identical | time ratio | {LEVEL:.0%} range | verdict |",
+        "|---|---|---|---|---|---|",
+    ]
+    for scenario in sorted(set(base) & set(candidate)):
+        b = {r["seed"]: log_time(r) for r in own_runs(base[scenario])}
+        c = {r["seed"]: log_time(r) for r in own_runs(candidate[scenario])}
+        seeds = sorted(set(b) & set(c), key=int)
+        if not seeds:
+            continue
+        diffs = [difference(c[k], b[k]) for k in seeds]
+        shift, low, high = paired_hodges_lehmann(diffs)
+        same = sum(1 for d in diffs if d == 0.0)
+        lines.append(
+            f"| `{scenario}` | {len(seeds)} | {same} | {ratio(shift)} | "
+            f"{ratio(low)}–{ratio(high)} | {verdict(high, margin)} |"
+        )
+    lines += [
+        "",
+        "Paired by seed: the median of the Walsh averages of the per-seed log time ratios, with its "
+        f"exact {LEVEL:.0%} range from the Wilcoxon signed-rank distribution. A lost transfer is "
+        "infinitely long.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def compare_report(
@@ -210,16 +292,10 @@ def compare_report(
         u = u_statistic(xs, ys)  # pairs in which the candidate took longer
         p_slower = 1.0 - u_cdf(len(xs), len(ys), u - 0.5)
         p_faster = u_cdf(len(xs), len(ys), u)
-        if math.exp(high) < 1.0:
-            verdict = "faster"
-        elif math.exp(high) <= 1.0 + margin:
-            verdict = f"not slower (within {margin:.0%})"
-        else:
-            verdict = "may be slower: confirm on fresh draws"
         lines.append(
             f"| `{scenario}` | {len(c)} v {len(b)} | {median_rate(b):.0f} | {median_rate(c):.0f} | "
             f"{ratio(shift)} | {ratio(low)}–{ratio(high)} | {p_faster:.3f} | {p_slower:.3f} | "
-            f"{verdict} |"
+            f"{verdict(high, margin)} |"
         )
     lines += [
         "",
@@ -250,6 +326,7 @@ def main() -> int:
     cmp.add_argument("--base", nargs="+", type=Path, required=True)
     cmp.add_argument("--candidate", nargs="+", type=Path, required=True)
     cmp.add_argument("--margin", type=float, default=0.10, help="not slower by more than this")
+    cmp.add_argument("--paired", action="store_true", help="pair the runs by seed")
     for p in (reg, cmp):
         p.add_argument("--markdown", type=Path, help="append the table here (a step summary)")
         p.add_argument("--out", type=Path, help="write the table here")
@@ -258,7 +335,8 @@ def main() -> int:
         rows = {k: v for k, v in read(args.summaries).items() if k not in set(args.skip)}
         write(regret_report(rows), args.out, args.markdown, "Rate oracle")
     else:
-        text = compare_report(read(args.base), read(args.candidate), args.margin)
+        judge = paired_report if args.paired else compare_report
+        text = judge(read(args.base), read(args.candidate), args.margin)
         write(text, args.out, args.markdown, "Candidate against base")
     return 0
 

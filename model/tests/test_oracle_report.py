@@ -88,3 +88,33 @@ def test_a_summary_serves_as_a_build_s_own_runs() -> None:
     report = r.compare_report(summary, rows("s", [100.5 + k for k in range(10)]))
     assert "| `s` | 10 v 10 |" in report
     assert "not slower (within 10%)" in report
+
+
+def test_the_signed_rank_distribution_is_exact() -> None:
+    for n in (3, 7, 10):
+        counts = r.signed_rank_counts(n)
+        assert sum(counts) == 2**n
+        assert counts == counts[::-1], "the null distribution is symmetric"
+    # the published one-sided 5 % critical value for ten pairs is 10
+    counts = r.signed_rank_counts(10)
+    assert sum(counts[:11]) / 2**10 <= 0.05 < sum(counts[:12]) / 2**10
+
+
+def test_paired_runs_that_did_not_change_read_one_with_no_range() -> None:
+    """A scenario the candidate never acted on repeats every draw exactly on the harness: paired by
+    seed it reads 1.00 (1.00–1.00) and passes, where the unpaired range is as wide as the spread
+    between the draws (04-results.md §1.3)."""
+    spread = [100.0 * 1.15**k for k in range(10)]
+    base, same = rows("s", spread), rows("s", spread)
+    assert "may be slower" in r.compare_report(base, same)
+    paired = r.paired_report(base, same)
+    assert "| `s` | 10 | 10 | 1.00 | 1.00–1.00 | not slower (within 10%) |" in paired
+    faster = r.paired_report(base, rows("s", [x * 1.2 for x in spread]))
+    assert "| faster |" in faster
+
+
+def test_the_paired_estimate_recovers_a_shift() -> None:
+    diffs = [0.1 + 0.01 * k for k in range(10)]
+    shift, low, high = r.paired_hodges_lehmann(diffs)
+    assert math.isclose(shift, 0.145)
+    assert low < shift < high

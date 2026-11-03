@@ -1,6 +1,6 @@
 # Gate 3: the candidates on the harness
 
-*In progress (2026-11-03). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
+*In progress (2026-11-03; D3 judged, waiting on the author's two calls in §1.3). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
 then D1 against D2, then the dip and the climb. Each is judged on the criteria of
 `03-candidates.md` §3 against today's pair (`01-evidence.md` §1, `bench/baselines/
 rate_oracle_beta127.csv`).*
@@ -53,6 +53,48 @@ across the delays, each run's echo read from its sidecars.
 ### 1.3 On the harness
 
 D3 as committed (`5d57f18`: items 2 and 3, no family limit), the oracle workflow with
-`bench_link = family_refusal`, ten draws, every rung (runs of 2026-11-03).
+`bench_link = family_refusal`, ten draws, every rung (runs 5–7 of 2026-11-03; per draw in
+`data/oracle_d3.csv`, the base in `bench/baselines/rate_oracle_beta127.csv`).
 
-*(pending)*
+**Where it acted.** On ten of the 22 scenarios every draw came out exactly as the baseline's,
+bit/s for bit/s: the harness repeats a draw when the controller makes the same choices, and D3
+never fired there (all the 2300 Hz regret scenarios but three, and the 500 Hz paths without
+echo). It changed draws on twelve, nine of them 500 Hz paths, in both directions.
+
+| criterion | today | D3 | verdict |
+|---|---|---|---|
+| K1(a), median regret, 21 scenarios | +22 % | +20 % (bootstrap +12 … +28 %) | far from +11 %: D3 is a component, not a controller |
+| K1(b), no scenario's median delivery 15 % under today's | — | lowest `80m-nvis-evening-500` 40 against 44 bit/s (−9 %) | passes |
+| K8 Trimode: (i) all delivered in budget | 9 of 10 | **10 of 10** | passes |
+| K8 Trimode: (ii) median regret ≤ +20 % | +25 % | **+9 %** | passes |
+| K8 Trimode: (iii) time ratio | — | 0.90 (0.71–1.08) | passes |
+| K8 AGC: (i) | 10 of 10 | 10 of 10 | passes |
+| K8 AGC: (ii) | +10.4 % | +20.5 % | **narrow miss** (below) |
+| K8 AGC: (iii) | — | 0.99 (0.85–1.12) | fails as registered (below) |
+| K2, the 22 scenarios (the 21 and the Trimode test), range below 1.10 | — | 10 pass, 12 "confirm on fresh draws" | **the criterion is at fault** (below) |
+
+**The AGC test's regret.** Neither median moved: the controller delivered 36 bit/s on both
+builds, the best fixed rung 42 and 43. The pinned runs have D3's stuck-block rule too, and both
+the controller's draws and the best rung's moved by up to 14 and 6 bit/s, both ways; the median of
+their ratio went from +10 % to +20 % on which draws the moves fell in. Ten draws do not tell this
+from D3; it is the case-by-case call the criteria leave to the author.
+
+**K2 as registered cannot pass identical runs.** Of the ten scenarios whose ten draws were exactly
+the baseline's, five get a 90 % range whose top end is above 1.10 — the equatorial flutter
+0.74–1.35, the VARA QRM 0.82–1.23 — because the unpaired range is set by the
+spread between draws (`40m-good-throughput-2300` delivers 1 829–2 909 bit/s over its ten), not by
+any difference between the builds. Fresh draws do not help: the spread is the scenario's. The
+reason it was registered unpaired (`03-candidates.md` §3: two controllers on one draw drift onto
+different stretches of the fade once their choices differ) does not make a paired test wrong: the
+seed is fixed before the run, pairs are independent across draws, and under "no effect" the two
+builds' runs on a seed are exchangeable, so the exact Wilcoxon signed-rank test and its
+Hodges–Lehmann range hold; the drift only adds spread to the differences once the choices part.
+Paired on the seed (`tools/oracle_report.py compare --paired`), the identical scenarios read
+1.00 (1.00–1.00), and three read "may be
+slower": the AGC test 0.98 (0.87–1.12), `80m-slow-machine-500` 1.00 (0.98–1.13) and the Trimode
+test 0.90 (0.51–1.12, its range widened by the baseline's lost draw). Changing K2 to the paired
+form is the author's call: it changes a criterion registered before the runs.
+
+**Reading.** D3 removes a failure — the Trimode test's lost send — and brings that test's regret
+from +25 % to +9 %; elsewhere it moves draws both ways by amounts the ten draws cannot tell from
+the drift. It adds no tunable. Item 1, the echo limit, was not built (§1.2).
