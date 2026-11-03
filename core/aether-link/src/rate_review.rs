@@ -9,6 +9,21 @@
 
 use crate::rate::usable_modes_by_rate;
 
+/// D3 (the second review, `docs/research/rate-control-2/03-candidates.md` §2.3): the echo share
+/// above which the whole OFDM family is kept off a ladder, by its number of rungs (20 at
+/// 2 300 Hz, 15 at 500 Hz), from `tools/bench_echo.py --family-limits` — the model's
+/// `FAMILY_ECHO_LIMIT`. An air without an entry has no limit.
+pub const FAMILY_ECHO_LIMIT: &[(usize, f64)] = &[];
+
+/// The OFDM family's echo limit on a ladder of `rungs` rungs, if it has one.
+#[must_use]
+pub fn family_echo_limit(rungs: usize) -> Option<f64> {
+    FAMILY_ECHO_LIMIT
+        .iter()
+        .find(|&&(n, _)| n == rungs)
+        .map(|&(_, limit)| limit)
+}
+
 /// Six transmissions' air is a try's wait exactly when six such transmissions went: a sum that
 /// lands on it counts as there whatever its last bit (the model's `WAIT_TOLERANCE_S`).
 const WAIT_TOLERANCE_S: f64 = 1e-9;
@@ -109,6 +124,11 @@ pub struct DeliveryController {
     /// Whether this station's control frames go on the floor, and whether the other's do, as
     /// the engine last said; `None`: both in the data's family.
     families: Option<(bool, bool)>,
+    /// D3 (the second review, `docs/research/rate-control-2/03-candidates.md` §2.3), bench
+    /// only: the OFDM family as a whole can be refused ([`refuses`](Self::refuses)).
+    family_refusal: bool,
+    /// The last OFDM frames observed delivered nothing ([`judge_family`](Self::judge_family)).
+    ofdm_failed: bool,
 }
 
 impl DeliveryController {
@@ -164,6 +184,48 @@ impl DeliveryController {
             gap_s: 0.0,
             burst_frames: Vec::new(),
             families: None,
+            family_refusal: false,
+            ofdm_failed: false,
+        }
+    }
+
+    /// D3, bench only: lets the OFDM family be refused as a whole — by the echo, when the path's
+    /// reading is over every OFDM rung's limit (the engine adds the family's own limit to them),
+    /// or by outcomes, when the choice has gone to the floor after OFDM frames that delivered
+    /// nothing — and the engine then brings the family's stuck blocks down at once (the model's
+    /// `family_refusal`).
+    pub const fn set_family_refusal(&mut self, on: bool) {
+        self.family_refusal = on;
+    }
+
+    /// D3: whether `mode`'s family is refused on this path. The OFDM family is, when every rung
+    /// of it is over its echo limit, or when the choice is a floor rung and the last OFDM frames
+    /// delivered nothing (the model's `refuses`). The floor's family is never refused.
+    #[must_use]
+    pub fn refuses(&self, mode: usize) -> bool {
+        if !self.family_refusal || mode < self.floor_modes {
+            return false;
+        }
+        if self.ofdm_failed && self.modes[self.index] < self.floor_modes {
+            return true;
+        }
+        let mut ofdm = (0..self.modes.len()).filter(|&i| self.modes[i] >= self.floor_modes);
+        let mut any = false;
+        let all_out = ofdm.all(|i| {
+            any = true;
+            self.echo_out(i)
+        });
+        any && all_out
+    }
+
+    /// D3 from outcomes: the OFDM frames of a transmission delivered nothing, or some did.
+    fn judge_family(&mut self, frames: &[FrameOutcome]) {
+        let mut ofdm = frames
+            .iter()
+            .filter(|f| f.mode >= self.floor_modes)
+            .peekable();
+        if ofdm.peek().is_some() {
+            self.ofdm_failed = !ofdm.any(|f| f.decoded);
         }
     }
 
@@ -426,6 +488,9 @@ impl DeliveryController {
                 acc.bytes += f.capacity as f64;
             }
         }
+        if self.family_refusal {
+            self.judge_family(frames);
+        }
         let mut sent: Vec<usize> = frames.iter().map(|f| f.mode).collect();
         sent.sort_unstable();
         sent.dedup();
@@ -592,8 +657,6 @@ impl DeliveryController {
         }
     }
 
-    /// [`estimate`](Self::estimate) with the four channels' mean as the prior.
-    #[allow(clippy::cast_precision_loss)]
     /// The rung a session starts at from one reading, no steps in hand: the optimistic prior's
     /// best. (A cautious start, by the four fading channels' mean, was rejected on the harness
     /// and deleted: `04-results.md` §3.6.)
@@ -657,5 +720,51 @@ mod tests {
         ctl.index = 5;
         ctl.silent(1);
         assert_eq!(ctl.recommend(), 4);
+    }
+
+    /// D3 (the second review): OFDM frames that delivered nothing refuse the family once the
+    /// choice is a floor rung; an OFDM frame that delivers lifts it; an echo over every OFDM
+    /// rung's limit refuses it whatever the choice. Off, nothing is refused. The model's
+    /// `test_d3_*`.
+    #[test]
+    fn d3_refuses_the_ofdm_family_by_outcomes_and_by_the_echo() {
+        let payload = [10, 20, 30, 40, 50, 60];
+        let limit = [None, None, None, Some(0.004), Some(0.004), Some(0.004)];
+        let mut ctl = DeliveryController::for_table(
+            &[-10.0, -8.0, -6.0, -4.0, -2.0, 0.0],
+            &payload,
+            &payload,
+            &[1.0; 6],
+            3,
+            &limit,
+        );
+        let frames = |mode: usize, decoded: bool| {
+            vec![
+                FrameOutcome {
+                    mode,
+                    air_s: 1.0,
+                    capacity: payload[mode],
+                    detected: true,
+                    decoded,
+                    combined: false,
+                };
+                3
+            ]
+        };
+        ctl.seed(6.0);
+        ctl.observe_frames(&frames(4, false), Some(6.0));
+        ctl.index = 2;
+        assert!(!ctl.refuses(4), "off, nothing is refused");
+        ctl.set_family_refusal(true);
+        ctl.observe_frames(&frames(4, false), Some(6.0));
+        ctl.index = 2;
+        assert!(ctl.refuses(3) && ctl.refuses(5) && !ctl.refuses(2));
+        ctl.index = 4;
+        assert!(!ctl.refuses(4), "the choice on OFDM refuses nothing");
+        ctl.observe_frames(&frames(3, true), Some(6.0));
+        ctl.index = 2;
+        assert!(!ctl.refuses(4), "an OFDM frame that delivers lifts it");
+        ctl.observe_echo(Some(0.012), 6.0);
+        assert!(ctl.refuses(5), "an echo over every OFDM rung's limit");
     }
 }

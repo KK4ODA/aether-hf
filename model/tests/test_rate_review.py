@@ -351,3 +351,113 @@ def test_a_stranded_frame_comes_down_under_the_senders_own_choice(controller: st
     assert [a._records[s].mode for s in kept] == [own, 0]
     assert a._records[kept[0]].pieces is None and a._records[kept[1]].pieces is not None
     assert a.stats.frames_reencoded >= 1 and a.stats.frames_split >= 1
+
+
+# ── D3: a family refused (the second review, rate-control-2/03-candidates.md §2.3) ──────
+
+
+def _d3_pair(on: bool = True) -> tuple[GrantedEngine, GrantedEngine]:
+    timing = phy_timing(NARROW.params)
+
+    def config() -> GrantConfig:
+        return GrantConfig(
+            capabilities=bandwidth_capabilities(NARROW.params),
+            max_mode=NARROW.n_rungs - 1,
+            max_burst_s=26.0,
+            disc_drain_s=1e9,
+            family_refusal=on,
+        )
+
+    return (
+        GrantedEngine("W4ODA", timing, config(), seed=11),
+        GrantedEngine("KK4XYZ", timing, config(), seed=12),
+    )
+
+
+def _transmission(ctl: DeliveryController, mode: int, decoded: int, frames: int = 6) -> None:
+    ctl.observe_frames(
+        [
+            FrameOutcome(
+                mode, ctl.frame_air_s[mode], ctl.capacity[mode], True, k < decoded, False, None
+            )
+            for k in range(frames)
+        ],
+        0.0,
+    )
+
+
+def test_d3_refuses_ofdm_when_the_choice_leaves_it_after_ofdm_delivered_nothing() -> None:
+    """OFDM frames that delivered nothing refuse the family once the choice is a floor rung — the
+    account has then judged every OFDM rung worse than the floor on what OFDM just did; an OFDM
+    frame that delivers lifts it. While the choice stays on OFDM nothing is refused. Off,
+    nothing ever is."""
+    a, _ = _d3_pair()
+    ctl = a._sender
+    assert ctl is not None and ctl.family_refusal
+    ctl.seed(6.0)
+    ctl._index = ctl.modes.index(9)
+    _transmission(ctl, 9, decoded=0)
+    choice = ctl.modes[ctl._index]
+    assert ctl.refuses(9) == (choice < 5)
+    ctl._index = ctl.modes.index(2)  # the choice on the floor
+    assert ctl.refuses(5) and ctl.refuses(14) and not ctl.refuses(2)
+    _transmission(ctl, 6, decoded=1)
+    ctl._index = ctl.modes.index(2)
+    assert not ctl.refuses(6)
+    off, _ = _d3_pair(on=False)
+    assert off._sender is not None
+    off._sender.seed(6.0)
+    _transmission(off._sender, 5, decoded=0)
+    off._sender._index = 0
+    assert not off._sender.refuses(5)
+
+
+def test_d3_refuses_ofdm_over_the_familys_echo_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the family's echo limit, a path that reads over it keeps every OFDM rung off — the
+    start too: from a 0 dB reading the prior rates OFDM rung 6 best on a 7 ms echo, where the
+    floor's tone rungs carry and OFDM's 5 ms prefix does not (``01-evidence.md`` §3)."""
+    import aether_model.link.granted as g
+
+    monkeypatch.setattr(g, "FAMILY_ECHO_LIMIT", {NARROW.n_rungs: 0.004})
+    a, _ = _d3_pair()
+    ctl = a._sender
+    assert ctl is not None
+    assert all(ctl.echo_limit[m] == pytest.approx(0.004) for m in ctl.modes if m >= 5)
+    assert ctl.echo_limit[3] == pytest.approx(0.0038)  # the floor's own limits stand
+    assert ctl.first_mode(0.0) >= 5
+    ctl.observe_echo(0.012, 0.0)
+    assert ctl.refuses(5) and ctl.first_mode(0.0) < 5
+    # the advice, the current controller, is held to the same limit
+    assert a.rate.echo_limit[9] == pytest.approx(0.004)
+    off, _ = _d3_pair(on=False)
+    assert off._sender is not None and 9 not in off._sender.echo_limit
+
+
+def test_d3_brings_a_block_stuck_at_a_refused_family_down_at_once() -> None:
+    """A block cut at OFDM goes on at its rung for its copies while the family is not refused
+    (``max_combines``, ADR-0085); once it is, the block comes down at its next transmission —
+    whole to the floor's rung that fits it, or in pieces (ADR-0086) — not after its copies:
+    HARQ cannot rescue a frame whose family the path does not carry."""
+    for on in (False, True):
+        a, b = _d3_pair(on)
+        sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+        a.connect("KK4XYZ")
+        sim.run(until=60.0)
+        assert a.state is State.CONNECTED and a._sender is not None
+        seqs = []
+        for mode, body in ((5, 22), (7, 36)):
+            seq = a._tx_next
+            a._records[seq] = _TxRecord(seq, bytes(body), mode, origin=mode, tx_count=1)
+            a._tx_next = seq_after(seq)
+            seqs.append(seq)
+        a._recommended = a._peer_rung = 7
+        a._own_rung = 1  # the sender's own choice has gone to the floor
+        _transmission(a._sender, 5, decoded=0)
+        a._sender._index = a._sender.modes.index(1)
+        a._data_frames(math.inf)
+        modes = [a._records[s].mode for s in seqs]
+        if on:
+            assert all(a.timing.is_floor(m) for m in modes), modes
+            assert a._records[seqs[1]].pieces is not None  # 36 bytes fit no floor rung ≤ 1
+        else:
+            assert modes == [5, 7]

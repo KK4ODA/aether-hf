@@ -6,7 +6,7 @@
 
 use std::{fs, path::PathBuf};
 
-use aether_link::rate_review::{DeliveryController, FrameOutcome};
+use aether_link::rate_review::{DeliveryController, FAMILY_ECHO_LIMIT, FrameOutcome};
 use serde_json::Value;
 
 fn vectors() -> Value {
@@ -161,5 +161,25 @@ fn the_prototypes_decide_as_the_model_does() {
             }
             check_state(&ctl, op, &format!("trace {n} op {i}"));
         }
+    }
+}
+
+/// D3's family echo limits (the second review) are the model's, ladder by ladder.
+#[test]
+fn the_family_echo_limits_are_the_models() {
+    let doc = vectors();
+    let model: Vec<(usize, f64)> = doc["family_echo_limit"]
+        .as_array()
+        .expect("family_echo_limit")
+        .iter()
+        .map(|pair| (int(&pair[0]), num(&pair[1])))
+        .collect();
+    assert_eq!(model.len(), FAMILY_ECHO_LIMIT.len());
+    for (&(n, limit), (m, expected)) in FAMILY_ECHO_LIMIT.iter().zip(model) {
+        assert_eq!(n, m);
+        assert!(
+            (limit - expected).abs() < 1e-12,
+            "ladder of {n}: {limit} against {expected}"
+        );
     }
 }

@@ -3,9 +3,10 @@ name: Rate oracle
 # The rate controller's oracle (tools/rung_oracle.py) on GitHub's runners: every regret scenario,
 # and the nightly's two echo tests, run at every usable rung and at the controller's own choice,
 # ten draws each by default, one job per scenario in parallel (a long set goes in two runs, by
-# `draws`: a job has six hours). Started by hand. A run in a cloud session stops when the session goes
-# quiet; here the runs finish, and each job keeps its rows and sidecars as an artifact
-# (docs/research/rate-control-2/00-brief.md, Gate 0).
+# `draws`: a job has six hours). Started by hand; `bench_link` runs a candidate's engine
+# switches on the same build (AETHER_BENCH_LINK, honoured by a simulated daemon only). A run in
+# a cloud session stops when the session goes quiet; here the runs finish, and each job keeps
+# its rows and sidecars as an artifact (docs/research/rate-control-2/00-brief.md, Gate 0).
 
 on:
   workflow_dispatch:
@@ -15,6 +16,9 @@ on:
         default: "0,1,2,3,4,5,6,7,8,9"
       only:
         description: "Run only these scenarios (file names without .toml, space separated); empty runs all"
+        default: ""
+      bench_link:
+        description: "A candidate's engine switches (AETHER_BENCH_LINK, e.g. family_refusal); empty runs the shipping default"
         default: ""
 
 jobs:
@@ -93,6 +97,9 @@ jobs:
       # one none at 6 or 13), so the best fixed rung is found, not guessed from a coarse set
       - name: Oracle
         if: steps.pick.outputs.run == 'true'
+        env:
+          # a candidate of the rate controller's review, read by a simulated daemon only
+          AETHER_BENCH_LINK: ${{ inputs.bench_link }}
         run: |
           case "${{ matrix.scenario }}" in
             *-500|*-500-*) rungs="0,1,2,3,4,5,6,7,9,10,11,12,13,14" ;;

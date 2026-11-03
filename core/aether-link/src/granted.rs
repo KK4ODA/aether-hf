@@ -58,7 +58,7 @@ use crate::{
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
-    rate_review::{DeliveryController, FrameOutcome},
+    rate_review::{DeliveryController, FrameOutcome, family_echo_limit},
 };
 
 // ── what the engine hands its driver ──────────────────────────────────
@@ -383,6 +383,9 @@ impl Rate {
 
 /// Tuning for a station; the protocol's constants are here too, so a bench can change them for
 /// both stations (they must hold the same).
+// each flag is an independent switch of one rule, a bench's to flip on its own: an enum of their
+// combinations would hide which rule a bench changed
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrantConfig {
     /// Data frames in one transmission, at most [`MAX_DATA`].
@@ -430,6 +433,11 @@ pub struct GrantConfig {
     /// the rate controller's review ([`crate::rate_review`]). A station on the air runs the
     /// current one.
     pub controller: Controller,
+    /// Bench only: D3 of the rate controller's second review (`docs/research/rate-control-2/
+    /// 03-candidates.md` §2.3) — the OFDM family refused as a whole by the echo or by outcomes
+    /// ([`DeliveryController::refuses`]), and a block stuck at a refused family brought down at
+    /// once. Off, nothing changes; a station on the air never sets it.
+    pub family_refusal: bool,
     /// The rung a session's data starts at before anything is measured.
     pub initial_mode: usize,
     /// The fastest rung this station uses.
@@ -536,6 +544,7 @@ impl Default for GrantConfig {
             link_timeout_exchanges: 4.0,
             rate: RateConfig::default(),
             controller: Controller::DeliveryS,
+            family_refusal: false,
             initial_mode: 0,
             max_mode: 19,
             ceiling: None,
@@ -1182,8 +1191,30 @@ impl std::fmt::Debug for GrantedEngine {
     }
 }
 
+/// The echo share above which each rung is kept off the ladder (ADR-0087), and with D3
+/// ([`GrantConfig::family_refusal`]) the OFDM family's own limit on every OFDM rung (the model's
+/// `_echo_limits`).
+fn echo_limits(timing: &PhyTiming, config: &GrantConfig) -> Vec<Option<f64>> {
+    let mut limits = timing.echo_limit.clone();
+    let rungs = timing.mode_threshold_db.len();
+    if config.family_refusal
+        && rungs > 0
+        && let Some(family) = family_echo_limit(rungs)
+    {
+        if limits.len() < rungs {
+            limits.resize(rungs, None);
+        }
+        for (mode, limit) in limits.iter_mut().enumerate().take(rungs) {
+            if !timing.is_floor(mode) {
+                *limit = Some(limit.map_or(family, |l| l.min(family)));
+            }
+        }
+    }
+    limits
+}
+
 /// C1 on an air's table: the receiver's, or the sender's own.
-fn delivery_for(timing: &PhyTiming) -> DeliveryController {
+fn delivery_for(timing: &PhyTiming, config: &GrantConfig) -> DeliveryController {
     let thresholds = if timing.mode_threshold_db.is_empty() {
         crate::rate::AWGN_THRESHOLD_DB.to_vec()
     } else {
@@ -1200,29 +1231,37 @@ fn delivery_for(timing: &PhyTiming) -> DeliveryController {
     let capacity: Vec<usize> = (0..thresholds.len())
         .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
         .collect();
-    DeliveryController::for_table(
+    let mut controller = DeliveryController::for_table(
         &thresholds,
         &payload,
         &capacity,
         &frame_s,
         timing.floor_modes,
-        &timing.echo_limit,
-    )
+        &echo_limits(timing, config),
+    );
+    controller.set_family_refusal(config.family_refusal);
+    controller
 }
 
 /// The controller a station's configuration names, on its air's table.
 fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
     match config.controller {
         // at the sender, the advice the receiver gives is the current controller's
-        Controller::Current | Controller::DeliveryS => {
-            Rate::Current(rate_controller_for(timing, config.rate))
-        }
+        Controller::Current | Controller::DeliveryS => Rate::Current(rate_controller_for(
+            timing,
+            config.rate,
+            &echo_limits(timing, config),
+        )),
         // the advice in every control frame: C1's choice for the frames received here
-        Controller::Delivery | Controller::C1 => Rate::Delivery(delivery_for(timing)),
+        Controller::Delivery | Controller::C1 => Rate::Delivery(delivery_for(timing, config)),
     }
 }
 
-fn rate_controller_for(timing: &PhyTiming, config: RateConfig) -> RateController {
+fn rate_controller_for(
+    timing: &PhyTiming,
+    config: RateConfig,
+    echo_limit: &[Option<f64>],
+) -> RateController {
     let controller = if timing.mode_threshold_db.is_empty() {
         RateController::new(config)
     } else {
@@ -1238,7 +1277,7 @@ fn rate_controller_for(timing: &PhyTiming, config: RateConfig) -> RateController
     };
     controller
         .with_floor(timing.floor_modes)
-        .with_echo_limit(&timing.echo_limit)
+        .with_echo_limit(echo_limit)
 }
 
 /// Whole steps of `step` in `x`, as the model's `int(x / step + 1e-9)`: truncated toward zero.
@@ -1400,7 +1439,7 @@ impl GrantedEngine {
             self.config.controller,
             Controller::DeliveryS | Controller::C1
         )
-        .then(|| delivery_for(&self.timing));
+        .then(|| delivery_for(&self.timing, &self.config));
         self.price_controllers();
         self.sent_copies.clear();
         self.rx_base = 0;
@@ -4199,7 +4238,12 @@ impl GrantedEngine {
                 continue;
             };
             let hopeless = self.hopeless(rec_mode);
-            let due = if hopeless {
+            // D3: HARQ cannot rescue a block whose family the path does not carry — it comes
+            // down at its next transmission, not after its copies and rounds of pieces there
+            let refused = self.sender.as_ref().is_some_and(|c| c.refuses(rec_mode));
+            let due = if refused {
+                1
+            } else if hopeless {
                 self.config.reencode_early_after
             } else {
                 self.config.max_combines
@@ -4230,7 +4274,7 @@ impl GrantedEngine {
                 // cannot reach; pieces are never combined, so a block in pieces goes again in
                 // pieces at `due`
                 let whole = self.records.get(&s).is_some_and(|r| r.pieces.is_none());
-                if !hopeless && whole && tx_count <= due {
+                if !(hopeless || refused) && whole && tx_count <= due {
                     continue;
                 }
                 let Some(target) = self.split_rung(body_len, rec_mode, asked) else {
@@ -5365,7 +5409,7 @@ mod tests {
             record(9, false),
         ]);
         let judged_at = |mode| {
-            let mut rate = rate_controller_for(&wide(), RateConfig::default());
+            let mut rate = rate_controller_for(&wide(), RateConfig::default(), &wide().echo_limit);
             rate.observe(Some(8.5), 2, 2, Some(mode));
             rate.margin_db()
         };

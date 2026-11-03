@@ -77,6 +77,25 @@ A component for D1 or D2, judged on its own before it is combined.
 **Removes** the per-rung echo limits (one family limit in their place) and, with 3, most of the
 time ADR-0094 §5 charges to the stranded frames' bound.
 
+**As built (2026-11-03, bench only: `GrantConfig.family_refusal`, `AETHER_BENCH_LINK=
+family_refusal` in a simulated daemon).** Two changes from the text above, each for a reason found
+in building it:
+
+* **Item 2 refuses on the choice, not on the most robust rung.** The family is refused when the
+  sender's own choice has gone to a floor rung after OFDM frames that delivered nothing, and
+  lifted when an OFDM frame delivers. As first written (a transmission at the family's most
+  robust rung delivering nothing) it never fired in the vector sessions: C1 leaves OFDM for the
+  floor from the rung that failed, by value, without sending at the most robust one. Once the
+  choice is on the floor the account has already judged every OFDM rung worse than the floor on
+  what OFDM just did, which is the evidence item 2 asks for.
+* **No inheritance cap.** C1 climbs only to a rung its own frames have measured (§2.1's "up only
+  to a rung whose frames outweigh its prior"), so capping the faster rungs at the most robust
+  one's estimate changed no choice; it is not built.
+* **Item 1's limit is held on every OFDM rung** in the existing per-rung tables (with the
+  floor's own limits, which stand: within the floor family rung 2 carries a 7 ms echo that rungs
+  3–4 do not, `bench/baselines/echo.csv`), so both controllers and the start read it with no new
+  code. Its value is `tools/bench_echo.py --family-limits` on `bench/baselines/echo_harq.csv`.
+
 ### 2.4 The dip and the climb's pace
 
 For whichever of D1 and D2 leads, after D3 is settled.

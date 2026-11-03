@@ -119,6 +119,11 @@ fn config(doc: &Value) -> GrantConfig {
     };
     GrantConfig {
         controller,
+        // D3 of the second review, bench only: named when set
+        family_refusal: doc
+            .get("family_refusal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         max_data_frames: int(&doc["max_data_frames"]),
         max_burst_s: opt(&doc["max_burst_s"]),
         max_retries: int(&doc["max_retries"]),

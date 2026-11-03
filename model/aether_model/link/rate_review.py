@@ -67,6 +67,13 @@ CLASS_PENALTY_DB: dict[int, dict[int, tuple[float, float, float]]] = {
 """The table for a ladder, by its number of rungs (20 at 2 300 Hz, 15 at 500 Hz)."""
 
 
+FAMILY_ECHO_LIMIT: dict[int, float] = {}
+"""D3 (the second review, ``docs/research/rate-control-2/03-candidates.md`` §2.3): the echo
+share above which the whole OFDM family is kept off a ladder, by its number of rungs (20 at
+2 300 Hz, 15 at 500 Hz), from ``tools/bench_echo.py --family-limits`` — what each rung delivers
+per second of an exchange with HARQ, not its first copies. An air without an entry has no limit:
+the measurement found no echo reading that tells the paths OFDM loses on from those it carries."""
+
 WAIT_TOLERANCE_S = 1e-9
 """Six transmissions' air is a try's wait exactly when six such transmissions went: a sum that
 lands on it counts as there whatever its last bit (:meth:`DeliveryController._wait_s`)."""
@@ -210,6 +217,14 @@ class DeliveryController(RateController):
     _clean_at: int | None = None
     """The rung the last transmission's frames went at, when every one of them there decoded
     alone (:meth:`_clean_climb`)."""
+    family_refusal: bool = False
+    """D3 (the second review, ``03-candidates.md`` §2.3), bench only: the OFDM family as a whole
+    can be refused (:meth:`refuses`) — by the echo, when the path's reading is over every OFDM
+    rung's limit (the engine adds :data:`FAMILY_ECHO_LIMIT` to them), or by outcomes, when the
+    choice has gone to the floor after OFDM frames that delivered nothing — and the engine then
+    brings the family's stuck blocks down at once."""
+    _ofdm_failed: bool = False
+    """The last OFDM frames observed delivered nothing (:meth:`_judge_family`)."""
 
     # ── what the engine feeds it ──────────────────────────────────────
 
@@ -255,6 +270,8 @@ class DeliveryController(RateController):
             acc.frames += 1.0
             if f.decoded:
                 acc.bytes += f.capacity
+        if self.family_refusal:
+            self._judge_family(frames)
         sent = {f.mode for f in frames}
         air = 0.0
         for f in frames:
@@ -276,6 +293,28 @@ class DeliveryController(RateController):
             if self._try_over():
                 self._end_probe(self._try_frames > 0)
         self._decide()
+
+    def _judge_family(self, frames: list[FrameOutcome]) -> None:
+        """D3 from outcomes: the OFDM frames of a transmission delivered nothing, or some did."""
+        ofdm = [f for f in frames if f.mode >= self.floor_modes]
+        if ofdm:
+            self._ofdm_failed = not any(f.decoded for f in ofdm)
+
+    def refuses(self, mode: int) -> bool:
+        """D3: whether ``mode``'s family is refused on this path. The OFDM family is, when every
+        rung of it is over its echo limit, or when the choice is a floor rung and the last OFDM
+        frames delivered nothing: the account has judged every OFDM rung worse than the floor
+        on what OFDM just did. (D3 as first written refused the family only on its most robust
+        rung's failure, and capped the faster rungs at it: C1 left OFDM for the floor from a
+        faster rung, never sending at the most robust one, so the rule never fired, and C1
+        climbs only to a rung its own frames have measured, so the cap changed nothing.) The
+        floor's family is never refused: there is nothing under it."""
+        if not self.family_refusal or mode < self.floor_modes:
+            return False
+        if self._ofdm_failed and self.modes[self._index] < self.floor_modes:
+            return True
+        ofdm = [i for i, m in enumerate(self.modes) if m >= self.floor_modes]
+        return bool(ofdm) and all(self._echo_out(i) for i in ofdm)
 
     # ── the estimate ──────────────────────────────────────────────────
 

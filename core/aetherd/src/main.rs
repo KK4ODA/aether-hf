@@ -382,7 +382,7 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
-    say_debug_mode(&config, &mut daemon);
+    say_debug_mode(&config, simulated, &mut daemon);
 
     let mut audio = match &args.channel {
         Some(address) => harness_channel(address, &config, &mut daemon)?,
@@ -561,6 +561,15 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
     Ok(log)
 }
 
+/// Bench only: an engine switch of the rate controller's review a harness names in
+/// `AETHER_BENCH_LINK` (comma separated, e.g. `family_refusal`), honoured only by a simulated
+/// daemon: a station on the air never runs a prototype. The oracle workflow sets it to judge a
+/// candidate on the same build as the shipping default (`docs/research/rate-control-2/`).
+fn bench_link(simulated: bool, name: &str) -> bool {
+    simulated
+        && std::env::var("AETHER_BENCH_LINK").is_ok_and(|v| v.split(',').any(|n| n.trim() == name))
+}
+
 /// What the station is told from the configuration file.
 fn station_config(
     config: &Config,
@@ -593,6 +602,7 @@ fn station_config(
         callsign: config.callsign.clone(),
         link: GrantConfig {
             max_mode: config.radio.fastest_mode(),
+            family_refusal: bench_link(simulated, "family_refusal"),
             ..GrantConfig::default()
         },
         // as set: it indexes the ladder of whichever bandwidth runs (ADR-0026)
@@ -1775,7 +1785,22 @@ fn report_frames(
 
 /// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
 /// every start, as the panel does once on screen.
-fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
+/// A bench switch a simulated daemon took from `AETHER_BENCH_LINK` ([`bench_link`]), said once
+/// at start so a run's log shows which engine it ran.
+fn say_bench_link(simulated: bool, daemon: &mut DaemonState) {
+    if bench_link(simulated, "family_refusal") {
+        daemon.log.record(
+            Level::Info,
+            "link",
+            "bench: the rate review's D3 is on (AETHER_BENCH_LINK=family_refusal)",
+            "Idle",
+        );
+    }
+}
+
+/// What debug mode does on this station, and any bench switch it runs ([`say_bench_link`]).
+fn say_debug_mode(config: &Config, simulated: bool, daemon: &mut DaemonState) {
+    say_bench_link(simulated, daemon);
     if config.record.send_to_project && daemon.simulated {
         daemon.log.record(
             Level::Info,

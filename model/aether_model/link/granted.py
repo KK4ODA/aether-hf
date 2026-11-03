@@ -92,6 +92,7 @@ from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_
 from aether_model.link.rate_review import (
     CLASS_PENALTY_DB,
     CONTROLLERS,
+    FAMILY_ECHO_LIMIT,
     DeliveryController,
     FrameOutcome,
 )
@@ -370,6 +371,11 @@ class GrantConfig:
     the other station's. Bench only until Gate 6 deletes them: ``current`` (the current
     controller in both roles) and the review's other prototypes. :attr:`rate` overrides the
     current controller's parameters either way."""
+    family_refusal: bool = False
+    """Bench only: D3 of the rate controller's second review (``docs/research/rate-control-2/
+    03-candidates.md`` §2.3) — the OFDM family refused as a whole by the echo or by outcomes
+    (:meth:`DeliveryController.refuses`), and a block stuck at a refused family brought down at
+    once. Off, nothing changes; a station on the air never sets it."""
     initial_mode: int = 0
     max_mode: int = 19
     ceiling: int | None = None
@@ -1585,12 +1591,25 @@ class GrantedEngine:
                     best = (mode, count)
         return None if best is None else best[0]
 
+    def _echo_limits(self) -> dict[int, float]:
+        """The echo share above which each rung is kept off the ladder (ADR-0087), and with D3
+        (:attr:`GrantConfig.family_refusal`) the OFDM family's own limit on every OFDM rung."""
+        limits = dict(self.timing.echo_limit or {})
+        thresholds = self.timing.mode_threshold_db
+        family = FAMILY_ECHO_LIMIT.get(len(thresholds)) if thresholds is not None else None
+        if self.cfg.family_refusal and family is not None and thresholds is not None:
+            for mode in thresholds:
+                if not self.timing.is_floor(mode):
+                    limits[mode] = min(limits.get(mode, family), family)
+        return limits
+
     def _delivery_controller(self) -> DeliveryController:
         """A prototype of the rate controller's review on this air's tables."""
         thresholds = self.timing.mode_threshold_db
         floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
-        if self.timing.echo_limit:
-            floor["echo_limit"] = dict(self.timing.echo_limit)
+        limits = self._echo_limits()
+        if limits:
+            floor["echo_limit"] = limits
         table = dict(thresholds if thresholds is not None else RateController().thresholds)
         capacity = self.timing.data_capacity or {}
         payload = capacity or {m: 0 for m in table}
@@ -1608,14 +1627,16 @@ class GrantedEngine:
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
+            family_refusal=self.cfg.family_refusal,
             **{**floor, **priced, **self.cfg.rate},  # type: ignore[arg-type]
         )
 
     def _rate_controller(self) -> RateController:
         thresholds = self.timing.mode_threshold_db
         floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
-        if self.timing.echo_limit:
-            floor["echo_limit"] = dict(self.timing.echo_limit)
+        limits = self._echo_limits()
+        if limits:
+            floor["echo_limit"] = limits
         if self.cfg.controller not in CONTROLLERS:
             raise ValueError(f"no rate controller {self.cfg.controller!r}")
         if self.cfg.controller in ("delivery", "c1"):
@@ -2808,6 +2829,11 @@ class GrantedEngine:
             rec = self._records[s]
             hopeless = self._hopeless(rec.mode)
             due = self.cfg.reencode_early_after if hopeless else self.cfg.max_combines
+            # D3: HARQ cannot rescue a block whose family the path does not carry — it comes
+            # down at its next transmission, not after its copies and rounds of pieces there
+            refused = self._sender is not None and self._sender.refuses(rec.mode)
+            if refused:
+                due = 1
             if rec.tx_count >= due and recommendation < rec.mode:
                 target = self._reencode_target(len(rec.body), rec.mode, recommendation)
                 if target is not None:
@@ -2827,7 +2853,7 @@ class GrantedEngine:
                     # frame's fifth copy that would have decoded never went, and the message
                     # missed its budget — unless the report says combining cannot reach. Pieces
                     # are never combined, so a block in pieces goes again in pieces at `due`
-                    if not hopeless and rec.pieces is None and rec.tx_count <= due:
+                    if not (hopeless or refused) and rec.pieces is None and rec.tx_count <= due:
                         continue
                     target = self._split_rung(len(rec.body), rec.mode, asked)
                     if target is None:
