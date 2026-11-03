@@ -293,6 +293,10 @@ pub enum Controller {
     /// C1 in both roles — at the sender, as [`Controller::DeliveryS`], and for the advice in
     /// every control frame, as [`Controller::Delivery`] (rejected at Gate 5, ADR-0094 §4).
     C1,
+    /// The second review's D1 (`docs/research/rate-control-2/03-candidates.md` §2.1): C1 at the
+    /// sender and nothing else — the other station's recommendation still rides in its control
+    /// frames but steers nothing ([`GrantedEngine::own_only`]).
+    D1,
 }
 
 /// The rate controller in use.
@@ -1247,11 +1251,9 @@ fn delivery_for(timing: &PhyTiming, config: &GrantConfig) -> DeliveryController 
 fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
     match config.controller {
         // at the sender, the advice the receiver gives is the current controller's
-        Controller::Current | Controller::DeliveryS => Rate::Current(rate_controller_for(
-            timing,
-            config.rate,
-            &echo_limits(timing, config),
-        )),
+        Controller::Current | Controller::DeliveryS | Controller::D1 => Rate::Current(
+            rate_controller_for(timing, config.rate, &echo_limits(timing, config)),
+        ),
         // the advice in every control frame: C1's choice for the frames received here
         Controller::Delivery | Controller::C1 => Rate::Delivery(delivery_for(timing, config)),
     }
@@ -1437,7 +1439,7 @@ impl GrantedEngine {
         self.last_rx_mode = None;
         self.sender = matches!(
             self.config.controller,
-            Controller::DeliveryS | Controller::C1
+            Controller::DeliveryS | Controller::C1 | Controller::D1
         )
         .then(|| delivery_for(&self.timing, &self.config));
         self.price_controllers();
@@ -2516,6 +2518,14 @@ impl GrantedEngine {
         self.config.ceiling.is_some_and(|c| self.timing.is_floor(c))
     }
 
+    /// D1 (the second review, `03-candidates.md` §2.1): this station's own C1 is the only thing
+    /// that chooses its data's rung — the other station's recommendation steers neither the
+    /// stuck frames' targets nor the header kept on data above it, and the slave's slot is sized
+    /// in the family the slave says its data goes in (the model's `_own_only`).
+    fn own_only(&self) -> bool {
+        self.config.controller == Controller::D1 && self.sender.is_some()
+    }
+
     fn burst_mode(&self) -> usize {
         let mut chosen = self.pinned.unwrap_or(self.recommended);
         if self.pinned.is_none()
@@ -3537,7 +3547,14 @@ impl GrantedEngine {
     #[allow(clippy::too_many_lines)]
     fn send_header(&mut self) {
         let rung = self.recommend(self.slave_floor_only);
-        let (n, open_window, index) = self.grant_size(rung);
+        // D1: the slave's data goes in its own C1's family, which its control frames state
+        // (`data_floor`); the recommendation, still sent, is no measure of it
+        let sized = if self.own_only() {
+            self.robust_mode(self.slave_floor_only)
+        } else {
+            rung
+        };
+        let (n, open_window, index) = self.grant_size(sized);
         let wanted =
             self.wants_floor() || self.silent >= 2 || self.recent_silent.iter().any(|&s| s);
         let mut elide = self.elide(n, open_window, wanted);
@@ -3566,7 +3583,12 @@ impl GrantedEngine {
         // without its header granted nothing: a wait and a floor poll. An ordinary header is
         // cheap, so it goes (ADR-0076)
         if self.config.header_above_recommendation && !hdr_floor {
-            let recommendation = self.recommended.min(self.cap());
+            // D1: above the station's own choice is a try's frame, the same bet
+            let recommendation = if self.own_only() {
+                self.burst_mode()
+            } else {
+                self.recommended.min(self.cap())
+            };
             elide = elide && !data.iter().any(|f| f.mode > recommendation);
         }
         let level = if elide { 0 } else { self.level() };
@@ -3575,7 +3597,7 @@ impl GrantedEngine {
         }
         let mut answer_floors = self.possible.with(wanted);
         let ans_s = answer_floors.max_of(|f| self.ctl_s(f));
-        let slave_floor = self.timing.is_floor(rung);
+        let slave_floor = self.timing.is_floor(sized);
         #[allow(clippy::cast_precision_loss)]
         let grant_s = if open_window {
             self.window_s(hdr_floor, index)
@@ -4215,7 +4237,11 @@ impl GrantedEngine {
         }
         let mut recommendation = self.recommended.min(self.cap());
         let mut asked = self.peer_rung.map(|rung| rung.min(self.cap()));
-        if let Some(own) = self.own_rung {
+        if self.own_only() {
+            // D1: the stuck frames' targets are bounded by the station's own choice alone
+            recommendation = self.burst_mode();
+            asked = Some(recommendation);
+        } else if let Some(own) = self.own_rung {
             // the sender's own choice bounds its stranded frames as the advice does (the
             // model's `_data_frames`, 04-results.md §3.26)
             recommendation = recommendation.min(own);

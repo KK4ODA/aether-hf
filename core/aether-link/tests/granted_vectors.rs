@@ -115,6 +115,7 @@ fn config(doc: &Value) -> GrantConfig {
         Some("delivery") => Controller::Delivery,
         Some("delivery-s") => Controller::DeliveryS,
         Some("c1") => Controller::C1,
+        Some("d1") => Controller::D1,
         Some(other) => panic!("no controller {other} in the port"),
     };
     GrantConfig {

@@ -175,3 +175,13 @@ Notes:
    the new controller's runs, and a weekly speed check is added: the 23 speed scenarios × 10 draws,
    `master` against the last release, judged with `tools/oracle_report.py compare`. Not before:
    its first comparisons are meant to be the new controller against itself.
+
+## 5. The author's answers after D3 (2026-11-03)
+
+6. **K2 is judged paired by seed** (`tools/oracle_report.py compare --paired`: the Hodges–Lehmann
+   ratio on the Walsh averages of the per-seed log time ratios, its exact Wilcoxon signed-rank
+   90 % range below 1.10). As registered, unpaired, it failed builds that ran every draw
+   identically (`04-results.md` §1.3). The same holds for K8 (iii).
+7. **D3 (items 2 and 3) is accepted as a component** of D1 and D2, the AGC test's half-point K8
+   (ii) miss included; item 1, the echo limit, stays unset. D1 and D2 are each run with it.
+

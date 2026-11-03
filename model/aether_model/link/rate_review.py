@@ -507,8 +507,11 @@ class DeliveryController(RateController):
         self._index = self.modes.index(self.first_mode(snr_db))
 
 
-CONTROLLERS = ("current", "delivery", "delivery-s", "c1")
-"""The controllers :attr:`~aether_model.link.granted.GrantConfig.controller` names."""
+CONTROLLERS = ("current", "delivery", "delivery-s", "c1", "d1")
+"""The controllers :attr:`~aether_model.link.granted.GrantConfig.controller` names. ``d1`` is the
+second review's D1 (``docs/research/rate-control-2/03-candidates.md`` §2.1): C1 at the sender and
+nothing else — the other station's recommendation still rides in its control frames but steers
+nothing."""
 
 
 def default_thresholds() -> dict[int, float]:

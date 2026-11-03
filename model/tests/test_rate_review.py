@@ -461,3 +461,53 @@ def test_d3_brings_a_block_stuck_at_a_refused_family_down_at_once() -> None:
             assert a._records[seqs[1]].pieces is not None  # 36 bytes fit no floor rung ≤ 1
         else:
             assert modes == [5, 7]
+
+
+# ── D1: one controller, at the sender (rate-control-2/03-candidates.md §2.1) ─────────────
+
+
+def test_d1_brings_a_stranded_frame_down_under_its_own_choice_whatever_the_advice() -> None:
+    """Under D1 the other station's recommendation steers nothing: a block stranded at OFDM comes
+    down when the station's own C1 has gone to the floor, though the advice still names a rung
+    above the block's. Under ``delivery-s`` before any acknowledgement (no own rung yet) the
+    advice keeps it where it is."""
+    for controller, comes_down in (("delivery-s", False), ("d1", True)):
+        a, b = _pair(NARROW, controller)
+        sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+        a.connect("KK4XYZ")
+        sim.run(until=60.0)
+        assert a.state is State.CONNECTED and a._sender is not None
+        seq = a._tx_next
+        a._records[seq] = _TxRecord(seq, bytes(22), 5, origin=5, tx_count=a.cfg.max_combines + 1)
+        a._tx_next = seq_after(seq)
+        a._recommended = a._peer_rung = 9  # the advice: faster than the block's rung
+        a._own_rung = None
+        a._sender._index = a._sender.modes.index(1)  # the station's own choice: the floor
+        a._data_frames(math.inf)
+        assert a.timing.is_floor(a._records[seq].mode) == comes_down, controller
+
+
+def test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states() -> None:
+    """The master grants the slave's slot in frames of the family the slave says its data goes in
+    (``data_floor``), not of the rung the master recommends: under D1 the slave does not follow
+    the recommendation."""
+    a, b = _pair(NARROW, "d1")
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    assert a.state is State.CONNECTED
+    sized: list[int] = []
+    original = a._grant_size
+
+    def spy(rung: int) -> tuple[int, bool, int]:
+        sized.append(rung)
+        return original(rung)
+
+    a._grant_size = spy  # type: ignore[method-assign]
+    a._recommend = lambda floor_only=False: 0  # type: ignore[method-assign]  # advice: the floor
+    a._slave_floor_only = False
+    a._send_header()
+    assert sized and not a.timing.is_floor(sized[-1])
+    a._slave_floor_only = True
+    a._send_header()
+    assert a.timing.is_floor(sized[-1])

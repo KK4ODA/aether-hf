@@ -369,8 +369,9 @@ class GrantConfig:
     (:class:`aether_model.link.rate_review.DeliveryController`) chooses the rung this station's
     own data goes at, and the current controller (:class:`RateController`) gives the advice for
     the other station's. Bench only until Gate 6 deletes them: ``current`` (the current
-    controller in both roles) and the review's other prototypes. :attr:`rate` overrides the
-    current controller's parameters either way."""
+    controller in both roles) and the review's other prototypes — ``d1`` (the second review's
+    D1) is ``delivery-s`` with the advice steering nothing (:meth:`GrantedEngine._own_only`).
+    :attr:`rate` overrides the current controller's parameters either way."""
     family_refusal: bool = False
     """Bench only: D3 of the rate controller's second review (``docs/research/rate-control-2/
     03-candidates.md`` §2.3) — the OFDM family refused as a whole by the echo or by outcomes
@@ -766,7 +767,9 @@ class GrantedEngine:
         self._asked: int | None = None
         self._last_rx_mode: int | None = None
         self._sender: DeliveryController | None = (
-            self._delivery_controller() if self.cfg.controller in ("delivery-s", "c1") else None
+            self._delivery_controller()
+            if self.cfg.controller in ("delivery-s", "c1", "d1")
+            else None
         )
         """C1-S (the rate controller's review): this station's own choice of the rung its data
         goes at, from what its acknowledgements say of its frames; the other station's
@@ -1484,6 +1487,13 @@ class GrantedEngine:
             chosen = self._sender.modes[self._sender._index]
         return min(chosen, self._cap())
 
+    def _own_only(self) -> bool:
+        """D1 (the second review, ``03-candidates.md`` §2.1): this station's own C1 is the only
+        thing that chooses its data's rung. The other station's recommendation is read and
+        steers nothing — not the stuck frames' targets, not the header kept on data above it —
+        and the slave's slot is sized in the family the slave says its data goes in."""
+        return self.cfg.controller == "d1" and self._sender is not None
+
     def _peer_reading(self, snr_db: float) -> None:
         """The other station's reading of this one, from a control frame: what the sender-side
         prototype (C1-S) seeds from, the first time one comes."""
@@ -1655,9 +1665,9 @@ class GrantedEngine:
 
     def _current_rate(self) -> dict[str, float | int | None]:
         """:attr:`GrantConfig.rate` as the current controller takes it: with a sender-side
-        prototype (``delivery-s``) the receiver's advice is the current controller's, and the
-        prototype's own settings are not its."""
-        if self.cfg.controller != "delivery-s":
+        prototype (``delivery-s``, ``d1``) the receiver's advice is the current controller's, and
+        the prototype's own settings are not its."""
+        if self.cfg.controller not in ("delivery-s", "d1"):
             return self.cfg.rate
         known = set(RateController.__dataclass_fields__)
         return {k: v for k, v in self.cfg.rate.items() if k in known}
@@ -2299,7 +2309,10 @@ class GrantedEngine:
 
     def _send_header(self) -> None:
         rung = self._recommend(self._slave_floor_only)
-        n, open_window, index = self._grant_size(rung)
+        # D1: the slave's data goes in its own C1's family, which its control frames state
+        # (``data_floor``); the recommendation, still sent, is no measure of it
+        sized = self.robust_mode(self._slave_floor_only) if self._own_only() else rung
+        n, open_window, index = self._grant_size(sized)
         wanted = self._wants_floor() or self._silent >= 2 or any(self._recent_silent)
         elide = self._elide(n, open_window, wanted)
         hdr_floor = self._hdr_floor or self._silent >= 2 or self._floor_only()
@@ -2326,14 +2339,17 @@ class GrantedEngine:
         # granted nothing: a wait and a floor poll. An ordinary header is cheap, so it goes
         # (ADR-0076)
         if self.cfg.header_above_recommendation and not hdr_floor:
-            recommendation = min(self._recommended, self._cap())
+            # D1: above the station's own choice is a try's frame, the same bet
+            recommendation = (
+                self._burst_mode() if self._own_only() else min(self._recommended, self._cap())
+            )
             elide = elide and not any(f.mode > recommendation for f in data)
         level = 0 if elide else self.level
         if not elide:
             self._possible.add(wanted)
         answer_floors = set(self._possible | {wanted})
         ans_s = max(self._ctl_s(f) for f in answer_floors)
-        slave_floor = self.timing.is_floor(rung)
+        slave_floor = self.timing.is_floor(sized)
         if open_window:
             grant_s = self._window_s(hdr_floor, index)
         else:
@@ -2812,7 +2828,10 @@ class GrantedEngine:
                 probe = None
         recommendation = min(self._recommended, self._cap())
         asked = None if self._peer_rung is None else min(self._peer_rung, self._cap())
-        if self._own_rung is not None:
+        if self._own_only():
+            # D1: the stuck frames' targets are bounded by the station's own choice alone
+            recommendation = asked = self._burst_mode()
+        elif self._own_rung is not None:
             # the sender's own choice bounds its stranded frames as the advice does: on ITU
             # NVIS at 500 Hz the receiver's C1 advised OFDM rung 5 while the sender's own had
             # gone to the floor, and blocks cut at OFDM went fourteen copies over 200 s

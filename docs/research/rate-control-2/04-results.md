@@ -1,6 +1,6 @@
 # Gate 3: the candidates on the harness
 
-*In progress (2026-11-03; D3 judged, waiting on the author's two calls in §1.3). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
+*In progress (2026-11-03; D3 judged and accepted as a component, K2 paired: the author's answers 6–7 in `03-candidates.md` §5). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
 then D1 against D2, then the dip and the climb. Each is judged on the criteria of
 `03-candidates.md` §3 against today's pair (`01-evidence.md` §1, `bench/baselines/
 rate_oracle_beta127.csv`).*
@@ -35,7 +35,9 @@ level with the floor's best on a 7 ms echo**: ITU NVIS 43 against 44 bit/s at 10
 against 42 at 20 dB; two rays 7 ms apart 48 against 52 and 51 against 42; 8 ms apart 52 against
 40 and 69 against 40. The echo reading cannot tell the paths apart on this measure: OFDM loses
 from high-latitude moderate (a reading of 0.0019) and wins again at 8 ms (0.0194), so
-`--family-limits` sets no limit (`FAMILY_ECHO_LIMIT` stays empty).
+`--family-limits` sets no limit (`FAMILY_ECHO_LIMIT` stays empty). The rows are
+`bench/baselines/echo_harq.csv`; the 2 300 Hz half was not run to its end (a container restart
+stopped it at rung 1) and is not owed: the limit is not taken from this bench.
 
 The harness says otherwise. On the Trimode NVIS test at 8 dB (the oracle's per-rung rows of
 draws 0–2), data pinned at OFDM rungs 5, 6 and 7 lost the send in two draws of three each, and at
