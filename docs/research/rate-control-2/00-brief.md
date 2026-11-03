@@ -151,9 +151,10 @@ proposed for the author to agree before any run:
 ### Gates 3–6
 
 As the first review (`docs/research/rate-control/00-brief.md` §7): prototypes in the model beside
-the shipping code, the harness A/B with three or more draws, the decision ADR with the list of
-what is deleted, the port and the proof, then the deletion. **Gate 6 deletes the first review's
-leftovers too** (§1.1).
+the shipping code, the harness A/B (ten draws for the speed scenarios, `03-candidates.md` §3),
+the decision ADR with the list of what is deleted, the port and the proof, then the deletion.
+**Gate 6 deletes the first review's leftovers too** (§1.1). After it, the nightly's baseline is
+refreshed and the weekly speed check starts (`03-candidates.md` §4, answer 5).
 
 ## 5. Harness lessons
 

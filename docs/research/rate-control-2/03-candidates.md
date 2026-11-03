@@ -1,7 +1,7 @@
 # Gate 2: candidates and criteria
 
-*The criteria were agreed by the author on 2026-11-03 (§4); the order of the candidates is still
-open. The current pair's numbers come from Gate 0 (`01-evidence.md`).*
+*Agreed by the author on 2026-11-03 (§4): the criteria and the order of the candidates. The
+current pair's numbers come from Gate 0 (`01-evidence.md`).*
 
 "Today's pair" is what ships: C1 chooses each station's own rung (`GrantConfig.controller =
 "delivery-s"`), and the old `RateController` makes the rung each station recommends to the other,
@@ -149,5 +149,10 @@ Notes:
    frames of the transmission the receiver never detected, which only it can know (link protocol
    12 if D1 is chosen).
 
-Still open: **the order** — D3 first (it serves either), then D1 against D2, then the dip and the
-climb.
+4. **The order**: D3 first (it serves either design), then D1 against D2, then the dip and the
+   climb.
+5. **The nightly stays a smoke alarm** (three draws, pass/fail, collisions). Once this review
+   lands, its baseline (`bench/baselines/scenarios.csv`, still `83eabd0`'s) is refreshed from
+   the new controller's runs, and a weekly speed check is added: the 23 speed scenarios × 10 draws,
+   `master` against the last release, judged with `tools/oracle_report.py compare`. Not before:
+   its first comparisons are meant to be the new controller against itself.
