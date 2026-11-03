@@ -1,7 +1,7 @@
 # Gate 2: candidates and criteria
 
-*Proposed; to be agreed by the author before any candidate runs. The current pair's numbers come
-from Gate 0 (`01-evidence.md`).*
+*The criteria were agreed by the author on 2026-11-03 (§4); the order of the candidates is still
+open. The current pair's numbers come from Gate 0 (`01-evidence.md`).*
 
 "Today's pair" is what ships: C1 chooses each station's own rung (`GrantConfig.controller =
 "delivery-s"`), and the old `RateController` makes the rung each station recommends to the other,
@@ -103,26 +103,51 @@ numbers replaced by today's; K7 is made firm and K8 is new (`00-brief.md` §4).
 
 | # | criterion | measured on | pass |
 |---|---|---|---|
-| K1 | **Regret against the oracle** | the 21 regret scenarios × 3 draws (`01-evidence.md` §1) | (a) the median over scenarios of the per-scenario median regret at most **half** today's; (b) no scenario's median delivery more than **15 %** under today's |
-| K2 | **No scenario slower** | every scenario × 3 draws | `scenario_trend.py` against today's three draws flags none *slower* or *failing*; pooled air time ≤ ×**1.00** |
+| K1 | **Regret against the oracle** | the 21 regret scenarios × 10 draws (`01-evidence.md` §1) | (a) the median over scenarios of the per-scenario median regret at most **half** today's; (b) no scenario's median delivery more than **15 %** under today's |
+| K2 | **No speed scenario slower** | the 21 regret scenarios and the two echo tests × 10 draws, the candidate's own runs against today's | in each, the transfer time ratio (Hodges–Lehmann, candidate over today) has its 90 % range end below **1.10**; a scenario that fails is run again on 10 fresh draws and fails K2 only if it fails again |
 | K3 | **Start independence** | the start pair × 3 draws | in each draw the two sessions settle within **one rung** of each other |
 | K4 | **Completion and no new overlap** | every scenario × 3 draws | passes per scenario ≥ today's; radiated overlaps **0** |
 | K5 | **The real-modem link bench** | `bench_link.py --backend phy --continuous`, both airs, its default grid | completion ≥ today's at every point; median session time ≤ ×**1.05** at every point and ≤ ×**1.00** pooled |
 | K6 | **The field replay** | every two-sided session in `field/inbox/` (ten), open-loop | as the first review's K6; open-loop, so a reading, not a veto (its caveat, `04-results.md`) |
 | K7 | **One controller, simpler** | the code | one process chooses rungs; at most **8** tunables in all, the engine's rate rules included (31 today); the old `RateController` gone or reduced to tables; any rule added names the evidence it rests on |
-| K8 | **The nightly's NVIS pair** | `80m-trimode-gateway-client-vanishes-500` and `80m-agc-carrier-outside-500`, six draws each (the nightly's three variants and three more) | every draw passes, and its transfer finishes inside **80 %** of its budget (320 s of 400, 240 s of 300); neither budget loosened |
+| K8 | **The nightly's two echo tests** | `80m-trimode-gateway-client-vanishes-500` (its host program's 1 000-byte send) and `80m-agc-carrier-outside-500` (its 1 000-byte message), 10 draws each, with every usable rung pinned on the same draws | (i) every run finishes inside its budget (400 s, 300 s), neither loosened; (ii) the median over the draws of the candidate's time over the best fixed rung's time on that draw at most **1.20** (a median regret of at most +20 %); (iii) K2 for these two: not slower than today by more than 10 % |
 
 Notes:
 
 * **K1 includes `80m-agc-carrier-outside-500`** (its message is the measure), so 21 scenarios.
+* **Which scenarios get statistics.** The 21 regret scenarios and the two echo tests measure speed,
+  so they get ten draws and the comparisons of K1, K2 and K8. The other scenarios (gateways,
+  aborts, VOX, host programs, slow machines) test that nothing breaks: three draws each, judged
+  by K4.
+* **Why ten draws.** With three runs a side no test can show anything: a Mann–Whitney comparison
+  of three against three cannot get below 5 % even when every run of one beats every run of the
+  other. Ten against ten can (`tools/oracle_report.py`, `model/tests/test_oracle_report.py`).
+* **Why unpaired.** The simulated channel follows the air's clock, so two controllers given the
+  same draw drift onto different stretches of its fading once their choices differ (CLAUDE.md,
+  ADR-0088 §5). A paired test would claim more than the runs show; Mann–Whitney and the
+  Hodges–Lehmann ratio with its exact (Moses) range do not assume pairs. A lost transfer ranks as
+  the longest.
+* **Chance across many scenarios.** At 90 % ranges over 23 scenarios about one will look slower
+  by chance alone; K2's second set of ten fresh draws is what tells chance from a real loss.
+* **K8's three parts** answer three questions: (i) the nightly passes; (ii) the controller loses
+  little to its own choices on a path where even the best rung is slow, so a slow draw does not
+  fail a good controller; (iii) it is no slower than today's.
 * **K6 stays a reading**: the first review found an open-loop replay judges a learning
   controller's untried choices as if it never learned (`04-results.md`).
 * **A failing criterion stops the step**; a narrow miss goes to the author with its trace, case
   by case (the author, 2026-10-24).
 
-## 4. Questions for the author
+## 4. The author's answers (2026-11-03)
 
-1. **The criteria**: K7 firm and K8 as written?
-2. **The wire under D1**: reserve the `rung` field, or have the receiver report the frames it
-   never detected in it?
-3. **The order**: D3 first (it serves either), then D1 against D2, then the dip and the climb?
+1. **K7 is firm**: one decision-maker, at most eight tunables in all.
+2. **K8 combines a measure against the best possible with more draws**, and the speed comparisons
+   are judged statistically where the decision hinges (§3: K1, K2, K8 at ten draws, unpaired
+   Mann–Whitney and Hodges–Lehmann; the other scenarios at three draws by K4). The author asked
+   for the combination and for a non-parametric test; the rules above are the result of that
+   discussion.
+3. **The wire under D1**: the five bits that carried the recommended rung carry the number of
+   frames of the transmission the receiver never detected, which only it can know (link protocol
+   12 if D1 is chosen).
+
+Still open: **the order** — D3 first (it serves either), then D1 against D2, then the dip and the
+climb.

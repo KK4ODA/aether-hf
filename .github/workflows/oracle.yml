@@ -1,8 +1,9 @@
 name: Rate oracle
 
-# The rate controller's oracle (tools/rung_oracle.py) on GitHub's runners: every regret scenario
-# run at every usable rung and at the controller's own choice, three draws each, one job per
-# scenario in parallel. Started by hand. A run in a cloud session stops when the session goes
+# The rate controller's oracle (tools/rung_oracle.py) on GitHub's runners: every regret scenario,
+# and the nightly's two echo tests, run at every usable rung and at the controller's own choice,
+# ten draws each by default, one job per scenario in parallel (a long set goes in two runs, by
+# `draws`: a job has six hours). Started by hand. A run in a cloud session stops when the session goes
 # quiet; here the runs finish, and each job keeps its rows and sidecars as an artifact
 # (docs/research/rate-control-2/00-brief.md, Gate 0).
 
@@ -11,9 +12,9 @@ on:
     inputs:
       draws:
         description: "Draws of each scenario, comma separated (0 is the scenario's own seed)"
-        default: "0,1,2"
+        default: "0,1,2,3,4,5,6,7,8,9"
       only:
-        description: "Run only these scenarios (names, space separated); empty runs all"
+        description: "Run only these scenarios (file names without .toml, space separated); empty runs all"
         default: ""
 
 jobs:
@@ -55,6 +56,8 @@ jobs:
           - 80m-lopsided-acks-500
           - 80m-slow-machine-500
           - 80m-agc-carrier-outside-500
+          # the nightly's other echo test: measured by its host program's send
+          - 80m-trimode-client-vanishes-500
           - quick-awgn-2300
           - 40m-good-throughput-2300
           - 20m-dx-moderate-2300
@@ -104,7 +107,7 @@ jobs:
         if: always() && steps.pick.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: oracle-${{ matrix.scenario }}
+          name: oracle-${{ matrix.scenario }}-run${{ github.run_number }}
           path: ${{ runner.temp }}/oracle
           retention-days: 30
 
@@ -124,7 +127,7 @@ jobs:
       - run: uv sync --locked
       - name: The regret table
         run: >-
-          uv run python tools/oracle_report.py oracle/oracle-*/summary.csv
+          uv run python tools/oracle_report.py regret oracle/oracle-*/summary.csv
           --markdown "$GITHUB_STEP_SUMMARY" --out oracle-report.md
       - uses: actions/upload-artifact@v7
         with:

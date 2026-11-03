@@ -1,14 +1,24 @@
-"""The rate oracle's regret table, from the summaries `tools/rung_oracle.py` writes (one per
-scenario job of `.github/workflows/oracle.yml`, or one for a whole local run).
+"""The rate oracle's tables, from what `tools/rung_oracle.py` writes (one job per scenario of
+`.github/workflows/oracle.yml`, or one local run).
 
-    python tools/oracle_report.py oracle/*/summary.csv [--markdown FILE] [--out FILE]
+    python tools/oracle_report.py regret oracle/*/summary.csv [--markdown FILE] [--out FILE]
+    python tools/oracle_report.py compare --base base/*/rows.csv --candidate cand/*/rows.csv
+                                  [--margin 0.10] [--markdown FILE] [--out FILE]
 
-Per scenario: the controller's delivery in each draw, the best fixed rung in hindsight and what
-it delivered, the regret (best / controller − 1) per draw and its median over the draws. Over
-the scenarios: the median and the mean of the per-scenario medians, and a bootstrap of the
-median over each scenario's draws (5–95 %), as the first review reported it
+``regret``: per scenario, the controller's delivery in each draw, the best fixed rung in
+hindsight and what it delivered, the regret (best / controller − 1) per draw and its median over
+the draws; over the scenarios, the median and the mean of the per-scenario medians and a
+bootstrap of the median over each scenario's draws (5–95 %), as the first review reported it
 (`docs/research/rate-control/03-candidates.md` §5.1). A draw the controller delivered nothing
 in has an infinite regret: it counts, and sorts last.
+
+``compare``: two builds' own runs (the ``auto`` rows) of the same scenarios and draws, scenario
+by scenario — how long the candidate's transfer takes against the base's, as a Hodges–Lehmann
+ratio with its exact 90 % range from the Mann–Whitney distribution, and a one-sided Mann–Whitney
+p-value each way (`docs/research/rate-control-2/03-candidates.md` §3). The runs are treated as
+unpaired: the simulated channel follows the air's clock, so two controllers on the same draw
+drift onto different stretches of it once their choices differ, and a paired test would claim
+more than the runs show. A lost transfer is an infinitely long one: it ranks last.
 """
 
 from __future__ import annotations
@@ -18,13 +28,16 @@ import csv
 import math
 import random
 import statistics
+from functools import cache
 from pathlib import Path
 
 BOOTSTRAP = 4000
+LEVEL = 0.90
+"""The two-sided coverage of the range a comparison reports."""
 
 
 def read(paths: list[Path]) -> dict[str, list[dict[str, str]]]:
-    """Every summary row, by scenario, its draws in seed order."""
+    """Every row, by scenario, in seed order."""
     rows: dict[str, list[dict[str, str]]] = {}
     for path in paths:
         with path.open(newline="", encoding="utf-8") as f:
@@ -53,7 +66,7 @@ def percent(value: float | None) -> str:
     return f"{value * 100:+.0f} %"
 
 
-def report(rows: dict[str, list[dict[str, str]]], seed: int = 1) -> str:
+def regret_report(rows: dict[str, list[dict[str, str]]], seed: int = 1) -> str:
     lines = [
         "| scenario | the controller (bit/s) | best fixed rung | regret | median |",
         "|---|---|---|---|---|",
@@ -89,19 +102,153 @@ def report(rows: dict[str, list[dict[str, str]]], seed: int = 1) -> str:
     return "\n".join(lines) + "\n"
 
 
+@cache
+def u_counts(m: int, n: int) -> tuple[int, ...]:
+    """How many of the C(m + n, m) orderings of two samples of sizes ``m`` and ``n`` give each
+    Mann–Whitney U = 0 … m·n, under the null (no ties)."""
+    if m == 0 or n == 0:
+        return (1,)
+    with_m = u_counts(m - 1, n)  # the largest value is the first sample's: U gains n
+    with_n = u_counts(m, n - 1)
+    out = [0] * (m * n + 1)
+    for u, count in enumerate(with_m):
+        out[u + n] += count
+    for u, count in enumerate(with_n):
+        out[u] += count
+    return tuple(out)
+
+
+def u_cdf(m: int, n: int, u: float) -> float:
+    """P(U ≤ u) under the null."""
+    counts = u_counts(m, n)
+    total = sum(counts)
+    return sum(c for k, c in enumerate(counts) if k <= u + 1e-9) / total
+
+
+def u_statistic(xs: list[float], ys: list[float]) -> float:
+    """Mann–Whitney U of ``xs`` against ``ys``: pairs in which x is the larger, ties half."""
+    return sum(1.0 if x > y else 0.5 if x == y else 0.0 for x in xs for y in ys)
+
+
+def difference(x: float, y: float) -> float:
+    """x − y, two infinities of the same sign being equal (two lost transfers)."""
+    if math.isinf(x) and math.isinf(y) and (x > 0) == (y > 0):
+        return 0.0
+    return x - y
+
+
+def hodges_lehmann(
+    xs: list[float], ys: list[float], level: float = LEVEL
+) -> tuple[float, float, float]:
+    """The shift of ``xs`` over ``ys`` (Hodges–Lehmann: the median of all pairwise differences)
+    and its exact two-sided range at ``level`` (Moses: the differences at the Mann–Whitney
+    distribution's critical ranks)."""
+    m, n = len(xs), len(ys)
+    diffs = sorted(difference(x, y) for x in xs for y in ys)
+    estimate = statistics.median(diffs)
+    tail = (1.0 - level) / 2.0
+    counts = u_counts(m, n)
+    total = sum(counts)
+    cumulative, c = 0, -1
+    for u, count in enumerate(counts):
+        # a tolerance: (1 − 0.9) / 2 is a hair under 0.05 in floating point
+        if (cumulative + count) / total > tail + 1e-12:
+            break
+        cumulative += count
+        c = u
+    if c < 0:  # too few runs for any range at this level
+        return estimate, -math.inf, math.inf
+    # the (c + 1)-th smallest and the (c + 1)-th largest difference
+    return estimate, diffs[c], diffs[m * n - c - 1]
+
+
+def log_time(row: dict[str, str]) -> float:
+    """A run's transfer as the log of its time per bit (the inverse of its rate); a lost
+    transfer is infinitely long."""
+    rate = float(row.get("metric") or 0.0)
+    return -math.log(rate) if rate > 0 else math.inf
+
+
+def median_rate(rows: list[dict[str, str]]) -> float:
+    """The median delivery of some runs, bit/s; a lost transfer is 0."""
+    return statistics.median(float(r.get("metric") or 0) for r in rows)
+
+
+def ratio(log_shift: float) -> str:
+    if math.isinf(log_shift):
+        return "∞" if log_shift > 0 else "0"
+    return f"{math.exp(log_shift):.2f}"
+
+
+def compare_report(
+    base: dict[str, list[dict[str, str]]],
+    candidate: dict[str, list[dict[str, str]]],
+    margin: float = 0.10,
+) -> str:
+    """Each scenario both builds ran: the candidate's transfer time over the base's."""
+    lines = [
+        "| scenario | runs | base (bit/s, median) | candidate | time ratio | "
+        f"{LEVEL:.0%} range | p (faster) | p (slower) | verdict |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for scenario in sorted(set(base) & set(candidate)):
+        b = [r for r in base[scenario] if r.get("rung") == "auto"]
+        c = [r for r in candidate[scenario] if r.get("rung") == "auto"]
+        if not b or not c:
+            continue
+        xs, ys = [log_time(r) for r in c], [log_time(r) for r in b]
+        shift, low, high = hodges_lehmann(xs, ys)
+        u = u_statistic(xs, ys)  # pairs in which the candidate took longer
+        p_slower = 1.0 - u_cdf(len(xs), len(ys), u - 0.5)
+        p_faster = u_cdf(len(xs), len(ys), u)
+        if math.exp(high) < 1.0:
+            verdict = "faster"
+        elif math.exp(high) <= 1.0 + margin:
+            verdict = f"not slower (within {margin:.0%})"
+        else:
+            verdict = "may be slower: confirm on fresh draws"
+        lines.append(
+            f"| `{scenario}` | {len(c)} v {len(b)} | {median_rate(b):.0f} | {median_rate(c):.0f} | "
+            f"{ratio(shift)} | {ratio(low)}–{ratio(high)} | {p_faster:.3f} | {p_slower:.3f} | "
+            f"{verdict} |"
+        )
+    lines += [
+        "",
+        "Time ratio: the candidate's transfer time over the base's (Hodges–Lehmann; under 1 is "
+        f"faster), with its exact {LEVEL:.0%} range (Moses, from the Mann–Whitney distribution). "
+        "The p-values are one-sided Mann–Whitney tests, unpaired; a lost transfer ranks as the "
+        "longest.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write(text: str, out: Path | None, markdown: Path | None, title: str) -> None:
+    print(text, end="")
+    if out:
+        out.write_text(text, encoding="utf-8")
+    if markdown:
+        with markdown.open("a", encoding="utf-8") as f:
+            f.write(f"## {title}\n\n" + text)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("summaries", nargs="+", type=Path)
-    ap.add_argument("--markdown", type=Path, help="append the table here (a step summary)")
-    ap.add_argument("--out", type=Path, help="write the table here")
+    sub = ap.add_subparsers(dest="what", required=True)
+    reg = sub.add_parser("regret", help="the controller against the best fixed rung")
+    reg.add_argument("summaries", nargs="+", type=Path)
+    cmp = sub.add_parser("compare", help="a candidate build against a base build")
+    cmp.add_argument("--base", nargs="+", type=Path, required=True)
+    cmp.add_argument("--candidate", nargs="+", type=Path, required=True)
+    cmp.add_argument("--margin", type=float, default=0.10, help="not slower by more than this")
+    for p in (reg, cmp):
+        p.add_argument("--markdown", type=Path, help="append the table here (a step summary)")
+        p.add_argument("--out", type=Path, help="write the table here")
     args = ap.parse_args()
-    text = report(read(args.summaries))
-    print(text, end="")
-    if args.out:
-        args.out.write_text(text, encoding="utf-8")
-    if args.markdown:
-        with args.markdown.open("a", encoding="utf-8") as f:
-            f.write("## Rate oracle\n\n" + text)
+    if args.what == "regret":
+        write(regret_report(read(args.summaries)), args.out, args.markdown, "Rate oracle")
+    else:
+        text = compare_report(read(args.base), read(args.candidate), args.margin)
+        write(text, args.out, args.markdown, "Candidate against base")
     return 0
 
 

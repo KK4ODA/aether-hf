@@ -37,7 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import session_matrix
 
 ROOT = Path(__file__).resolve().parents[1]
-TRANSFER = re.compile(r"(message|reply) (\d+) B (\d+) s (\d+) bps")
+TRANSFER = re.compile(r"(message|reply|host-send|host-reply) (\d+) B (\d+) s (\d+) bps")
+# the steps whose rate is a run's measure: the script's own message, or a host program's send
+# through a gateway (`80m-trimode-gateway-client-vanishes-500`, the nightly's other echo test)
+MEASURED = ("message", "host-send")
 
 COLUMNS = [
     "scenario", "seed", "rung", "pass", "why", "air_s", "message_bps", "file_bps",
@@ -49,18 +52,19 @@ SUMMARY_COLUMNS = [
 
 
 def transfer_bps(result: dict[str, Any]) -> float | None:
-    """The largest ``message`` step's rate — a short first message is mostly the exchange's
-    overhead, whatever the rung — 0 when it was lost; None when the script sent none."""
+    """The largest ``message`` (or a host program's ``host-send``) step's rate — a short first
+    message is mostly the exchange's overhead, whatever the rung — 0 when it was lost; None when
+    the script sent none."""
     best: tuple[int, float] | None = None
     for part in str(result.get("transfers") or "").split(";"):
         part = part.strip()
-        if not part.startswith("message"):
+        if not part.startswith(MEASURED):
             continue
         m = TRANSFER.match(part)
         if m:
             size, rate = int(m[2]), float(m[4])
         else:
-            lost = re.match(r"message (\d+) B lost", part)
+            lost = re.match(r"(?:message|host-send) (\d+) B lost", part)
             size, rate = (int(lost[1]) if lost else 0), 0.0
         if best is None or size > best[0]:
             best = (size, rate)
