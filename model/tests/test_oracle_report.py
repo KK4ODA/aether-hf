@@ -69,3 +69,22 @@ def test_the_verdicts_follow_the_range() -> None:
     assert "not slower (within 10%)" in same
     slower = r.compare_report(base, rows("s", [60.0 + k for k in range(10)]))
     assert "may be slower: confirm on fresh draws" in slower
+
+
+def test_a_summary_serves_as_a_build_s_own_runs() -> None:
+    """The committed baseline is a summary (one row a draw); `compare` reads its controller runs."""
+    summary = {
+        "s": [
+            {
+                "scenario": "s",
+                "seed": str(k),
+                "auto_metric": str(100.0 + k),
+                "best_rung": "3",
+                "best_metric": "120",
+            }
+            for k in range(10)
+        ]
+    }
+    report = r.compare_report(summary, rows("s", [100.5 + k for k in range(10)]))
+    assert "| `s` | 10 v 10 |" in report
+    assert "not slower (within 10%)" in report

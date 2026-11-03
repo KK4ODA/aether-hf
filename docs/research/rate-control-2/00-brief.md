@@ -106,6 +106,8 @@ Added for this review, from §1:
    three draws, today's daemon: draw 0's coarse rungs run first (started 2026-11-02, the
    session's scratchpad), then the best's neighbours and draws 1–2, as `03-candidates.md` §5.1
    did. `80m-agc-carrier-outside-500` joins the set (its message is the measure).
+   *Done instead on GitHub's runners, ten draws and every usable rung, with the Trimode echo
+   test: `01-evidence.md` §1.*
 2. **Today's pair on every scenario**, three draws: the K2/K4 reference, and the baseline the
    nightly should move to once this review lands.
 3. **The NVIS trace.** On the two nightly scenarios and `80m-nvis-disturbed-500`: per rung,

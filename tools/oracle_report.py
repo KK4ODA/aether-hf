@@ -1,7 +1,8 @@
 """The rate oracle's tables, from what `tools/rung_oracle.py` writes (one job per scenario of
 `.github/workflows/oracle.yml`, or one local run).
 
-    python tools/oracle_report.py regret oracle/*/summary.csv [--markdown FILE] [--out FILE]
+    python tools/oracle_report.py regret oracle/*/summary.csv [--skip SCENARIO …]
+                                  [--markdown FILE] [--out FILE]
     python tools/oracle_report.py compare --base base/*/rows.csv --candidate cand/*/rows.csv
                                   [--margin 0.10] [--markdown FILE] [--out FILE]
 
@@ -12,7 +13,8 @@ bootstrap of the median over each scenario's draws (5–95 %), as the first revi
 (`docs/research/rate-control/03-candidates.md` §5.1). A draw the controller delivered nothing
 in has an infinite regret: it counts, and sorts last.
 
-``compare``: two builds' own runs (the ``auto`` rows) of the same scenarios and draws, scenario
+``compare``: two builds' own runs (the ``auto`` rows of ``rows.csv``, or a summary's
+``auto_metric``, as in `bench/baselines/rate_oracle_beta127.csv`) of the same scenarios, scenario
 by scenario — how long the candidate's transfer takes against the base's, as a Hodges–Lehmann
 ratio with its exact 90 % range from the Mann–Whitney distribution, and a one-sided Mann–Whitney
 p-value each way (`docs/research/rate-control-2/03-candidates.md` §3). The runs are treated as
@@ -46,6 +48,14 @@ def read(paths: list[Path]) -> dict[str, list[dict[str, str]]]:
     for draws in rows.values():
         draws.sort(key=lambda r: int(r["seed"]))
     return rows
+
+
+def own_runs(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """The controller's own runs: ``rows.csv``'s ``auto`` rows, or every row of a summary (one a
+    draw, its ``auto_metric`` the run's measure)."""
+    if rows and "rung" not in rows[0] and "auto_metric" in rows[0]:
+        return [{**r, "rung": "auto", "metric": r["auto_metric"]} for r in rows]
+    return [r for r in rows if r.get("rung") == "auto"]
 
 
 def regret(row: dict[str, str]) -> float | None:
@@ -192,8 +202,7 @@ def compare_report(
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for scenario in sorted(set(base) & set(candidate)):
-        b = [r for r in base[scenario] if r.get("rung") == "auto"]
-        c = [r for r in candidate[scenario] if r.get("rung") == "auto"]
+        b, c = own_runs(base[scenario]), own_runs(candidate[scenario])
         if not b or not c:
             continue
         xs, ys = [log_time(r) for r in c], [log_time(r) for r in b]
@@ -236,6 +245,7 @@ def main() -> int:
     sub = ap.add_subparsers(dest="what", required=True)
     reg = sub.add_parser("regret", help="the controller against the best fixed rung")
     reg.add_argument("summaries", nargs="+", type=Path)
+    reg.add_argument("--skip", nargs="*", default=[], help="leave these scenarios out")
     cmp = sub.add_parser("compare", help="a candidate build against a base build")
     cmp.add_argument("--base", nargs="+", type=Path, required=True)
     cmp.add_argument("--candidate", nargs="+", type=Path, required=True)
@@ -245,7 +255,8 @@ def main() -> int:
         p.add_argument("--out", type=Path, help="write the table here")
     args = ap.parse_args()
     if args.what == "regret":
-        write(regret_report(read(args.summaries)), args.out, args.markdown, "Rate oracle")
+        rows = {k: v for k, v in read(args.summaries).items() if k not in set(args.skip)}
+        write(regret_report(rows), args.out, args.markdown, "Rate oracle")
     else:
         text = compare_report(read(args.base), read(args.candidate), args.margin)
         write(text, args.out, args.markdown, "Candidate against base")

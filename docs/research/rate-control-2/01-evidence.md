@@ -1,23 +1,98 @@
 # Gate 0: today's baseline
 
-*In progress (2026-11-02): §4 and §5 are written; §1–3 are filled in as the runs finish.*
+*Written 2026-11-02 and 2026-11-03. §1 is the baseline K1, K2 and K8 are judged against.*
 
 The brief (`00-brief.md` §4, Gate 0) asks for the evidence on today's build before any design:
 the oracle again, today's controller pair on every scenario, the NVIS trace, the field sessions
 since the first review, and the count K7 will be judged against. Nothing in the controller
 changed for it.
 
-**The build.** The daemon is `887a9e7` (beta.125 and ADR-0098). The deletion of C2 and the
-cautious start (`4c425e3`, the author's answer 3) came after it and changes nothing the default
-runs: the granted vectors and C1's vector sessions regenerate identical.
+**The build.** §3 ran on `887a9e7` (beta.125 and ADR-0098); §1 and §2 on beta.127's daemon
+(`c52f89e`). Between them the link layer changed only by the deletion of C2 and the cautious
+start (`4c425e3`, the author's answer 3), which changes nothing the default runs: the granted
+vectors and C1's vector sessions regenerate identical. beta.126 and beta.127 changed the daemon
+outside the controller (the shared files, the keyed-audio watch, playback skips).
 
 ## 1. The oracle
 
-*(pending: draw 0's coarse rungs are running.)*
+The 21 regret scenarios and the Trimode echo test, ten draws each (seeds *s*, *s* + 1000, …,
+*s* + 9000), each at the controller's own choice and pinned at every usable rung (14 at 500 Hz, 18
+at 2300 Hz): 3 660 runs on GitHub's runners (`.github/workflows/oracle.yml`, runs 1–4 of
+2026-11-03: draws 0–2, 3–6 and 7–9, and the Trimode test's ten). The measure is
+`tools/rung_oracle.py`'s: the largest transfer's rate, or a Test's file rate, or a host program's
+send; a lost transfer delivers 0. Per draw, the controller's delivery, the best fixed rung and what
+it delivered are in **`bench/baselines/rate_oracle_beta127.csv`**, the base K1, K2 and K8 compare
+against (`tools/oracle_report.py regret` and `compare --base` read it); every rung's rows stay in
+the runs' artifacts until 2026-12-03.
+
+**The median over the 21 scenarios of the per-scenario median regret is +22 %** (mean +33 %); a
+bootstrap over each scenario's draws puts it between +12 % and +29 % (5–95 %). With the Trimode
+test, 22 scenarios, +23 %. So **K1(a) asks a candidate for +11 % or less.** For scale: the first
+review measured +38.8 % for the old controller and +27.9 % for C1 at the sender on 20 scenarios
+× 6 draws (ADR-0094 §3); today's build has the hidden-frame rule (ADR-0095) and the fixes since.
+
+| scenario | air | the controller (median bit/s) | best fixed rung (median) | best rung (draws) | regret over the draws | median |
+|---|---|---|---|---|---|---|
+| `15m-equatorial-flutter-2300` | 2300 | 211 | 800 | 10 (8 of 10) | +53 % … +300 % | **+239 %** |
+| `20m-polar-path-2300` | 2300 | 192 | 381 | 14 (5 of 10) | +59 % … +124 % | **+97 %** |
+| `40m-moderate-2300-vara-qrm` | 2300 | 711 | 1085 | 14 (9 of 10) | +11 % … +203 % | **+47 %** |
+| `80m-thunderstorm-agc-2300` | 2300 | 666 | 913 | 14 (7 of 10) | +7 % … +83 % | **+36 %** |
+| `80m-slow-machine-500` | 500 | 120 | 170 | 10 (5 of 10) | +12 % … +100 % | **+35 %** |
+| `40m-good-2300-rtty-crashes` | 2300 | 562 | 756 | 12 (5 of 10) | +13 % … +155 % | **+34 %** |
+| `20m-dx-moderate-2300` | 2300 | 775 | 1000 | 15 (5 of 10) | +8 % … +114 % | **+31 %** |
+| `80m-flutter-500` | 500 | 140 | 167 | 9 (9 of 10) | −4 % … +75 % | **+30 %** |
+| `80m-poor-500-pactor-signalink` | 500 | 132 | 165 | 9 (8 of 10) | −2 % … +66 % | **+26 %** |
+| `40m-good-throughput-2300` | 2300 | 2246 | 2784 | 17 (4 of 10) | +0 % … +66 % | **+24 %** |
+| `80m-strong-moderate-500` | 500 | 302 | 368 | 12 (6 of 10) | +0 % … +52 % | **+22 %** |
+| `80m-qsb-dropout-500` | 500 | 202 | 222 | 11 (5 of 10) | +2 % … +28 % | **+14 %** |
+| `20m-dx-500` | 500 | 228 | 256 | 10 (7 of 10) | −1 % … +34 % | **+12 %** |
+| `80m-weak-500` | 500 | 76 | 86 | 3 (10 of 10) | +0 % … +28 % | **+12 %** |
+| `80m-agc-carrier-outside-500` | 500 | 36 | 42 | 2 (6 of 10) | +0 % … +66 % | **+10 %** |
+| `80m-nvis-disturbed-500` | 500 | 38 | 44 | 2 (8 of 10) | −2 % … +73 % | **+9 %** |
+| `80m-weak-both-ways-ladder-500` | 500 | 74 | 74 | 4 (8 of 10) | −11 % … +95 % | **+6 %** |
+| `80m-lopsided-acks-500` | 500 | 102 | 108 | 10 (5 of 10) | −1 % … +30 % | **+5 %** |
+| `80m-nvis-evening-500` | 500 | 44 | 42 | 2 (5 of 10) | −15 % … +36 % | **+3 %** |
+| `quick-awgn-2300` | 2300 | 2182 | 2182 | 16 (8 of 10) | +0 % … +57 % | **+0 %** |
+| `80m-weak-wide-test-2300` | 2300 | 175 | 175 | 5 (10 of 10) | −9 % … +9 % | **+0 %** |
+| *`80m-trimode-gateway-client-vanishes-500`* | 500 | 34 | 42 | 2 (8 of 10) | −13 % … lost | *+25 %* |
+
+A negative regret is a draw where the controller beat every fixed rung: a rung pinned for the
+whole session is not the best a controller can do on a path that changes.
+
+What it says:
+
+* **The regret is at 2300 Hz.** The median over the nine 2300 Hz scenarios is +34 %, over the
+  twelve 500 Hz ones +12 %. The worst two are fading paths where an OFDM rung in the middle of the
+  ladder carries far more than the controller chooses: on the equatorial flutter rung 10 delivered
+  800 bit/s in eight draws of ten, and the controller 200–211 bit/s in six of them; on the polar
+  path no draw came within +59 %.
+* **The 500 Hz echo paths lose little to the choice.** `80m-agc-carrier-outside-500`,
+  `80m-nvis-disturbed-500` and `80m-nvis-evening-500` are within +10 %: on those paths even the
+  best rung is slow (rung 2, 42–44 bit/s), so their nightly failures are budgets the best rung
+  barely meets, not a controller far from the best (§3, and K8 below).
+* **Three draws cannot measure this.** One scenario's draws span +0 … +66 % (`40m-good-throughput`)
+  or +11 … +203 % (the VARA QRM); the per-scenario medians need the ten.
+
+**K8 today.** `80m-agc-carrier-outside-500`: all ten messages delivered inside the 300 s budget,
+median time over the best fixed rung's ×1.10 — passes (i) and (ii). The Trimode test: draw 6
+(seed 6046) lost its send, and the median is ×1.25 — fails (i) and (ii). (iii) compares a
+candidate with these runs.
 
 ## 2. Today's pair on every scenario
 
-*(pending.)*
+The nightly of 2026-11-03 (run 41631754195, `c5da1eb`, the same daemon as §1): **all 61
+scenarios passed in all three draws** (183 runs), no radiated overlap, and the soak and the mixed
+pairs passed. That is K4's base: a candidate passes every one of them, with no radiated overlap.
+Frames keyed into a deaf receiver: only `80m-vox-caller-learned-gap-500`, 5.8–8.3 s a run at
+the VOX station, the price of learning its gap (ADR-0054), which the scenario is there to show.
+
+Its trend failed, against a baseline from `83eabd0` (2026-10-21) that the brief keeps on purpose
+(`00-brief.md` §1): eight scenarios faster than the baseline's range (`15m-old-rig-offset-500`, `20m-dx-500`,
+`40m-drift-and-clocks-2300`, `40m-moderate-2300-vara-qrm`, `80m-flutter-500`,
+`80m-lopsided-acks-500`, `80m-poor-500-pactor-signalink`, `80m-winlink-exchange-500`) and one
+slower: `40m-rtty-contest-2300`'s file at 116 bit/s against 165–392, as every night since 10-22,
+its advice held at rungs 4–5 under the RTTY QRM. The nightly is not the review's measure (three
+draws); it says nothing broke.
 
 ## 3. The NVIS trace
 
