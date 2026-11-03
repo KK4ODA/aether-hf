@@ -1,6 +1,6 @@
 # Gate 3: the candidates on the harness
 
-*In progress (2026-11-03; D3 judged and accepted as a component, K2 paired: the author's answers 6–7 in `03-candidates.md` §5). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
+*In progress (2026-11-03; D3 accepted as a component, D1 leads D2 (§2); K2 paired: the author's answers 6–7 in `03-candidates.md` §5). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
 then D1 against D2, then the dip and the climb. Each is judged on the criteria of
 `03-candidates.md` §3 against today's pair (`01-evidence.md` §1, `bench/baselines/
 rate_oracle_beta127.csv`).*
@@ -100,3 +100,44 @@ form is the author's call: it changes a criterion registered before the runs.
 **Reading.** D3 removes a failure — the Trimode test's lost send — and brings that test's regret
 from +25 % to +9 %; elsewhere it moves draws both ways by amounts the ten draws cannot tell from
 the drift. It adds no tunable. Item 1, the echo limit, was not built (§1.2).
+
+## 2. D1 against D2
+
+Runs 8–10 (D1: `family_refusal,controller=d1`) and 11–13 (D2: `family_refusal,controller=c1`) of
+2026-11-03, on `76dc97d`, each run's switch and draws confirmed from its own logs; ten draws, every
+rung pinned on the candidate's build. Per draw in `data/oracle_d1.csv` and `data/oracle_d2.csv`.
+Both carry D3 (answer 7). K2 is paired by seed (answer 6).
+
+| criterion | today | D3 alone | D2 | D1 |
+|---|---|---|---|---|
+| K1(a) median regret, 21 scenarios (≤ +11 %) | +21.8 % | +20.5 % | +18.2 % | **+14.5 %** (bootstrap +11 … +32 %) |
+| K1(b) lowest median delivery against today (≥ 0.85) | — | 0.91 | **0.84** `80m-nvis-evening-500` | 0.94 `80m-flutter-500` |
+| K2, "may be slower" (90 % range above 1.10) | — | 3 | 3: RTTY crashes 1.03 (1.00–1.13), NVIS evening 1.09 (1.01–1.18), Trimode 0.96 (0.65–1.12) | 3: lopsided acks 1.00 (1.00–1.12), weak both ways 1.00 (1.00–1.27), thunderstorm 1.04 (0.97–1.11) |
+| K2, faster | — | — | AWGN 0.91 | AWGN 0.91, Trimode 0.81 (0.75–1.05) |
+| K8 AGC: delivered, regret, time ratio | 10/10, +10.4 % | 10/10, +20.5 %, 0.98 (0.87–1.12) | 10/10, +8.6 %, 0.98 (0.85–1.08) | **10/10, +3.6 %, 0.95 (0.85–1.01)** |
+| K8 Trimode | 9/10, +25.4 % | 10/10, +8.6 %, 0.90 (0.51–1.12) | 10/10, +17.0 %, 0.96 (0.65–1.12) | **10/10, +13.5 %, 0.81 (0.75–1.05)** |
+| K7 | 31 tunables, two controllers | — | two controllers (C1 twice) | one decision-maker; the old controller unread (deleted at Gate 6) |
+
+**D1 against D2 directly**, paired (D1's time over D2's): D1 ahead on the NVIS evening path, 0.90
+(0.82–1.00), and the Trimode test, 0.90 (0.81–1.08); D2 ahead on the slow machine, 1.11
+(0.97–1.21), and on 80 m flutter, 1.05 (0.98–1.13); the other eighteen within a few hundredths.
+
+**What the K1 median hides.** Scenario by scenario D1 is close to today: its median regret is
++36 % over the nine 2 300 Hz scenarios (today +34 %) and +11.7 % over the twelve 500 Hz ones
+(today +12.0 %). The 21-scenario median moved from +21.8 % to +14.5 % because scenarios near the
+middle moved: `80m-strong-moderate-500` +22 → +12 %, `80m-flutter-500` +30 → +26 %, the AGC test
++10 → +4 %. Where the regret is large neither candidate acts: the equatorial flutter (+232 %), the
+polar path (+92 %), the VARA QRM (+48 %), the thunderstorm and the RTTY crashes (+36 … +39 %), all
+2 300 Hz paths where the best fixed rung is an OFDM rung in the middle of the ladder that the
+controller does not climb to. That is §2.4's climb, next in the agreed order.
+
+**D1's three K2 cases**, draw by draw against today: on the lopsided-acks path two draws of ten
+went slower (91 → 71 and 126 → 104 bit/s), six were identical; on the weak-both-ways ladder two
+(38 → 30 and 75 → 40), eight identical; the thunderstorm moved both ways (four up, five down). K2's
+rule runs each again on ten fresh draws (draws 10–19), today's build on the same seeds for the
+pairing: runs 14 and 15.
+
+**Reading.** D1 leads: lower regret than D2 and today, K1(b) and every part of K8 met, D2's K1(b)
+miss avoided, and one decision-maker where D2 keeps two. Neither meets K1(a) — the regret that
+is left belongs to the climb (§2.4), which is the next step, on D1.
+
