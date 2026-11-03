@@ -1,0 +1,133 @@
+name: Rate oracle
+
+# The rate controller's oracle (tools/rung_oracle.py) on GitHub's runners: every regret scenario
+# run at every usable rung and at the controller's own choice, three draws each, one job per
+# scenario in parallel. Started by hand. A run in a cloud session stops when the session goes
+# quiet; here the runs finish, and each job keeps its rows and sidecars as an artifact
+# (docs/research/rate-control-2/00-brief.md, Gate 0).
+
+on:
+  workflow_dispatch:
+    inputs:
+      draws:
+        description: "Draws of each scenario, comma separated (0 is the scenario's own seed)"
+        default: "0,1,2"
+      only:
+        description: "Run only these scenarios (names, space separated); empty runs all"
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build the daemon
+        working-directory: core
+        run: cargo build --release -p aetherd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aetherd-oracle
+          path: core/target/release/aetherd
+          retention-days: 2
+
+  oracle:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - 80m-strong-moderate-500
+          - 20m-dx-500
+          - 80m-qsb-dropout-500
+          - 80m-weak-500
+          - 80m-flutter-500
+          - 80m-nvis-evening-500
+          - 80m-weak-both-ways-ladder-500
+          - 80m-poor-500-pactor-signalink
+          - 80m-nvis-disturbed-500
+          - 80m-lopsided-acks-500
+          - 80m-slow-machine-500
+          - 80m-agc-carrier-outside-500
+          - quick-awgn-2300
+          - 40m-good-throughput-2300
+          - 20m-dx-moderate-2300
+          - 15m-equatorial-flutter-2300
+          - 80m-thunderstorm-agc-2300
+          - 20m-polar-path-2300
+          - 80m-weak-wide-test-2300
+          - 40m-good-2300-rtty-crashes
+          - 40m-moderate-2300-vara-qrm
+    steps:
+      - uses: actions/checkout@v7
+      - name: This scenario or not
+        id: pick
+        run: |
+          only="${{ inputs.only }}"
+          if [ -z "$only" ] || [[ " $only " == *" ${{ matrix.scenario }} "* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v8
+        if: steps.pick.outputs.run == 'true'
+        with:
+          name: aetherd-oracle
+          path: bin
+      - if: steps.pick.outputs.run == 'true'
+        run: chmod +x bin/aetherd
+      - uses: astral-sh/setup-uv@v10.1.0
+        if: steps.pick.outputs.run == 'true'
+        with:
+          enable-cache: true
+      - if: steps.pick.outputs.run == 'true'
+        run: uv sync --locked
+      # every usable rung of the scenario's air (the 500 Hz ladder has no rung 8; the 2300 Hz
+      # one none at 6 or 13), so the best fixed rung is found, not guessed from a coarse set
+      - name: Oracle
+        if: steps.pick.outputs.run == 'true'
+        run: |
+          case "${{ matrix.scenario }}" in
+            *-500|*-500-*) rungs="0,1,2,3,4,5,6,7,9,10,11,12,13,14" ;;
+            *) rungs="0,1,2,3,4,5,7,8,9,10,11,12,14,15,16,17,18,19" ;;
+          esac
+          out="${{ runner.temp }}/oracle"
+          uv run python tools/rung_oracle.py "bench/scenarios/${{ matrix.scenario }}.toml" \
+            --rungs "$rungs" --draws "${{ inputs.draws }}" --jobs 2 --drop-audio \
+            --daemon bin/aetherd --out "$out/runs" \
+            --csv "$out/rows.csv" --summary "$out/summary.csv"
+      - name: Keep the runs
+        if: always() && steps.pick.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: oracle-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/oracle
+          retention-days: 30
+
+  report:
+    needs: oracle
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: oracle-*
+          path: oracle
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: The regret table
+        run: >-
+          uv run python tools/oracle_report.py oracle/oracle-*/summary.csv
+          --markdown "$GITHUB_STEP_SUMMARY" --out oracle-report.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: oracle-report
+          path: oracle-report.md
+          retention-days: 30
