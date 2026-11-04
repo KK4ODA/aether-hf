@@ -211,3 +211,117 @@ file 163 bit/s against 175.
 (`03-candidates.md` §4).
 
 
+
+## 4. The last checks on D1 + D3
+
+`.github/workflows/candidate.yml` (started by hand): every scenario at three draws with the
+candidate's daemon switches (`family_refusal,controller=d1`; K3's start pair and K4), and the
+real-modem link bench, both arms on its registered grid (K5: AWGN, Good, Moderate, Poor; −4 …
++20 dB; 8 000 B; three trials; both airs). K4's base is the nightly of 2026-11-03 on today's build
+(the switches off; the granted vectors are the same byte for byte), the same 61 scenarios × 3
+draws.
+
+### 4.1 The first run found an overlap
+
+Run 1 (`b696e5c`): 183 of 183 runs passed, but one radiated overlap, the first in this review:
+`80m-trimode-gateway-client-vanishes-500`, base draw (seed 46), 3.2 s at 95.8–99.0 s of the air.
+The trace (channel time):
+
+* ND1J (master) keyed a floor header granting KK4ODA (slave) five frames, `rung 2 n 5`.
+* KK4ODA's C1 had moved to the floor after its OFDM frames delivered nothing (D3). It answered
+  at 86.2 s with an ordinary answer (`count 5`) and five tone frames at rung 1: 27.6 s on the air.
+* ND1J did not decode the answer (a failed ordinary control frame at 86.6 s). It decoded the first
+  tone frame (`follows 3`, "three or more"), failed the second, and keyed its next header at
+  95.7 s, 9.5 s into the slave's transmission.
+
+The cause was D1's slot sizing as built (§2's prototype). The master sized the slave's slot in the
+family the slave last stated (`robust_mode(data_floor)`: OFDM rung 5, 1.05 s frames), but the
+header's rung field still carried the old controller's advice (rung 2, a tone rung), and the slave
+reckons its room as `n` frames of the header rung's family. The master's 5 × 1.05 s became the
+slave's 5 × 5.36 s. When the master decodes the answer, its stated count places the slot's end and
+nothing overlaps, which is why it took a lost answer to show. Fixed in `356bc77`, model and port:
+under D1 the header states the rung the slot is sized at (without D1 that is the advice, as
+before). `test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states` now checks that the
+slave's room fits the master's slot; it fails on the old code. The rate-review vectors' D1
+sessions were regenerated, and the port's replay catches the old port code.
+
+**For link protocol 12** (decision 9): the slave must know the family its slot was sized in, so
+the header's five bits cannot all go to "frames never detected". One bit says the slot's family;
+the count takes three (0–7: a transmission holds six data frames at most); one is spare.
+
+### 4.2 The checks on the fix
+
+Run 2 (`356bc77`), each job's switch and grid confirmed from its log.
+
+| criterion | result | verdict |
+|---|---|---|
+| K3, the start pair × 3 draws, rungs apart | D1 3, 0, 1; today 3, 0, 0 | **fails in draw 0, as today does** (both builds settle at 10 and 7 there) |
+| K4, every scenario × 3 draws | 183 of 183 passed (nightly 183 of 183); radiated overlaps 0 | **met** |
+| K5, the real-modem bench, 56 points | completion 3 of 3 at every point, both arms; median time ≤ ×1.05 at 55 points, ×1.000 pooled | **one point over**: 500 Hz Good +4 dB, ×1.066 |
+| K7 | one decision-maker, fourteen settings (decision 11) | met as decided |
+
+**K4's readings.** Frames keyed into a deaf receiver: only `80m-vox-caller-learned-gap-500`'s VOX
+caller, 6.1–6.7 s, as on the nightly (5.8–8.3 s). Air time, sum of the scenario medians, ×0.997 of
+the nightly. The slowest scenario is `20m-ft8-neighbours-2300`, ×1.18, from one draw of three
+(seed 56; the other two identical to the nightly): the slave's 2 000-byte reply took 82 s against
+42 s. The master's second data transmission went without its header under D1, where today's rule
+keeps a header on data above the advice. The master did not decode the slave's answer to it, took
+the slot as silent, asked for floor answers for the next four slots, and one more slot went silent.
+That is D1's "a header kept on a try" (§2.1), on one draw.
+
+**K5's point over.** 500 Hz Good +4 dB: two of the three sessions are the same in both arms
+(143.1 and 104.6/104.9 bit/s); the third went 136.2 → 127.8 bit/s, which moves the median of
+three. Every other point is within ×1.05, 50 of them within ×1.01. The two arms agree this
+closely because today's default already chooses its own data's rung with C1 (ADR-0094); D1
+differs from it only where the advice still steered (the stuck frames' targets, the header rule,
+the slot's size), and the link bench's one-way session seldom reaches those.
+
+### 4.3 K1, K2 and K8 on the fix, and what a rerun showed
+
+The fix changes the build the decision rested on, so D1 + D3's own choice was run again on the
+oracle's ten draws (run 19, `controller_only`: a pinned rung does not consult the controller, so
+each draw is judged against the pinned best of runs 8–10). Per draw in `data/oracle_d1fix.csv`.
+
+| | today | D1 (runs 8–10) | D1 fixed (run 19) |
+|---|---|---|---|
+| K1(a), median regret, 21 scenarios | +21.8 % | +14.5 % | **+24.2 %** |
+| the same, bootstrap 5–95 % over each scenario's draws | +14 … +24 % | +13 … +22 % | +14 … +26 % |
+| K1(b), lowest median delivery against today | — | 0.94 | 0.90 `80m-flutter-500` |
+| K8 AGC: delivered, median regret | 10/10, +10.4 % | 10/10, +3.6 % | 10/10, **+26.0 %** |
+| K8 Trimode | 9/10, +25.4 % | 10/10, +13.5 % | 10/10, +11.8 % |
+
+**The rerun moved K1(a) by ten points, and the fix is not why.** Scenario by scenario the two D1
+runs are close (19 of 22 within five points of regret); the median over 21 moved because the
+middle of the distribution has a gap — no scenario between +15 % and +24 % — and one scenario, the
+AGC test, crossed it (+3.6 → +26.0 %). The AGC test's message goes one way, master to slave, and
+the fix only changes the room a slave with data reckons; on the model the same one-way sessions are
+identical before and after it (eight real-modem sessions, 500 Hz Moderate and Poor). On the harness
+the daemons CI built before and after the fix, run here twice each on two of the AGC draws:
+
+| draw | before the fix | after the fix |
+|---|---|---|
+| 3031 | 48, 48 bit/s | 34, 48 bit/s |
+| 31 | 41, 41 bit/s | 41, 35 bit/s |
+
+The same binary on the same draw gives 34 or 48. What differs is when the call goes: the
+harness's steps (`at 61`, `clear a 4`, `connect`) are taken by polling the air clock every 20 ms of
+wall time, and the air runs several times faster than the wall, so the call lands anywhere from
+63.29 to 63.41 s of the air from one run to the next (`../link-architecture/08-steps-0-and-1.md` §1.4 found the same:
+air-time stepping was not built). A session started a few blocks apart rides another stretch of the
+simulated fading, which on this path decides whether the first data goes at rung 2 or rung 4.
+
+**What that means for the review's numbers.** A single ten-draw run's K1(a) median is not a
+measurement of a controller to better than about ten points; today's, D1's and the fixed D1's
+bootstrap ranges overlap almost entirely. §2's "+14.5 % against +21.8 %" was within that noise, and
+so is this run's +24.2 %. K8 (ii) on the AGC test moves the same way (+3.6 % and +26.0 % for builds
+that behave the same on it). The paired comparison (K2) is the firmer measure, and where a step
+lands a few blocks apart even its pairs become fresh draws.
+
+**K2 for the fixed build against today**, paired by seed: faster on `80m-strong-moderate-500`, 0.89
+(0.83–0.97), and on AWGN, 0.91 (0.91–0.91); "may be slower" on three, each to run again on ten fresh
+draws under K2's rule: the AGC test 1.02 (0.87–1.15), 80 m flutter 1.00 (0.94–1.11), the
+thunderstorm 1.02 (0.95–1.12) — the last already passed its fresh draws on §2's D1, 1.00
+(0.98–1.03).
+
+The AGC test and 80 m flutter run again on draws 10–19 (oracle runs 20 and 21, the fixed D1 + D3
+and today's default, controller only); their result follows here when they finish.
