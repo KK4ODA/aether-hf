@@ -1,6 +1,6 @@
 # Gate 3: the candidates on the harness
 
-*2026-11-03/04. The outcome is D1 with D3 (the author's decision 8, `03-candidates.md` §6); the climb is parked (decision 10). The last checks on D1 + D3 are §4; the decision record waits on the author's reading of them. The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
+*2026-11-03/04. The outcome is D1 with D3 (the author's decision 8, `03-candidates.md` §6); the climb is parked (decision 10). The last checks on D1 + D3 are §4; the author accepted them (`03-candidates.md` §7, decisions 12–14), and the decision record follows. The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
 then D1 against D2, then the dip and the climb. Each is judged on the criteria of
 `03-candidates.md` §3 against today's pair (`01-evidence.md` §1, `bench/baselines/
 rate_oracle_beta127.csv`).*

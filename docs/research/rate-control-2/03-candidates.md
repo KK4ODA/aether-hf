@@ -205,3 +205,14 @@ Notes:
     `floor_answer_memory`) — against thirty-one today and the eight set firm. Pruning C1's own can
     be a later item; each removal would need a harness sweep.
 
+## 7. The author's decisions on the last checks (2026-11-04)
+
+12. **D1 with D3 goes ahead to the decision record** (`04-results.md` §4.4): no slower than today
+    anywhere on the paired measure (K2, with its fresh draws), faster on the strong Moderate path
+    and AWGN, and one decision-maker with fourteen settings. K1(a) cannot separate it from today on
+    this harness (two runs: +14.5 % and +24.2 %, today +21.8 %), and decision 8's case rests on the
+    rest.
+13. **The two narrow results are accepted**: K5's one point over (500 Hz Good +4 dB, ×1.066, one
+    session of three) and K3's one failing draw, which today's controller fails the same way.
+14. **The harness's steps on the air's clock are a separate item, later** (ROADMAP P9-18): after
+    the rate controller's decision record is built.
