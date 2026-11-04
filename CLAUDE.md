@@ -2468,7 +2468,9 @@ whose range goes over 1.10 is run again on fresh draws before anything is read i
 On draws 0–9 and again 10–19 nothing is slower than beta.127 (`04-results.md` §5).
 `80m-agc-carrier-outside-500` stays at its budget's edge (a 1 000-byte message in 300 s at 500 Hz on
 ITU NVIS: 182–275 s in the nightly; CI's quick set failed it on one OS of three at `3b11d97` and at
-`44e8dbb`, as on Windows at `b2e487c` under the old controller).
+`44e8dbb`, as on Windows at `b2e487c` under the old controller), so by the author's decision it
+left CI's quick set (no `quick` tag): the nightly and the weekly speed check watch it, and the
+budget stays.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -4,7 +4,11 @@ carrier at 700 Hz in the audio — inside the radio's passband, outside Aether's
 40 dB over the noise. The AGC holds the gain down 31 dB for as long as it lasts. When it goes,
 the caller's channel must read clear at once, not for the minute the floor took to come back
 up, and the call must go out."""
-tags = ["80m", "agc", "quick"]
+# Not in CI's quick set since 2026-11-04 (the author's decision): its 1 000-byte message in
+# 300 s on ITU NVIS sits at the budget's edge, so one draw in three failed it on one OS or
+# another under either rate controller (rate-control-2/04-results.md §5). The nightly runs it
+# at three draws and the weekly speed check at ten; the budget stays.
+tags = ["80m", "agc"]
 bandwidth = 500
 seconds = 400
 seed = 31

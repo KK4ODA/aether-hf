@@ -375,4 +375,6 @@ default).
   read from both sidecars: the call read 10 dB, so the first transmissions went at OFDM rungs 7 and
   5, which the 7 ms echo kills (one frame of eighteen decoded, about 40 s), then the floor at
   rung 0; every answer was read, and 32 blocks were acknowledged by 347 s. The scenario sits at its
-  budget's edge, a draw either side of it, before the review and after.
+  budget's edge, a draw either side of it, before the review and after. The author's decision: it
+  leaves CI's quick set and keeps its budget; the nightly (three draws) and the weekly speed check
+  (ten, paired) watch it.
