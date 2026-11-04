@@ -197,4 +197,11 @@ Notes:
 10. **The 2 300 Hz fading paths are parked** as their own item (ROADMAP P9-17): the loss there is
     information the controller lacks, not a rule it lacks. The climb is not built further, and its
     switch goes with the other bench arms at Gate 6.
+11. **K7 is judged as "one decision-maker, well under today's count".** D1 + D3 with the old
+    controller deleted has one decision-maker and fourteen settings: C1's own seven (`half_life`,
+    `prior_frames`, `probe_every`, `probe_wait_max`, `slope_db`, `prior_margin_db`,
+    `family_gain_db`), the echo reading's two (`echo_weight`, `echo_min_snr_db`) and the
+    engine's five (`silence_step`, `max_combines`, `reencode_early_after`, `reencode_hopeless_db`,
+    `floor_answer_memory`) — against thirty-one today and the eight set firm. Pruning C1's own can
+    be a later item; each removal would need a harness sweep.
 
