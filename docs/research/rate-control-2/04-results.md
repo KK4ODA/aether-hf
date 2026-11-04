@@ -135,7 +135,9 @@ controller does not climb to. That is §2.4's climb, next in the agreed order.
 went slower (91 → 71 and 126 → 104 bit/s), six were identical; on the weak-both-ways ladder two
 (38 → 30 and 75 → 40), eight identical; the thunderstorm moved both ways (four up, five down). K2's
 rule runs each again on ten fresh draws (draws 10–19), today's build on the same seeds for the
-pairing: runs 14 and 15.
+pairing: runs 14 (D1) and 15 (today). Paired, D1 over today: the thunderstorm 1.00 (0.98–1.03),
+the weak-both-ways ladder 1.00 (1.00–1.06) — both pass. The lopsided-acks path waits on its job
+in run 15, which lost its runner and is being run again.
 
 **Reading.** D1 leads: lower regret than D2 and today, K1(b) and every part of K8 met, D2's K1(b)
 miss avoided, and one decision-maker where D2 keeps two. Neither meets K1(a) — the regret that
@@ -179,6 +181,33 @@ first OFDM rung is no longer the only candidate.
 
 ### 3.3 On the harness
 
-D1 with D3 and the climb (`family_refusal,controller=d1,climb`), ten draws, every rung (runs
-16–18 of 2026-11-04). *(pending)*
+D1 with D3 and the climb (`family_refusal,controller=d1,climb`), runs 16–18 of 2026-11-04,
+switch and draws confirmed from each run's logs; per draw in `data/oracle_d1c.csv`. The
+lopsided-acks path has six draws of ten: its job in run 17 lost its runner with no log (as the
+same job of run 15 did); both are being run again.
+
+| | today | D1 | D1 + climb |
+|---|---|---|---|
+| K1(a), median regret, 21 scenarios | +21.8 % | +14.5 % | +15.5 % |
+| K1(b), lowest delivery against today | — | 0.94 | **0.75** `80m-weak-wide-test-2300`, 0.80 weak both ways |
+| K8 AGC: delivered, regret | 10/10, +10.4 % | 10/10, +3.6 % | 10/10, **+32.6 %** |
+| K8 Trimode | 9/10, +25.4 % | 10/10, +13.5 % | 10/10, +19.3 % |
+
+**The climb's own effect** (paired against D1, the time ratio): where it was aimed it works — the
+equatorial flutter 0.83 (0.79–0.88), the polar path 0.87 (0.80–0.95), the VARA QRM 0.84
+(0.74–0.98), 80 m flutter 0.88 (0.78–0.99). Elsewhere it costs: the weak 2 300 Hz Test path 1.25
+(1.17–1.33, every draw slower: 175 → 123–165 bit/s), the AGC echo test 1.23 (1.09–1.41), the
+Trimode test 1.11 (1.00–1.22), AWGN 1.10 in every draw (D1 2 400 bit/s at rung 16 → 2 182).
+
+**Why.** Item 2 starts a try after every clean transmission whatever the estimate says, and a
+try is a whole transmission. Where the choice is already the best rung — AWGN at rung 16, the weak
+path's floor top, the NVIS floor at 500 Hz where OFDM cannot carry the echo — every clean
+transmission buys a failed try. On the flutter and polar paths the same rule is what pays, because
+there the floor's reading (a lower bound) hides that OFDM carries. One trace (the weak path, a
+local run): rung 5, a try at rung 8 for two transmissions, rung 5 to the end; message 140 and
+file 163 bit/s against 175.
+
+**A failing criterion stops the step** (K1(b), K8): the refinement is the author's call
+(`03-candidates.md` §4).
+
 
