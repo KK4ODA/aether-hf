@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use aether_link::{Controller, GrantConfig};
+use aether_link::GrantConfig;
 use aetherd::{
     audio::{AudioIo, DEVICE_LATENCY_S, Loopback, SoundCard, list_devices},
     config::{Config, EXAMPLE, PttConfig},
@@ -382,7 +382,7 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
-    say_debug_mode(&config, simulated, &mut daemon);
+    say_debug_mode(&config, &mut daemon);
 
     let mut audio = match &args.channel {
         Some(address) => harness_channel(address, &config, &mut daemon)?,
@@ -561,35 +561,6 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
     Ok(log)
 }
 
-/// Bench only: an engine switch of the rate controller's review a harness names in
-/// `AETHER_BENCH_LINK` (comma separated, e.g. `family_refusal,controller=d1`), honoured only by a
-/// simulated daemon: a station on the air never runs a prototype. The oracle workflow sets it to
-/// judge a candidate on the same build as the shipping default (`docs/research/rate-control-2/`).
-fn bench_link(simulated: bool, name: &str) -> bool {
-    simulated
-        && std::env::var("AETHER_BENCH_LINK").is_ok_and(|v| v.split(',').any(|n| n.trim() == name))
-}
-
-/// Bench only: the rate controller `AETHER_BENCH_LINK` names (`controller=d1`, `c1`, …; the
-/// model's `GrantConfig.controller` names), for a simulated daemon; `None` runs the default.
-fn bench_controller(simulated: bool) -> Option<Controller> {
-    if !simulated {
-        return None;
-    }
-    let value = std::env::var("AETHER_BENCH_LINK").ok()?;
-    let name = value
-        .split(',')
-        .find_map(|item| item.trim().strip_prefix("controller="))?;
-    match name.trim() {
-        "current" => Some(Controller::Current),
-        "delivery" => Some(Controller::Delivery),
-        "delivery-s" => Some(Controller::DeliveryS),
-        "c1" => Some(Controller::C1),
-        "d1" => Some(Controller::D1),
-        _ => None,
-    }
-}
-
 /// What the station is told from the configuration file.
 fn station_config(
     config: &Config,
@@ -622,9 +593,6 @@ fn station_config(
         callsign: config.callsign.clone(),
         link: GrantConfig {
             max_mode: config.radio.fastest_mode(),
-            family_refusal: bench_link(simulated, "family_refusal"),
-            climb: bench_link(simulated, "climb"),
-            controller: bench_controller(simulated).unwrap_or_default(),
             ..GrantConfig::default()
         },
         // as set: it indexes the ladder of whichever bandwidth runs (ADR-0026)
@@ -1807,38 +1775,8 @@ fn report_frames(
 
 /// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
 /// every start, as the panel does once on screen.
-/// A bench switch a simulated daemon took from `AETHER_BENCH_LINK` ([`bench_link`]), said once
-/// at start so a run's log shows which engine it ran.
-fn say_bench_link(simulated: bool, daemon: &mut DaemonState) {
-    if bench_link(simulated, "family_refusal") {
-        daemon.log.record(
-            Level::Info,
-            "link",
-            "bench: the rate review's D3 is on (AETHER_BENCH_LINK=family_refusal)",
-            "Idle",
-        );
-    }
-    if bench_link(simulated, "climb") {
-        daemon.log.record(
-            Level::Info,
-            "link",
-            "bench: the rate review's climb is on (AETHER_BENCH_LINK=climb)",
-            "Idle",
-        );
-    }
-    if let Some(controller) = bench_controller(simulated) {
-        daemon.log.record(
-            Level::Info,
-            "link",
-            &format!("bench: the rate controller is {controller:?} (AETHER_BENCH_LINK)"),
-            "Idle",
-        );
-    }
-}
-
-/// What debug mode does on this station, and any bench switch it runs ([`say_bench_link`]).
-fn say_debug_mode(config: &Config, simulated: bool, daemon: &mut DaemonState) {
-    say_bench_link(simulated, daemon);
+/// What debug mode does on this station.
+fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
     if config.record.send_to_project && daemon.simulated {
         daemon.log.record(
             Level::Info,

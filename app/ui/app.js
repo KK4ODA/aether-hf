@@ -828,10 +828,13 @@ function applyMetrics(metrics) {
   if (metrics.rate_snr_db !== undefined) {
     const smoothed = metrics.rate_snr_db;
     $("d-rate").textContent = smoothed === null ? "—" : `${smoothed.toFixed(1)} dB`;
+    const missed = metrics.missed_there;
     $("d-rate-sub").textContent =
       smoothed === null
         ? "nothing measured this session"
-        : `smoothed · margin ${metrics.margin_db.toFixed(1)} dB`;
+        : missed === null || missed === undefined
+          ? "smoothed"
+          : `smoothed · ${missed} ${missed === 1 ? "frame" : "frames"} not heard there`;
   }
   if (metrics.receiving !== undefined) {
     setLamp("lamp-rx", metrics.receiving === true, metrics.receiving ? "A burst is arriving" : "Nothing arriving");

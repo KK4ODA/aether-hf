@@ -5088,22 +5088,17 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// The rate controller's state as a control frame carrying its recommendation is decided:
-    /// the replay of a session (`tools/rung_reading.py --replay`) checks its own controller's
-    /// state against it, not only the rung, so a drift shows where it starts rather than where
-    /// it first changes a recommendation.
+    /// The rate controller's reading as a control frame is decided, and how many frames of this
+    /// station's last transmission the other said it never detected (ADR-0099): what a replay of
+    /// the session checks its own controller against.
     fn record_rate(&mut self) {
         let now = self.now();
         let state = format!("{:?}", self.engine.state());
-        let (snr, margin) = self.engine.rate_readings();
+        let (snr, missed) = self.engine.rate_readings();
         if let Some(recording) = &mut self.recording {
             let snr = snr.map_or_else(|| "-".to_owned(), |s| format!("{s:.3}"));
-            recording.event(
-                now,
-                "rate",
-                &format!("snr {snr} margin {margin:.3}"),
-                &state,
-            );
+            let missed = missed.map_or_else(|| "-".to_owned(), |m| m.to_string());
+            recording.event(now, "rate", &format!("snr {snr} missed {missed}"), &state);
         }
     }
 

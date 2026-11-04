@@ -51,14 +51,13 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use crate::{
     frames::{
         CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, FRAGMENT_HEADER,
-        GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS, PROTOCOL_VERSION, Piece, ProbeBody, REPORT,
-        WINDOW, bandwidth_code, bandwidth_hz_of, data_capacity, data_kind, decode_data,
-        encode_data, in_window, level_of, pack_callsign, pieces, seq_after, seq_distance,
-        with_level,
+        GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS, MISSED_UNKNOWN, PROTOCOL_VERSION, Piece,
+        ProbeBody, REPORT, WINDOW, bandwidth_code, bandwidth_hz_of, data_capacity, data_kind,
+        decode_data, encode_data, in_window, level_of, pack_callsign, pieces, seq_after,
+        seq_distance, with_level,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
-    rate::{CONTROL_THRESHOLD_DB, RateConfig, RateController},
-    rate_review::{DeliveryController, FrameOutcome, family_echo_limit},
+    rate::{CONTROL_THRESHOLD_DB, FrameOutcome, RateController},
 };
 
 // ── what the engine hands its driver ──────────────────────────────────
@@ -199,9 +198,6 @@ const LEFT_UNHEARD: [&str; 4] = [
     "no response",
     "link timeout",
 ];
-/// Redundancy versions that decode on their own; a failed frame at another, not combined, is no
-/// news of the path (ADR-0020).
-const SELF_DECODABLE_RVS: [u8; 2] = [0, 3];
 /// The redundancy version of each transmission of a block (ADR-0043).
 const RV_SEQUENCE: [u8; 4] = [0, 0, 2, 3];
 
@@ -275,116 +271,6 @@ pub enum Role {
 
 // ── configuration and counters ────────────────────────────────────────
 
-/// Which rate controller a station runs (the model's `GrantConfig.controller`): ADR-0094's
-/// [`Controller::DeliveryS`] by default; the others are the rate controller's reviews', bench
-/// only until the second review's Gate 6 (`docs/research/rate-control-2/00-brief.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Controller {
-    /// The current controller ([`RateController`]) in both roles.
-    Current,
-    /// C1, choose by measured delivery at the receiver ([`DeliveryController`]).
-    Delivery,
-    /// ADR-0094, C1 at the sender: the station chooses its own data's rung from what its
-    /// acknowledgements say of its copies, the other station's recommendation advice; a try is
-    /// one new frame of a transmission at the rung above. The advice it gives is the current
-    /// controller's.
-    #[default]
-    DeliveryS,
-    /// C1 in both roles — at the sender, as [`Controller::DeliveryS`], and for the advice in
-    /// every control frame, as [`Controller::Delivery`] (rejected at Gate 5, ADR-0094 §4).
-    C1,
-    /// The second review's D1 (`docs/research/rate-control-2/03-candidates.md` §2.1): C1 at the
-    /// sender and nothing else — the other station's recommendation still rides in its control
-    /// frames but steers nothing ([`GrantedEngine::own_only`]).
-    D1,
-}
-
-/// The rate controller in use.
-#[derive(Debug, Clone)]
-enum Rate {
-    Current(RateController),
-    Delivery(DeliveryController),
-}
-
-impl Rate {
-    fn snr_db(&self) -> Option<f64> {
-        match self {
-            Self::Current(c) => c.snr_db(),
-            Self::Delivery(c) => c.snr_db(),
-        }
-    }
-
-    fn margin_db(&self) -> f64 {
-        match self {
-            Self::Current(c) => c.margin_db(),
-            Self::Delivery(c) => c.margin_db(),
-        }
-    }
-
-    fn echo(&self) -> Option<f64> {
-        match self {
-            Self::Current(c) => c.echo(),
-            Self::Delivery(c) => c.echo(),
-        }
-    }
-
-    fn recommend(&self) -> usize {
-        match self {
-            Self::Current(c) => c.recommend(),
-            Self::Delivery(c) => c.recommend(),
-        }
-    }
-
-    fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
-        match self {
-            Self::Current(c) => c.observe_echo(share, snr_db),
-            Self::Delivery(c) => c.observe_echo(share, snr_db),
-        }
-    }
-
-    fn modes(&self) -> &[usize] {
-        match self {
-            Self::Current(c) => c.modes(),
-            Self::Delivery(c) => c.modes(),
-        }
-    }
-
-    fn threshold_db(&self, mode: usize) -> Option<f64> {
-        match self {
-            Self::Current(c) => c.threshold_db(mode),
-            Self::Delivery(c) => c.threshold_db(mode),
-        }
-    }
-
-    fn seed(&mut self, snr_db: f64, lower_bound: bool) {
-        match self {
-            Self::Current(c) => c.seed(snr_db, lower_bound),
-            Self::Delivery(c) => c.seed(snr_db),
-        }
-    }
-
-    fn first_mode(&self, snr_db: f64) -> usize {
-        match self {
-            Self::Current(c) => c.first_mode(snr_db),
-            Self::Delivery(c) => c.first_mode(snr_db),
-        }
-    }
-
-    fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {
-        match self {
-            Self::Current(c) => c.observe(snr_db, ok, failed, mode),
-            Self::Delivery(c) => c.observe(snr_db),
-        }
-    }
-
-    fn observe_snr(&mut self, snr_db: Option<f64>) {
-        match self {
-            Self::Current(c) => c.observe_snr(snr_db),
-            Self::Delivery(c) => c.observe_snr(snr_db),
-        }
-    }
-}
-
 /// Tuning for a station; the protocol's constants are here too, so a bench can change them for
 /// both stations (they must hold the same).
 // each flag is an independent switch of one rule, a bench's to flip on its own: an enum of their
@@ -431,21 +317,6 @@ pub struct GrantConfig {
     pub link_timeout_s: f64,
     /// Silence ends a session after this many exchanges of the size in use.
     pub link_timeout_exchanges: f64,
-    /// The rate controller's tuning.
-    pub rate: RateConfig,
-    /// Bench only: which rate controller the station runs — the current one, or a prototype of
-    /// the rate controller's review ([`crate::rate_review`]). A station on the air runs the
-    /// current one.
-    pub controller: Controller,
-    /// Bench only: D3 of the rate controller's second review (`docs/research/rate-control-2/
-    /// 03-candidates.md` §2.3) — the OFDM family refused as a whole by the echo or by outcomes
-    /// ([`DeliveryController::refuses`]), and a block stuck at a refused family brought down at
-    /// once. Off, nothing changes; a station on the air never sets it.
-    pub family_refusal: bool,
-    /// Bench only: the second review's climb (`03-candidates.md` §2.4) for C1 at the sender — a
-    /// try goes to the best-rated rung that could beat the choice, starts after a clean
-    /// transmission, and fills its transmission ([`DeliveryController::set_climb`]).
-    pub climb: bool,
     /// The rung a session's data starts at before anything is measured.
     pub initial_mode: usize,
     /// The fastest rung this station uses.
@@ -550,10 +421,6 @@ impl Default for GrantConfig {
             family_readings: 3,
             link_timeout_s: 45.0,
             link_timeout_exchanges: 4.0,
-            rate: RateConfig::default(),
-            controller: Controller::DeliveryS,
-            family_refusal: false,
-            climb: false,
             initial_mode: 0,
             max_mode: 19,
             ceiling: None,
@@ -613,6 +480,8 @@ pub struct GrantStats {
     pub frames_reencoded: usize,
     /// Stranded frames whose body fit no rung the path carries, sent in pieces (ADR-0086).
     pub frames_split: usize,
+    /// Frames of this station's the other said it never detected (`missed`, ADR-0099).
+    pub frames_missed: usize,
     /// Frames of a session this station had left, answered with a DISC (ADR-0052).
     pub left_answered: usize,
     /// Transmissions handed over.
@@ -709,7 +578,6 @@ impl Pieces {
 struct Heard {
     mode: usize,
     floor: bool,
-    rv: u8,
     snr_db: f64,
     trusted: bool,
     follows: Option<u8>,
@@ -723,7 +591,6 @@ impl Heard {
         Self {
             mode: frame.mode(),
             floor: frame.floor(),
-            rv: frame.rv(),
             snr_db: frame.snr_db(),
             trusted: frame.trusted(),
             follows: frame.follows(),
@@ -1077,16 +944,10 @@ pub struct GrantedEngine {
     records: BTreeMap<u8, TxRecord>,
     tx_base: u8,
     tx_next: u8,
-    /// The rung this station's data goes at: what the other station recommends.
-    recommended: usize,
-    /// The rung the other station last recommended, before any step down for silence: a
-    /// stranded frame goes in pieces only below it (ADR-0086).
-    peer_rung: Option<usize>,
-    /// C1 at the sender's own choice when it last read an answer: a stranded frame comes down,
-    /// or goes in pieces, only below the lower of it and the other station's advice (ADR-0094
-    /// §2.6).
-    own_rung: Option<usize>,
     peer_snr_db: Option<f64>,
+    /// How many frames of this station's last transmission the other said it never detected
+    /// (`missed`, ADR-0099); `None` before it has said, or when it could not count them.
+    peer_missed: Option<u8>,
     heard_db: Option<f64>,
     /// The readings of the last `family_readings` frames of the other's decoded.
     heard_recent: Vec<f64>,
@@ -1117,16 +978,28 @@ pub struct GrantedEngine {
     measure_unheard: bool,
     /// The measurement out is a repeat, its first slot silent ([`Self::measurement_unheard`]).
     measure_again: bool,
-    rate: Rate,
-    /// The rung the other station's data last decoded at, for a prototype's frames never
-    /// detected (`granted._outcomes`).
+    /// The rate controller: the rung this station's own data goes at, from what the other
+    /// station's acknowledgements say of its frames (ADR-0094, ADR-0099).
+    rate: RateController,
+    /// The rung the other station's data last decoded at: the other half of an exchange's size
+    /// ([`Self::exchange_s`]).
     last_rx_mode: Option<usize>,
-    /// C1 at the sender ([`Controller::DeliveryS`]): this station's own choice of its data's
-    /// rung.
-    sender: Option<DeliveryController>,
-    /// Copies sent since the last acknowledgement — block, rung, air — for [`Self::sender`].
+    /// Frames of the other station's last transmission this station never detected, by a count
+    /// it stated ([`MISSED_UNKNOWN`] when it read none): said in the next control frame
+    /// (ADR-0099).
+    missed: u8,
+    /// Copies sent since the last acknowledgement — block, rung, air — for [`Self::rate`].
     sent_copies: Vec<(u8, usize, f64)>,
-    asked: Option<usize>,
+    /// The fastest rung pieces may go at in this session: one under the lowest rung a block's
+    /// pieces went their copies at without arriving (ADR-0099 §2.2). What one block's pieces
+    /// showed holds for every block in pieces: each found it on its own, four copies a rung.
+    piece_bound: Option<usize>,
+    /// The rate controller's choice when this station last read an answer: a stranded frame
+    /// goes in pieces only below it, never on silence steps alone (ADR-0086) — with the band
+    /// gone, frames of a fast rung split onto the floor made each try 25 s, and the master tried
+    /// past where the timed-out slave reckons it gives up: the two closing identifiers
+    /// overlapped.
+    answered_rung: Option<usize>,
     rx_base: u8,
     rx_buf: HashMap<u8, Vec<u8>>,
     max_seen: Option<u8>,
@@ -1200,30 +1073,8 @@ impl std::fmt::Debug for GrantedEngine {
     }
 }
 
-/// The echo share above which each rung is kept off the ladder (ADR-0087), and with D3
-/// ([`GrantConfig::family_refusal`]) the OFDM family's own limit on every OFDM rung (the model's
-/// `_echo_limits`).
-fn echo_limits(timing: &PhyTiming, config: &GrantConfig) -> Vec<Option<f64>> {
-    let mut limits = timing.echo_limit.clone();
-    let rungs = timing.mode_threshold_db.len();
-    if config.family_refusal
-        && rungs > 0
-        && let Some(family) = family_echo_limit(rungs)
-    {
-        if limits.len() < rungs {
-            limits.resize(rungs, None);
-        }
-        for (mode, limit) in limits.iter_mut().enumerate().take(rungs) {
-            if !timing.is_floor(mode) {
-                *limit = Some(limit.map_or(family, |l| l.min(family)));
-            }
-        }
-    }
-    limits
-}
-
-/// C1 on an air's table: the receiver's, or the sender's own.
-fn delivery_for(timing: &PhyTiming, config: &GrantConfig) -> DeliveryController {
+/// The rate controller on an air's table (the model's `_rate_controller`).
+fn rate_for(timing: &PhyTiming) -> RateController {
     let thresholds = if timing.mode_threshold_db.is_empty() {
         crate::rate::AWGN_THRESHOLD_DB.to_vec()
     } else {
@@ -1240,52 +1091,14 @@ fn delivery_for(timing: &PhyTiming, config: &GrantConfig) -> DeliveryController 
     let capacity: Vec<usize> = (0..thresholds.len())
         .map(|m| timing.data_capacity.get(m).map_or(0, |&c| data_capacity(c)))
         .collect();
-    let mut controller = DeliveryController::for_table(
+    RateController::for_table(
         &thresholds,
         &payload,
         &capacity,
         &frame_s,
         timing.floor_modes,
-        &echo_limits(timing, config),
-    );
-    controller.set_family_refusal(config.family_refusal);
-    controller.set_climb(config.climb);
-    controller
-}
-
-/// The controller a station's configuration names, on its air's table.
-fn rate_for(timing: &PhyTiming, config: &GrantConfig) -> Rate {
-    match config.controller {
-        // at the sender, the advice the receiver gives is the current controller's
-        Controller::Current | Controller::DeliveryS | Controller::D1 => Rate::Current(
-            rate_controller_for(timing, config.rate, &echo_limits(timing, config)),
-        ),
-        // the advice in every control frame: C1's choice for the frames received here
-        Controller::Delivery | Controller::C1 => Rate::Delivery(delivery_for(timing, config)),
-    }
-}
-
-fn rate_controller_for(
-    timing: &PhyTiming,
-    config: RateConfig,
-    echo_limit: &[Option<f64>],
-) -> RateController {
-    let controller = if timing.mode_threshold_db.is_empty() {
-        RateController::new(config)
-    } else {
-        let frame_s: Vec<f64> = (0..timing.mode_threshold_db.len())
-            .map(|m| timing.data_frame_s_for(m))
-            .collect();
-        RateController::for_table_timed(
-            config,
-            &timing.mode_threshold_db,
-            &timing.data_capacity,
-            &frame_s,
-        )
-    };
-    controller
-        .with_floor(timing.floor_modes)
-        .with_echo_limit(echo_limit)
+        &timing.echo_limit,
+    )
 }
 
 /// Whole steps of `step` in `x`, as the model's `int(x / step + 1e-9)`: truncated toward zero.
@@ -1307,7 +1120,7 @@ impl GrantedEngine {
     #[allow(clippy::too_many_lines)] // the engine's state, a field a line
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
-        let rate = rate_for(&timing, &config);
+        let rate = rate_for(&timing);
         let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
@@ -1315,9 +1128,6 @@ impl GrantedEngine {
             remote_call: String::new(),
             stats: GrantStats::default(),
             last_data: None,
-            recommended: config.initial_mode,
-            peer_rung: None,
-            own_rung: None,
             timing,
             config,
             rng: Draws::new(seed),
@@ -1353,6 +1163,7 @@ impl GrantedEngine {
             tx_base: 0,
             tx_next: 0,
             peer_snr_db: None,
+            peer_missed: None,
             heard_db: None,
             heard_recent: Vec::new(),
             peer_capabilities: 0,
@@ -1370,9 +1181,10 @@ impl GrantedEngine {
             measure_again: false,
             rate,
             last_rx_mode: None,
-            sender: None,
+            missed: MISSED_UNKNOWN,
             sent_copies: Vec::new(),
-            asked: None,
+            piece_bound: None,
+            answered_rung: None,
             rx_base: 0,
             rx_buf: HashMap::new(),
             max_seen: None,
@@ -1421,10 +1233,8 @@ impl GrantedEngine {
         self.records.clear();
         self.tx_base = 0;
         self.tx_next = 0;
-        self.recommended = self.config.initial_mode;
-        self.peer_rung = None;
-        self.own_rung = None;
         self.peer_snr_db = None;
+        self.peer_missed = None;
         self.heard_db = None;
         self.heard_recent.clear();
         self.peer_capabilities = 0;
@@ -1440,16 +1250,13 @@ impl GrantedEngine {
         self.measure_out = None;
         self.measure_unheard = false;
         self.measure_again = false;
-        self.rate = rate_for(&self.timing, &self.config);
-        self.asked = None;
+        self.rate = rate_for(&self.timing);
         self.last_rx_mode = None;
-        self.sender = matches!(
-            self.config.controller,
-            Controller::DeliveryS | Controller::C1 | Controller::D1
-        )
-        .then(|| delivery_for(&self.timing, &self.config));
+        self.missed = MISSED_UNKNOWN;
         self.price_controllers();
         self.sent_copies.clear();
+        self.piece_bound = None;
+        self.answered_rung = None;
         self.rx_base = 0;
         self.rx_buf.clear();
         self.max_seen = None;
@@ -1542,10 +1349,12 @@ impl GrantedEngine {
         self.peer_capabilities
     }
 
-    /// The rate controller's smoothed SNR and margin, for a display.
+    /// For a display: the rate controller's smoothed reading of how the other station hears this
+    /// one (what it chooses this station's rung by), and how many frames of this station's last
+    /// transmission the other said it never detected (ADR-0099).
     #[must_use]
-    pub fn rate_readings(&self) -> (Option<f64>, f64) {
-        (self.rate.snr_db(), self.rate.margin_db())
+    pub fn rate_readings(&self) -> (Option<f64>, Option<u8>) {
+        (self.rate.snr_db(), self.peer_missed)
     }
 
     /// What this station's last probe came back with.
@@ -1572,10 +1381,17 @@ impl GrantedEngine {
         self.state == State::Connected
     }
 
-    /// The rung this station's data goes at.
+    /// The rung this station's data goes at now.
     #[must_use]
-    pub const fn current_mode(&self) -> usize {
-        self.recommended
+    pub fn current_mode(&self) -> usize {
+        self.burst_mode()
+    }
+
+    /// How many frames of this station's last transmission the other said it never detected
+    /// (`missed`, ADR-0099); `None` before it has said, or when it could not count them.
+    #[must_use]
+    pub const fn peer_missed(&self) -> Option<u8> {
+        self.peer_missed
     }
 
     /// The path's echo as the session's frames have read it (ADR-0087), smoothed: what keeps
@@ -1585,14 +1401,10 @@ impl GrantedEngine {
         self.rate.echo()
     }
 
-    /// C1 of the rate controller's review (bench-only): the families it prices an exchange by,
-    /// as this engine last told it; `None` for the other controllers.
+    /// The families the rate controller prices an exchange by, as this engine last told it.
     #[must_use]
-    pub fn prototype_families(&self) -> Option<(bool, bool)> {
-        match (&self.rate, &self.sender) {
-            (Rate::Delivery(c), _) | (_, Some(c)) => c.families(),
-            _ => None,
-        }
+    pub const fn rate_families(&self) -> Option<(bool, bool)> {
+        self.rate.families()
     }
 
     /// The gap level in use: what a master grants, what a slave asks for.
@@ -2112,9 +1924,8 @@ impl GrantedEngine {
         if let Some(rung) = max_mode {
             self.config.max_mode = rung;
         }
-        self.rate = rate_for(&self.timing, &self.config);
+        self.rate = rate_for(&self.timing);
         self.price_controllers();
-        self.recommended = self.config.initial_mode;
     }
 
     // ── inputs ────────────────────────────────────────────────────────
@@ -2418,11 +2229,11 @@ impl GrantedEngine {
     #[allow(clippy::cast_precision_loss)]
     fn exchange_s(&self) -> f64 {
         let burst_floor = self.timing.is_floor(self.burst_mode());
-        let recommended_floor = self.timing.is_floor(self.rate.recommend());
-        let floor = burst_floor || recommended_floor || self.hdr_floor;
-        let frame = self
-            .frame_s(burst_floor)
-            .max(self.frame_s(recommended_floor));
+        let peer_floor = self.last_rx_mode.map(|m| self.timing.is_floor(m));
+        let floor = burst_floor || peer_floor == Some(true) || self.hdr_floor;
+        let frame = peer_floor.map_or(self.frame_s(burst_floor), |f| {
+            self.frame_s(burst_floor).max(self.frame_s(f))
+        });
         let gap = self.slot_start(
             0.0,
             true,
@@ -2457,16 +2268,12 @@ impl GrantedEngine {
         }
         self.price();
         self.rate.observe_echo(frame.echo, frame.snr_db);
-        if let Some(sender) = &mut self.sender {
-            // the sender's own choice keeps the echo exclusions too (ADR-0087)
-            sender.observe_echo(frame.echo, frame.snr_db);
-        }
         self.heard_at = self.now;
         self.deadlines
             .set(Timer::Link, self.now + self.link_timeout());
     }
 
-    /// C1 (the rate controller's review) ranks rungs per second of a whole exchange: what one
+    /// The rate controller ranks rungs per second of a whole exchange: what one
     /// costs beyond its data frames, by the protocol's lengths — a control frame each way and
     /// the two gaps (the decode budgets are the families' alike) — and the frames a full
     /// transmission at each rung carries (the model's `_delivery_controller`).
@@ -2477,12 +2284,8 @@ impl GrantedEngine {
         let burst: Vec<usize> = (0..self.timing_rungs())
             .map(|m| self.burst_capacity(self.timing.data_frame_s_for(m)))
             .collect();
-        if let Rate::Delivery(c) = &mut self.rate {
-            c.price_exchanges(floor_s, ordinary_s, gap_s, &burst);
-        }
-        if let Some(c) = &mut self.sender {
-            c.price_exchanges(floor_s, ordinary_s, gap_s, &burst);
-        }
+        self.rate
+            .price_exchanges(floor_s, ordinary_s, gap_s, &burst);
     }
 
     /// The rungs of this air's table.
@@ -2495,8 +2298,8 @@ impl GrantedEngine {
     }
 
     /// The families both stations' control frames go in now — this station's own and the one
-    /// it asks of the other — for C1, which prices a transmission at any rung with them (the
-    /// model's `_price`).
+    /// it asks of the other — for the rate controller, which prices a transmission at any rung
+    /// with them (the model's `_price`).
     fn price(&mut self) {
         let own = if self.role == Role::Master {
             self.hdr_floor
@@ -2504,12 +2307,7 @@ impl GrantedEngine {
             self.ans_sticky
         };
         let other = self.wants_floor();
-        if let Rate::Delivery(c) = &mut self.rate {
-            c.set_families(own, other);
-        }
-        if let Some(c) = &mut self.sender {
-            c.set_families(own, other);
-        }
+        self.rate.set_families(own, other);
     }
 
     // ── rate and family ───────────────────────────────────────────────
@@ -2524,44 +2322,37 @@ impl GrantedEngine {
         self.config.ceiling.is_some_and(|c| self.timing.is_floor(c))
     }
 
-    /// D1 (the second review, `03-candidates.md` §2.1): this station's own C1 is the only thing
-    /// that chooses its data's rung — the other station's recommendation steers neither the
-    /// stuck frames' targets nor the header kept on data above it, and the slave's slot is sized
-    /// in the family the slave says its data goes in (the model's `_own_only`).
-    fn own_only(&self) -> bool {
-        self.config.controller == Controller::D1 && self.sender.is_some()
-    }
-
+    /// The rung this station's data goes at: the pinned rung of a bench or the Test's ladder,
+    /// else the rate controller's ([`Self::own_choice`]).
     fn burst_mode(&self) -> usize {
-        let mut chosen = self.pinned.unwrap_or(self.recommended);
-        if self.pinned.is_none()
-            && let Some(sender) = &self.sender
-            && sender.snr_db().is_some()
-        {
-            chosen = sender.choice();
-        }
-        chosen.min(self.cap())
+        self.pinned
+            .map_or_else(|| self.own_choice(), |pinned| pinned.min(self.cap()))
     }
 
-    /// C1 at the sender's try: the rung one new frame of this transmission goes at, or `None`.
+    /// The rate controller's choice once it has a reading, the configured initial rung before
+    /// (the model's `_own_choice`).
+    fn own_choice(&self) -> usize {
+        if self.rate.snr_db().is_none() {
+            return self.config.initial_mode.min(self.cap());
+        }
+        self.rate.choice().min(self.cap())
+    }
+
+    /// The rate controller's try: the rung one new frame of this transmission goes at, or
+    /// `None`.
     fn probe_rung(&self) -> Option<usize> {
         if self.pinned.is_some() {
             return None;
         }
-        self.sender
-            .as_ref()
-            .and_then(DeliveryController::probing)
-            .filter(|&probe| probe <= self.cap())
+        self.rate.probing().filter(|&probe| probe <= self.cap())
     }
 
-    /// The other station's reading of this one, from a control frame: what the sender-side
-    /// prototype seeds from, the first time one comes.
+    /// The other station's reading of this one, from a control frame: what the rate controller
+    /// seeds from, the first time one comes.
     fn peer_reading(&mut self, snr_db: f64) {
         self.peer_snr_db = Some(snr_db);
-        if let Some(sender) = &mut self.sender
-            && sender.snr_db().is_none()
-        {
-            sender.seed(snr_db);
+        if self.rate.snr_db().is_none() {
+            self.rate.seed(snr_db);
         }
     }
 
@@ -2587,28 +2378,6 @@ impl GrantedEngine {
             .reduce(f64::min)
             .unwrap_or(f64::NEG_INFINITY);
         weakest < self.ctl_threshold() + self.config.answer_floor_margin_db
-    }
-
-    /// The rung this station's control frame recommends for the other's data, remembered
-    /// (ADR-0020). `floor_only`: the other station has said its data can only go on the tone
-    /// floor, and a header's rung is also what its grant is sized by, so it stays there.
-    fn recommend(&mut self, floor_only: bool) -> usize {
-        let mut rung = self.rate.recommend();
-        if floor_only && self.timing.floor_modes > 0 {
-            rung = rung.min(self.timing.floor_modes - 1);
-        }
-        self.asked = Some(self.asked.map_or(rung, |a| a.max(rung)));
-        rung
-    }
-
-    fn back_off(&mut self) {
-        let modes = self.rate.modes().to_vec();
-        let current = self.recommended.min(self.cap());
-        let index = modes.iter().rposition(|&m| m <= current).unwrap_or(0);
-        self.recommended = modes[index.saturating_sub(self.config.silence_step)];
-        if let Some(sender) = &mut self.sender {
-            sender.silent(self.config.silence_step);
-        }
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -3025,9 +2794,6 @@ impl GrantedEngine {
         self.role = Role::Slave;
         self.heard(frame);
         self.measure_lateness(frame);
-        // the request is the first measurement of how the caller is heard; a lower bound if it
-        // came on the tone floor (ADR-0016)
-        self.rate.seed(frame.snr_db, frame.floor);
         self.ans_sticky = self.acceptance_floor(frame);
         let remote = self.remote_call.clone();
         self.event("connected", format!("{remote} (slave)"));
@@ -3090,15 +2856,11 @@ impl GrantedEngine {
         self.state = State::Connected;
         self.role = Role::Master;
         self.heard(frame);
-        self.rate.seed(frame.snr_db, frame.floor);
-        self.recommended = self.config.initial_mode;
         if let Some(snr) = ack.snr_db {
-            let first = self.rate.first_mode(snr);
-            self.recommended = self.config.initial_mode.max(self.cap().min(first));
+            // the slave's reading of the call: how it hears this station, where the rate
+            // controller's prior starts (ADR-0008)
             self.peer_snr_db = Some(snr);
-            if let Some(sender) = &mut self.sender {
-                sender.seed(snr);
-            }
+            self.rate.seed(snr);
             // the first header goes in the family the slave's reading of the call asks for: a
             // floor reading is a lower bound, never too fast
             if self.timing.floor_modes > 0 {
@@ -3424,10 +3186,8 @@ impl GrantedEngine {
         let Some(slot) = self.slot.take() else {
             return;
         };
-        if !self.rx.is_empty() {
-            let records = std::mem::take(&mut self.rx);
-            self.observe(&records);
-        }
+        let records = std::mem::take(&mut self.rx);
+        self.observe(&records);
         self.restart_rx();
         if !slot.open_window {
             self.recent_silent.push_back(!slot.heard);
@@ -3472,10 +3232,7 @@ impl GrantedEngine {
             self.silence_level += 1;
         }
         if slot.data {
-            self.back_off();
-        }
-        if slot.granted > 0 && self.silent >= 2 {
-            self.rate.observe(None, 0, 1, None);
+            self.rate.silent(self.config.silence_step);
         }
         if self.silent > self.config.max_retries {
             self.end_session("no response", false);
@@ -3552,18 +3309,11 @@ impl GrantedEngine {
 
     #[allow(clippy::too_many_lines)]
     fn send_header(&mut self) {
-        let rung = self.recommend(self.slave_floor_only);
-        // D1: the slave's data goes in its own C1's family, which its control frames state
-        // (`data_floor`); the recommendation is no measure of it. The header's rung is what the
-        // slave reckons its room in (`schedule_slave`), so it states the rung the slot is sized
-        // at: sending the advice there, a floor rung over a slot sized in OFDM frames, gave the
-        // slave five tone frames' room where the master reckoned five OFDM frames, and the
-        // master's next header went 9 s into the slave's 27 s (04-results.md §4)
-        let sized = if self.own_only() {
-            self.robust_mode(self.slave_floor_only)
-        } else {
-            rung
-        };
+        // the slave's slot is sized in the family it says its data goes in (`data_floor`), and
+        // the header says which: the slave reckons its room as `n` frames of it. Sized in one
+        // family and stated in another, five OFDM frames' slot was read as five tone frames,
+        // 27 s, and the master's next header went 9 s into it (ADR-0099 §2.2)
+        let sized = self.robust_mode(self.slave_floor_only);
         let (n, open_window, index) = self.grant_size(sized);
         let wanted =
             self.wants_floor() || self.silent >= 2 || self.recent_silent.iter().any(|&s| s);
@@ -3593,13 +3343,10 @@ impl GrantedEngine {
         // without its header granted nothing: a wait and a floor poll. An ordinary header is
         // cheap, so it goes (ADR-0076)
         if self.config.header_above_recommendation && !hdr_floor {
-            // D1: above the station's own choice is a try's frame, the same bet
-            let recommendation = if self.own_only() {
-                self.burst_mode()
-            } else {
-                self.recommended.min(self.cap())
-            };
-            elide = elide && !data.iter().any(|f| f.mode > recommendation);
+            // above the station's own choice is a try's frame, or a pinned rung's, the same bet
+            // (ADR-0099 §2.2)
+            let chosen = self.own_choice();
+            elide = elide && !data.iter().any(|f| f.mode > chosen);
         }
         let level = if elide { 0 } else { self.level() };
         if !elide {
@@ -3637,7 +3384,8 @@ impl GrantedEngine {
                 base,
                 bitmap,
                 snr_db: self.heard_db,
-                rung: u8::try_from(sized).unwrap_or(31),
+                slot_floor: self.timing.is_floor(sized),
+                missed: self.missed,
                 n: u8::try_from(if open_window { index } else { n }).unwrap_or(7),
             };
             frames.insert(0, Self::control(&ctl, hdr_floor));
@@ -3850,7 +3598,7 @@ impl GrantedEngine {
         self.window = None;
         let mut room = 0.0;
         if let Some(g) = grant {
-            room = f64::from(g.n) * self.frame_s(self.timing.is_floor(usize::from(g.rung)));
+            room = f64::from(g.n) * self.frame_s(g.slot_floor);
         }
         let mut answer = Answer::new(AnswerKind::Ans, start, start + self.config.slack_s, floor);
         answer.session = self.session;
@@ -3910,10 +3658,8 @@ impl GrantedEngine {
     /// still news of the path.
     fn forfeit(&mut self, anchor: f64) {
         self.answered_end = Some(anchor);
-        if !self.rx.is_empty() {
-            let records = std::mem::take(&mut self.rx);
-            self.observe(&records);
-        }
+        let records = std::mem::take(&mut self.rx);
+        self.observe(&records);
         self.restart_rx();
     }
 
@@ -3977,12 +3723,8 @@ impl GrantedEngine {
     }
 
     fn send_answer(&mut self, floor: bool, room_s: f64, keying: Keying, window_end: Option<f64>) {
-        let snr = if self.rx.is_empty() {
-            None
-        } else {
-            let records = std::mem::take(&mut self.rx);
-            self.observe(&records)
-        };
+        let records = std::mem::take(&mut self.rx);
+        let snr = self.observe(&records);
         self.restart_rx();
         if snr.is_some() {
             self.heard_db = snr;
@@ -3998,7 +3740,6 @@ impl GrantedEngine {
             .first()
             .map_or_else(|| self.data_floor_only(), |f| self.timing.is_floor(f.mode));
         let fam = self.wants_floor();
-        let rung = self.recommend(false);
         let queued = self.queued_frames().min(7);
         let (base, bitmap) = self.ack_fields();
         let ctl = GrantFrame {
@@ -4014,7 +3755,8 @@ impl GrantedEngine {
             base,
             bitmap,
             snr_db: self.heard_db,
-            rung: u8::try_from(rung).unwrap_or(31),
+            slot_floor: false,
+            missed: self.missed,
             n: u8::try_from(queued).unwrap_or(7),
         };
         let mut frames = vec![Self::control(&ctl, floor)];
@@ -4036,11 +3778,9 @@ impl GrantedEngine {
         if self.timing.floor_modes > 0 && self.timing.is_floor(limit) {
             return true;
         }
-        // C1 at the sender chose a floor rung: the master sizes this station's slot in frames
-        // of the rung it recommends, and no floor frame fits OFDM frames' air (the model's
-        // `_data_floor_only`)
-        self.sender.as_ref().is_some_and(|s| s.snr_db().is_some())
-            && self.timing.is_floor(self.burst_mode())
+        // the rate controller chose a floor rung: the master sizes this station's slot in the
+        // family it states (the model's `_data_floor_only`)
+        self.rate.snr_db().is_some() && self.timing.is_floor(self.burst_mode())
     }
 
     fn queued_frames(&self) -> usize {
@@ -4245,18 +3985,10 @@ impl GrantedEngine {
             // `_data_frames`)
             probe = None;
         }
-        let mut recommendation = self.recommended.min(self.cap());
-        let mut asked = self.peer_rung.map(|rung| rung.min(self.cap()));
-        if self.own_only() {
-            // D1: the stuck frames' targets are bounded by the station's own choice alone
-            recommendation = self.burst_mode();
-            asked = Some(recommendation);
-        } else if let Some(own) = self.own_rung {
-            // the sender's own choice bounds its stranded frames as the advice does (the
-            // model's `_data_frames`, 04-results.md §3.26)
-            recommendation = recommendation.min(own);
-            asked = asked.map(|rung| rung.min(own));
-        }
+        // the stuck frames' targets are bounded by the station's own choice (ADR-0099 §2.2); a
+        // split, by its choice when it last read an answer (ADR-0086)
+        let chosen = self.burst_mode();
+        let asked = self.answered_rung;
         // what an unheard answer would have said is not resent blind: it waits for an answer —
         // through one silent slot. Two in a row and the answers are not getting through, and
         // the frames go again rather than not at all
@@ -4266,17 +3998,17 @@ impl GrantedEngine {
             .filter(|s| self.silent >= 2 || self.records.get(s).is_some_and(|r| !r.unknown))
             .collect();
         for &s in &unacked {
-            let Some((tx_count, rec_mode, body_len)) = self
+            let Some((tx_count, rec_mode, body_len, in_pieces)) = self
                 .records
                 .get(&s)
-                .map(|r| (r.tx_count, r.mode, r.body.len()))
+                .map(|r| (r.tx_count, r.mode, r.body.len(), r.pieces.is_some()))
             else {
                 continue;
             };
             let hopeless = self.hopeless(rec_mode);
             // D3: HARQ cannot rescue a block whose family the path does not carry — it comes
             // down at its next transmission, not after its copies and rounds of pieces there
-            let refused = self.sender.as_ref().is_some_and(|c| c.refuses(rec_mode));
+            let refused = self.rate.refuses(rec_mode);
             let due = if refused {
                 1
             } else if hopeless {
@@ -4284,8 +4016,15 @@ impl GrantedEngine {
             } else {
                 self.config.max_combines
             };
-            if tx_count >= due && recommendation < rec_mode {
-                if let Some(target) = self.reencode_target(body_len, rec_mode, recommendation) {
+            // a block in pieces that went its copies at their rung without arriving is evidence
+            // of its own that the rung does not carry it: split again below it, in its family,
+            // whatever the choice (ADR-0099 §2.2, ADR-0086's split again) — new data can decode
+            // at a rung its pieces never do, and the choice would hold the block there for good
+            let spent = in_pieces && tx_count >= due;
+            let pieces_stuck =
+                spent || (in_pieces && self.piece_bound.is_some_and(|bound| rec_mode > bound));
+            if (tx_count >= due && chosen < rec_mode) || pieces_stuck {
+                if let Some(target) = self.reencode_target(body_len, rec_mode, chosen) {
                     if let Some(rec) = self.records.get_mut(&s) {
                         rec.mode = target;
                         rec.pieces = None;
@@ -4295,27 +4034,36 @@ impl GrantedEngine {
                     }
                     continue;
                 }
-                // a body that fits no rung the other station asked for goes in pieces, each a
-                // frame of its own at that rung (ADR-0086). Not on silence alone: with the band
-                // gone, frames of a fast rung split onto the floor made each try 25 s, and the
-                // master tried past where the timed-out slave reckons it gives up
-                let Some(asked) = asked else {
+                // a body that fits no rung up to the choice goes in pieces, each a frame of its
+                // own (ADR-0086). Not on silence alone: with the band gone, frames of a fast rung
+                // split onto the floor made each try 25 s, and the master tried past where the
+                // timed-out slave reckons it gives up
+                let mut bound = asked;
+                if pieces_stuck {
+                    bound = Some(bound.map_or(rec_mode.saturating_sub(1), |b| {
+                        b.min(rec_mode.saturating_sub(1))
+                    }));
+                }
+                if let (Some(b), Some(limit)) = (bound, self.piece_bound) {
+                    bound = Some(b.min(limit));
+                }
+                let Some(bound) = bound.filter(|&b| b < rec_mode) else {
                     continue;
                 };
-                if asked >= rec_mode {
-                    continue;
-                }
                 // and not before the copy the receiver combines with every one it holds (it
                 // starts over only after that one fails), unless the report says combining
                 // cannot reach; pieces are never combined, so a block in pieces goes again in
                 // pieces at `due`
-                let whole = self.records.get(&s).is_some_and(|r| r.pieces.is_none());
-                if !(hopeless || refused) && whole && tx_count <= due {
+                if !hopeless && !refused && !in_pieces && tx_count <= due {
                     continue;
                 }
-                let Some(target) = self.split_rung(body_len, rec_mode, asked) else {
+                let Some(target) = self.split_rung(body_len, rec_mode, bound) else {
                     continue;
                 };
+                if spent {
+                    let below = rec_mode - 1;
+                    self.piece_bound = Some(self.piece_bound.map_or(below, |b| b.min(below)));
+                }
                 let capacity = self.timing.capacity(target);
                 if let Some(rec) = self.records.get_mut(&s)
                     && let Ok(parts) = pieces(&rec.body, capacity)
@@ -4368,12 +4116,8 @@ impl GrantedEngine {
             && seq_distance(self.tx_next, self.tx_base) < WINDOW
             && !self.tx_queue.is_empty()
         {
-            // a try is one new frame of the transmission — or, with the climb, all of them
-            let at = if self.config.climb {
-                probe.unwrap_or(mode)
-            } else {
-                probe.take().unwrap_or(mode)
-            };
+            // a try is one new frame of the transmission
+            let at = probe.take().unwrap_or(mode);
             let cap = data_capacity(self.timing.capacity(at));
             let mut take = cap.min(self.tx_queue.len());
             if let Some(body) = self.pin_body {
@@ -4434,12 +4178,10 @@ impl GrantedEngine {
                 floor: false,
                 follows,
             });
-            if self.sender.is_some() {
-                // every copy of a block, re-encoded or not, is charged to the rung it was cut at
-                let air = self.frame_s(self.timing.is_floor(rung));
-                let origin = self.records.get(s).map_or(rung, |r| r.origin);
-                self.sent_copies.push((*s, origin, air));
-            }
+            // every copy of a block, re-encoded or not, is charged to the rung it was cut at
+            let air = self.frame_s(self.timing.is_floor(rung));
+            let origin = self.records.get(s).map_or(rung, |r| r.origin);
+            self.sent_copies.push((*s, origin, air));
         }
         self.stats.frames_sent += frames.len();
         frames
@@ -4567,8 +4309,8 @@ impl GrantedEngine {
     /// The other station's acknowledgement of this one's data, and its recommendation — or its
     /// report of this station's measurement (a header decoded late reports nothing: the next one
     /// says it again).
-    fn take_ack(&mut self, ctl: &GrantFrame, recommendation: bool) {
-        if recommendation && let Some((mode, sent)) = self.measure_out {
+    fn take_ack(&mut self, ctl: &GrantFrame, fresh: bool) {
+        if fresh && let Some((mode, sent)) = self.measure_out {
             if ctl.reports() {
                 self.measure_out = None;
                 let decoded = (0..sent).filter(|&i| ctl.measured(i)).count();
@@ -4615,21 +4357,19 @@ impl GrantedEngine {
         if progress && self.patience_until.is_some() {
             self.patience_until = Some(self.now + self.disc_patience());
         }
-        if recommendation {
-            self.recommended = self.cap().min(usize::from(ctl.rung));
-            self.peer_rung = Some(usize::from(ctl.rung));
-            if self.sender.is_some() && !self.sent_copies.is_empty() {
-                self.judge_copies(&newly);
-            }
-            if let Some(sender) = &self.sender
-                && sender.snr_db().is_some()
-            {
-                self.own_rung = Some(sender.choice());
-            }
+        if fresh && !self.sent_copies.is_empty() {
+            // an answer to a transmission of this station's: how many of its frames the other
+            // station never detected, recorded (ADR-0099; the account already counts them)
+            self.peer_missed = (ctl.missed != MISSED_UNKNOWN).then_some(ctl.missed);
+            self.stats.frames_missed += usize::from(self.peer_missed.unwrap_or(0));
+            self.judge_copies(&newly);
+        }
+        if fresh && self.rate.snr_db().is_some() {
+            self.answered_rung = Some(self.rate.choice());
         }
     }
 
-    /// C1 at the sender: what an acknowledgement says of the copies sent since the last one — a
+    /// What an acknowledgement says of the copies sent since the last one, to the rate controller — a
     /// block it acknowledges for the first time was delivered by the latest of them, every other
     /// copy was air spent for nothing (the model's `_judge_copies`).
     fn judge_copies(&mut self, newly: &[u8]) {
@@ -4653,9 +4393,7 @@ impl GrantedEngine {
         self.sent_copies.clear();
         let reading = self.peer_snr_db;
         self.price();
-        if let Some(sender) = &mut self.sender {
-            sender.observe_frames(&outcomes, reading);
-        }
+        self.rate.observe_frames(&outcomes, reading);
     }
 
     // ── receiving data ────────────────────────────────────────────────
@@ -4985,147 +4723,41 @@ impl GrantedEngine {
         Accepted::Data(header.seq)
     }
 
-    /// What a transmission's data said of the path, to the rate controller (ADR-0020's rules).
-    /// Returns the SNR measured on it.
+    /// What this station heard of the other's transmission being closed: the SNR measured on it
+    /// (its frames that decoded or that the PHY trusts), the rung its data went at, and how many
+    /// of the frames a count stated it never detected, said in this station's next control frame
+    /// (ADR-0099; the model's `_observe`). Returns the SNR.
     #[allow(clippy::cast_precision_loss)]
     fn observe(&mut self, records: &[RxRecord]) -> Option<f64> {
-        let ok = records.iter().filter(|r| r.payload.is_some()).count();
-        let failed = records
-            .iter()
-            .filter(|r| {
-                r.payload.is_none()
-                    && r.frame.trusted
-                    && (SELF_DECODABLE_RVS.contains(&r.frame.rv) || r.combined)
-            })
-            .count();
         let snrs: Vec<f64> = records
             .iter()
             .filter(|r| r.payload.is_some() || r.frame.trusted)
             .map(|r| r.frame.snr_db)
             .collect();
-        let snr = (!snrs.is_empty()).then(|| snrs.iter().sum::<f64>() / snrs.len() as f64);
-        if matches!(self.rate, Rate::Delivery(_)) {
-            let outcomes = self.outcomes(records);
-            self.price();
-            if let Rate::Delivery(c) = &mut self.rate {
-                c.observe_frames(&outcomes, snr);
-            }
-            return snr;
+        if let Some(last) = records.iter().rev().find(|r| r.payload.is_some()) {
+            self.last_rx_mode = Some(last.frame.mode);
         }
-        let Some(slowest) = records.iter().map(|r| r.frame.mode).min() else {
-            return snr;
-        };
-        if failed > 0 && self.asked.is_some_and(|asked| slowest > asked) {
-            self.rate.observe_snr(snr); // the sender's choice, not news of the path
-        } else {
-            // the rung most of it went at; of two as common, the slower
-            let mut modes: Vec<usize> = records.iter().map(|r| r.frame.mode).collect();
-            modes.sort_unstable();
-            let mut best = modes[0];
-            let mut best_count = 0;
-            let mut i = 0;
-            while i < modes.len() {
-                let mut j = i;
-                while j < modes.len() && modes[j] == modes[i] {
-                    j += 1;
-                }
-                if j - i > best_count {
-                    best = modes[i];
-                    best_count = j - i;
-                }
-                i = j;
-            }
-            self.rate.observe(snr, ok, failed, Some(best));
-        }
-        snr
-    }
-
-    /// What each data frame of the transmission being closed came to, for a prototype of the
-    /// rate controller's review — the frames its header (or a count this station can believe)
-    /// stated and nothing reported included, at the rung most of the transmission went at: a
-    /// frame never heard is air spent for nothing (the model's `_outcomes`).
-    fn outcomes(&mut self, records: &[RxRecord]) -> Vec<FrameOutcome> {
-        let capacity_of = |timing: &PhyTiming, mode: usize| {
-            if timing.data_capacity.is_empty() {
-                0
-            } else {
-                data_capacity(timing.capacity(mode))
-            }
-        };
-        let mut out = Vec::new();
-        for r in records {
-            if r.payload.is_none() && !r.frame.trusted {
-                continue; // a frame neither decoded nor trusted is no frame of the path
-            }
-            out.push(FrameOutcome {
-                mode: r.frame.mode,
-                air_s: (r.frame.t_end - r.frame.t_start).max(0.0),
-                capacity: capacity_of(&self.timing, r.frame.mode),
-                detected: true,
-                decoded: r.payload.is_some(),
-                combined: r.combined,
-            });
-        }
-        let slots: Vec<usize> = records.iter().map(|r| r.slot).collect();
-        let (stated, floor) = match self.grid {
-            Some((_, count, floor)) => (Some(count), Some(floor)),
-            None => (
-                records
-                    .iter()
-                    .filter_map(|r| {
-                        r.frame
-                            .follows
-                            .filter(|&f| r.payload.is_some() && !r.combined && f < MAX_FOLLOWS)
-                            .map(|f| r.slot + 1 + usize::from(f))
-                    })
-                    .max(),
-                None,
-            ),
-        };
-        if let Some(stated) = stated.filter(|&n| n > 0) {
-            let heard: Vec<usize> = records
+        let stated = match self.grid {
+            Some((_, count, _)) => Some(count),
+            // without the opening control frame, a count this station can believe (R2)
+            None => records
                 .iter()
-                .filter(|r| r.payload.is_some() || r.frame.trusted)
-                .map(|r| r.frame.mode)
-                .collect();
-            let mode = if heard.is_empty() {
-                self.last_rx_mode
-                    .filter(|&m| floor.is_none_or(|f| self.timing.is_floor(m) == f))
-            } else {
-                // the most common, of two as common the slower
-                let mut sorted = heard.clone();
-                sorted.sort_unstable();
-                sorted.dedup();
-                let count = |m: usize| heard.iter().filter(|&&h| h == m).count();
-                let mut best = sorted[0];
-                for &m in &sorted[1..] {
-                    if count(m) > count(best) {
-                        best = m;
-                    }
-                }
-                Some(best)
-            };
-            if let Some(mode) = mode {
-                let capacity = capacity_of(&self.timing, mode);
-                let air = self.frame_s(self.timing.is_floor(mode));
-                for k in 0..stated {
-                    if !slots.contains(&k) {
-                        out.push(FrameOutcome {
-                            mode,
-                            air_s: air,
-                            capacity,
-                            detected: false,
-                            decoded: false,
-                            combined: false,
-                        });
-                    }
-                }
-            }
-        }
-        if let Some(last) = out.iter().rev().find(|o| o.decoded) {
-            self.last_rx_mode = Some(last.mode);
-        }
-        out
+                .filter_map(|r| {
+                    r.frame
+                        .follows
+                        .filter(|&f| r.payload.is_some() && !r.combined && f < MAX_FOLLOWS)
+                        .map(|f| r.slot + 1 + usize::from(f))
+                })
+                .max(),
+        };
+        self.missed = stated.map_or(MISSED_UNKNOWN, |stated| {
+            let missed = (0..stated)
+                .filter(|k| !records.iter().any(|r| r.slot == *k))
+                .count()
+                .min(MAX_DATA);
+            u8::try_from(missed).unwrap_or(MISSED_UNKNOWN)
+        });
+        (!snrs.is_empty()).then(|| snrs.iter().sum::<f64>() / snrs.len() as f64)
     }
 
     fn receive_window(&self) -> (u16, Vec<u8>, u8) {
@@ -5416,49 +5048,6 @@ mod tests {
             floor_preamble_detect_s: Some(0.54),
             echo_limit: Vec::new(),
         }
-    }
-
-    fn record(mode: usize, decoded: bool) -> RxRecord {
-        RxRecord {
-            frame: Heard {
-                mode,
-                floor: false,
-                rv: 0,
-                snr_db: 8.5,
-                trusted: true,
-                follows: None,
-                echo: None,
-                t_start: 0.0,
-                t_end: 1.0,
-            },
-            slot: 0,
-            payload: decoded.then(Vec::new),
-            seq: None,
-            combined: false,
-        }
-    }
-
-    #[test]
-    fn a_transmission_split_evenly_between_two_rungs_is_judged_at_the_slower() {
-        // the model breaks the tie the same way (test_granted.py); the trace vectors never
-        // happen to carry a tie with a failure in it
-        let mut engine = GrantedEngine::new("W4ODA", wide(), GrantConfig::default(), 1);
-        engine.observe(&[
-            record(12, true),
-            record(12, false),
-            record(9, true),
-            record(9, false),
-        ]);
-        let judged_at = |mode| {
-            let mut rate = rate_controller_for(&wide(), RateConfig::default(), &wide().echo_limit);
-            rate.observe(Some(8.5), 2, 2, Some(mode));
-            rate.margin_db()
-        };
-        assert!(
-            (judged_at(9) - judged_at(12)).abs() > 0.1,
-            "the rung must change the controller for this to mean anything"
-        );
-        assert!((engine.rate.margin_db() - judged_at(9)).abs() < 1e-12);
     }
 
     #[test]

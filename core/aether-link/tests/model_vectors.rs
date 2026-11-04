@@ -21,7 +21,7 @@ use aether_link::{
     },
     rate::{
         AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
-        PAYLOAD_BYTES, RateController, usable_modes, usable_modes_by_rate,
+        PAYLOAD_BYTES, usable_modes, usable_modes_by_rate,
     },
 };
 use serde_json::Value;
@@ -340,7 +340,8 @@ fn grant_frame(case: &Value) -> GrantFrame {
         base: int(case, "base") as u8,
         bitmap: int(case, "bitmap") as u16,
         snr_db: case["snr_db"].as_f64(),
-        rung: int(case, "rung") as u8,
+        slot_floor: case["slot_floor"].as_bool().expect("slot_floor"),
+        missed: int(case, "missed") as u8,
         n: int(case, "n") as u8,
     }
 }
@@ -470,53 +471,6 @@ fn probe_bodies_match_the_model() {
 }
 
 #[test]
-fn the_rate_controller_follows_the_same_trace_as_the_model() {
-    for case in vectors()["rate_traces"].as_array().expect("rate traces") {
-        let name = case["name"].as_str().expect("name");
-        let observations = case["observations"].as_array().expect("observations");
-        let track = case["track"].as_array().expect("track");
-        assert_eq!(observations.len(), track.len(), "{name}");
-
-        let mut rc = RateController::default();
-        for (step, (observation, expected)) in observations.iter().zip(track).enumerate() {
-            let snr = observation["snr_db"].as_f64();
-            let ok = observation["ok"].as_u64().expect("ok") as usize;
-            let failed = observation["failed"].as_u64().expect("failed") as usize;
-            let mode = observation["mode"].as_u64().map(|m| m as usize);
-            if observation["snr_only"].as_bool() == Some(true) {
-                rc.observe_snr(snr);
-            } else {
-                rc.observe(snr, ok, failed, mode);
-            }
-
-            let want_mode = expected["recommend"].as_u64().expect("recommend") as usize;
-            assert_eq!(
-                rc.recommend(),
-                want_mode,
-                "{name} step {step}: recommendation"
-            );
-
-            let want_margin = expected["margin_db"].as_f64().expect("margin");
-            assert!(
-                (rc.margin_db() - want_margin).abs() < 1e-9,
-                "{name} step {step}: margin {} vs {want_margin}",
-                rc.margin_db()
-            );
-            match (rc.snr_db(), expected["snr_db"].as_f64()) {
-                (None, None) => {}
-                (Some(got), Some(want)) => assert!(
-                    (got - want).abs() < 1e-9,
-                    "{name} step {step}: smoothed SNR {got} vs {want}"
-                ),
-                (got, want) => {
-                    panic!("{name} step {step}: SNR presence differs, {got:?} vs {want:?}")
-                }
-            }
-        }
-    }
-}
-
-#[test]
 fn the_echo_limits_match_the_model() {
     // ADR-0087: the echo share above which each rung is kept off the ladder, by mode
     use aether_link::rate::{ECHO_LIMIT, NARROW_ECHO_LIMIT};
@@ -535,56 +489,147 @@ fn the_echo_limits_match_the_model() {
     }
 }
 
-#[test]
-fn the_rate_controller_reads_the_echo_as_the_model_does() {
-    // ADR-0087: the 500 Hz controller with its echo limits, the same seeds, readings and
-    // bursts on both sides — the recommendation, the margin, the SNR and the echo after each
-    use aether_link::rate::{NARROW_ECHO_LIMIT, RateConfig};
-    for case in vectors()["echo_traces"].as_array().expect("echo traces") {
-        let name = case["name"].as_str().expect("name");
-        let steps = case["steps"].as_array().expect("steps");
-        let track = case["track"].as_array().expect("track");
-        assert_eq!(steps.len(), track.len(), "{name}");
-        let mut rc = RateController::for_table_timed(
-            RateConfig::default(),
-            &NARROW_AWGN_THRESHOLD_DB,
-            &NARROW_PAYLOAD_BYTES,
-            &NARROW_FRAME_S,
-        )
-        .with_floor(5)
-        .with_echo_limit(&NARROW_ECHO_LIMIT);
-        for (index, (step, want)) in steps.iter().zip(track).enumerate() {
-            let args = step["args"].as_array().expect("args");
-            match step["what"].as_str().expect("what") {
-                "echo" => rc.observe_echo(args[0].as_f64(), args[1].as_f64().expect("snr")),
-                "seed" => rc.seed(
-                    args[0].as_f64().expect("snr"),
-                    args[1].as_bool().expect("lower bound"),
-                ),
-                _ => rc.observe(
-                    args[0].as_f64(),
-                    args[1].as_u64().expect("ok") as usize,
-                    args[2].as_u64().expect("failed") as usize,
-                    args[3].as_u64().map(|m| m as usize),
-                ),
-            }
-            let at = format!("{name} step {index}");
-            assert_eq!(
-                rc.recommend() as u64,
-                want["recommend"].as_u64().expect("recommend"),
-                "{at}: recommendation"
+/// The rate controller (ADR-0094, ADR-0099) against the model, input by input: the link vectors'
+/// controller traces, written by `tools/make_link_vectors.py` from the model's `RateController`.
+mod controller_traces {
+    use aether_link::rate::{FrameOutcome, RateController};
+    use serde_json::Value;
+
+    fn num(v: &Value) -> f64 {
+        v.as_f64().expect("number")
+    }
+
+    fn opt(v: &Value) -> Option<f64> {
+        v.as_f64()
+    }
+
+    fn int(v: &Value) -> usize {
+        usize::try_from(v.as_u64().expect("integer")).expect("fits")
+    }
+
+    fn floats(v: &Value) -> Vec<f64> {
+        v.as_array().expect("array").iter().map(num).collect()
+    }
+
+    fn ints(v: &Value) -> Vec<usize> {
+        v.as_array().expect("array").iter().map(int).collect()
+    }
+
+    fn close_opt(a: Option<f64>, b: Option<f64>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(1.0),
+            _ => false,
+        }
+    }
+
+    fn build(trace: &Value, n: usize) -> RateController {
+        let echo_limit: Vec<Option<f64>> = trace["echo_limit"]
+            .as_array()
+            .expect("echo limit")
+            .iter()
+            .map(opt)
+            .collect();
+        let (thresholds, payload, capacity, frame_s) = (
+            floats(&trace["thresholds"]),
+            ints(&trace["payload"]),
+            ints(&trace["capacity"]),
+            floats(&trace["frame_s"]),
+        );
+        let mut c = RateController::for_table(
+            &thresholds,
+            &payload,
+            &capacity,
+            &frame_s,
+            int(&trace["floor_modes"]),
+            &echo_limit,
+        );
+        let control = floats(&trace["control_s"]);
+        if let [floor, ordinary] = control[..] {
+            c.price_exchanges(
+                floor,
+                ordinary,
+                num(&trace["gap_s"]),
+                &ints(&trace["burst_frames"]),
             );
-            let margin = want["margin_db"].as_f64().expect("margin");
-            assert!((rc.margin_db() - margin).abs() < 1e-9, "{at}: margin");
-            match (rc.snr_db(), want["snr_db"].as_f64()) {
-                (None, None) => {}
-                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-9, "{at}: SNR {got}"),
-                (got, w) => panic!("{at}: SNR {got:?} vs {w:?}"),
-            }
-            match (rc.echo(), want["echo"].as_f64()) {
-                (None, None) => {}
-                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-11, "{at}: echo {got}"),
-                (got, w) => panic!("{at}: echo {got:?} vs {w:?}"),
+        }
+        let _ = n;
+        c
+    }
+
+    fn frames_of(doc: &Value) -> Vec<FrameOutcome> {
+        doc.as_array()
+            .expect("frames")
+            .iter()
+            .map(|f| FrameOutcome {
+                mode: int(&f[0]),
+                air_s: num(&f[1]),
+                capacity: int(&f[2]),
+                detected: f[3].as_bool().expect("detected"),
+                decoded: f[4].as_bool().expect("decoded"),
+                combined: f[5].as_bool().expect("combined"),
+            })
+            .collect()
+    }
+
+    fn check_state(ctl: &RateController, op: &Value, at: &str) {
+        assert_eq!(ctl.recommend(), int(&op["recommend"]), "{at}: the rung");
+        assert!(
+            close_opt(ctl.snr_db(), opt(&op["snr"])),
+            "{at}: smoothed SNR"
+        );
+        assert!(close_opt(ctl.echo(), opt(&op["echo"])), "{at}: echo");
+        let want = floats(&op["estimates"]);
+        let values = floats(&op["values"]);
+        for (k, &mode) in ctl.modes().iter().enumerate() {
+            assert!(
+                close_opt(Some(ctl.estimate(mode)), Some(want[k])),
+                "{at}: rung {mode}'s estimate {} against the model's {}",
+                ctl.estimate(mode),
+                want[k]
+            );
+            assert!(
+                close_opt(Some(ctl.value(mode)), Some(values[k])),
+                "{at}: rung {mode}'s value {} against the model's {}",
+                ctl.value(mode),
+                values[k]
+            );
+        }
+    }
+
+    #[test]
+    fn the_rate_controller_decides_as_the_model_does() {
+        let doc = super::vectors();
+        let traces = doc["controller_traces"]
+            .as_array()
+            .expect("controller traces");
+        assert!(traces.len() >= 4, "too few traces to mean anything");
+        for (n, trace) in traces.iter().enumerate() {
+            let mut ctl = build(trace, n);
+            assert_eq!(
+                ctl.modes(),
+                ints(&trace["modes"]).as_slice(),
+                "trace {n}: the usable rungs"
+            );
+            for (i, op) in trace["ops"].as_array().expect("ops").iter().enumerate() {
+                if let Some(snr) = op.get("seed") {
+                    ctl.seed(num(snr));
+                } else if let Some(frames) = op.get("frames") {
+                    ctl.observe_frames(&frames_of(frames), opt(&op["snr_in"]));
+                } else if let Some(share) = op.get("echo_in") {
+                    ctl.observe_echo(opt(share), num(&op["snr_in"]));
+                } else if let Some(snr) = op.get("observe_snr") {
+                    ctl.observe_snr(opt(snr));
+                } else if let Some(families) = op.get("families") {
+                    let both = families.as_array().expect("two families");
+                    ctl.set_families(
+                        both[0].as_bool().expect("own"),
+                        both[1].as_bool().expect("other"),
+                    );
+                } else {
+                    panic!("trace {n} op {i}: unknown input");
+                }
+                check_state(&ctl, op, &format!("trace {n} op {i}"));
             }
         }
     }

@@ -1,22 +1,14 @@
-//! Receiver-side rate control.
+//! The rate controller (ADR-0094, ADR-0099): each station chooses the rung its own data goes at.
 //!
-//! The receiving station knows two things the sender does not: the SNR it measures on every
-//! frame, and whether those frames decoded. It turns that into a mode recommendation with
-//! three nested loops.
+//! Per rung, the data its frames delivered per second of the air they took — every copy, every
+//! frame never detected — decayed, against a prior from the smoothed SNR the other station
+//! reports; the choice is the best estimate per second of a whole exchange, and the rung above
+//! is tried when it could beat it. Nothing recommends a rung to the other station: one
+//! decision-maker, at the sender (the rate controller's second review,
+//! `docs/research/rate-control-2/`). The model's `aether_model.link.rate`.
 //!
-//! * **Inner loop** — the fastest mode whose measured AWGN threshold, plus a margin, fits
-//!   under the smoothed SNR. Thresholds come from the PHY sweep; every entry is measured.
-//! * **Outer loop** — the margin itself adapts. A failed burst is treated as a
-//!   *measurement*: mode `m` dying at SNR `s` says this channel needs more than
-//!   `s − threshold[m]` dB, so the margin jumps toward that figure rather than creeping up in
-//!   fixed steps. On a fading channel, where every mode costs 6–10 dB more than the AWGN
-//!   table predicts, creeping means overshooting the mode for many bursts first.
-//! * **Hysteresis** — the decision is a state machine, not a lookup. Stepping *up* needs a
-//!   clean burst and an extra `up_hysteresis_db` of headroom; stepping *down* happens
-//!   immediately on any failure. Fast down, slow up: what stops a link parked on a mode
-//!   boundary from oscillating and losing a burst to every change.
-//!
-//! Modes that another mode beats on *both* throughput and threshold are never recommended.
+//! The tables are the PHY's measurements: each rung's AWGN 10 % point, its payload and frame
+//! length, the echo a rung cannot carry (ADR-0087), and the rungs worth offering at all.
 
 /// Minimum usable SNR (3 kHz, 10 % frame error rate) per rung of the 2 300 Hz ladder on
 /// AWGN.
@@ -175,314 +167,354 @@ pub fn usable_modes_by_rate(thresholds: &[f64], payload: &[usize], frame_s: &[f6
         .collect()
 }
 
-/// Tuning for [`RateController`].
+/// Six transmissions' air is a try's wait exactly when six such transmissions went: a sum that
+/// lands on it counts as there whatever its last bit (the model's `WAIT_TOLERANCE_S`).
+const WAIT_TOLERANCE_S: f64 = 1e-9;
+
+/// One data frame of a transmission, as the receiving station saw it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RateConfig {
-    /// Starting margin over a mode's threshold, in dB.
-    pub margin_db: f64,
-    /// Floor on the margin.
-    pub min_margin_db: f64,
-    /// Ceiling on the margin.
-    pub max_margin_db: f64,
-    /// Margin increase per failed burst when the failing mode is not reported.
-    pub up_step_db: f64,
-    /// Cap on a single targeted increase, so one deep fade cannot strand the link.
-    pub max_jump_db: f64,
-    /// Margin decrease at the first decay step after a failure, applied once `decay_every`
-    /// clean bursts have gone by.
-    pub down_step_db: f64,
-    /// How much each further clean burst's decay step grows on the last (1.0 keeps the
-    /// step fixed and the old every-`decay_every` cadence): once the stickiness has run
-    /// its course the margin comes back at an accelerating rate, capped at
-    /// `max_down_step_db`. A learned penalty is given up slowly at first and quickly once
-    /// clean burst follows clean burst — what a fade that has passed, or a collision that
-    /// was never a fade, looks like (ADR-0007).
-    pub decay_growth: f64,
-    /// Cap on a single decay step.
-    pub max_down_step_db: f64,
-    /// Clean bursts before the first decay step after a failure.
-    pub decay_every: usize,
-    /// Extra headroom demanded before stepping up — the anti-oscillation mechanism.
-    pub up_hysteresis_db: f64,
-    /// Consecutive clean bursts required before any upshift.
-    pub up_dwell: usize,
-    /// Most modes to climb at once, so a link never leaps onto an untried mode.
-    pub max_up_step: usize,
-    /// Steps kept in hand by [`RateController::first_mode`]: how far below the fastest mode
-    /// one measurement supports a session's first burst goes out.
-    pub first_mode_back: usize,
-    /// How far above a lower-bound seed ([`RateController::seed`]) the first ordinary
-    /// measurement must read to replace it. The tone floor's estimate is exact to about
-    /// +10 dB on AWGN; a few decibels between two frames' readings is their estimates' own
-    /// spread and the fade between them, and replacing a seed on that would only take the
-    /// larger of two noisy numbers. Beyond it the seed was the floor's ceiling, not the
-    /// path's (ADR-0016).
-    pub reseed_margin_db: f64,
-    /// A burst that lost fewer than this share of its frames, and decoded some, failed in part
-    /// (ADR-0084): the margin widens by the share lost — the jump to the margin the failure
-    /// implies too — the rung stays unless the SNR no longer carries it, and the climb waits.
-    /// On a fading path a lone lost frame is the operating point HARQ pays for, not a cliff. A
-    /// burst lost in the main is a failure as before, and so is any on the first OFDM rung of
-    /// an air that does not cap its margin there, where the floor below carries an exchange
-    /// better than the rung does once it loses frames.
-    pub partial_share: f64,
-    /// How much each echo reading moves the controller's [`echo`](RateController::echo)
-    /// (ADR-0087): a frame's reading spreads by a factor of two or so about its path's, and a
-    /// session's first data goes on one or two of them.
-    pub echo_weight: f64,
-    /// The weakest frame whose echo reading counts: below it the noise in the bins the reading
-    /// weighs is as large as a 4 ms echo's spill, and at those SNRs the rungs an echo refuses
-    /// are not on offer.
-    pub echo_min_snr_db: f64,
+pub struct FrameOutcome {
+    /// The rung it was read at (or sent at, for one never detected).
+    pub mode: usize,
+    /// Its air time: a frame never detected took its slot all the same.
+    pub air_s: f64,
+    /// The data bytes a frame at this rung carries.
+    pub capacity: usize,
+    /// Reported by the PHY at all.
+    pub detected: bool,
+    /// Delivered by this copy, alone or combined with earlier ones.
+    pub decoded: bool,
+    /// Combined with copies held.
+    pub combined: bool,
 }
 
-impl Default for RateConfig {
-    fn default() -> Self {
-        Self {
-            margin_db: 3.0,
-            min_margin_db: 1.5,
-            max_margin_db: 12.0,
-            up_step_db: 1.5,
-            max_jump_db: 3.0,
-            down_step_db: 0.25,
-            decay_growth: 2.0,
-            max_down_step_db: 1.0,
-            decay_every: 3,
-            up_hysteresis_db: 1.5,
-            up_dwell: 1,
-            max_up_step: 2,
-            first_mode_back: 2,
-            reseed_margin_db: 3.0,
-            partial_share: 0.5,
-            echo_weight: 0.4,
-            echo_min_snr_db: -6.0,
-        }
+/// The prior's chance that a frame decodes at `snr_db`: a logistic through 90 % at the rung's
+/// AWGN 10 % point, `slope_db` wide.
+#[must_use]
+pub fn decode_probability(snr_db: f64, threshold_db: f64, slope_db: f64) -> f64 {
+    let x = (snr_db - threshold_db) / slope_db;
+    if x < -40.0 {
+        return 0.0;
     }
+    1.0 / (1.0 + (-x).exp() / 9.0)
 }
 
-/// Chooses the mode the sender should use.
+/// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Account {
+    /// Data bytes its frames delivered.
+    pub bytes: f64,
+    /// Seconds of air its frames took.
+    pub air_s: f64,
+    /// Frames sent at it.
+    pub frames: f64,
+}
+
+/// C1: choose by measured delivery, at the receiver. Per rung, the data its frames delivered
+/// per second of the air they took — every copy, every frame never detected — decayed with a
+/// half-life of `half_life` of its own frames' air, whatever rung that air went at, against a
+/// prior from the smoothed SNR (the AWGN curve `prior_margin_db` under the reading) worth
+/// `prior_frames` frames. The recommendation is the best estimate of the rungs at or under the
+/// current one and the rungs above it measured; the rung above is tried — one transmission
+/// recommended at it — when its lossless rate beats the current rung's estimate and
+/// `probe_every` transmissions have gone since the last try of it, or at once after a clean
+/// transmission ([`clean_climb`](Self::clean_climb)); a try that delivered less doubles the
+/// wait, one that delivered more moves there and tries the next at once. The prior of a family's rungs is read `family_gain_db`
+/// times its surprises under the reading: every frame of the family, not combined, moves the
+/// family's offset by `gain × (p − decoded)`. The OFDM family is refused as a whole
+/// ([`refuses`](Self::refuses), D3) when the choice has gone to the floor after OFDM frames that
+/// delivered nothing. The model's `RateController`.
 #[derive(Debug, Clone)]
 pub struct RateController {
-    config: RateConfig,
     thresholds: Vec<f64>,
     modes: Vec<usize>,
-    margin_db: f64,
+    capacity: Vec<usize>,
+    frame_s: Vec<f64>,
+    floor_modes: usize,
+    /// The families' offsets, `[floor, ordinary]`.
+    family: [f64; 2],
+    family_gain_db: f64,
+    echo_limit: Vec<Option<f64>>,
+    echo: Option<f64>,
     smoothed_snr_db: Option<f64>,
     index: usize,
-    clean_run: usize,
-    clean_since_decay: usize,
-    ever_failed: bool,
-    /// The last decay step taken since the failure before, which the next one grows on.
-    decay_step_db: f64,
-    /// How many of the ladder's leading rungs are the floor's — the tone floor, ADR-0013, and
-    /// its fast kinds — whose frames are five times as long as an OFDM frame: see
-    /// [`first_mode`](Self::first_mode) and [`at_edge`](Self::at_edge). The first OFDM rung is
-    /// held to the learned margin like any other: the 2 300 Hz air capped it at 1 dB against the
-    /// floor until ADR-0093 (ADR-0013 §4), which held a weak path on a rung that lost most of
-    /// its frames.
-    floor_modes: usize,
-    /// The seed was a lower bound ([`seed`](Self::seed)): the first clean burst measured on an
-    /// ordinary frame seeds again.
-    reseed_pending: bool,
-    /// The echo share above which each rung is kept off the ladder, by mode (ADR-0087); empty,
-    /// no rung has one.
-    echo_limit: Vec<Option<f64>>,
-    /// The path's echo as the frames have read it, smoothed ([`observe_echo`](Self::observe_echo)).
-    echo: Option<f64>,
-}
-
-impl Default for RateController {
-    fn default() -> Self {
-        Self::new(RateConfig::default())
-    }
+    accounts: Vec<Option<Account>>,
+    /// Seconds of data air observed since each rung's last try ([`wait_s`](Self::wait_s)).
+    since_probe: Vec<Option<f64>>,
+    probe_wait: Vec<Option<usize>>,
+    probing: Option<usize>,
+    probe_tries: usize,
+    /// Frames at the rung being tried since the try began: a try is decided once they outweigh
+    /// the prior ([`try_over`](Self::try_over)).
+    try_frames: usize,
+    /// The rung the last transmission's frames went at, when every one of them there decoded
+    /// alone ([`clean_climb`](Self::clean_climb)).
+    clean_at: Option<usize>,
+    half_life: f64,
+    prior_frames: f64,
+    probe_every: usize,
+    probe_wait_max: usize,
+    slope_db: f64,
+    prior_margin_db: f64,
+    echo_weight: f64,
+    echo_min_snr_db: f64,
+    /// A control frame's length, `[floor, ordinary]`: with `burst_frames` and `gap_s` the rungs
+    /// are ranked per second of a whole exchange ([`value`](Self::value)); `None`, per second of
+    /// frame air.
+    control_s: Option<[f64; 2]>,
+    /// The two gaps of an exchange: to the answer's slot, and to the next key after it.
+    gap_s: f64,
+    /// By rung, the data frames a full transmission at it carries; empty: none given.
+    burst_frames: Vec<usize>,
+    /// Whether this station's control frames go on the floor, and whether the other's do, as
+    /// the engine last said; `None`: both in the data's family.
+    families: Option<(bool, bool)>,
+    /// The last OFDM frames observed delivered nothing ([`judge_family`](Self::judge_family)).
+    ofdm_failed: bool,
 }
 
 impl RateController {
-    /// The modes this controller recommends from, ascending: the throughput/threshold
-    /// Pareto front of its table.
+    /// One for an air's table.
+    ///
+    /// # Panics
+    /// If the table's columns differ in length or are empty.
+    #[must_use]
+    pub fn for_table(
+        thresholds: &[f64],
+        payload: &[usize],
+        capacity: &[usize],
+        frame_s: &[f64],
+        floor_modes: usize,
+        echo_limit: &[Option<f64>],
+    ) -> Self {
+        assert!(
+            !thresholds.is_empty()
+                && thresholds.len() == payload.len()
+                && thresholds.len() == capacity.len()
+                && thresholds.len() == frame_s.len(),
+            "a mode table has one threshold, payload, capacity and air time per mode"
+        );
+        let n = thresholds.len();
+        Self {
+            thresholds: thresholds.to_vec(),
+            modes: usable_modes_by_rate(thresholds, payload, frame_s),
+            capacity: capacity.to_vec(),
+            frame_s: frame_s.to_vec(),
+            floor_modes,
+            family: [0.0, 0.0],
+            family_gain_db: 0.5,
+            echo_limit: echo_limit.to_vec(),
+            echo: None,
+            smoothed_snr_db: None,
+            index: 0,
+            accounts: vec![None; n],
+            since_probe: vec![None; n],
+            probe_wait: vec![None; n],
+            probing: None,
+            probe_tries: 0,
+            try_frames: 0,
+            clean_at: None,
+            half_life: 12.0,
+            prior_frames: 2.0,
+            probe_every: 6,
+            probe_wait_max: 48,
+            slope_db: 0.5,
+            prior_margin_db: 3.0,
+            echo_weight: 0.4,
+            echo_min_snr_db: -6.0,
+            control_s: None,
+            gap_s: 0.0,
+            burst_frames: Vec::new(),
+            families: None,
+            ofdm_failed: false,
+        }
+    }
+
+    /// D3: whether `mode`'s family is refused on this path. The OFDM family is, when every rung
+    /// of it is over its echo limit, or when the choice is a floor rung and the last OFDM frames
+    /// delivered nothing (the model's `refuses`). The floor's family is never refused.
+    #[must_use]
+    pub fn refuses(&self, mode: usize) -> bool {
+        if mode < self.floor_modes {
+            return false;
+        }
+        if self.ofdm_failed && self.modes[self.index] < self.floor_modes {
+            return true;
+        }
+        let mut ofdm = (0..self.modes.len()).filter(|&i| self.modes[i] >= self.floor_modes);
+        let mut any = false;
+        let all_out = ofdm.all(|i| {
+            any = true;
+            self.echo_out(i)
+        });
+        any && all_out
+    }
+
+    /// D3 from outcomes: the OFDM frames of a transmission delivered nothing, or some did.
+    fn judge_family(&mut self, frames: &[FrameOutcome]) {
+        let mut ofdm = frames
+            .iter()
+            .filter(|f| f.mode >= self.floor_modes)
+            .peekable();
+        if ofdm.peek().is_some() {
+            self.ofdm_failed = !ofdm.any(|f| f.decoded);
+        }
+    }
+
+    /// Ranks the rungs per second of a whole exchange: a full transmission's data frames
+    /// (`burst_frames`, by rung), its header, the answer (`control_floor_s` or
+    /// `control_ordinary_s` by their families) and the two gaps (`gap_s`).
+    pub fn price_exchanges(
+        &mut self,
+        control_floor_s: f64,
+        control_ordinary_s: f64,
+        gap_s: f64,
+        burst_frames: &[usize],
+    ) {
+        self.control_s = Some([control_floor_s, control_ordinary_s]);
+        self.gap_s = gap_s;
+        self.burst_frames = burst_frames.to_vec();
+    }
+
+    /// The families both stations' control frames go in now: this station's own, and the one
+    /// it asks of the other.
+    pub const fn set_families(&mut self, own_floor: bool, other_floor: bool) {
+        self.families = Some((own_floor, other_floor));
+    }
+
+    /// The families the engine last said both stations' control frames go in.
+    #[must_use]
+    pub const fn families(&self) -> Option<(bool, bool)> {
+        self.families
+    }
+
+    /// What the rungs are ranked by: [`estimate`](Self::estimate) per second of a full
+    /// exchange at `mode`, or of its frames' air when no lengths were given.
+    #[must_use]
+    pub fn value(&self, mode: usize) -> f64 {
+        self.priced(mode, self.estimate(mode))
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn priced(&self, mode: usize, per_air: f64) -> f64 {
+        let n = self.burst_frames.get(mode).copied().unwrap_or(0);
+        let Some(control) = self.control_s else {
+            return per_air;
+        };
+        if n == 0 {
+            return per_air;
+        }
+        let floor = mode < self.floor_modes;
+        let (own, other) = self.families.unwrap_or((floor, floor));
+        let len = |fl: bool| control[usize::from(!fl)];
+        let over = len(own) + len(other) + self.gap_s;
+        let air = n as f64 * self.frame_s.get(mode).copied().unwrap_or(1.0);
+        per_air * air / (air + over)
+    }
+
+    /// Data bytes a second of a rung's frames carries, nothing lost.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn lossless(&self, mode: usize) -> f64 {
+        self.capacity.get(mode).copied().unwrap_or(0) as f64
+            / self.frame_s.get(mode).copied().unwrap_or(1.0)
+    }
+
+    /// Data bytes a second of air at `mode` delivers, measured and prior together.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn estimate(&self, mode: usize) -> f64 {
+        self.estimate_at(mode, self.smoothed_snr_db)
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn estimate_at(&self, mode: usize, snr_db: Option<f64>) -> f64 {
+        let cap = self.capacity.get(mode).copied().unwrap_or(0) as f64;
+        let air = self.frame_s.get(mode).copied().unwrap_or(1.0);
+        let prior = snr_db.map_or(0.0, |snr| cap * self.prior_p(mode, snr));
+        let acc = self.account(mode);
+        let w = self.prior_frames;
+        (acc.bytes + w * prior) / (acc.air_s + w * air)
+    }
+
+    /// The prior's chance a frame at `mode` decodes at `snr_db`, its family's offset under the
+    /// reading.
+    fn prior_p(&self, mode: usize, snr_db: f64) -> f64 {
+        let offset = self.family[usize::from(mode >= self.floor_modes)];
+        decode_probability(
+            snr_db - offset - self.prior_margin_db,
+            self.thresholds[mode],
+            self.slope_db,
+        )
+    }
+
+    /// The families' offsets, `[floor, ordinary]`.
+    #[must_use]
+    pub const fn family_offsets(&self) -> [f64; 2] {
+        self.family
+    }
+
+    /// A rung's account so far (zero for one never sent at).
+    #[must_use]
+    pub fn account(&self, mode: usize) -> Account {
+        self.accounts
+            .get(mode)
+            .copied()
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    /// The usable rungs, ascending.
     #[must_use]
     pub fn modes(&self) -> &[usize] {
         &self.modes
     }
 
-    /// Build one for the wide waveform's ladder.
-    #[must_use]
-    pub fn new(config: RateConfig) -> Self {
-        Self::for_table_timed(config, &AWGN_THRESHOLD_DB, &PAYLOAD_BYTES, &FRAME_S)
-    }
-
-    /// The same controller for an air whose first `floor_modes` rungs are the floor's.
-    #[must_use]
-    pub const fn with_floor(mut self, floor_modes: usize) -> Self {
-        self.floor_modes = floor_modes;
-        self
-    }
-
-    /// The same controller with the echo share above which each rung, by mode, is kept off the
-    /// ladder (ADR-0087): [`ECHO_LIMIT`], [`NARROW_ECHO_LIMIT`], `PhyTiming::echo_limit`.
-    #[must_use]
-    pub fn with_echo_limit(mut self, limit: &[Option<f64>]) -> Self {
-        self.echo_limit = limit.to_vec();
-        self
-    }
-
-    /// The path's echo as the frames have read it, smoothed; `None` before any reading.
-    #[must_use]
-    pub fn echo(&self) -> Option<f64> {
-        self.echo
-    }
-
-    /// How many of the ladder's leading rungs are the floor's.
-    #[must_use]
-    pub fn floor_modes(&self) -> usize {
-        self.floor_modes
-    }
-
-    /// Build one for any mode table: its thresholds decide when to step, its payloads
-    /// decide which modes another mode beats on both counts and are never recommended.
-    ///
-    /// # Panics
-    /// If the table is empty or the two slices disagree in length.
-    #[must_use]
-    pub fn for_table(config: RateConfig, thresholds: &[f64], payload: &[usize]) -> Self {
-        let frame_s = vec![1.0; thresholds.len()];
-        Self::for_table_timed(config, thresholds, payload, &frame_s)
-    }
-
-    /// The same for a table whose frames differ in length — the floor's are five times the
-    /// ordinary ones (ADR-0013): modes are compared by bytes per second.
-    ///
-    /// # Panics
-    /// If the table's columns differ in length or are empty.
-    #[must_use]
-    pub fn for_table_timed(
-        config: RateConfig,
-        thresholds: &[f64],
-        payload: &[usize],
-        frame_s: &[f64],
-    ) -> Self {
-        assert!(
-            !thresholds.is_empty()
-                && thresholds.len() == payload.len()
-                && thresholds.len() == frame_s.len(),
-            "a mode table has one threshold, one payload and one air time per mode"
-        );
-        Self {
-            margin_db: config.margin_db,
-            config,
-            thresholds: thresholds.to_vec(),
-            modes: usable_modes_by_rate(thresholds, payload, frame_s),
-            smoothed_snr_db: None,
-            index: 0,
-            clean_run: 0,
-            clean_since_decay: 0,
-            ever_failed: false,
-            decay_step_db: 0.0,
-            floor_modes: 6,
-            reseed_pending: false,
-            echo_limit: Vec::new(),
-            echo: None,
-        }
-    }
-
-    /// The mode to use.
+    /// The rung to use: the one being tried, else the choice.
     #[must_use]
     pub fn recommend(&self) -> usize {
+        self.probing.unwrap_or(self.modes[self.index])
+    }
+
+    /// The choice, whatever is being tried.
+    #[must_use]
+    pub fn choice(&self) -> usize {
         self.modes[self.index]
     }
 
-    /// The mode a session should start at, given one measurement and nothing else: the
-    /// fastest mode that fits under `snr_db` with the margin and the hysteresis a step
-    /// up would demand, less one step. The measurement is of a mode-0 frame — the most
-    /// robust there is — and a burst at a fast mode is more exposed to what the channel
-    /// does within a frame, so the first burst keeps `first_mode_back` steps in hand and
-    /// the climb makes them up in a burst if the channel allows (P9-2, ADR-0008). The steps
-    /// in hand stay in the family the measurement fits: a session the SNR puts on an OFDM
-    /// rung does not start on the floor, five times slower, for its caution (ADR-0013).
-    ///
-    /// On the floor the steps in hand are the decibels they keep, not the rungs: the first
-    /// burst goes at the fastest rung the measurement clears by as much as the steps below the
-    /// fit would have kept at the fit's own edge. The floor's top rung fits a measurement up to
-    /// seven decibels above it, because the rung above is the first OFDM one, and counted in
-    /// rungs the steps took a session the call had measured with ten decibels to spare down to
-    /// half the rate — WC4Y's Test of 2026-10-11, its message at tone-36 on a path that carried
-    /// tone4x100-75 in every burst after (ADR-0066). Among the OFDM rungs, a decibel or two
-    /// apart, the rungs are what ADR-0008 measured and stay the rule.
+    /// The rung being tried, if one is.
     #[must_use]
-    pub fn first_mode(&self, snr_db: f64) -> usize {
-        let ordinary = self.first_ordinary();
-        let mut fit = 0;
-        for index in 1..self.modes.len() {
-            if self.required(index) > snr_db || self.echo_out(index) {
-                break;
-            }
-            fit = index;
-        }
-        let lowest = if fit >= ordinary { ordinary } else { 0 };
-        let back = fit.saturating_sub(self.config.first_mode_back).max(lowest);
-        if fit < ordinary {
-            let keep = self.required(fit) - self.required(back);
-            if let Some(index) = (back + 1..=fit)
-                .rev()
-                .find(|&index| self.required(index) + keep <= snr_db)
-            {
-                return self.modes[index];
-            }
-        }
-        self.modes[back]
+    pub const fn probing(&self) -> Option<usize> {
+        self.probing
     }
 
-    /// The SNR a step up to the rung at `index` asks for: its threshold, the margin it is held
-    /// to and the hysteresis.
-    fn required(&self, index: usize) -> f64 {
-        self.thresholds[self.modes[index]] + self.margin_db + self.config.up_hysteresis_db
+    /// A transmission of this station's went unanswered (C1 at the sender): the choice steps
+    /// down, as the engine steps its own (R9), to a rung the echo allows, and a try ends.
+    pub fn silent(&mut self, steps: usize) {
+        self.cancel_try();
+        let to = self.index.saturating_sub(steps);
+        self.index = (0..=to).rev().find(|&i| self.usable(i)).unwrap_or(0);
     }
 
-    /// Index in [`modes`](Self::modes) of the first rung above the floor.
-    fn first_ordinary(&self) -> usize {
-        self.modes
-            .iter()
-            .position(|&m| m >= self.floor_modes)
-            .unwrap_or(0)
-    }
-
-    /// Start from a measurement — the connect frame this station decoded — instead of
-    /// from the slowest mode: the smoothed SNR becomes the measurement and the
-    /// recommendation [`first_mode`](Self::first_mode). Only before anything has been
-    /// observed; a controller that has seen bursts knows more than one frame can tell it.
-    ///
-    /// `lower_bound`: the measurement was a tone-floor frame's, which a strong path does not
-    /// show — the floor's estimate is exact to about +10 dB on AWGN and saturates near +17,
-    /// and on a dispersive path it reads a few decibels whatever the SNR, the echo's spill
-    /// into the next symbol counting as noise (ADR-0016). Calls start on the floor, so a
-    /// strong path's session would start many rungs low and climb two a burst; instead the
-    /// first clean burst measured on an ordinary frame seeds again, upward only.
-    pub fn seed(&mut self, snr_db: f64, lower_bound: bool) {
-        if self.smoothed_snr_db.is_some() {
-            return;
-        }
-        self.smoothed_snr_db = Some(snr_db);
-        let first = self.first_mode(snr_db);
-        self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
-        self.reseed_pending = lower_bound;
-    }
-
-    /// The smoothed SNR, once anything has been measured.
+    /// The smoothed SNR.
     #[must_use]
-    pub fn snr_db(&self) -> Option<f64> {
+    pub const fn snr_db(&self) -> Option<f64> {
         self.smoothed_snr_db
     }
 
-    /// The current margin over a mode's threshold.
+    /// The path's echo as the frames have read it, smoothed.
     #[must_use]
-    pub fn margin_db(&self) -> f64 {
-        self.margin_db
+    pub const fn echo(&self) -> Option<f64> {
+        self.echo
     }
 
-    /// Take a burst's SNR and nothing else: for a burst sent faster than this station asked
-    /// for, whose failure is the sender's choice and no news to this controller (ADR-0020) —
-    /// the Test's ladder climbing past what the path carries, or a burst sent before the
-    /// advice to go slower reached the sender. What decoded in it is still a measurement.
+    /// The threshold of a rung, if the table has one.
+    #[must_use]
+    pub fn threshold_db(&self, mode: usize) -> Option<f64> {
+        self.thresholds.get(mode).copied()
+    }
+
+    /// Take an SNR reading and nothing else.
     pub fn observe_snr(&mut self, snr_db: Option<f64>) {
         if let Some(value) = snr_db {
             self.smoothed_snr_db = Some(
@@ -492,31 +524,15 @@ impl RateController {
         }
     }
 
-    /// A frame's echo reading (`aether_phy::tone::echo_share`, ADR-0087), read at `snr_db`. The
-    /// tone floor's 40 ms symbols carry a path whose echo smears the fast kinds' 10 ms ones and
-    /// outruns OFDM's 5 ms prefix, and the SNR such a path reads cannot say so: the floor's
-    /// reading saturates near −3 dB whatever the SNR, as a quiet path at −3 dB reads. A
-    /// recommendation the reading now rules out moves to the fastest rung below that it allows
-    /// and the SNR carries.
-    pub fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
-        let Some(share) = share else {
-            return;
-        };
-        if snr_db < self.config.echo_min_snr_db {
-            return;
-        }
-        let w = self.config.echo_weight;
-        self.echo = Some(self.echo.map_or(share, |prev| (1.0 - w) * prev + w * share));
-        if !self.echo_out(self.index) {
-            return;
-        }
-        self.index = (0..self.index)
-            .rev()
-            .find(|&i| !self.echo_out(i) && (self.fits(i, 0.0) || i == 0))
-            .unwrap_or(0);
+    /// A burst's counts: only its SNR is read; a silent slot is no news.
+    pub fn observe(&mut self, snr_db: Option<f64>) {
+        self.observe_snr(snr_db);
     }
 
-    /// Whether the path's echo keeps the rung at `index` off the ladder.
+    fn usable(&self, index: usize) -> bool {
+        index < self.modes.len() && !self.echo_out(index)
+    }
+
     fn echo_out(&self, index: usize) -> bool {
         match (
             self.echo_limit.get(self.modes[index]).copied().flatten(),
@@ -527,142 +543,270 @@ impl RateController {
         }
     }
 
-    /// The threshold of a mode of this controller's table, if it has one.
-    #[must_use]
-    pub fn threshold_db(&self, mode: usize) -> Option<f64> {
-        self.thresholds.get(mode).copied()
+    fn since(&self, mode: usize) -> f64 {
+        self.since_probe.get(mode).copied().flatten().unwrap_or(0.0)
     }
 
-    /// Feed one burst: the mean SNR of its frames, how many decoded and failed, and the mode
-    /// they were sent in — which is what turns a failure into a measurement.
-    pub fn observe(&mut self, snr_db: Option<f64>, ok: usize, failed: usize, mode: Option<usize>) {
-        if self.reseed_pending
-            && ok > 0
-            && failed == 0
-            && let (Some(value), Some(mode)) = (snr_db, mode)
-            && mode >= self.floor_modes
-        {
-            // the first measurement a strong path can show: start again from it — upward, and
-            // only past the estimates' own spread — as an ordinary connect frame would have
-            self.reseed_pending = false;
-            if self
-                .smoothed_snr_db
-                .is_none_or(|seed| value > seed + self.config.reseed_margin_db)
-            {
-                self.smoothed_snr_db = Some(value);
-                let first = self.first_mode(value);
-                let at = self.modes.iter().position(|&m| m == first).unwrap_or(0);
-                self.index = self.index.max(at);
-                return;
-            }
-        }
-        if let Some(value) = snr_db {
-            self.smoothed_snr_db = Some(
-                self.smoothed_snr_db
-                    .map_or(value, |prev| 0.7 * prev + 0.3 * value),
-            );
-        }
-        let total = (ok + failed) as f64;
-        if failed > 0
-            && ok > 0
-            && (failed as f64) < self.config.partial_share * total
-            && !self.at_edge()
-        {
-            self.widen(snr_db, mode, failed as f64 / total);
-            self.ever_failed = true;
-            self.clean_run = 0;
-            self.clean_since_decay = 0;
-            self.decay_step_db = 0.0;
-            if !self.fits(self.index, 0.0) {
-                self.step_down();
-            }
-        } else if failed > 0 {
-            self.widen(snr_db, mode, 1.0);
-            self.ever_failed = true;
-            self.clean_run = 0;
-            self.clean_since_decay = 0;
-            self.decay_step_db = 0.0;
-            self.step_down();
-        } else if ok > 0 {
-            self.clean_run += 1;
-            self.clean_since_decay += 1;
-            if !self.ever_failed {
-                self.margin_db =
-                    (self.margin_db - self.config.down_step_db).max(self.config.min_margin_db);
-            } else if self.decay_step_db > 0.0 {
-                // past the sticky bursts: every clean burst gives back more than the last
-                self.decay_step_db = (self.decay_step_db * self.config.decay_growth)
-                    .min(self.config.max_down_step_db);
-                self.margin_db =
-                    (self.margin_db - self.decay_step_db).max(self.config.min_margin_db);
-            } else if self.clean_since_decay >= self.config.decay_every {
-                self.clean_since_decay = 0;
-                self.decay_step_db = self.config.down_step_db;
-                self.margin_db =
-                    (self.margin_db - self.config.down_step_db).max(self.config.min_margin_db);
-            }
-            self.step_up();
-        }
+    /// The air to let go by before trying `mode`: its wait, in full transmissions at `mode`
+    /// (the model's `_wait_s`). Counted in transmissions of whatever was sent, it was six floor
+    /// transmissions before a try of OFDM.
+    #[allow(clippy::cast_precision_loss)]
+    fn wait_s(&self, mode: usize) -> f64 {
+        let n = self.burst_frames.get(mode).copied().unwrap_or(1);
+        self.wait(mode) as f64 * (n as f64 * self.frame_s.get(mode).copied().unwrap_or(1.0))
     }
 
-    /// Whether the recommendation is the first OFDM rung, above the floor: where a failure, in
-    /// part or not, goes back to the floor (ADR-0084, ADR-0093).
-    fn at_edge(&self) -> bool {
-        self.floor_modes > 0 && self.index == self.first_ordinary()
+    fn wait(&self, mode: usize) -> usize {
+        self.probe_wait
+            .get(mode)
+            .copied()
+            .flatten()
+            .unwrap_or(self.probe_every)
     }
 
-    /// A failed burst is a measurement, not just a nudge; one that failed in part moves the
-    /// margin by the `share` of it that failed (ADR-0084).
-    fn widen(&mut self, snr_db: Option<f64>, mode: Option<usize>, share: f64) {
-        let mut target = self.margin_db + self.config.up_step_db * share;
-        if let (Some(snr), Some(mode)) = (snr_db, mode) {
-            if let Some(&threshold) = self.thresholds.get(mode) {
-                let implied = snr - threshold + self.config.up_step_db;
-                target = target.max(implied.min(self.margin_db + self.config.max_jump_db * share));
-            }
-        }
-        self.margin_db = target.clamp(self.config.min_margin_db, self.config.max_margin_db);
-    }
-
-    /// Whether the mode at `index` fits under the smoothed SNR with the margin and `extra`.
-    fn fits(&self, index: usize, extra_db: f64) -> bool {
-        if self.echo_out(index) {
-            return false;
-        }
-        match self.smoothed_snr_db {
-            None => index == 0,
-            Some(snr) => self.thresholds[self.modes[index]] + self.margin_db + extra_db <= snr,
-        }
-    }
-
-    /// A failure: fall to the fastest mode the SNR and margin still support, but always at
-    /// least one step — a failure at the bottom of the table is still evidence.
-    fn step_down(&mut self) {
-        let mut target = self.index.saturating_sub(1);
-        for candidate in (0..self.index).rev() {
-            if self.fits(candidate, 0.0) {
-                target = candidate;
-                break;
-            }
-        }
-        self.index = target;
-    }
-
-    fn step_up(&mut self) {
-        if self.clean_run < self.config.up_dwell {
+    /// A transmission's data frames: each rung's account takes its frames, a try ends, and the
+    /// recommendation is the best estimate around the current rung.
+    pub fn observe_frames(&mut self, frames: &[FrameOutcome], snr_db: Option<f64>) {
+        self.observe_snr(snr_db);
+        if frames.is_empty() {
             return;
         }
-        let mut target = self.index;
-        for candidate in self.index + 1..self.modes.len() {
-            if !self.fits(candidate, self.config.up_hysteresis_db) {
-                break;
+        if self.family_gain_db != 0.0
+            && let Some(snr) = self.smoothed_snr_db
+        {
+            for f in frames {
+                if f.combined || f.mode >= self.thresholds.len() {
+                    continue;
+                }
+                let p = self.prior_p(f.mode, snr);
+                let slot = usize::from(f.mode >= self.floor_modes);
+                let offset = self.family[slot]
+                    + self.family_gain_db * (p - if f.decoded { 1.0 } else { 0.0 });
+                self.family[slot] = offset.clamp(-5.0, 20.0);
             }
-            target = candidate;
         }
-        if target > self.index {
-            self.index = target.min(self.index + self.config.max_up_step);
-            self.clean_run = 0;
+        let decay = 0.5_f64.powf(1.0 / self.half_life);
+        #[allow(clippy::cast_precision_loss)]
+        for f in frames {
+            for (mode, old) in self.accounts.iter_mut().enumerate() {
+                if mode == f.mode {
+                    continue;
+                }
+                if let Some(old) = old {
+                    // a rung's account ages with the air sent at any rung, in frames of its own
+                    // (the model's `observe_frames`)
+                    let aged = 0.5_f64.powf(f.air_s / (self.half_life * self.frame_s[mode]));
+                    old.bytes *= aged;
+                    old.air_s *= aged;
+                    old.frames *= aged;
+                }
+            }
+            let Some(slot) = self.accounts.get_mut(f.mode) else {
+                continue;
+            };
+            let acc = slot.get_or_insert_with(Account::default);
+            acc.bytes *= decay;
+            acc.air_s *= decay;
+            acc.frames *= decay;
+            acc.air_s += f.air_s;
+            acc.frames += 1.0;
+            if f.decoded {
+                acc.bytes += f.capacity as f64;
+            }
         }
+        self.judge_family(frames);
+        let mut sent: Vec<usize> = frames.iter().map(|f| f.mode).collect();
+        sent.sort_unstable();
+        sent.dedup();
+        let air = frames.iter().map(|f| f.air_s).sum::<f64>();
+        for i in 0..self.modes.len() {
+            let mode = self.modes[i];
+            self.since_probe[mode] = Some(self.since(mode) + air);
+        }
+        let here = self.modes[self.index];
+        let mut at_here = frames.iter().filter(|f| f.mode == here).peekable();
+        let clean = at_here.peek().is_some() && at_here.all(|f| f.decoded && !f.combined);
+        self.clean_at = clean.then_some(here);
+        for &mode in &sent {
+            // frames at a rung above, sent for another reason (a copy still at its first rung,
+            // the Test's measurement): news of it, as a try would be
+            if Some(mode) != self.probing && mode != here && mode > here {
+                self.judge_try(mode);
+            }
+        }
+        if let Some(probe) = self.probing {
+            self.probe_tries += 1;
+            self.try_frames += frames.iter().filter(|f| f.mode == probe).count();
+            if self.try_over() {
+                self.end_probe(self.try_frames > 0);
+            }
+        }
+        self.decide();
+    }
+
+    /// A try is decided once its own frames outweigh the prior — more than `prior_frames` of
+    /// them — or, a frame or none a transmission, after twice the transmissions that takes: one
+    /// frame is a coin toss either way (the model's `_try_over`).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    const fn try_over(&self) -> bool {
+        let enough = self.prior_frames as usize + 1;
+        self.try_frames >= enough || self.probe_tries >= 2 * enough
+    }
+
+    const fn cancel_try(&mut self) {
+        self.probing = None;
+        self.probe_tries = 0;
+        self.try_frames = 0;
+    }
+
+    fn end_probe(&mut self, measured: bool) {
+        let Some(mode) = self.probing else {
+            return;
+        };
+        self.cancel_try();
+        if !measured {
+            return;
+        }
+        if self.judge_try(mode) {
+            self.index = self
+                .modes
+                .iter()
+                .position(|&m| m == mode)
+                .unwrap_or(self.index);
+            if self.usable(self.index + 1) {
+                // a climb that works goes on: the rung above is tried at the next transmission
+                let above = self.modes[self.index + 1];
+                self.since_probe[above] = Some(self.wait_s(above));
+            }
+        }
+    }
+
+    /// What frames at `mode`, above the current rung, said: whether it now beats the current
+    /// rung. If not, the next try of it waits twice as long.
+    fn judge_try(&mut self, mode: usize) -> bool {
+        let here = self.modes[self.index];
+        if self.value(mode) > self.value(here) {
+            self.probe_wait[mode] = Some(self.probe_every);
+            return true;
+        }
+        let wait = self.wait(mode);
+        self.probe_wait[mode] = Some(self.probe_wait_max.min(2 * wait));
+        self.since_probe[mode] = Some(0.0);
+        false
+    }
+
+    fn decide(&mut self) {
+        // down to any rung (the estimate of one never sent is the prior); up only to a rung
+        // whose own frames outweigh its prior — a try's, or frames the sender put there itself
+        let mut best: Option<(usize, f64)> = None;
+        for i in 0..self.modes.len() {
+            if !self.usable(i) {
+                continue;
+            }
+            if i > self.index && self.account(self.modes[i]).frames <= self.prior_frames {
+                continue;
+            }
+            let value = self.value(self.modes[i]);
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        let Some((index, _)) = best else {
+            self.index = 0;
+            self.cancel_try();
+            return;
+        };
+        self.index = index;
+        let up = self.index + 1;
+        if let Some(probe) = self.probing {
+            if !(self.usable(up) && self.modes[up] == probe) {
+                self.cancel_try(); // the choice moved from under the try
+            }
+            return;
+        }
+        if !self.usable(up) {
+            return;
+        }
+        let mode = self.modes[up];
+        if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
+            return;
+        }
+        let waited = self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S;
+        if waited || self.clean_climb(mode) {
+            self.probing = Some(mode);
+            self.since_probe[mode] = Some(0.0);
+        }
+    }
+
+    /// Whether the rung above, `mode`, is tried without its wait: of the current rung's family,
+    /// rated above the current rung, no try of it failed since it last carried, and every frame
+    /// of the last transmission at the current rung decoded alone (the model's `_clean_climb`).
+    fn clean_climb(&self, mode: usize) -> bool {
+        let here = self.modes[self.index];
+        self.clean_at == Some(here)
+            && (mode < self.floor_modes) == (here < self.floor_modes)
+            && self.wait(mode) == self.probe_every
+            && self.value(mode) > self.value(here)
+    }
+
+    /// A frame's echo reading (ADR-0087): a try of a rung it rules out ends, and a choice it
+    /// rules out goes to the best estimate below that it allows.
+    pub fn observe_echo(&mut self, share: Option<f64>, snr_db: f64) {
+        let Some(share) = share else {
+            return;
+        };
+        if snr_db < self.echo_min_snr_db {
+            return;
+        }
+        let w = self.echo_weight;
+        self.echo = Some(self.echo.map_or(share, |prev| (1.0 - w) * prev + w * share));
+        if let Some(probe) = self.probing
+            && let Some(at) = self.modes.iter().position(|&m| m == probe)
+            && self.echo_out(at)
+        {
+            self.cancel_try();
+        }
+        if self.echo_out(self.index) {
+            let mut best: Option<(usize, f64)> = None;
+            for i in 0..self.index {
+                if !self.usable(i) {
+                    continue;
+                }
+                let value = self.value(self.modes[i]);
+                if best.is_none_or(|(_, b)| value > b) {
+                    best = Some((i, value));
+                }
+            }
+            self.index = best.map_or(0, |(i, _)| i);
+        }
+    }
+
+    /// The rung a session starts at from one reading, no steps in hand: the optimistic prior's
+    /// best. (A cautious start, by the four fading channels' mean, was rejected on the harness
+    /// and deleted: `04-results.md` §3.6.)
+    #[must_use]
+    pub fn first_mode(&self, snr_db: f64) -> usize {
+        let mut best: Option<(usize, f64)> = None;
+        for i in 0..self.modes.len() {
+            if self.echo_out(i) {
+                continue;
+            }
+            let value = self.priced(self.modes[i], self.estimate_at(self.modes[i], Some(snr_db)));
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        self.modes[best.map_or(0, |(i, _)| i)]
+    }
+
+    /// Start from the connect frame's reading, before anything has been observed.
+    pub fn seed(&mut self, snr_db: f64) {
+        if self.smoothed_snr_db.is_some() {
+            return;
+        }
+        self.smoothed_snr_db = Some(snr_db);
+        let first = self.first_mode(snr_db);
+        self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
     }
 }
 
@@ -670,370 +814,76 @@ impl RateController {
 mod tests {
     use super::*;
 
-    fn settle(snr_db: f64) -> usize {
-        let mut rc = RateController::default();
-        for _ in 0..20 {
-            rc.observe(Some(snr_db), 6, 0, None);
-        }
-        rc.recommend()
-    }
-
-    /// Drive the controller against a channel that fails any mode needing more than
-    /// `snr_db − 1` dB, returning the sequence of recommendations.
-    fn boundary_track(rc: &mut RateController, snr_db: f64, bursts: usize) -> Vec<usize> {
-        let mut track = Vec::with_capacity(bursts);
-        for _ in 0..bursts {
-            let mode = rc.recommend();
-            track.push(mode);
-            let failed = usize::from(AWGN_THRESHOLD_DB[mode] > snr_db - 1.0) * 3;
-            rc.observe(Some(snr_db), 6 - failed, failed, Some(mode));
-        }
-        track
-    }
-
     #[test]
-    fn the_dominated_rungs_are_never_recommended() {
-        // 8-PSK 2/3, OFDM mode 7, six rungs up the ladder since the fast kinds (ADR-0014);
-        // and BPSK 1/5, OFDM mode 0, which the fastest tone kind beats on rate and threshold
-        let modes = usable_modes();
-        assert!(!modes.contains(&13) && !modes.contains(&6), "{modes:?}");
-        assert_eq!(modes.len(), 18);
-        assert!(modes.windows(2).all(|w| w[0] < w[1]));
+    fn the_prior_passes_ninety_per_cent_at_the_threshold() {
+        assert!((decode_probability(-3.2, -3.2, 0.5) - 0.9).abs() < 1e-12);
+        assert!(decode_probability(-6.2, -3.2, 0.5) < 0.05);
+        assert!(decode_probability(0.0, -3.2, 0.5) > 0.99);
+        assert!(decode_probability(-50.0, -3.2, 0.5).abs() < f64::MIN_POSITIVE);
     }
 
+    /// A step down after silence passes the rungs the echo rules out, as the model's does.
     #[test]
-    fn the_recommendation_climbs_with_snr() {
-        let floor = usable_modes()[0];
-        let mut previous = 0usize;
-        for snr in (-6..22).step_by(2) {
-            let mode = settle(f64::from(snr));
-            assert!(mode >= previous, "snr {snr}: {mode} after {previous}");
-            assert!(
-                mode == floor || AWGN_THRESHOLD_DB[mode] <= f64::from(snr),
-                "snr {snr}: recommended {mode}, which needs {}",
-                AWGN_THRESHOLD_DB[mode]
-            );
-            previous = mode;
-        }
+    fn a_silent_step_lands_on_a_rung_the_echo_allows() {
+        let payload = [10, 20, 30, 40, 50, 60];
+        let limit = [None, None, None, Some(0.0038), Some(0.0038), None];
+        let mut ctl = RateController::for_table(
+            &[-10.0, -8.0, -6.0, -4.0, -2.0, 0.0],
+            &payload,
+            &payload,
+            &[1.0; 6],
+            5,
+            &limit,
+        );
+        assert_eq!(ctl.modes(), &[0, 1, 2, 3, 4, 5]);
+        ctl.observe_echo(Some(0.012), 0.0);
+        ctl.index = 5;
+        ctl.silent(1);
+        assert_eq!(ctl.recommend(), 2);
+        ctl.echo = None;
+        ctl.index = 5;
+        ctl.silent(1);
+        assert_eq!(ctl.recommend(), 4);
     }
 
+    /// D3 (ADR-0099 §2.3): OFDM frames that delivered nothing refuse the family once the
+    /// choice is a floor rung; an OFDM frame that delivers lifts it; an echo over every OFDM
+    /// rung's limit refuses it whatever the choice. The model's `test_d3_*`.
     #[test]
-    fn a_seed_from_the_tone_floor_is_a_lower_bound() {
-        // ADR-0016: calls start on the tone floor, whose SNR estimate reads low on a strong
-        // path; a controller seeded from it seeds again from the first clean burst measured
-        // on an ordinary frame — upward, past the estimates' own spread, and once
-        let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
-        let mut rc = RateController::default();
-        let ordinary = rc.modes()[rc.first_ordinary()];
-        rc.seed(4.0, true);
-        assert_eq!(rc.recommend(), rc.first_mode(4.0));
-        rc.observe(Some(20.0), 6, 0, Some(0)); // a floor burst: a lower bound again
-        assert!(close(rc.snr_db(), 0.7 * 4.0 + 0.3 * 20.0));
-        rc.observe(Some(20.0), 3, 3, Some(ordinary)); // a failure says nothing of the path
-        assert!(rc.recommend() < rc.first_mode(20.0));
-        rc.observe(Some(20.0), 6, 0, Some(ordinary));
-        assert!(close(rc.snr_db(), 20.0));
-        assert_eq!(rc.recommend(), rc.first_mode(20.0));
-        rc.observe(Some(10.0), 6, 0, Some(ordinary)); // once: then smoothed as ever
-        assert!(close(rc.snr_db(), 0.7 * 20.0 + 0.3 * 10.0));
-
-        let mut high = RateController::default(); // upward only
-        high.seed(15.0, true);
-        high.observe(Some(10.0), 6, 0, Some(ordinary));
-        assert!(close(high.snr_db(), 0.7 * 15.0 + 0.3 * 10.0));
-        let mut near = RateController::default(); // within the spread: smoothed, not replaced
-        let margin = RateConfig::default().reseed_margin_db;
-        near.seed(10.0, true);
-        near.observe(Some(10.0 + margin), 6, 0, Some(ordinary));
-        assert!(close(near.snr_db(), 0.7 * 10.0 + 0.3 * (10.0 + margin)));
-        let mut plain = RateController::default(); // an ordinary frame's is not a lower bound
-        plain.seed(4.0, false);
-        plain.observe(Some(20.0), 6, 0, Some(ordinary));
-        assert!(close(plain.snr_db(), 0.7 * 4.0 + 0.3 * 20.0));
-    }
-
-    #[test]
-    fn a_clean_link_converges_in_a_few_bursts() {
-        // from the bottom of the ladder two things pace the climb and nothing else: the step,
-        // `max_up_step` usable modes a burst, and the margin, which gives up `down_step_db` a
-        // clean burst before the first failure; one burst more for the first measurement
-        let config = RateConfig::default();
-        let decay = ((config.margin_db - config.min_margin_db) / config.down_step_db).ceil();
-        for snr in [0.0, 8.0, 14.0, 20.0] {
-            let final_mode = settle(snr);
-            let mut rc = RateController::default();
-            let position = rc
-                .modes()
-                .iter()
-                .position(|&m| m == final_mode)
-                .expect("a usable mode");
-            let climb = position.div_ceil(config.max_up_step);
-            let bound = climb.max(decay as usize) + 1;
-            let mut bursts = 0;
-            for index in 1..=30 {
-                rc.observe(Some(snr), 6, 0, None);
-                if rc.recommend() == final_mode {
-                    bursts = index;
-                    break;
-                }
-            }
-            assert!(
-                bursts > 0 && bursts <= bound,
-                "snr {snr}: {bursts} bursts to settle, {bound} allowed"
-            );
-        }
-    }
-
-    #[test]
-    fn it_does_not_oscillate_at_a_mode_boundary() {
-        let mut rc = RateController::default();
-        let track = boundary_track(&mut rc, 9.0, 40);
-        let tail = &track[20..];
-        assert!(tail.iter().all(|&m| m == tail[0]), "{track:?}");
-        assert!(AWGN_THRESHOLD_DB[tail[0]] <= 9.0);
-    }
-
-    #[test]
-    fn it_backs_off_fast_when_the_channel_collapses() {
-        let mut rc = RateController::default();
-        for _ in 0..20 {
-            rc.observe(Some(18.0), 6, 0, None);
-        }
-        let high = rc.recommend();
-        let track = boundary_track(&mut rc, 4.0, 12);
-        assert_eq!(track[0], high);
-        let sustainable = track
-            .iter()
-            .position(|&m| AWGN_THRESHOLD_DB[m] <= 3.0)
-            .expect("never reached a sustainable mode");
-        assert!(sustainable <= 4, "{track:?}");
-        assert!(track[7..].iter().all(|&m| m == track[7]), "{track:?}");
-    }
-
-    #[test]
-    fn a_failure_widens_the_margin_by_more_than_a_fixed_step() {
-        let mut rc = RateController::default();
-        let start = rc.margin_db();
-        // rung 6 (QPSK ½) needs +1.4 dB and failed at +12: this channel costs about 11 dB more
-        rc.observe(Some(12.0), 0, 4, Some(6));
-        assert!(rc.margin_db() - start > rc.config.up_step_db);
-        assert!(rc.margin_db() - start <= rc.config.max_jump_db);
-    }
-
-    #[test]
-    fn a_burst_that_failed_in_part_moves_the_margin_by_its_share() {
-        // ADR-0084: one frame of six lost widens the margin by a sixth of what the whole burst
-        // lost would and keeps the rung; half or more lost is a failure as before
-        let settle = |rc: &mut RateController| {
-            for _ in 0..20 {
-                rc.observe(Some(12.0), 6, 0, None);
-            }
-            rc.recommend()
+    fn d3_refuses_the_ofdm_family_by_outcomes_and_by_the_echo() {
+        let payload = [10, 20, 30, 40, 50, 60];
+        let limit = [None, None, None, Some(0.004), Some(0.004), Some(0.004)];
+        let mut ctl = RateController::for_table(
+            &[-10.0, -8.0, -6.0, -4.0, -2.0, 0.0],
+            &payload,
+            &payload,
+            &[1.0; 6],
+            3,
+            &limit,
+        );
+        let frames = |mode: usize, decoded: bool| {
+            vec![
+                FrameOutcome {
+                    mode,
+                    air_s: 1.0,
+                    capacity: payload[mode],
+                    detected: true,
+                    decoded,
+                    combined: false,
+                };
+                3
+            ]
         };
-        let mut part = RateController::default();
-        let mut half = RateController::default();
-        let mut whole = RateController::default();
-        let mode = settle(&mut part);
-        assert_eq!(settle(&mut half), mode);
-        assert_eq!(settle(&mut whole), mode);
-        let start = part.margin_db();
-        part.observe(Some(12.0), 5, 1, Some(mode));
-        half.observe(Some(12.0), 3, 3, Some(mode));
-        whole.observe(Some(12.0), 0, 6, Some(mode));
-        let lost = whole.margin_db() - start;
-        assert_eq!(part.recommend(), mode);
-        assert!(part.margin_db() > start && part.margin_db() - start <= lost / 6.0 + 1e-9);
-        assert!(half.recommend() < mode && whole.recommend() < mode);
-    }
-
-    #[test]
-    fn a_partial_failure_on_the_first_500_hz_ofdm_rung_goes_back_to_the_floor() {
-        // ADR-0084: under it is the floor, the better exchange once the rung loses frames
-        let narrow = || {
-            RateController::for_table_timed(
-                RateConfig::default(),
-                &NARROW_AWGN_THRESHOLD_DB,
-                &NARROW_PAYLOAD_BYTES,
-                &NARROW_FRAME_S,
-            )
-            .with_floor(aether_phy::modes::NARROW.floor_modes())
-        };
-        let mut rc = narrow();
-        for _ in 0..20 {
-            rc.observe(Some(-2.0), 6, 0, None);
-        }
-        assert_eq!(rc.recommend(), 5);
-        rc.observe(Some(-2.0), 5, 1, Some(5));
-        assert!(rc.recommend() < 5);
-        let mut rc = narrow();
-        for _ in 0..20 {
-            rc.observe(Some(1.0), 6, 0, None);
-        }
-        let above = rc.recommend();
-        assert!(above > 5);
-        rc.observe(Some(1.0), 5, 1, Some(above));
-        assert_eq!(rc.recommend(), above);
-    }
-
-    #[test]
-    fn a_learned_margin_is_sticky_then_decays() {
-        let mut rc = RateController::default();
-        rc.observe(Some(12.0), 0, 4, Some(6));
-        let learned = rc.margin_db();
-        for _ in 0..rc.config.decay_every - 1 {
-            rc.observe(Some(12.0), 6, 0, Some(6));
-        }
-        assert!(
-            (rc.margin_db() - learned).abs() < 1e-12,
-            "gave up too early"
-        );
-        rc.observe(Some(12.0), 6, 0, Some(6));
-        assert!(rc.margin_db() < learned, "never decays");
-    }
-
-    #[test]
-    fn before_any_failure_the_margin_decays_freely() {
-        let mut rc = RateController::default();
-        for _ in 0..3 {
-            rc.observe(Some(10.0), 6, 0, Some(0));
-        }
-        assert!(rc.margin_db() < RateConfig::default().margin_db - 2.0 * rc.config.down_step_db);
-    }
-
-    #[test]
-    fn the_first_mode_keeps_a_step_in_hand() {
-        let mut rc = RateController::default();
-        // far below every mode but the slowest: the slowest
-        assert_eq!(rc.first_mode(-25.0), usable_modes()[0]);
-        let config = RateConfig::default();
-        // within the family the fit is in: a fit on the OFDM rungs does not start on the floor
-        let ordinary = rc.first_ordinary();
-        for snr in [4.0, 9.0, 15.0, 20.0] {
-            let modes = rc.modes().to_vec();
-            let top = modes
-                .iter()
-                .rposition(|&m| {
-                    AWGN_THRESHOLD_DB[m] + rc.margin_db() + config.up_hysteresis_db <= snr
-                })
-                .expect("something fits");
-            let lowest = if top >= ordinary { ordinary } else { 0 };
-            assert_eq!(
-                rc.first_mode(snr),
-                modes[top.saturating_sub(config.first_mode_back).max(lowest)],
-                "{snr}"
-            );
-        }
-        // seeding places the controller there and takes the measurement, once
-        rc.seed(15.0, false);
-        assert_eq!(rc.recommend(), rc.first_mode(15.0));
-        rc.seed(2.0, false);
-        assert_eq!(rc.snr_db(), Some(15.0));
-    }
-
-    #[test]
-    fn on_the_floor_the_steps_in_hand_are_decibels() {
-        // WC4Y's Test of 2026-10-11 (80 m, 500 Hz; ADR-0066): the call heard at about -2 dB,
-        // which the floor's top rung (then tone4x100-75) cleared by ten decibels and the first
-        // OFDM rung did not fit; two rungs in hand sent the message at tone-36, half the rate.
-        // The floor's top is tone4x100-93 since ADR-0081, and the same call starts on it.
-        let config = RateConfig::default();
-        let floor = aether_phy::modes::NARROW.floor_modes();
-        let narrow = RateController::for_table_timed(
-            config,
-            &NARROW_AWGN_THRESHOLD_DB,
-            &NARROW_PAYLOAD_BYTES,
-            &NARROW_FRAME_S,
-        )
-        .with_floor(floor);
-        let required = |rung: usize| {
-            NARROW_AWGN_THRESHOLD_DB[rung] + config.margin_db + config.up_hysteresis_db
-        };
-        let top = floor - 1;
-        assert!(required(top) <= -2.0 && -2.0 < required(top + 1));
-        assert_eq!(narrow.first_mode(-2.0), top);
-        let keep = required(top) - required(top - 2);
-        assert_eq!(narrow.first_mode(required(top) + keep), top);
-        assert_eq!(narrow.first_mode(required(top - 1) + keep), top - 1);
-        assert_eq!(narrow.first_mode(required(top - 1) + keep - 0.01), top - 2);
-        assert_eq!(
-            narrow.first_mode(required(top)),
-            top - 2,
-            "at the fit's edge: two rungs"
-        );
-        assert_eq!(narrow.first_mode(-20.0), 0);
-        // the OFDM rungs: the steps are rungs (ADR-0008)
-        let ordinary = narrow.first_ordinary();
-        for snr in [3.0, 6.0, 9.0, 14.0] {
-            let modes = narrow.modes().to_vec();
-            let top = modes
-                .iter()
-                .rposition(|&m| required(m) <= snr)
-                .expect("something fits");
-            assert_eq!(
-                narrow.first_mode(snr),
-                modes[top.saturating_sub(config.first_mode_back).max(ordinary)],
-                "{snr}"
-            );
-        }
-        let wide = RateController::default(); // the wide ladder's floor top is rung 5
-        assert_eq!(wide.first_mode(-3.5), 5);
-        assert_eq!(wide.first_mode(-6.7), 3, "at its edge, two rungs in hand");
-    }
-
-    #[test]
-    fn the_floor_boundary_is_crossed_by_what_the_rungs_are_worth() {
-        // ADR-0013 §4, ADR-0014: the floor's frames are five times as long as an OFDM frame;
-        // the first OFDM rung is the first *usable* one — the wide ladder's BPSK 1/5 is beaten
-        // by its fastest tone kind and never recommended
-        let config = RateConfig::default();
-        let rc = RateController::default(); // the wide ladder: rungs 0–5 are the floor
-        assert_eq!(rc.floor_modes(), 6);
-        assert_eq!(&rc.modes()[..6], &[0, 1, 2, 3, 4, 5]);
-        let first = rc.modes()[rc.first_ordinary()];
-        let second = rc.modes()[rc.first_ordinary() + 1];
-        let fits_second = AWGN_THRESHOLD_DB[second] + rc.margin_db() + config.up_hysteresis_db;
-        assert_eq!(
-            rc.first_mode(fits_second),
-            first,
-            "not two steps down, on the floor"
-        );
-        assert!(
-            rc.first_mode(-12.0) < 6,
-            "nothing above the floor fits: the floor"
-        );
-
-        // WC4Y's call read at -0.3 dB: rung 7 at AWGN -3.2 dB needs its margin and the
-        // hysteresis, which the 2 300 Hz air's cap at 1 dB had waived (ADR-0093)
-        assert!(rc.first_mode(-0.3) < 6);
-
-        // above the floor the learned margin decides, as between any two rungs
-        let mut fading = RateController::default().with_floor(6);
-        fading.seed(AWGN_THRESHOLD_DB[first] + 1.5, false);
-        fading.index = fading
-            .modes
-            .iter()
-            .position(|&m| m == first)
-            .expect("the first OFDM rung");
-        fading.margin_db = 8.0; // a fading channel's learned margin
-        let snr = fading.snr_db();
-        fading.observe(snr, 0, 6, Some(first));
-        assert!(
-            fading.recommend() < first,
-            "one lost burst on the first OFDM rung: the floor"
-        );
-        for _ in 0..6 {
-            fading.observe(Some(AWGN_THRESHOLD_DB[first] + 2.5), 6, 0, None);
-        }
-        assert!(
-            fading.recommend() < first,
-            "the learned margin keeps it there at that SNR"
-        );
-    }
-
-    #[test]
-    fn with_no_measurement_it_recommends_the_most_robust_mode() {
-        let rc = RateController::default();
-        assert_eq!(rc.recommend(), usable_modes()[0]);
-        assert_eq!(rc.snr_db(), None);
+        ctl.seed(6.0);
+        ctl.observe_frames(&frames(4, false), Some(6.0));
+        ctl.index = 2;
+        assert!(ctl.refuses(3) && ctl.refuses(5) && !ctl.refuses(2));
+        ctl.index = 4;
+        assert!(!ctl.refuses(4), "the choice on OFDM refuses nothing");
+        ctl.observe_frames(&frames(3, true), Some(6.0));
+        ctl.index = 2;
+        assert!(!ctl.refuses(4), "an OFDM frame that delivers lifts it");
+        ctl.observe_echo(Some(0.012), 6.0);
+        assert!(ctl.refuses(5), "an echo over every OFDM rung's limit");
     }
 }

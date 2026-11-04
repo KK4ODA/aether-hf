@@ -2438,6 +2438,29 @@ field sessions for now; and C2 (`OuterLoopController`, `olla`) and C1's `cautiou
 deleted (model, port, tests, their vector sessions; the port's penalty tables went with them) —
 `delivery` and `c1` stay as comparison arms until this review's Gate 6.
 
+**The second review's outcome: one rate controller, at the sender (ADR-0099, link protocol 12,
+2026-11-04).** `docs/research/rate-control-2/03-candidates.md` (candidates D1–D3 and the climb,
+criteria K1–K8, the author's decisions 1–14) and `04-results.md` (the oracle, the harness, the real-
+modem bench). Each station's C1 chooses its own data's rung and nothing recommends one: `rate.py` /
+`rate.rs` hold the tables and C1 as `RateController` (the old controller, `rate_review.py`/`.rs`,
+`GrantConfig.controller`, the climb and the `family_refusal` switch are gone; D3 is always on). The
+stuck frames' targets and the header kept on a try go by the station's own choice; a split goes
+only below its choice when it last read an answer (`_answered_rung`), stuck pieces split again below
+their rung, and the session's `_piece_bound` keeps every later split under it. The master sizes the
+slave's slot in the family the slave states and **the header says which** — the prototype stated
+the advice's rung there, the slave read five tone frames' room where the master granted five OFDM
+frames, and the master's next header went 9 s into the slave's transmission (the review's only
+radiated overlap). The control frame's five rung bits are `slot_floor` (header) and `missed` (frames
+of the other's last transmission the receiver never detected, 7 = no count): `peer_missed`,
+`stats.frames_missed`, the panel's *Rate control* tile (`metrics.missed_there`), the recording's
+`rate` event `snr S missed M`. The review's vector sessions joined `granted_vectors.json` and C1's
+traces `link_vectors.json`; the oracle workflow lost its `bench_link` input and gained
+`controller_only`, and `candidate.yml` went. **What the review learned of the harness:** its steps are
+taken by polling the air clock in wall time, so a call lands a few blocks apart from run to run
+and one daemon on one draw delivered 34 or 48 bit/s; a ten-draw median regret moves by ten points
+between runs (ROADMAP P9-18). Judge builds on the paired measure, and check a surprising difference
+by running each build twice on the same draw.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

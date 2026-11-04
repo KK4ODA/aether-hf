@@ -16,8 +16,8 @@
 use std::{cell::RefCell, collections::VecDeque, fs, path::PathBuf};
 
 use aether_link::{
-    Action, Container, Controller, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming,
-    SoftFrame, State, TxFrame, granted::Role,
+    Action, Container, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
+    State, TxFrame, granted::Role,
 };
 use serde_json::Value;
 
@@ -108,24 +108,7 @@ fn pair(doc: &Value) -> [f64; 2] {
 
 fn config(doc: &Value) -> GrantConfig {
     let levels = doc["levels_s"].as_array().expect("levels");
-    // a controller other than the engine's default is named
-    let controller = match doc.get("controller").and_then(Value::as_str) {
-        None => Controller::default(),
-        Some("current") => Controller::Current,
-        Some("delivery") => Controller::Delivery,
-        Some("delivery-s") => Controller::DeliveryS,
-        Some("c1") => Controller::C1,
-        Some("d1") => Controller::D1,
-        Some(other) => panic!("no controller {other} in the port"),
-    };
     GrantConfig {
-        controller,
-        // D3 of the second review, bench only: named when set
-        family_refusal: doc
-            .get("family_refusal")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        climb: doc.get("climb").and_then(Value::as_bool).unwrap_or(false),
         max_data_frames: int(&doc["max_data_frames"]),
         max_burst_s: opt(&doc["max_burst_s"]),
         max_retries: int(&doc["max_retries"]),
@@ -180,7 +163,6 @@ fn config(doc: &Value) -> GrantConfig {
         silence_levels_after: int(&doc["silence_levels_after"]),
         on_time_to_lower: int(&doc["on_time_to_lower"]),
         need_ease_after: int(&doc["need_ease_after"]),
-        ..GrantConfig::default()
     }
 }
 
@@ -367,7 +349,7 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
-fn stats(s: &GrantStats) -> [(&'static str, usize); 18] {
+fn stats(s: &GrantStats) -> [(&'static str, usize); 19] {
     [
         ("frames_sent", s.frames_sent),
         ("frames_resent", s.frames_resent),
@@ -381,6 +363,7 @@ fn stats(s: &GrantStats) -> [(&'static str, usize); 18] {
         ("probe_replies", s.probe_replies),
         ("frames_reencoded", s.frames_reencoded),
         ("frames_split", s.frames_split),
+        ("frames_missed", s.frames_missed),
         ("left_answered", s.left_answered),
         ("transmissions", s.transmissions),
         ("headers_elided", s.headers_elided),
@@ -469,16 +452,20 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         want["measuring"].as_bool() == Some(e.measuring()),
         e.measuring().to_string(),
     );
-    if let Some(families) = want.get("families") {
-        let model = families
-            .as_array()
-            .map(|f| (f[0].as_bool() == Some(true), f[1].as_bool() == Some(true)));
-        check(
-            "families",
-            model == e.prototype_families(),
-            format!("{:?}", e.prototype_families()),
-        );
-    }
+    let model = want["families"]
+        .as_array()
+        .map(|f| (f[0].as_bool() == Some(true), f[1].as_bool() == Some(true)));
+    check(
+        "families",
+        model == e.rate_families(),
+        format!("{:?}", e.rate_families()),
+    );
+    let missed = want["peer_missed"].as_u64().map(|m| m as u8);
+    check(
+        "peer_missed",
+        missed == e.peer_missed(),
+        format!("{:?}", e.peer_missed()),
+    );
     let note = &want["last_data"];
     check(
         "last_data",
@@ -631,15 +618,4 @@ fn replay_file(file: &str, generator: &str, at_least: usize) {
 #[test]
 fn the_port_does_what_the_model_does_input_by_input() {
     replay_file("granted_vectors.json", "make_granted_vectors.py", 10);
-}
-
-/// The rate controller review's prototype C2 (Gate 3, bench-only), through the same sessions:
-/// the harness's A/B of it is only as good as the port's agreement with the model.
-#[test]
-fn the_rate_review_prototype_does_what_the_model_does() {
-    replay_file(
-        "rate_review_vectors.json",
-        "make_rate_review_vectors.py",
-        10,
-    );
 }

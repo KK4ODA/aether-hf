@@ -497,8 +497,15 @@ pub const GRANTED_VERSION: u8 = 8;
 /// ([`REPORT`]), none of which a station of version 8 reads. 10 since tone4x100-93
 /// (ADR-0081): rung 4 of the 500 Hz ladder is a tone kind where it was QPSK ⅓. 11 since a
 /// stuck frame is sent in pieces (ADR-0086): a DATA frame's `FRAGMENT` flag and its two header
-/// bytes, which a station of version 10 does not read.
-pub const PROTOCOL_VERSION: u8 = 11;
+/// bytes, which a station of version 10 does not read. 12 since one rate controller, at the
+/// sender (ADR-0099): the control frame's five bits that recommended a rung say the family a
+/// header's slot is sized in and how many frames of the transmission answered the receiver never
+/// detected ([`GrantFrame`]).
+pub const PROTOCOL_VERSION: u8 = 12;
+
+/// A control frame's `missed` when its sender read no count for the transmission it answers, so
+/// cannot say how many of its frames it never detected (ADR-0099).
+pub const MISSED_UNKNOWN: u8 = 7;
 
 /// Capability bits 3–4, in a request (a call, a probe) of protocol 8: the gap level of the
 /// slot its answer goes in (ADR-0069). A caller raises it every second try, so a called
@@ -705,7 +712,7 @@ pub const REPORT: u16 = 0x0001;
 /// 1: session (7) | fam (1)
 /// 2: flag (1) | id / measure (1) | SNR (6)
 /// 3: base       4–5: bitmap         (selective acknowledgement, as version 7's)
-/// 6: rung (5) | n (3)
+/// 6: slot family (1) | missed (3) | 0 (1) | n (3)
 /// ```
 ///
 /// `count`: data frames after this one in its transmission, exactly (0–6), and their family
@@ -719,8 +726,13 @@ pub const REPORT: u16 = 0x0001;
 /// after it, the sender's last were and it has not read their report — it sends no data until
 /// it has (ADR-0077). `base`/`bitmap`: what the sender has received of the other station's
 /// data, or with [`REPORT`] set, which of its last measurement's frames arrived. `snr_db`: how
-/// the sender hears the other station, −31 … +31 dB (ADR-0021). `rung`: recommended for the other station's data. `n`: frames granted (or an
-/// open window's size step) / frames queued, at most 7. `session` is the session number's low
+/// the sender hears the other station, −31 … +31 dB (ADR-0021). `slot_floor` (a header): the
+/// slot's `n` frames are the floor's — the family the slave says its data goes in, which the
+/// slave reckons its room in. `missed`: frames of the other station's last transmission, by a
+/// count its sender stated, that this station neither decoded nor detected — 0–6,
+/// [`MISSED_UNKNOWN`] when it read no count (protocol 12, ADR-0099; in protocol 11 these five
+/// bits recommended a rung). `n`: frames granted (or an open window's size step) / frames
+/// queued, at most 7. `session` is the session number's low
 /// seven bits: data frames carry all eight.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // the frame's flag bits, as the wire has them
@@ -749,8 +761,10 @@ pub struct GrantFrame {
     pub bitmap: u16,
     /// How the sender hears the other station, whole decibels, `None` if not measured.
     pub snr_db: Option<f64>,
-    /// The rung recommended for the other station's data.
-    pub rung: u8,
+    /// A header: the slot is sized in floor frames.
+    pub slot_floor: bool,
+    /// Frames of the other station's last transmission this station never detected.
+    pub missed: u8,
     /// Frames granted (or an open window's size step) / frames queued.
     pub n: u8,
 }
@@ -772,7 +786,8 @@ impl GrantFrame {
             base: 0,
             bitmap: 0,
             snr_db: None,
-            rung: 0,
+            slot_floor: false,
+            missed: 0,
             n: 0,
         }
     }
@@ -794,7 +809,9 @@ impl GrantFrame {
             self.base,
             ((self.bitmap >> 8) & 0xFF) as u8,
             (self.bitmap & 0xFF) as u8,
-            ((self.rung & 0x1F) << 3) | (self.n.min(7) & 0x07),
+            (u8::from(self.slot_floor) << 7)
+                | (self.missed.min(MISSED_UNKNOWN) << 4)
+                | (self.n.min(7) & 0x07),
         ]
     }
 
@@ -830,7 +847,8 @@ impl GrantFrame {
             snr_db,
             base: payload[3],
             bitmap: (u16::from(payload[4]) << 8) | u16::from(payload[5]),
-            rung: payload[6] >> 3,
+            slot_floor: payload[6] & 0x80 != 0,
+            missed: (payload[6] >> 4) & 0x07,
             n: payload[6] & 0x07,
         })
     }

@@ -1,6 +1,6 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on `master` (link protocol version 11,
+Status: **draft**, tracking the reference model on `master` (link protocol version 12,
 §7.1). Numbering and constants are stable enough to implement against; anything still open is
 called out in §11.
 
@@ -162,9 +162,8 @@ estimate is by energy, exact where the floor is used and a lower bound on a stro
 glide between tones caps it near +17.5 dB on a clean channel, and on a dispersive one the
 echo's spill into the next symbol, counted as noise, caps it lower — about +15.5 dB on ITU
 Good, +12 on Moderate and +5 on Poor (ADR-0016 §4, `bench/baselines/tone_snr_reading.csv`).
-A rate controller seeded from a floor frame seeds again, once and upward only, from the first
-clean burst it measures on an OFDM rung, when that reads more than 3 dB above the floor's
-reading.
+A rate controller that starts from a floor frame's reading starts low on a strong path; the
+other station's later reports, of OFDM frames it reads, raise it (§7.2 rule 9).
 
 The floor's 40 ms symbols carry a path whose echo breaks the faster rungs, and the SNR such a
 path reads cannot say so: on ITU-R F.1487's disturbed NVIS (two rays 7 ms apart) the floor reads
@@ -177,7 +176,7 @@ and ITU's Good, Moderate and Poor paths read 0.0003 or less. Its rate controller
 rungs the smoothed reading rules out — on the 500 Hz air rungs 3 and 4 above 0.0038, on the
 2 300 Hz air rung 5 above 0.0073 (`bench/baselines/echo.csv`) — and, since it climbs rung by
 rung, does not reach the rungs above one it keeps off. Nothing of this is on the air: a
-receiver that reads no echo recommends as before.
+station that reads no echo chooses as before.
 
 The tones are spaced at the symbol rate about the passband centre and span 400 Hz, inside
 a 500 Hz channel on either air. Between symbols the frequency glides on a raised cosine and
@@ -595,7 +594,7 @@ at 500 Hz in OFDM (§7.2 says which family):
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | link protocol version: 11 |
+| 15 | link protocol version: 12 |
 | 16 | measured SNR, one signed byte (whole dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
 | 17 | the sender's **turnaround**: bits 0–3, how long its radio takes to hear again after it stops sending (VOX hold, receiver recovery), in 0.1 s steps rounded up, 0–1.5 s; bits 4–7 reserved, zero |
 | 18 | the sender's **identifier**: its closing Morse identifier's length in 0.5 s steps rounded up, 0 for none |
@@ -609,20 +608,18 @@ recommended mode to five bits (ADR-0014), 4 added the 500 Hz middle kinds (ADR-0
 burst countdown (ADR-0041), 6 counted it in pairs (ADR-0046), 7 the turn offered at the end of
 a burst (ADR-0047), 8 granted slots (ADR-0069: the control frame below, the connect body's two
 more bytes, and every rule of §7.2), 9 the measurement frames (ADR-0077), 10 the 500 Hz
-rung 4, `tone4x100-93` in the place of QPSK ⅓ (ADR-0081), and 11 a stuck frame sent in pieces,
-the FRAGMENT flag (ADR-0086). The same number
+rung 4, `tone4x100-93` in the place of QPSK ⅓ (ADR-0081), 11 a stuck frame sent in pieces,
+the FRAGMENT flag (ADR-0086), and 12 the control frame's slot family and count of frames never
+detected in the five bits that recommended a rung (ADR-0099). The same number
 names different frames in different versions, so a session between two versions cannot run.
 
 The SNR byte is the **faster start**: a session used to begin at the most robust mode
 and climb from there, a transmission per step, proving what the connect frames had already
-measured. The called station starts its rate controller from the request's SNR and
-sends that SNR back; the caller starts its first data two usable rungs below the fastest
-rung that SNR supports with the controller's margin and hysteresis — never falling from an
-OFDM rung onto the tone floor for that caution; on the floor the two rungs are counted in
-decibels, so a SNR the floor's top rung clears by as much as the two rungs below it would have
-kept starts there (ADR-0066) — and starts its own controller from the SNR
-the acceptance arrived at, which is what it will recommend once it receives. A body that stops
-at the version byte reads as "not measured"; only a version-1 station sends one, and its call is
+measured. The called station sends back the SNR the request arrived at, which is how it hears
+the caller; the caller starts its rate controller from it — its first data at the rung the
+controller's prior rates best from that reading (ADR-0094) — and the called station starts its
+own from the first reading the caller's header reports (§7.2 rule 9). A body that stops at the
+version byte reads as "not measured"; only a version-1 station sends one, and its call is
 ignored.
 
 A `BEACON` frame is **unproto**: sent outside any session, addressed to nobody, with a session
@@ -713,7 +710,9 @@ CONTROL container, seven bytes (link protocol 8, ADR-0069):
 | 2 | 5–0 | SNR: how the sender hears the other station, signed whole decibels −31 … +31 (3 kHz reference, ties to even), 0x20 = not measured |
 | 3 | | base: the next sequence number the sender needs of the other's data |
 | 4–5 | | bitmap: bit *i* set ⇔ `base + i` received — or, with bit 0 set, a **report** of the other station's last measurement: bit *i* + 1 set ⇔ its measurement frame *i* arrived, and nothing at or above `base` is acknowledged |
-| 6 | 7–3 | rung recommended for the other station's data |
+| 6 | 7 | in a header, the slot family: the frames granted are tone-floor frames — the family the slave last stated its data goes in (byte 0 bit 2), which it reckons its room in (ADR-0099); 0 in other frames |
+| 6 | 6–4 | missed (version 12): data frames of the other station's last transmission, by a count it stated, that the sender neither decoded nor detected, 0–6; 7 when it read no count for it |
+| 6 | 3 | reserved, 0 |
 | 6 | 2–0 | n: in a header, the data frames granted, or the open window's size index; in an answer, the frames its sender has queued, at most 7 |
 
 Bit 0 of a plain acknowledgement's bitmap is always clear, since `base` is the first sequence
@@ -788,8 +787,8 @@ deadline. The rules, numbered as in the formal specification
    nothing beyond an answer, at level 0, after a slot it heard, with the answer's family the only
    one the slave may hold; when at most four data frames follow, one of them a copy at RV 0 (the
    only version that decodes alone on every rung, ADR-0073); when none of them goes above the
-   rung the slave recommends, unless the header would be a floor frame (ADR-0076); and when no
-   measurement is under way.
+   rung the master's own rate controller chooses — a try's frame, or a pinned rung's — unless
+   the header would be a floor frame (ADR-0076, ADR-0099); and when no measurement is under way.
 8. **Gap levels.** The slave asks in every answer for the level its own lateness needs, and for
    one that starts its slots no sooner than its answer gap (configured, or learned of the master)
    after the master's frames;
@@ -797,19 +796,24 @@ deadline. The rules, numbered as in the formal specification
    asked and its silence level, which two silent slots in a row raise one step and four slots
    answered on time lower one. A call's or a probe's level is in its capability bits 3–4 and
    rises every second try.
-9. **Rate.** Each station recommends the other's rung in every control frame. The sender
-   chooses its own data's rung (ADR-0094): by the data each rung's frames delivered per second
-   of the air they took, frames never heard included, the recommendation as advice; capped by its
-   own regulatory ceiling (below), its `max_mode` and a pinned rung. It may send one new frame of
-   a transmission at the usable rung above its choice, to try it. A
+9. **Rate.** Each station chooses its own data's rung, and nothing else does (ADR-0094,
+   ADR-0099): by the data each rung's frames delivered per second of the air they took, frames
+   never heard included, against a prior from the other station's reports of how it hears this
+   one (byte 2); capped by its own regulatory ceiling (below), its `max_mode` and a pinned rung.
+   No station recommends a rung to the other. It may send one new frame of a transmission at the
+   usable rung above its choice, to try it. Every control frame says how many data frames of the
+   other station's last transmission its sender never detected (byte 6, `missed`), which only the
+   receiver can know; a sender records it. The master sizes the slave's slot in the family the
+   slave last stated its data goes in, and says which (byte 6 bit 7): the slave reckons its room
+   as `n` frames of that family. A
    data slot heard silent steps the master's own rung down two usable rungs; two silent slots
    step the slave's too and put headers and answers on the floor. Control frames go on the floor
    unless the other station's last three reports cleared the ordinary control frame's threshold
    by 3 dB, and while any of the last four answer slots went silent. A copy goes at the next RV
    in the order 0, 0, 2, 3, then round again (ADR-0043: the second copy is RV 0 so that it
    decodes on its own when the first was never detected; the receiver reads the RV from the
-   chips and combines any order). Below, the *bound* is the lower of the recommendation and the
-   sender's own choice when it last read an answer (ADR-0094). A frame sent four times
+   chips and combines any order). Below, the *bound* is the sender's own choice. A frame sent four
+   times
    unacknowledged at a rung the bound has since left, or after two copies one the other station
    measured further under its rung than four copies can make up (ADR-0038), is re-encoded at the
    most robust usable rung below its own, in the bound's family and no faster than the bound,
@@ -817,16 +821,20 @@ deadline. The rules, numbered as in the formal specification
    number, which the receiver does not combine with the old one. A body no such rung carries
    goes **in pieces** (ADR-0086) after one copy more — the receiver combines a fifth copy with the
    four it holds before it starts over — or after two when the report says combining cannot
-   reach, and only when the lower of the rung the other station itself last recommended — not a
-   step down for a silent slot — and the sender's own choice when it last read an answer is below
-   the frame's: at the usable rung of its family up to that rung that cuts the body into the
+   reach, and only when the sender's own choice when it last read an answer — not a step down for
+   a silent slot — is below the frame's: at the usable rung of its family up to that rung that
+   cuts the body into the
    fewest pieces, the most robust of those (every
    frame of a family is as long as the others, so the pieces are the air), each piece a full
    FRAGMENT frame (§7.1), in transmissions of pieces
    alone and always at RV 0, since the receiver gives a frame that does not decode a sequence
    number by its slot and a piece has none; a block sends each piece once before any again. A
    receiver that decodes a piece infers no sequence number for the transmission's other frames,
-   nor for any while a block it holds pieces of is incomplete. A rung is offered only when no other carries as much data, after the
+   nor for any while a block it holds pieces of is incomplete. A block in pieces that went its
+   copies at their rung without arriving goes in pieces again below it, in its family, whatever
+   the choice, and every split in the session after it goes below that rung (ADR-0099). While
+   the choice is on the floor after OFDM frames that delivered nothing, the OFDM family is
+   refused: a block cut at it comes down at its next transmission (ADR-0099). A rung is offered only when no other carries as much data, after the
    DATA header, per second of air from a threshold no higher (ADR-0073).
 10. **Ending.** The master leaves with a `DISC`, which grants the slave a slot for its
     `DISC_ACK`; it repeats it at most three times, then ends ("closed (no DISC_ACK)"). It sends
@@ -872,9 +880,8 @@ deadline. The rules, numbered as in the formal specification
 
 A station whose rules admit only tone-floor rungs where it is (the regulatory ceiling,
 ADR-0018) sends every frame on the floor: every try of a call, its answers to calls and
-probes, and its control frames. The ceiling is the station's own: the rung it recommends to
-the other station is not capped by it, and each station caps the recommendation it follows by
-its own.
+probes, and its control frames. The ceiling is the station's own, and caps only its own data's
+rung.
 
 Data frames carry no callsign. A station that identifies in Morse (the reference daemon: a
 1 500 Hz tone, at most 20 wpm under US rules; on for a US callsign whatever its setting) does

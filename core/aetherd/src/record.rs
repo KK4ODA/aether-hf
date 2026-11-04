@@ -135,7 +135,7 @@ impl FrameRecord {
 pub fn describe_control(payload: &[u8]) -> Option<String> {
     let frame = aether_link::GrantFrame::decode(payload).ok()?;
     Some(format!(
-        "{:?} session {} count {}{} level {} base {} bitmap {:#06x} rung {} n {} snr {}{}{}{}{}",
+        "{:?} session {} count {}{} level {} base {} bitmap {:#06x} missed {} n {}{} snr {}{}{}{}{}",
         frame.kind,
         frame.session,
         frame.count,
@@ -147,8 +147,15 @@ pub fn describe_control(payload: &[u8]) -> Option<String> {
         frame.level,
         frame.base,
         frame.bitmap,
-        frame.rung,
+        // frames of the other's last transmission this station never detected (protocol 12,
+        // ADR-0099), "-" when it read no count for it
+        if frame.missed == aether_link::frames::MISSED_UNKNOWN {
+            "-".to_owned()
+        } else {
+            frame.missed.to_string()
+        },
         frame.n,
+        if frame.slot_floor { " slot floor" } else { "" },
         frame.snr_db.map_or("-".to_owned(), |s| format!("{s:.0}")),
         if frame.fam { " fam floor" } else { "" },
         if frame.flag { " flag" } else { "" },

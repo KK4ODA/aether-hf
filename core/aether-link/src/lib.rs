@@ -5,7 +5,7 @@
 //! this crate against vectors it generates.
 //!
 //! * [`frames`] — the wire formats, data and control.
-//! * [`rate`] — the receiver-side mode recommendation.
+//! * [`rate`] — the rate controller: the rung a station's own data goes at (ADR-0099).
 //! * [`phy`] — what the engine needs from a physical layer, and nothing more.
 //! * [`granted`] — the link engine, granted slots (ADR-0069).
 //! * [`datagram`] — another program's frames outside sessions (ADR-0019).
@@ -15,15 +15,13 @@ pub mod frames;
 pub mod granted;
 pub mod phy;
 pub mod rate;
-pub mod rate_review;
 
 pub use frames::{
     CONTROL_BYTES, ConnectBody, DATA_HEADER, DataHeader, DataKind, FrameError, GrantFrame,
     GrantKind, ProbeBody, WINDOW,
 };
 pub use granted::{
-    Action, Controller, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult,
-    State,
+    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult, State,
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
-pub use rate::{AWGN_THRESHOLD_DB, RateConfig, RateController, usable_modes};
+pub use rate::{AWGN_THRESHOLD_DB, FrameOutcome, RateController, usable_modes};

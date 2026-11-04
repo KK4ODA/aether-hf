@@ -2086,7 +2086,7 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
             Value::Null
         }
     };
-    let (rate_snr_db, margin_db) = station.engine().rate_readings();
+    let (rate_snr_db, missed_there) = station.engine().rate_readings();
     let last = station.last_frame();
     json!({
         "mode": station.engine().current_mode(),
@@ -2127,9 +2127,10 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         "last_frame_s": last.map(|f| f.t_s),
         // what the other station reports hearing this one at
         "peer_snr_db": station.engine().peer_snr_db(),
-        // the rate controller's own view: the smoothed SNR it acts on and its margin
+        // the rate controller's own view: the smoothed reading it chooses this station's rung by,
+        // and how many frames of this station's last transmission the other never detected
         "rate_snr_db": rate_snr_db,
-        "margin_db": margin_db,
+        "missed_there": missed_there,
         "throughput_bps": station.throughput_bps(),
         // the rungs the session's data went at in the same window, each way: the speed chart's
         // rate lines (null where nothing moved that way)

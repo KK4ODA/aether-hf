@@ -40,6 +40,16 @@ draws × every usable rung, paired by seed), the scenario harness and the real-m
      check its one radiated overlap — five OFDM frames' slot read as five tone frames, 27 s, and
      the master's next header 9 s into it (`04-results.md` §4.1);
    * R9's silence step steps C1 alone.
+   * **Pieces** (ADR-0086, as built): a stranded frame goes in pieces only below the station's
+     choice when it last read an answer — never on silence steps alone, ADR-0086's reason: with
+     the band gone, fast frames split onto the floor made each try 25 s and the master's tries
+     outlasted the timed-out slave's reckoning, and the two closing identifiers overlapped (the
+     prototype bounded the split by its silence-stepped choice, and the model's band-closing
+     tests caught it). A block in pieces that went its copies at their rung without arriving is
+     split again below that rung, in its family, whatever the choice, and every later split in the
+     session goes below it: new data can decode at a rung a block's pieces never do, and with no
+     advice — whose receiver counted the failed pieces — nothing else would bring the block down
+     (`test_a_stuck_frame_goes_in_pieces_and_its_block_arrives`).
 3. **A family refused** (D3, `03-candidates.md` §2.3): C1 refuses the OFDM family while its
    choice is on the floor after OFDM frames that delivered nothing, and a block cut at a refused
    family comes down at its next transmission, not after its copies and the wait for the
@@ -110,8 +120,19 @@ What stays: C1's seven settings (`half_life`, `prior_frames`, `probe_every`, `pr
 * Builds before protocol 12 cannot connect to builds after it.
 * Field builds, held still for rate changes since 2026-11-02, resume with the first protocol 12
   beta.
-* The panel's readings that came from the advice (the rate margin, the rung the other station is
-  asked to send at) change to C1's own; the manual changes with them.
+* The panel's readings that came from the advice change to the controller's own: the *Rate
+  control* tile shows the smoothed reading it chooses by and the frames of the last transmission
+  the other station never detected (`metrics.missed_there` in place of `margin_db`); a recording's
+  `rate` event says `snr S missed M`. The manual changes with them.
+* Two engine rules lose the gain their tests measured under the old controller: the floor
+  answers while recent slots went silent (`floor_answer_memory`) still cut the silent slots, but
+  their time gain holds at 500 Hz and ties at 2 300 Hz (45 s both); holding frames whose answer
+  went unheard (`hold_unknown`) sends 1.5 % more frames at 2 300 Hz and ties in time at 500 Hz
+  over the test's eight seeds. Their tests now hold what is still true — the silent slots cut, no
+  slower; the hold's own mechanism — and their worth is owed, as their docstrings said under
+  C1 at the sender (a candidate for removal).
+* `tools/rung_reading.py --replay` replays the advice only on a session from before protocol 12,
+  with `--tree` at its build.
 * After the build: every scenario on the new default, the nightly's baseline
   (`bench/baselines/scenarios.csv`) refreshed from it, and the weekly speed check added
   (`03-candidates.md` §4, answer 5).
