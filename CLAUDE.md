@@ -2427,8 +2427,8 @@ OFDM pieces at rung 5 for four more rounds, before it reaches the floor (ADR-008
 trend's `40m-rtty-contest-2300` file at 116–133 bit/s (baseline 165–392, flagged since 10-22) is
 the advice sitting at rungs 4–5 at +8 to +13 dB readings under the RTTY QRM. All of it is the rate
 controller and its stuck-frame targets, owed to the next review (ADR-0094 §5), not patched; the
-budgets stay. `bench/baselines/scenarios.csv` is still `83eabd0`'s: refreshing it would record
-these slowdowns as normal.
+budgets stay. `bench/baselines/scenarios.csv` stayed `83eabd0`'s until ADR-0099 was built:
+refreshing it would have recorded these slowdowns as normal.
 **The rate controller's second review started the same day** (the author's "start the rate
 controller review"): `docs/research/rate-control-2/00-brief.md` (scope, what the first review left
 and owed, the gates, four questions for the author); Gate 0's oracle on today's daemon runs first.
@@ -2459,7 +2459,14 @@ traces `link_vectors.json`; the oracle workflow lost its `bench_link` input and 
 taken by polling the air clock in wall time, so a call lands a few blocks apart from run to run
 and one daemon on one draw delivered 34 or 48 bit/s; a ten-draw median regret moves by ten points
 between runs (ROADMAP P9-18). Judge builds on the paired measure, and check a surprising difference
-by running each build twice on the same draw.
+by running each build twice on the same draw. **The build's proof:** the nightly on `33c6dd0`, every
+scenario × 3 draws, 183 of 183, no radiated overlap, nothing slower than `83eabd0`'s baseline and
+seven scenarios faster; `bench/baselines/scenarios.csv` is those runs. The weekly's speed check
+(`weekly.yml`: `speed`, `speed-report`; dispatched by hand it takes `draws`, `only` and `long`)
+compares this build's own choice with the newest release's, ten draws paired by seed; a scenario
+whose range goes over 1.10 is run again on fresh draws before anything is read into it.
+`80m-agc-carrier-outside-500` stays at its budget's edge (a 1 000-byte message in 300 s at 500 Hz on
+ITU NVIS: 182–275 s on Linux, over 300 s on one macOS draw in CI's quick set, as before the review).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
