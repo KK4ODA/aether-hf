@@ -1,6 +1,6 @@
 # Gate 3: the candidates on the harness
 
-*2026-11-03/04. The outcome is D1 with D3 (the author's decision 8, `03-candidates.md` §6); the climb is parked (decision 10). Remaining: K3, K4, K5, K7 on D1 + D3, then the decision record. The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
+*2026-11-03/04. The outcome is D1 with D3 (the author's decision 8, `03-candidates.md` §6); the climb is parked (decision 10). The last checks on D1 + D3 are §4; the decision record waits on the author's reading of them. The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
 then D1 against D2, then the dip and the climb. Each is judged on the criteria of
 `03-candidates.md` §3 against today's pair (`01-evidence.md` §1, `bench/baselines/
 rate_oracle_beta127.csv`).*
@@ -323,5 +323,25 @@ draws under K2's rule: the AGC test 1.02 (0.87–1.15), 80 m flutter 1.00 (0.94�
 thunderstorm 1.02 (0.95–1.12) — the last already passed its fresh draws on §2's D1, 1.00
 (0.98–1.03).
 
-The AGC test and 80 m flutter run again on draws 10–19 (oracle runs 20 and 21, the fixed D1 + D3
-and today's default, controller only); their result follows here when they finish.
+**K2's fresh draws** (oracle runs 20 and 21, draws 10–19, the fixed D1 + D3 and today's default,
+controller only, each run's switch and draws confirmed from its log; per draw in
+`data/oracle_k2_fresh.csv`): the AGC test 0.93 (0.85–1.03), every run delivered on both builds;
+80 m flutter 1.00 (0.94–1.06). **Both pass: the fixed D1 + D3 meets K2.**
+
+### 4.4 Reading
+
+* **K4 is met on the fix**, and the overlap the first run found was the prototype's, not granted
+  slots': a slot sized in one family and read in another. Protocol 12 keeps the slot's family in
+  the header.
+* **No scenario is slower** than today's controller on the paired measure (K2, with its fresh
+  draws), and two are faster: the strong Moderate path 0.89 and AWGN 0.91. K5 is within ×1.05 at
+  55 of 56 points and ×1.000 pooled; its one point over is one session of three.
+* **K1(a) cannot separate D1 + D3 from today** on this harness: two runs of D1 gave +14.5 % and
+  +24.2 % against today's +21.8 %, and the three bootstrap ranges overlap. The case for D1 + D3 is
+  then decision 8's second half and decision 11: no slower anywhere, faster where it differs, and
+  one decision-maker with fourteen settings where today has two controllers and thirty-one.
+* **K3** fails in one draw of three, the same draw and the same rungs as today's controller: the
+  start is not D1's to change.
+* **The harness's step timing** makes a comparison of two builds at one seed a fresh draw wherever
+  a step lands a few blocks apart (§4.3). Taking the steps on the air's clock would make every
+  pair a pair; it is a harness item, not this review's.
