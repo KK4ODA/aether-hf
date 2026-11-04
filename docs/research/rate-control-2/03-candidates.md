@@ -185,3 +185,16 @@ Notes:
 7. **D3 (items 2 and 3) is accepted as a component** of D1 and D2, the AGC test's half-point K8
    (ii) miss included; item 1, the echo limit, stays unset. D1 and D2 are each run with it.
 
+## 6. The author's decisions (2026-11-04)
+
+8. **D1 with D3 is the outcome.** K1(a)'s target is relaxed to "better than today and no slower
+   anywhere": D1 + D3 reached +14.5 % median regret (today +21.8 %), is no slower than today on
+   any scenario, paired and confirmed on fresh draws, and passed both echo tests ten of ten. The
+   remaining checks (K3, K4, K5, K7) run on D1 + D3, then the decision record.
+9. **Link protocol 12.** The five bits that carried the recommended rung carry how many of the
+   transmission's frames the receiver never detected, and the old controller is deleted. Builds
+   before it cannot connect to builds after it; the release notes say "Update required".
+10. **The 2 300 Hz fading paths are parked** as their own item (ROADMAP P9-17): the loss there is
+    information the controller lacks, not a rule it lacks. The climb is not built further, and its
+    switch goes with the other bench arms at Gate 6.
+

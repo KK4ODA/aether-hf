@@ -1,6 +1,6 @@
 # Gate 3: the candidates on the harness
 
-*In progress (2026-11-03; D3 accepted as a component, D1 leads D2 (§2); K2 paired: the author's answers 6–7 in `03-candidates.md` §5). The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
+*2026-11-03/04. The outcome is D1 with D3 (the author's decision 8, `03-candidates.md` §6); the climb is parked (decision 10). Remaining: K3, K4, K5, K7 on D1 + D3, then the decision record. The order is the author's (`03-candidates.md` §4, answer 4): D3 first,
 then D1 against D2, then the dip and the climb. Each is judged on the criteria of
 `03-candidates.md` §3 against today's pair (`01-evidence.md` §1, `bench/baselines/
 rate_oracle_beta127.csv`).*
