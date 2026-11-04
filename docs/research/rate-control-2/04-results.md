@@ -345,3 +345,34 @@ controller only, each run's switch and draws confirmed from its log; per draw in
 * **The harness's step timing** makes a comparison of two builds at one seed a fresh draw wherever
   a step lands a few blocks apart (§4.3). Taking the steps on the air's clock would make every
   pair a pair; it is a harness item, not this review's.
+
+## 5. After the build
+
+ADR-0099 §5's checks, on the build itself (`33c6dd0`, link protocol 12, the one controller the
+default).
+
+* **Every scenario on the new default** (the nightly, run 56): 61 scenarios × 3 draws, 183 of 183
+  pass, no radiated and no RF overlap. Against `83eabd0`'s baseline nothing is slower and seven
+  scenarios are faster (`20m-dx-500`, `40m-drift-and-clocks-2300`, `40m-moderate-2300-vara-qrm`,
+  `80m-flutter-500`, `80m-lopsided-acks-500`, `80m-poor-500-pactor-signalink`,
+  `80m-qsb-dropout-500`). `bench/baselines/scenarios.csv` is now those runs.
+* **The weekly speed check** (`weekly.yml`; the oracle's 22 scenarios, this build's own choice
+  against beta.127's, paired by seed): on draws 0–9 none slower, `quick-awgn-2300` faster (0.91,
+  0.91–0.95), and five ranges over 1.10. Run again on draws 10–19:
+
+  | scenario | draws 0–9 | draws 10–19 | verdict |
+  |---|---|---|---|
+  | `80m-agc-carrier-outside-500` | 1.02 (0.80–1.12) | 0.93 (0.89–1.00) | not slower |
+  | `80m-flutter-500` | 1.04 (0.96–1.12) | 1.00 (0.91–1.05) | not slower |
+  | `80m-nvis-evening-500` | 1.01 (0.89–1.15) | 1.00 (0.82–1.08) | not slower |
+  | `80m-slow-machine-500` | 1.02 (0.94–1.15) | 1.00 (0.94–1.19) | twenty draws pooled 1.02 (0.97–1.09): not slower |
+  | `80m-thunderstorm-agc-2300` | 1.05 (0.99–1.13) | 1.02 (0.98–1.06) | not slower |
+
+* **CI's quick set**: `80m-agc-carrier-outside-500`'s own draw (seed 31; a 1 000-byte message in
+  300 s at 500 Hz on ITU NVIS) failed one OS of three at `3b11d97` (macOS) and at `44e8dbb`
+  (Ubuntu), as it failed Windows at `b2e487c` under the old controller. The nightly's three draws
+  took 217, 275 and 182 s, and paired with beta.127 the build is not slower on it. The macOS run
+  read from both sidecars: the call read 10 dB, so the first transmissions went at OFDM rungs 7 and
+  5, which the 7 ms echo kills (one frame of eighteen decoded, about 40 s), then the floor at
+  rung 0; every answer was read, and 32 blocks were acknowledged by 347 s. The scenario sits at its
+  budget's edge, a draw either side of it, before the review and after.

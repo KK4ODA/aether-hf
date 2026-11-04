@@ -2465,8 +2465,10 @@ seven scenarios faster; `bench/baselines/scenarios.csv` is those runs. The weekl
 (`weekly.yml`: `speed`, `speed-report`; dispatched by hand it takes `draws`, `only` and `long`)
 compares this build's own choice with the newest release's, ten draws paired by seed; a scenario
 whose range goes over 1.10 is run again on fresh draws before anything is read into it.
+On draws 0–9 and again 10–19 nothing is slower than beta.127 (`04-results.md` §5).
 `80m-agc-carrier-outside-500` stays at its budget's edge (a 1 000-byte message in 300 s at 500 Hz on
-ITU NVIS: 182–275 s on Linux, over 300 s on one macOS draw in CI's quick set, as before the review).
+ITU NVIS: 182–275 s in the nightly; CI's quick set failed it on one OS of three at `3b11d97` and at
+`44e8dbb`, as on Windows at `b2e487c` under the old controller).
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
