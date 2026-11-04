@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: "41 2 * * 0"   # Sundays, 02:41 UTC
   workflow_dispatch:
+    inputs:
+      draws:
+        description: "The speed check's draws of each scenario, comma separated (0 is the scenario's own seed)"
+        default: "0,1,2,3,4,5,6,7,8,9"
+      only:
+        description: "The speed check on these scenarios only (file names without .toml, space separated); empty runs all"
+        default: ""
+      long:
+        description: "Run the gateway's day too"
+        type: boolean
+        default: true
 
 jobs:
   # A gateway's day, compressed (bench/scenarios/long/): one gateway and three clients calling
@@ -11,6 +22,7 @@ jobs:
   # for days needs — every round's sessions ending, both ends idle, and the daemons' memory,
   # open files and threads flat from the first round's end to the last.
   long:
+    if: ${{ github.event_name == 'schedule' || inputs.long }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -52,7 +64,8 @@ jobs:
   # release's, paired by seed (tools/oracle_report.py compare --paired). The nightly says whether
   # the sessions pass; this says whether they got slower. A step lands a few blocks apart from one
   # run to the next (ROADMAP P9-18), so a single pair can differ by chance: a scenario the range
-  # puts over 1.10 is the one to run again before reading anything into it.
+  # puts over 1.10 is the one to run again before reading anything into it — by hand, with fresh
+  # draws (`draws`, say 10–19) and those scenarios alone (`only`), the gateway's day left out.
   speed-build:
     runs-on: ubuntu-latest
     steps:
@@ -117,28 +130,41 @@ jobs:
           - 40m-good-2300-rtty-crashes
           - 40m-moderate-2300-vara-qrm
     steps:
+      - name: This scenario or not
+        id: pick
+        run: |
+          only="${{ inputs.only }}"
+          if [ -z "$only" ] || [[ " $only " == *" ${{ matrix.scenario }} "* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v7
+        if: steps.pick.outputs.run == 'true'
       - uses: actions/download-artifact@v8
+        if: steps.pick.outputs.run == 'true'
         with:
           name: speed-daemons
           path: bin
-      - run: chmod +x bin/aetherd bin/aetherd-build
+      - if: steps.pick.outputs.run == 'true'
+        run: chmod +x bin/aetherd bin/aetherd-build
       - uses: astral-sh/setup-uv@v10.1.0
+        if: steps.pick.outputs.run == 'true'
         with:
           enable-cache: true
-      - run: uv sync --locked
+      - if: steps.pick.outputs.run == 'true'
+        run: uv sync --locked
       - name: This build and the release, the controller's own choice
+        if: steps.pick.outputs.run == 'true'
         run: |
           for arm in build release; do
             daemon=bin/aetherd-build
             if [ "$arm" = "release" ]; then daemon=bin/aetherd; fi
             out="${{ runner.temp }}/speed/$arm"
             uv run python tools/rung_oracle.py "bench/scenarios/${{ matrix.scenario }}.toml" \
-              --rungs "" --draws "0,1,2,3,4,5,6,7,8,9" --jobs 2 --drop-audio \
+              --rungs "" --draws "${{ inputs.draws || '0,1,2,3,4,5,6,7,8,9' }}" --jobs 2 --drop-audio \
               --daemon "$daemon" --out "$out/runs" --summary "$out/summary.csv"
           done
       - uses: actions/upload-artifact@v7
-        if: always()
+        if: always() && steps.pick.outputs.run == 'true'
         with:
           name: speed-${{ matrix.scenario }}
           path: ${{ runner.temp }}/speed
