@@ -141,3 +141,44 @@ pairing: runs 14 and 15.
 miss avoided, and one decision-maker where D2 keeps two. Neither meets K1(a) — the regret that
 is left belongs to the climb (§2.4), which is the next step, on D1.
 
+## 3. The climb, on D1
+
+### 3.1 Why D1 does not climb
+
+Read from D1's own runs (run 8, draws 0–2) at the master, the station whose data is measured.
+
+* **The equatorial flutter path** (15 m, 10 Hz flutter at 10 dB; best fixed rung 10, 800 bit/s).
+  Every draw read the call on the floor at −1 … +1 dB, the floor's reading falling short on fast
+  fading. From it the sender started at the floor's top (rung 5) in two draws and sent the whole
+  1 500-byte message there in two transmissions, before a try's wait (six full transmissions at
+  the rung tried) ran out: 211 bit/s, exactly what rung 5 delivers pinned. In the third draw the
+  same kind of reading started it at OFDM rung 9: 522 bit/s.
+* **The polar path** (20 m, ITU high-latitude moderate at 12 dB; best fixed rungs 15 and 9,
+  300–440 bit/s). The answers went on the floor (the readings −2 … +5 dB), and priced with floor
+  answers the first OFDM rung (7) delivers less than the floor's top even with nothing lost —
+  the dip of §2.4. The next-rung try is the only try there is, so in one draw no try of OFDM was
+  ever due (the whole message at rung 5) and in another the one try of rung 7 judged it worse and
+  went back. Rungs 9 and 15 were never tried.
+
+### 3.2 What was built
+
+`GrantConfig.climb` (model and port, `AETHER_BENCH_LINK=climb`), on C1 at the sender, with no new
+tunable:
+
+1. **The try's rung.** Of the usable rungs above the choice whose lossless delivery, priced per
+   exchange, beats the choice's estimate, the one the estimate rates best (SampleRate's pruning,
+   `03-candidates.md` §2.4) — from the 2 300 Hz floor's top with floor answers that skips rung 7.
+2. **When.** A transmission whose frames at the choice all decoded alone starts the try at once,
+   across the floor's edge too; a try that failed since the rung last carried has doubled its
+   wait, as before.
+3. **The whole transmission.** A try's frames fill the transmission, so it is decided in one
+   exchange.
+
+The dip's own fix (pricing a try with the answers it would earn) is not built: with item 1 the
+first OFDM rung is no longer the only candidate.
+
+### 3.3 On the harness
+
+D1 with D3 and the climb (`family_refusal,controller=d1,climb`), ten draws, every rung (runs
+16–18 of 2026-11-04). *(pending)*
+
