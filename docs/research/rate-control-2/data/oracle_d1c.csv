@@ -92,6 +92,10 @@ scenario,seed,auto_metric,best_rung,best_metric
 80m-lopsided-acks-500,59,80,10,103
 80m-lopsided-acks-500,1059,94,12,110
 80m-lopsided-acks-500,2059,104,9,109
+80m-lopsided-acks-500,3059,103,9,113
+80m-lopsided-acks-500,4059,92,10,116
+80m-lopsided-acks-500,5059,90,10,103
+80m-lopsided-acks-500,6059,104,7,115
 80m-lopsided-acks-500,7059,95,9,107
 80m-lopsided-acks-500,8059,95,4,102
 80m-lopsided-acks-500,9059,103,10,118
