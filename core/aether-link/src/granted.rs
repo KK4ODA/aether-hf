@@ -3554,7 +3554,11 @@ impl GrantedEngine {
     fn send_header(&mut self) {
         let rung = self.recommend(self.slave_floor_only);
         // D1: the slave's data goes in its own C1's family, which its control frames state
-        // (`data_floor`); the recommendation, still sent, is no measure of it
+        // (`data_floor`); the recommendation is no measure of it. The header's rung is what the
+        // slave reckons its room in (`schedule_slave`), so it states the rung the slot is sized
+        // at: sending the advice there, a floor rung over a slot sized in OFDM frames, gave the
+        // slave five tone frames' room where the master reckoned five OFDM frames, and the
+        // master's next header went 9 s into the slave's 27 s (04-results.md §4)
         let sized = if self.own_only() {
             self.robust_mode(self.slave_floor_only)
         } else {
@@ -3633,7 +3637,7 @@ impl GrantedEngine {
                 base,
                 bitmap,
                 snr_db: self.heard_db,
-                rung: u8::try_from(rung).unwrap_or(31),
+                rung: u8::try_from(sized).unwrap_or(31),
                 n: u8::try_from(if open_window { index } else { n }).unwrap_or(7),
             };
             frames.insert(0, Self::control(&ctl, hdr_floor));

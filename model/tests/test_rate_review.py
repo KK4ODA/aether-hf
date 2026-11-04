@@ -12,7 +12,7 @@ import math
 import pytest
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
-from aether_model.link.frames import data_capacity, seq_after
+from aether_model.link.frames import GrantFrame, data_capacity, seq_after
 from aether_model.link.granted import GrantConfig, GrantedEngine, State, _TxRecord
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container
@@ -490,7 +490,11 @@ def test_d1_brings_a_stranded_frame_down_under_its_own_choice_whatever_the_advic
 def test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states() -> None:
     """The master grants the slave's slot in frames of the family the slave says its data goes in
     (``data_floor``), not of the rung the master recommends: under D1 the slave does not follow
-    the recommendation."""
+    the recommendation. And the header states that rung, which the slave reckons its room in: the
+    slave's room is the master's reckoning of the slot, whatever the advice — with the advice in
+    the header, a floor rung over a slot sized in OFDM frames, the slave of the final checks'
+    Trimode run sent 27 s of tone frames into a slot the master reckoned at 6 s
+    (rate-control-2/04-results.md §4)."""
     a, b = _pair(NARROW, "d1")
     sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
     a.connect("KK4XYZ")
@@ -503,14 +507,27 @@ def test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states() -> None:
         sized.append(rung)
         return original(rung)
 
+    sent: list[tuple[float, GrantFrame]] = []
+    keyed = a._key_granting
+
+    def key(slot, frames):  # type: ignore[no-untyped-def]
+        control = [f for f in frames if f.container is Container.CONTROL]
+        if control:
+            sent.append((slot.grant_s, GrantFrame.decode(control[0].payload)))
+        keyed(slot, frames)
+
     a._grant_size = spy  # type: ignore[method-assign]
+    a._key_granting = key  # type: ignore[method-assign]
     a._recommend = lambda floor_only=False: 0  # type: ignore[method-assign]  # advice: the floor
-    a._slave_floor_only = False
-    a._send_header()
-    assert sized and not a.timing.is_floor(sized[-1])
-    a._slave_floor_only = True
-    a._send_header()
-    assert a.timing.is_floor(sized[-1])
+    for floor_only in (False, True):
+        a._slave_floor_only = floor_only
+        a._send_header()
+        assert sized and a.timing.is_floor(sized[-1]) == floor_only
+        grant_s, header = sent[-1]
+        assert header.rung == sized[-1]
+        # what the slave reckons its data's room in (``_schedule_slave``) fits the master's slot
+        room = header.n * a._frame_s(a.timing.is_floor(header.rung))
+        assert header.n > 0 and room <= grant_s + 1e-9
 
 
 # ── the climb (rate-control-2/03-candidates.md §2.4) ──────────────────────────────────

@@ -2315,7 +2315,11 @@ class GrantedEngine:
     def _send_header(self) -> None:
         rung = self._recommend(self._slave_floor_only)
         # D1: the slave's data goes in its own C1's family, which its control frames state
-        # (``data_floor``); the recommendation, still sent, is no measure of it
+        # (``data_floor``); the recommendation is no measure of it. The header's rung is what
+        # the slave reckons its room in (``_schedule_slave``), so it states the rung the slot is
+        # sized at: sending the advice there, a floor rung over a slot sized in OFDM frames, gave
+        # the slave five tone frames' room where the master reckoned five OFDM frames, and the
+        # master's next header went 9 s into the slave's 27 s (04-results.md §4)
         sized = self.robust_mode(self._slave_floor_only) if self._own_only() else rung
         n, open_window, index = self._grant_size(sized)
         wanted = self._wants_floor() or self._silent >= 2 or any(self._recent_silent)
@@ -2376,7 +2380,7 @@ class GrantedEngine:
                 flag=open_window,
                 measure=measuring,
                 snr_db=self._heard_db,
-                rung=rung,
+                rung=sized,
                 n=index if open_window else n,
                 **self._ack_fields(),
             )
