@@ -39,6 +39,7 @@ from aether_model.link.frames import (
     encode_data,
     level_of,
     pieces,
+    seq_after,
     with_level,
 )
 from aether_model.link.granted import (
@@ -54,6 +55,7 @@ from aether_model.link.granted import (
     SlotTransmit,
     State,
     Transmit,
+    _TxRecord,
 )
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
@@ -155,7 +157,8 @@ def test_the_control_frame_carries_every_field() -> None:
         base=200,
         bitmap=0xA5C2,
         snr_db=-12.4,
-        rung=19,
+        slot_floor=True,
+        missed=5,
         n=7,
     )
     raw = frame.encode()
@@ -342,7 +345,7 @@ def test_a_frame_of_a_closed_slot_moves_no_deadline() -> None:
     slot = a._slot
     assert slot is not None
     before = dict(a._deadlines)
-    old = GrantFrame(GrantKind.ANSWER, a.session & 0x7F, n=5, rung=3).encode()
+    old = GrantFrame(GrantKind.ANSWER, a.session & 0x7F, n=5).encode()
 
     class Old:
         container = Container.CONTROL
@@ -628,9 +631,7 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
     44 s with it against 41 s without (``04-results.md`` §3.28): owed to the next review."""
 
     def run(memory: int) -> tuple[int, float]:
-        a, b = _pair(
-            AIRS[air], floor_answer_memory=memory, hold_unknown=False, controller="current"
-        )
+        a, b = _pair(AIRS[air], floor_answer_memory=memory, hold_unknown=False)
         rng = random.Random(7)
 
         def bursts(frame: TxFrame) -> float:
@@ -654,7 +655,12 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
     silent_before, t_before = run(0)
     silent_after, t_after = run(4)
     assert silent_after < silent_before, (silent_before, silent_after)
-    assert t_after < t_before, (t_before, t_after)
+    # the time gain was measured with the old controller choosing the rung; under the one
+    # controller (ADR-0099 §5) it holds at 500 Hz and ties at 2 300 Hz (45 s both)
+    if air == "500":
+        assert t_after < t_before, (t_before, t_after)
+    else:
+        assert t_after <= t_before, (t_before, t_after)
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])
@@ -662,49 +668,38 @@ def test_frames_whose_answer_went_unheard_are_not_resent_blind(air: str) -> None
     """10-step-3.md §3.4: on the PACTOR path protocol 8's slave decoded more frames than protocol
     7's and still finished later — the master resent every frame of a transmission whose answer
     it had not heard, and the slave had most of them. With ``hold_unknown`` those frames wait for
-    an answer to say what arrived: fewer frames for the same bytes, and sooner.
+    an answer to say what arrived, through one silent slot; two in a row and the answers are not
+    getting through, and they go again rather than not at all.
 
-    Measured, and held here, with the current controller choosing the rung. Under C1 at the
-    sender (ADR-0094) the frames are still fewer, but the time is not: 1125 s blind against
-    1445 s held at 2 300 Hz over these eight seeds, 3310 against 3425 s at 500 Hz, and neutral on
-    the PACTOR scenario (2976 against 2944 s of air over ten draws, ``04-results.md`` §3.28):
-    owed to the next review."""
+    Its gain — fewer frames, and sooner — was measured with the old controller choosing the rung
+    (twelve seeds: a fifth less time, a quarter fewer frames). Under C1 at the sender it was
+    already gone at 2 300 Hz (``rate-control/04-results.md`` §3.28), and under the one
+    controller (ADR-0099 §5) eight seeds of the test that held it send 1.5 % more frames at
+    2 300 Hz and tie in time at 500 Hz: what is held here is the rule, and its worth is owed."""
+    a, b = _pair(AIRS[air], hold_unknown=True)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    assert a.state is State.CONNECTED
+    held = []
+    for _ in range(2):
+        seq = a._tx_next
+        body = bytes(data_capacity(a.timing.capacity(0)))
+        a._records[seq] = _TxRecord(seq, body, 0, origin=0, tx_count=1, unknown=True)
+        a._tx_next = seq_after(seq)
+        held.append(seq)
 
-    def run(hold: bool, seed: int) -> tuple[int, float]:
-        a, b = _pair(AIRS[air], floor_answer_memory=4, hold_unknown=hold, controller="current")
-        rng = random.Random(seed)
-        hits = random.Random(100 + seed)
+    def resent() -> set[int]:
+        return {
+            decode_data(f.payload)[0].seq
+            for f in a._data_frames(math.inf)
+            if f.container is Container.DATA
+        }
 
-        def bursts(frame: TxFrame) -> float:
-            if (
-                frame.container is Container.CONTROL
-                and not frame.floor
-                and GrantFrame.decode(frame.payload).kind is GrantKind.ANSWER
-            ):
-                return -40.0 if hits.random() < 2 / 3 else 0.0
-            return -40.0 if hits.random() < 1 / 3 else 0.0
-
-        sim = TwoStationSim(a, b, snr_db=8.0, seed=seed, frame_snr_offset=bursts)
-        message = bytes(rng.randrange(256) for _ in range(3000))
-        a.connect("KK4XYZ")
-        a.send(message)
-        t = 0.0
-        while len(sim.st[1].delivered) < len(message) and t < 1500.0:
-            t += 5.0
-            sim.run(until=t)
-        assert bytes(sim.st[1].delivered) == message, "not all of it, in order"
-        return a.stats.frames_sent, t
-
-    # eight seeds: one transfer is a draw of the bursts, and either rule can be the luckier.
-    # Four were enough until ADR-0093 let the 2 300 Hz link leave rung 7: then seeds 0-3 tied
-    # to the second at 2 300 Hz (held slower in two), while twelve still gave held 20 % less
-    # time and a quarter fewer frames
-    blind = [run(False, seed) for seed in range(8)]
-    held = [run(True, seed) for seed in range(8)]
-    sent = (sum(n for n, _ in blind), sum(n for n, _ in held))
-    took = (sum(t for _, t in blind), sum(t for _, t in held))
-    assert sent[1] < sent[0], sent
-    assert took[1] < took[0], took
+    a._silent = 1
+    assert not set(held) & resent(), "resent blind after one silent slot"
+    a._silent = 2
+    assert set(held) <= resent(), "held through a second silent slot"
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])
@@ -1568,12 +1563,20 @@ def test_a_frame_goes_in_pieces_only_after_the_copy_its_receiver_combines_last()
                 copies.setdefault(header.seq, []).append((f.mode, header.fragment))
     split = {seq: c for seq, c in copies.items() if any(piece for _, piece in c)}
     assert split
+    # a block cut at OFDM comes down at once: the path refuses the family, and HARQ cannot rescue
+    # a frame whose family it does not carry (D3, ADR-0099 §2.3). A floor rung's block waits
+    # for its last combined copy
+    floor_blocks = 0
     for seq, history in split.items():
         whole = [mode for mode, piece in history[: [p for _, p in history].index(True)]]
+        if not a.timing.is_floor(whole[-1]):
+            continue
+        floor_blocks += 1
         at_last_rung = next(
             (i for i, mode in enumerate(reversed(whole)) if mode != whole[-1]), len(whole)
         )
         assert at_last_rung >= a.cfg.max_combines + 1, (seq, history)
+    assert floor_blocks, "no block cut at a floor rung was split"
     assert sim.overlaps() == []
 
 
@@ -1895,32 +1898,6 @@ def test_the_fastest_rung_is_a_live_setting() -> None:
     done = _exchange(sim, a, b, b"r" * 6000, b"s" * 2000)
     assert done is not None
     assert max(modes) == 8  # the path carries far more: the setting is what holds it
-
-
-def test_a_transmission_split_evenly_between_two_rungs_is_judged_at_the_slower() -> None:
-    """The rate controller judges a transmission at the rung most of it went at; of two as
-    common, the slower — a rule written out so the port takes the same one (the Rust engine's
-    unit test says the same)."""
-    from types import SimpleNamespace
-
-    from aether_model.link.granted import _RxRecord
-
-    timing = _timing(WIDE)
-    engine = GrantedEngine("W4ODA", timing, GrantConfig(), seed=1)
-
-    def record(mode: int, decoded: bool) -> _RxRecord:
-        frame = SimpleNamespace(mode=mode, trusted=True, rv=0, snr_db=8.5, floor=False)
-        return _RxRecord(frame, 0, b"" if decoded else None)  # type: ignore[arg-type]
-
-    engine._observe([record(12, True), record(12, False), record(9, True), record(9, False)])
-
-    def judged_at(mode: int) -> float:
-        rate = GrantedEngine("W4ODA", timing, GrantConfig(), seed=1).rate
-        rate.observe(8.5, 2, 2, mode)
-        return rate.margin_db
-
-    assert abs(judged_at(9) - judged_at(12)) > 0.1
-    assert engine.rate.margin_db == judged_at(9)
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])

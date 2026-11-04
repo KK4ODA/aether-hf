@@ -318,7 +318,7 @@ def limits(rows: list[dict[str, str]], bw: int) -> dict[int, float]:
 def exchange_worth(bw: int) -> dict[int, float]:
     """Per rung, the data bytes a second of a whole exchange carries with nothing lost: a full
     transmission of its frames, a control frame each way in its own family and the two gaps —
-    what C1 ranks rungs by (``DeliveryController._priced``), from the protocol's own lengths.
+    what the rate controller ranks rungs by (``RateController._priced``), from the protocol's own lengths.
     Pricing the answers in the data's own family is the kindest to OFDM: on an echo path its
     answers may go on the floor, at 3.2 s each."""
     air = AIRS[bw]

@@ -69,7 +69,6 @@ from aether_model.frame.modes import NARROW, WIDE, AirInterface  # noqa: E402
 from aether_model.link.frames import SEQ_MOD, WINDOW, data_capacity, seq_distance  # noqa: E402
 from aether_model.link.granted import (  # noqa: E402
     RV_SEQUENCE,
-    SELF_DECODABLE_RVS,
     GrantConfig,
     GrantedEngine,
 )
@@ -82,6 +81,14 @@ try:
     from aether_model.link.granted import PhyTiming
 except ImportError:  # a tree before Step 5 (2026-10-20) kept it with protocol 7's engine
     from aether_model.link.engine import PhyTiming
+try:
+    from aether_model.link.granted import SELF_DECODABLE_RVS
+except ImportError:  # protocol 12 (ADR-0099) has no advice for these to count for
+    SELF_DECODABLE_RVS = frozenset({0, 3})
+try:
+    from aether_model.link.rate import FrameOutcome
+except ImportError:  # a tree before ADR-0099 kept C1 with the review's prototypes
+    from aether_model.link.rate_review import FrameOutcome
 try:
     from aether_model.link.frames import REPORT
 except ImportError:  # before protocol 9 (ADR-0077) bit 0 of a plain acknowledgement is never set
@@ -926,10 +933,12 @@ def controller_for(
     tree's engine hands it (the thresholds, the usable rungs, the floor, its echo limits, a cap
     it once had) is what the replay runs — ``rate`` the daemon's ``[link] rate`` overrides,
     none by default; ``controller`` a prototype of the rate controller's review (Gate 3), which
-    only this tree's engine has."""
+    only a tree before ADR-0099 has: from protocol 12 the engine's one controller is C1, and
+    the advice a ``current`` replay compares against is in no control frame (run the replay of
+    an older session with ``--tree`` at its build)."""
     cfg = GrantConfig(rate=dict(rate or {}))
-    if controller != "current":
-        cfg.controller = controller  # type: ignore[attr-defined]
+    if controller != "current" and hasattr(cfg, "controller"):
+        cfg.controller = controller
     engine = GrantedEngine("TOOL", timing_of(air), cfg)
     return engine.rate
 
@@ -1148,8 +1157,6 @@ def outcomes_of(
     review (``granted._outcomes``): every frame decoded or trusted, at the rung read off its
     chips, and — when the station read the header, or decoded a frame of the transmission and
     could believe its count — every frame sent and never detected, at its rung."""
-    from aether_model.link.rate_review import FrameOutcome
-
     timing = timing_of(air)
     out = []
     counted = header_read is True or any(f.decoded for f in frames)
@@ -1441,10 +1448,8 @@ def replay_sender(
     (``granted._back_off``). A step is each data transmission: what the advice in hand said
     (the last recommendation the sender read, or what it sent before any), against the
     choice."""
-    from aether_model.link.rate_review import DeliveryController, FrameOutcome
-
     ctl = controller_for(sender.air, controller="delivery")
-    assert isinstance(ctl, DeliveryController)
+    assert hasattr(ctl, "observe_frames"), "C1 needs a tree with the rate review's controller"
     foreign = foreign_rungs(sender.air)
     timing = timing_of(sender.air)
     if role_of(sender.doc) == "master":

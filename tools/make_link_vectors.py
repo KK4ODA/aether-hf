@@ -21,11 +21,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
-from aether_model.frame.modes import NARROW
+import random
+
+from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.datagram import body as datagram_body
 from aether_model.link.datagram import fragments, max_payload
 from aether_model.link.frames import (
     DATA_HEADER,
+    MISSED_UNKNOWN,
     PROTOCOL_VERSION,
     REPORT,
     ConnectBody,
@@ -35,12 +38,15 @@ from aether_model.link.frames import (
     GrantFrame,
     GrantKind,
     ProbeBody,
+    data_capacity,
     encode_data,
     level_of,
     pack_callsign,
     pieces,
     with_level,
 )
+from aether_model.link.granted import GrantConfig, GrantedEngine
+from aether_model.link.harness import phy_timing
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     CONTROL_THRESHOLD_DB,
@@ -52,7 +58,7 @@ from aether_model.link.rate import (
     NARROW_FRAME_S,
     NARROW_PAYLOAD_BYTES,
     PAYLOAD_BYTES,
-    RateController,
+    FrameOutcome,
     usable_modes,
 )
 
@@ -202,7 +208,8 @@ def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
 def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
     """Protocol 8's control frame (ADR-0069): every field at its edges, the session's high bit
     dropped, the SNR's ties to even and its six-bit clamp; protocol 9's measurement bit, which
-    is the identifier's in a DISC and a DISC_ACK, and a report (ADR-0077)."""
+    is the identifier's in a DISC and a DISC_ACK, and a report (ADR-0077); protocol 12's slot
+    family and count of frames never detected, clamped to three bits (ADR-0099)."""
     out = []
     cases = [
         GrantFrame(GrantKind.HEADER, 42),
@@ -218,14 +225,15 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
             base=250,
             bitmap=0xFFFE,
             snr_db=31.6,
-            rung=19,
+            slot_floor=True,
+            missed=6,
             n=7,
         ),
         GrantFrame(GrantKind.ANSWER, 1, count=2, level=1, base=3, bitmap=0b1011, snr_db=12.5),
-        GrantFrame(GrantKind.ANSWER, 127, flag=True, snr_db=-0.5, rung=31, n=5),
+        GrantFrame(GrantKind.ANSWER, 127, flag=True, snr_db=-0.5, missed=MISSED_UNKNOWN, n=5),
         GrantFrame(GrantKind.DISC, 64, fam=True, level=2, snr_db=-40.0),
         GrantFrame(GrantKind.DISC_ACK, 255, ident=True, snr_db=-31.4, base=17),
-        GrantFrame(GrantKind.HEADER, 9, count=9, n=12, snr_db=13.5, rung=40),
+        GrantFrame(GrantKind.HEADER, 9, count=9, n=12, snr_db=13.5, missed=9),
         GrantFrame(GrantKind.HEADER, 3, ident=True, measure=False, base=7, bitmap=0b0110),
         GrantFrame(GrantKind.DISC, 5, measure=True),
         GrantFrame(GrantKind.ANSWER, 11, measure=True, base=250, bitmap=REPORT | 0b10110),
@@ -248,7 +256,8 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
                 "base": frame.base,
                 "bitmap": frame.bitmap,
                 "snr_db": frame.snr_db,
-                "rung": frame.rung,
+                "slot_floor": frame.slot_floor,
+                "missed": frame.missed,
                 "n": frame.n,
                 "encoded": encoded.hex(),
                 "decoded": {
@@ -264,7 +273,8 @@ def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
                     "base": decoded.base,
                     "bitmap": decoded.bitmap,
                     "snr_db": decoded.snr_db,
-                    "rung": decoded.rung,
+                    "slot_floor": decoded.slot_floor,
+                    "missed": decoded.missed,
                     "n": decoded.n,
                 },
                 "received": [decoded.received(q) for q in range(0, 256, 13)]
@@ -303,104 +313,90 @@ def probe_body_cases() -> list[dict]:  # type: ignore[type-arg]
     return out
 
 
-def rate_trace_cases() -> list[dict]:  # type: ignore[type-arg]
-    """The same observations fed to both implementations; the recommendations must match."""
-    out = []
-    scenarios = {
-        "clean_climb": [(snr, 6, 0, None) for snr in [14.0] * 20],
-        "low_snr": [(snr, 6, 0, None) for snr in [-2.0] * 15],
-        "collapse": [(18.0, 6, 0, None)] * 12 + [(4.0, 2, 4, 10)] * 12,
-        "boundary": [(9.0, 6, 0, None)] * 3 + [(9.0, 3, 3, 8)] * 3 + [(9.0, 6, 0, 6)] * 12,
-        "targeted_widen": [(12.0, 0, 4, 4)] * 3 + [(12.0, 6, 0, 4)] * 9,
-        # ADR-0020: bursts the sender chose, faster than asked, feed only their SNR
-        "senders_choice": [(10.0, 6, 0, None)] * 4
-        + [(6.0, 0, 4, None, True)] * 3
-        + [(None, 0, 3, None, True)]
-        + [(10.0, 6, 0, None)] * 4,
-    }
-    for name, observations in scenarios.items():
-        rc = RateController()
-        track = []
-        for snr, ok, failed, mode, *snr_only in observations:
-            if snr_only:
-                rc.observe_snr(snr)
-            else:
-                rc.observe(snr, ok, failed, mode)
-            track.append(
+def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str, object]:
+    """The rate controller alone (ADR-0094, ADR-0099), input by input: a seed, then frames at the recommended rung and
+    others (decoded, failed, never detected, combined), echo readings and bare SNRs drawn at
+    random, and what it recommends and holds after each — every rule of the controller, where a
+    session's next transmission would hide one (an echo reading's choice is taken again at the
+    next transmission's)."""
+    timing = phy_timing(air.params)
+    ctl = GrantedEngine("TOOL", timing, GrantConfig()).rate
+    modes = sorted(ctl.thresholds)
+    rng = random.Random(seed)
+    snr = rng.uniform(-10.0, 20.0)
+    ops: list[dict[str, object]] = []
+
+    def state() -> dict[str, object]:
+        common = {"recommend": ctl.recommend(), "snr": ctl.snr_db, "echo": ctl.echo}
+        return {
+            **common,
+            "estimates": [ctl.estimate(m) for m in ctl.modes],
+            "values": [ctl.value(m) for m in ctl.modes],
+        }
+
+    ctl.seed(snr)
+    ops.append({"seed": snr, **state()})
+    for _ in range(steps):
+        snr = max(-25.0, min(30.0, snr + rng.gauss(0.0, 2.0)))
+        roll = rng.random()
+        if roll < 0.6:
+            frames = []
+            for _ in range(rng.randint(1, 6)):
+                mode = ctl.recommend() if rng.random() < 0.75 else rng.choice(modes)
+                detected = rng.random() < 0.85
+                decoded = detected and rng.random() < 0.6
+                frames.append(
+                    FrameOutcome(
+                        mode,
+                        timing.data_frame_s_for(mode),
+                        data_capacity(timing.capacity(mode)),
+                        detected,
+                        decoded,
+                        detected and rng.random() < 0.15,
+                        snr if detected else None,
+                    )
+                )
+            reading = snr if rng.random() < 0.9 else None
+            ctl.observe_frames(frames, reading)
+            ops.append(
                 {
-                    "recommend": int(rc.recommend()),
-                    "margin_db": round(float(rc.margin_db), 9),
-                    "snr_db": None if rc.snr_db is None else round(float(rc.snr_db), 9),
+                    "frames": [
+                        [f.mode, f.air_s, f.capacity, f.detected, f.decoded, f.combined]
+                        for f in frames
+                    ],
+                    "snr_in": reading,
+                    **state(),
                 }
             )
-        out.append(
-            {
-                "name": name,
-                "observations": [
-                    {
-                        "snr_db": snr,
-                        "ok": ok,
-                        "failed": failed,
-                        "mode": mode,
-                        "snr_only": bool(only),
-                    }
-                    for snr, ok, failed, mode, *only in observations
-                ],
-                "track": track,
-            }
-        )
-    return out
-
-
-def echo_trace_cases() -> list[dict]:  # type: ignore[type-arg]
-    """The 500 Hz controller with its echo limits (ADR-0087), fed the same steps on both sides:
-    a seed from a floor frame, echo readings (a weak one that does not count among them) and
-    bursts; the recommendation, the margin, the SNR and the echo must match."""
-    steps: list[tuple[str, tuple[object, ...]]] = [
-        ("echo", (0.011, -3.0)),
-        ("seed", (-3.0, True)),
-        *[("observe", (-3.0, 6, 0, 2))] * 4,
-        ("echo", (0.05, -9.0)),
-        ("observe", (-2.5, 4, 2, 2)),
-        ("echo", (0.012, -2.8)),
-        *[("observe", (-3.0, 6, 0, 2))] * 6,
-        *[("echo", (0.0002, 8.0)), ("observe", (8.0, 6, 0, None))] * 10,
-        ("echo", (0.02, 6.0)),
-        ("echo", (0.02, 6.0)),
-        *[("observe", (6.0, 6, 0, None))] * 4,
-    ]
-    rc = RateController(
-        thresholds=dict(NARROW_AWGN_THRESHOLD_DB),
-        modes=usable_modes(NARROW_AWGN_THRESHOLD_DB, NARROW_PAYLOAD_BYTES, NARROW_FRAME_S),
-        floor_modes=NARROW.floor_modes,
-        echo_limit=dict(NARROW_ECHO_LIMIT),
-    )
-    track = []
-    for what, args in steps:
-        if what == "echo":
-            share, snr = args
-            rc.observe_echo(share, snr)  # type: ignore[arg-type]
-        elif what == "seed":
-            snr, lower = args
-            rc.seed(snr, lower_bound=lower)  # type: ignore[arg-type]
+        elif roll < 0.85:
+            share = rng.choice([None, rng.uniform(0.0, 0.012)])
+            ctl.observe_echo(share, snr)
+            ops.append({"echo_in": share, "snr_in": snr, **state()})
+        elif roll < 0.9:
+            # the control frames' families the engine says are in use (C1's exchange price)
+            families = (rng.random() < 0.5, rng.random() < 0.5)
+            ctl.families = families
+            ops.append({"families": list(families), **state()})
         else:
-            snr, ok, failed, mode = args
-            rc.observe(snr, ok, failed, mode)  # type: ignore[arg-type]
-        track.append(
-            {
-                "recommend": int(rc.recommend()),
-                "margin_db": round(float(rc.margin_db), 9),
-                "snr_db": None if rc.snr_db is None else round(float(rc.snr_db), 9),
-                "echo": None if rc.echo is None else round(float(rc.echo), 12),
-            }
-        )
-    return [
-        {
-            "name": "narrow_echo",
-            "steps": [{"what": what, "args": list(args)} for what, args in steps],
-            "track": track,
-        }
-    ]
+            reading = snr if rng.random() < 0.8 else None
+            ctl.observe_snr(reading)
+            ops.append({"observe_snr": reading, **state()})
+    return {
+        "air": air.params.bandwidth.value,
+        "thresholds": [ctl.thresholds[m] for m in modes],
+        "payload": [timing.capacity(m) for m in modes],
+        "capacity": [data_capacity(timing.capacity(m)) for m in modes],
+        "frame_s": [timing.data_frame_s_for(m) for m in modes],
+        "floor_modes": timing.floor_modes,
+        "echo_limit": [(timing.echo_limit or {}).get(m) for m in modes],
+        # C1 ranks per second of a whole exchange (control frames [floor, ordinary], the gaps,
+        # a full transmission's frames by rung); its families stay the data's in a trace
+        "control_s": [ctl.control_s[True], ctl.control_s[False]] if ctl.control_s else [],
+        "gap_s": ctl.gap_s,
+        "burst_frames": [ctl.burst_frames.get(m, 0) for m in modes],
+        "modes": list(ctl.modes),
+        "ops": ops,
+    }
 
 
 def main() -> int:
@@ -439,8 +435,11 @@ def main() -> int:
         "datagrams": datagram_cases(),
         "datagram_bodies": datagram_body_cases(),
         "grant_frames": grant_frame_cases(),
-        "rate_traces": rate_trace_cases(),
-        "echo_traces": echo_trace_cases(),
+        # the rate controller, input by input, on both airs (ADR-0094, ADR-0099)
+        "controller_traces": [
+            controller_trace(air, seed)
+            for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3), (NARROW, 4))
+        ],
         # the echo share above which each rung is kept off the ladder (ADR-0087), by mode
         "echo_limits": [ECHO_LIMIT.get(m) for m in sorted(AWGN_THRESHOLD_DB)],
         "narrow_echo_limits": [NARROW_ECHO_LIMIT.get(m) for m in sorted(NARROW_AWGN_THRESHOLD_DB)],

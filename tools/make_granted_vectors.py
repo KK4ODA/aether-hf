@@ -39,7 +39,6 @@ from aether_model.link.frames import DataKind, GrantFrame, GrantKind, decode_dat
 from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine, Transmit
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
-from aether_model.link.rate_review import DeliveryController
 from aether_model.link.sim import SimFrame, TwoStationSim
 
 
@@ -95,14 +94,7 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
 def config_doc(c: GrantConfig) -> dict[str, Any]:
     if c.rate:
         raise ValueError("the vectors use the rate controller's defaults")
-    # a controller other than the engine's default is named (tools/make_rate_review_vectors.py)
-    named = {} if c.controller == GrantConfig().controller else {"controller": c.controller}
-    if c.family_refusal:  # D3 of the second review, bench only (make_rate_review_vectors.py)
-        named["family_refusal"] = True
-    if c.climb:  # the second review's climb, bench only
-        named["climb"] = True
     return {
-        **named,
         "max_data_frames": c.max_data_frames,
         "max_burst_s": bits(c.max_burst_s),
         "max_retries": c.max_retries,
@@ -198,11 +190,10 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "last_data": None if e.last_data is None else vars(e.last_data),
         "stats": dict(vars(e.stats)),
     }
-    # C1 of the rate controller's review (bench-only): the families it prices exchanges by, as
-    # the engine last told it — written only for its sessions, so the shipped vectors keep theirs
-    c1 = next((c for c in (e.rate, e._sender) if isinstance(c, DeliveryController)), None)
-    if c1 is not None:
-        out["families"] = None if c1.families is None else list(c1.families)
+    # the families the rate controller prices exchanges by, as the engine last told it, and how
+    # many frames of its last transmission the other station said it never detected (ADR-0099)
+    out["families"] = None if e.rate.families is None else list(e.rate.families)
+    out["peer_missed"] = e.peer_missed
     return out
 
 
@@ -348,11 +339,6 @@ INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
 # ── the sessions ──────────────────────────────────────────────────────
 
 
-PROTOTYPE: dict[str, Any] = {}
-"""Settings every station of ``_pair`` takes: empty here, a prototype of the rate controller's
-review for ``tools/make_rate_review_vectors.py``."""
-
-
 def _pair(
     air: AirInterface,
     *,
@@ -369,7 +355,7 @@ def _pair(
             capabilities=bandwidth_capabilities(air.params),
             max_mode=air.n_rungs - 1,
             max_burst_s=26.0,
-            **{**PROTOTYPE, **cfg, **own},
+            **{**cfg, **own},
         )
 
     a = GrantedEngine("W4ODA", timing, config(**(sender or {})), seed=seeds[0])
@@ -1128,6 +1114,125 @@ def left_header() -> list[Recorder]:
     return [ra, rb]
 
 
+def unheard(air: AirInterface, seed: int, snr: float) -> Callable[[], list[Recorder]]:
+    """Every third data frame of the transmissions to one station never detected: what the
+    receiver says it missed in its next control frame (``missed``, ADR-0099) and the sender's
+    account counts as air spent, which the other sessions' pipes, detecting every frame, never
+    exercise."""
+
+    def run() -> list[Recorder]:
+        a, b, ra, rb = _pair(air)
+        rng = random.Random(seed)
+        count = [0]
+
+        def lost(rx: int, container: Container, _t0: float) -> bool:
+            if container is not Container.DATA or rx != 1:
+                return False
+            count[0] += 1
+            return count[0] % 3 == 0
+
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed, unheard=lost)
+        _exchange(sim, a, b, _message(rng, 2000), _message(rng, 300))
+        return [ra, rb]
+
+    return run
+
+
+def lopsided(air: AirInterface, seed: int, snr: float) -> Callable[[], list[Recorder]]:
+    """The slave's answers heard 10 dB under everything else: the master asks for them on the
+    floor while its own headers stay ordinary, so the two families of an exchange differ — what
+    C1 prices a transmission at any rung by (``granted._price``)."""
+
+    def run() -> list[Recorder]:
+        a, b, ra, rb = _pair(air)
+        rng = random.Random(seed)
+
+        def weaker(frame: TxFrame) -> float:
+            if frame.container is Container.DATA:
+                return 0.0
+            return -10.0 if GrantFrame.decode(frame.payload).kind is GrantKind.ANSWER else 0.0
+
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed, frame_snr_offset=weaker)
+        _exchange(sim, a, b, _message(rng, 3000), _message(rng, 300))
+        return [ra, rb]
+
+    return run
+
+
+def floor_in_flight(
+    seed: int, air: AirInterface = NARROW, snr: float = 8.0, size: int = 4000
+) -> Callable[[], list[Recorder]]:
+    """A call read 12 dB low starts C1 on the floor, and every third floor data frame is lost,
+    so a floor frame is always in flight when C1 at the sender tries OFDM: the try takes the
+    transmission (``granted._data_frames``' ``across``) — before, it never went. Short of data
+    at the end, a try with nothing to cut at its rung lets the floor frames go instead
+    (``_can_cut``): before, the transmissions went empty and the try never ended."""
+
+    def run() -> list[Recorder]:
+        a, b, ra, rb = _pair(air)
+        rng = random.Random(seed)
+        timing = phy_timing(air.params)
+        count = [0]
+
+        def offset(frame: TxFrame) -> float:
+            if frame.container is not Container.DATA:
+                return 0.0
+            kind = decode_data(frame.payload)[0].kind
+            if kind is DataKind.CONNECT_REQ:
+                return -12.0
+            if kind is DataKind.DATA and timing.is_floor(frame.mode):
+                count[0] += 1
+                return -40.0 if count[0] % 3 == 0 else 0.0
+            return 0.0
+
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed, frame_snr_offset=offset)
+        _exchange(sim, a, b, _message(rng, size), _message(rng, 200))
+        return [ra, rb]
+
+    return run
+
+
+class _OfdmUnheard(TwoStationSim):
+    """Every OFDM data frame to station 1 never reported, whatever the channel."""
+
+    def __init__(self, *args: Any, timing: PhyTiming, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self._timing = timing
+
+    def _deliver(self, rx: int, frame: TxFrame, t0: float, t1: float, *, cut: bool = False) -> None:
+        if (
+            rx == 1
+            and frame.container is Container.DATA
+            and not self._timing.is_floor(frame.mode)
+            and decode_data(frame.payload)[0].kind is DataKind.DATA
+        ):
+            return
+        super()._deliver(rx, frame, t0, t1, cut=cut)
+
+
+def own_choice(seed: int) -> Callable[[], list[Recorder]]:
+    """The rate controller brings blocks stranded at OFDM down under its own choice (ADR-0094
+    §2.6, ADR-0099): every OFDM data frame to the called station is lost, and its answers to the
+    caller are lost from 30 to 90 s, so the caller steps down for the silent slots. Under the old
+    advice alone, from frames never heard, the stranded blocks stayed at OFDM and nothing arrived
+    in 900 s (``rate-control/04-results.md`` §3.26)."""
+
+    def run() -> list[Recorder]:
+        a, b, ra, rb = _pair(WIDE)
+        rng = random.Random(seed)
+
+        def unheard(rx: int, container: Container, t0: float) -> bool:
+            return rx == 0 and container is Container.CONTROL and 30.0 < t0 < 90.0
+
+        sim = _OfdmUnheard(
+            a, b, snr_db=10.0, seed=seed, timing=phy_timing(WIDE.params), unheard=unheard
+        )
+        _exchange(sim, a, b, _message(rng, 1500), _message(rng, 100))
+        return [ra, rb]
+
+    return run
+
+
 SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "clean-wide": clean_wide,
     "weak-narrow": weak_narrow,
@@ -1161,6 +1266,14 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "echo-path": echo_path,
     "measure-silent": measure_silent,
     "left-header": left_header,
+    # the rate controller's own (from the second review's vectors, ADR-0099)
+    "unheard-wide": unheard(WIDE, 41, 10.0),
+    "unheard-narrow": unheard(NARROW, 42, 4.0),
+    "lopsided-narrow": lopsided(NARROW, 43, 6.0),
+    "lopsided-wide": lopsided(WIDE, 44, 4.0),
+    "floor-in-flight": floor_in_flight(45),
+    "edge-at-the-end": floor_in_flight(46, WIDE, 6.0, 1000),
+    "own-choice": own_choice(47),
 }
 
 

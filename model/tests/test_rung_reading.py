@@ -314,38 +314,6 @@ def test_the_recommendations_and_the_regret_are_read(tmp_path: Path) -> None:
     assert regret.best_all is not None and regret.best_all.rung == 13
 
 
-def test_the_controller_replays_to_the_recommendations_sent(tmp_path: Path) -> None:
-    master, slave = session(tmp_path)
-    reading = rr.read_session(master, slave, replay_controller=True)
-    down = reading.directions[0]
-    compared = [s for s in down.steps if s.rung_sent is not None]
-    assert len(compared) == 4
-    # the same controller, fed by hand as the engine feeds it: the call's reading seeds it (a
-    # floor frame: a lower bound), then each transmission's outcome
-    ctl = rr.controller_for(NARROW)
-    ctl.seed(6.2, lower_bound=True)
-    ctl.observe(8.0, 1, 1, 11)  # frame 0 decoded, frame 1 failed, frame 2 never there
-    want = [ctl.recommend()]
-    ctl.observe(8.0, 3, 0, 11)  # seq 1 combined, 2 and 3 alone
-    want.append(ctl.recommend())
-    # the measurement at rung 12 lost a frame above any rung the slave asked for: the sender's
-    # choice, not news of the path, so only its SNR counts (ADR-0020)
-    ctl.observe_snr(8.0)
-    want.append(ctl.recommend())
-    ctl.observe(8.0, 2, 0, 13)
-    want.append(ctl.recommend())
-    assert [s.rung_replayed for s in compared] == want
-    assert [(s.ok, s.failed) for s in compared] == [(1, 1), (3, 0), (1, 1), (2, 0)]
-    # the master's controller, seeded from the acceptance it read, recommended in each header
-    # the slave decoded; the slave sent no data, so the seed's rung stands
-    up = reading.directions[1]
-    heads = [s for s in up.steps if s.rung_sent is not None]
-    assert [s.rung_sent for s in heads] == [11, 11, 12]  # the fourth header went unread
-    master_ctl = rr.controller_for(NARROW)
-    master_ctl.seed(8.0, lower_bound=True)  # the acceptance, a floor frame read at 8 dB
-    assert [s.rung_replayed for s in heads] == [master_ctl.recommend()] * 3
-
-
 def test_pairs_are_found_among_sidecars(tmp_path: Path) -> None:
     master, slave = session(tmp_path)
     decoy = tmp_path / "other.json"
@@ -452,14 +420,14 @@ def test_c1_at_the_sender_replays_as_the_engine_feeds_it(tmp_path: Path) -> None
     call, each acknowledgement judging the copies since the last — the newly acknowledged
     block's latest copy delivered it, every other copy air for nothing — a step per data
     transmission, the measurements none."""
-    from aether_model.link.rate_review import DeliveryController, FrameOutcome
+    from aether_model.link.rate import FrameOutcome, RateController
 
     master, slave = session(tmp_path)
     reading = rr.read_session(master, slave)
     down = reading.directions[0]
     steps = rr.replay_sender(rr.load_side(master), rr.load_side(slave), down.txs, down.blocks)
-    ctl = rr.controller_for(NARROW, controller="delivery")
-    assert isinstance(ctl, DeliveryController)
+    ctl = rr.controller_for(NARROW)
+    assert isinstance(ctl, RateController)
     ctl.seed(6.2)
     first = ctl.modes[ctl._index]
     air = RUNG_S[11]

@@ -64,6 +64,7 @@ from aether_model.link.frames import (
     FRAGMENT_HEADER,
     MAX_BURST,
     MAX_FOLLOWS,
+    MISSED_UNKNOWN,
     PROTOCOL_VERSION,
     REPORT,
     WINDOW,
@@ -88,13 +89,12 @@ from aether_model.link.frames import (
     with_level,
 )
 from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
-from aether_model.link.rate import CONTROL_THRESHOLD_DB, RateController, usable_modes
-from aether_model.link.rate_review import (
+from aether_model.link.rate import (
     CLASS_PENALTY_DB,
-    CONTROLLERS,
-    FAMILY_ECHO_LIMIT,
-    DeliveryController,
+    CONTROL_THRESHOLD_DB,
     FrameOutcome,
+    RateController,
+    usable_modes,
 )
 
 # ── what the engine hands its driver ──────────────────────────────────
@@ -161,12 +161,6 @@ OUTSIDE_SESSIONS = frozenset(
     {DataKind.BEACON, DataKind.PROBE, DataKind.PROBE_ACK, DataKind.DATAGRAM}
 )
 """DATA kinds sent outside any session: never taken into a session's stream."""
-
-SELF_DECODABLE_RVS = frozenset({0, 3})
-"""The redundancy versions that carry the systematic bits (TS 38.212 §5.4.2.1: RV 0 starts at
-them, RV 3 wraps round to them): a frame at RV 1 or 2 is mostly parity and, at the rates this
-modem runs, does not decode on its own at any SNR — 6 and 10 % on ND1J's path, 2026-09-25,
-against 75 % at RV 0 — which is why a retransmission is combined with what came before."""
 
 RV_SEQUENCE = (0, 0, 2, 3)
 """The redundancy version of a frame's first, second, third and fourth transmission under one
@@ -364,24 +358,9 @@ class GrantConfig:
     link_timeout_exchanges: float = 4.0
     """Silence ends a session after this many exchanges of the size in use, 45 s at least."""
     rate: dict[str, float | int | None] = field(default_factory=dict)
-    controller: str = "delivery-s"
-    """Which rate controller the station runs. ``delivery-s`` is ADR-0094's: C1
-    (:class:`aether_model.link.rate_review.DeliveryController`) chooses the rung this station's
-    own data goes at, and the current controller (:class:`RateController`) gives the advice for
-    the other station's. Bench only until Gate 6 deletes them: ``current`` (the current
-    controller in both roles) and the review's other prototypes — ``d1`` (the second review's
-    D1) is ``delivery-s`` with the advice steering nothing (:meth:`GrantedEngine._own_only`).
-    :attr:`rate` overrides the current controller's parameters either way."""
-    climb: bool = False
-    """Bench only: the second review's climb (``03-candidates.md`` §2.4) for C1 at the sender —
-    a try goes to the best-rated rung that could beat the choice, starts after a clean
-    transmission, and fills its transmission (:attr:`DeliveryController.climb`)."""
-    family_refusal: bool = False
-    """Bench only: D3 of the rate controller's second review (``docs/research/rate-control-2/
-    03-candidates.md`` §2.3) — the OFDM family refused as a whole by the echo or by outcomes
-    (:meth:`DeliveryController.refuses`), and a block stuck at a refused family brought down at
-    once. Off, nothing changes; a station on the air never sets it."""
+    """Overrides of the rate controller's settings (:class:`RateController`), for benches."""
     initial_mode: int = 0
+    """The rung this station's data goes at before its rate controller has a reading."""
     max_mode: int = 19
     ceiling: int | None = None
     """The fastest rung the rules allow this station to send at, where it is now — the
@@ -477,6 +456,8 @@ class GrantStats:
     frames_reencoded: int = 0
     frames_split: int = 0
     """Stranded frames whose body fit no rung the path carries, sent in pieces (ADR-0086)."""
+    frames_missed: int = 0
+    """Frames of this station's the other said it never detected (``missed``, ADR-0099)."""
     left_answered: int = 0
     transmissions: int = 0
     headers_elided: int = 0
@@ -725,17 +706,11 @@ class GrantedEngine:
         self.top_acked_mode: int | None = None
         self._records: dict[int, _TxRecord] = {}
         self._tx_base = self._tx_next = 0
-        self._recommended = self.cfg.initial_mode
-        """The rung this station's data goes at: what the other station recommends."""
-        self._peer_rung: int | None = None
-        """The rung the other station last recommended, before any step down for silence: a
-        stranded frame goes in pieces only below it (ADR-0086)."""
-        self._own_rung: int | None = None
-        """C1 at the sender's own choice when it last read an answer: a stranded frame comes
-        down, or goes in pieces, only below the lower of it and the other station's advice
-        (ADR-0094 §2.6)."""
         self.peer_snr_db: float | None = None
         """How the other station says it hears this one (every control frame carries it)."""
+        self.peer_missed: int | None = None
+        """How many frames of this station's last transmission the other said it never detected
+        (``missed``, ADR-0099); ``None`` before it has said, or when it could not count them."""
         self._heard_db: float | None = None
         """How this station heard the other's last frame it decoded."""
         self._heard_recent: list[float] = []
@@ -768,20 +743,27 @@ class GrantedEngine:
         self._measure_again = False
         """The measurement out is a repeat, its first slot silent (:meth:`_measurement_unheard`)."""
         self.rate = self._rate_controller()
-        self._asked: int | None = None
+        """The rate controller: the rung this station's own data goes at, from what the other
+        station's acknowledgements say of its frames (ADR-0094, ADR-0099)."""
         self._last_rx_mode: int | None = None
-        self._sender: DeliveryController | None = (
-            self._delivery_controller()
-            if self.cfg.controller in ("delivery-s", "c1", "d1")
-            else None
-        )
-        """C1-S (the rate controller's review): this station's own choice of the rung its data
-        goes at, from what its acknowledgements say of its frames; the other station's
-        recommendation is advice."""
+        """The rung the other station's data last decoded at: the other half of an exchange's
+        size (:meth:`_exchange_s`)."""
+        self._missed = MISSED_UNKNOWN
+        """Frames of the other station's last transmission this station never detected, by a
+        count it stated (:data:`MISSED_UNKNOWN` when it read none): said in the next control
+        frame (ADR-0099)."""
         self._sent_copies: list[tuple[int, int, float]] = []
-        """Copies sent since the last acknowledgement — block, rung, air — for :attr:`_sender`."""
-        """The rung the other station's data last decoded at: what a transmission none of whose
-        frames was heard is counted at, for a prototype of the rate controller's review."""
+        """Copies sent since the last acknowledgement — block, rung, air — for :attr:`rate`."""
+        self._piece_bound: int | None = None
+        """The fastest rung pieces may go at in this session: one under the lowest rung a block's
+        pieces went their copies at without arriving (ADR-0099 §2.2). What one block's pieces
+        showed holds for every block in pieces: each found it on its own, four copies a rung."""
+        self._answered_rung: int | None = None
+        """The rate controller's choice when this station last read an answer: a stranded frame
+        goes in pieces only below it, never on silence steps alone (ADR-0086) — with the band
+        gone, frames of a fast rung split onto the floor made each try 25 s, and the master
+        tried past where the timed-out slave reckons it gives up: the two closing identifiers
+        overlapped."""
         # receiving, either role
         self._rx_base = 0
         self._rx_buf: dict[int, bytes] = {}
@@ -1095,7 +1077,8 @@ class GrantedEngine:
 
     @property
     def current_mode(self) -> int:
-        return self._recommended
+        """The rung this station's data goes at now."""
+        return self._burst_mode()
 
     @property
     def echo(self) -> float | None:
@@ -1182,7 +1165,6 @@ class GrantedEngine:
         if max_mode is not None:
             self.cfg.max_mode = max_mode
         self.rate = self._rate_controller()
-        self._recommended = self.cfg.initial_mode
 
     @property
     def connect_tries(self) -> int:
@@ -1428,15 +1410,11 @@ class GrantedEngine:
         """One whole exchange of the size in use: two full transmissions at the rungs the link
         runs at with their control frames, the gaps at the highest level and the slack — or an
         idle exchange's longest open window, whichever is longer."""
-        floor = (
-            self.timing.is_floor(self._burst_mode())
-            or self.timing.is_floor(self.rate.recommend())
-            or self._hdr_floor
-        )
-        frame = max(
-            self._frame_s(self.timing.is_floor(self._burst_mode())),
-            self._frame_s(self.timing.is_floor(self.rate.recommend())),
-        )
+        families = {self.timing.is_floor(self._burst_mode())}
+        if self._last_rx_mode is not None:
+            families.add(self.timing.is_floor(self._last_rx_mode))
+        floor = True in families or self._hdr_floor
+        frame = max(self._frame_s(f) for f in families)
         gap = (
             self._slot_start(0.0, True, len(self.cfg.levels_s) - 1, self._peer_turnaround_s)
             + self.cfg.slack_s
@@ -1453,14 +1431,10 @@ class GrantedEngine:
 
     def _price(self) -> None:
         """The families both stations' control frames go in now — this station's own and the
-        one it asks of the other — for a prototype that ranks rungs per second of a whole
-        exchange (C1, the rate controller's review): the header and the answer of a transmission
-        at any rung."""
+        one it asks of the other — for the rate controller, which ranks rungs per second of a
+        whole exchange: the header and the answer of a transmission at any rung."""
         own = self._hdr_floor if self.role is Role.MASTER else self._ans_sticky
-        families = (own, self._wants_floor())
-        for ctl in (self.rate, self._sender):
-            if isinstance(ctl, DeliveryController):
-                ctl.families = families
+        self.rate.families = (own, self._wants_floor())
 
     def _heard(self, frame: SoftFrame) -> None:
         """A decoded frame of the session: the link is alive, and what it read of the path's
@@ -1469,9 +1443,6 @@ class GrantedEngine:
         self._heard_recent = [*self._heard_recent, frame.snr_db][-self.cfg.family_readings :]
         self._price()
         self.rate.observe_echo(frame.echo, frame.snr_db)
-        if self._sender is not None:
-            # the sender's own choice keeps the echo exclusions too (ADR-0087)
-            self._sender.observe_echo(frame.echo, frame.snr_db)
         self._heard_at = self.now
         self._arm_at("link", self.now + self._link_timeout())
 
@@ -1486,31 +1457,32 @@ class GrantedEngine:
         return self.cfg.ceiling is not None and self.timing.is_floor(self.cfg.ceiling)
 
     def _burst_mode(self) -> int:
-        chosen = self._recommended if self._pinned is None else self._pinned
-        if self._sender is not None and self._pinned is None and self._sender.snr_db is not None:
-            chosen = self._sender.modes[self._sender._index]
-        return min(chosen, self._cap())
+        """The rung this station's data goes at: the pinned rung of a bench or the Test's ladder,
+        else the rate controller's (:meth:`_own_choice`)."""
+        if self._pinned is not None:
+            return min(self._pinned, self._cap())
+        return self._own_choice()
 
-    def _own_only(self) -> bool:
-        """D1 (the second review, ``03-candidates.md`` §2.1): this station's own C1 is the only
-        thing that chooses its data's rung. The other station's recommendation is read and
-        steers nothing — not the stuck frames' targets, not the header kept on data above it —
-        and the slave's slot is sized in the family the slave says its data goes in."""
-        return self.cfg.controller == "d1" and self._sender is not None
+    def _own_choice(self) -> int:
+        """The rate controller's choice once it has a reading, :attr:`GrantConfig.initial_mode`
+        before."""
+        if self.rate.snr_db is None:
+            return min(self.cfg.initial_mode, self._cap())
+        return min(self.rate.modes[self.rate._index], self._cap())
 
     def _peer_reading(self, snr_db: float) -> None:
-        """The other station's reading of this one, from a control frame: what the sender-side
-        prototype (C1-S) seeds from, the first time one comes."""
+        """The other station's reading of this one, from a control frame: what the rate
+        controller seeds from, the first time one comes."""
         self.peer_snr_db = snr_db
-        if self._sender is not None and self._sender.snr_db is None:
-            self._sender.seed(snr_db)
+        if self.rate.snr_db is None:
+            self.rate.seed(snr_db)
 
     def _probe_rung(self, mode: int) -> int | None:
-        """C1-S's try: the rung one new frame of this transmission goes at, in ``mode``'s
-        family, or ``None``."""
-        if self._sender is None or self._pinned is not None:
+        """The rate controller's try: the rung one new frame of this transmission goes at, or
+        ``None``."""
+        if self._pinned is not None:
             return None
-        probe = self._sender._probing
+        probe = self.rate._probing
         if probe is None or probe > self._cap():
             return None
         return probe
@@ -1526,27 +1498,6 @@ class GrantedEngine:
         if self._floor_only() or not self._heard_recent:
             return True
         return min(self._heard_recent) < self._ctl_threshold() + self.cfg.answer_floor_margin_db
-
-    def _recommend(self, floor_only: bool = False) -> int:
-        """The rung this station's control frame recommends for the other's data, remembered
-        (ADR-0020). ``floor_only``: the other station has said its data can only go on the tone
-        floor — its ceiling or its pinned rung is there — and a header's rung is also what its
-        grant is sized by, so it stays on the floor: granted in ordinary frames, a floor-only
-        slave's data never fitted, and never went."""
-        rung = self.rate.recommend()
-        if floor_only and self.timing.floor_modes > 0:
-            rung = min(rung, self.timing.floor_modes - 1)
-        self._asked = rung if self._asked is None else max(self._asked, rung)
-        return rung
-
-    def _back_off(self) -> None:
-        modes = self.rate.modes
-        current = min(self._recommended, self._cap())
-        below = [m for m in modes if m <= current]
-        index = modes.index(below[-1]) if below else 0
-        self._recommended = modes[max(0, index - self.cfg.silence_step)]
-        if self._sender is not None:
-            self._sender.silent(self.cfg.silence_step)
 
     def _hopeless(self, mode: int) -> bool:
         thresholds = self.rate.thresholds
@@ -1605,23 +1556,11 @@ class GrantedEngine:
                     best = (mode, count)
         return None if best is None else best[0]
 
-    def _echo_limits(self) -> dict[int, float]:
-        """The echo share above which each rung is kept off the ladder (ADR-0087), and with D3
-        (:attr:`GrantConfig.family_refusal`) the OFDM family's own limit on every OFDM rung."""
-        limits = dict(self.timing.echo_limit or {})
-        thresholds = self.timing.mode_threshold_db
-        family = FAMILY_ECHO_LIMIT.get(len(thresholds)) if thresholds is not None else None
-        if self.cfg.family_refusal and family is not None and thresholds is not None:
-            for mode in thresholds:
-                if not self.timing.is_floor(mode):
-                    limits[mode] = min(limits.get(mode, family), family)
-        return limits
-
-    def _delivery_controller(self) -> DeliveryController:
-        """A prototype of the rate controller's review on this air's tables."""
+    def _rate_controller(self) -> RateController:
+        """The rate controller on this air's tables."""
         thresholds = self.timing.mode_threshold_db
         floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
-        limits = self._echo_limits()
+        limits = dict(self.timing.echo_limit or {})
         if limits:
             floor["echo_limit"] = limits
         table = dict(thresholds if thresholds is not None else RateController().thresholds)
@@ -1635,47 +1574,14 @@ class GrantedEngine:
             "gap_s": self._slot_start(0.0, True, 0, 0.0) + self._after(0.0, True, 0.0),
             "burst_frames": {m: self.burst_capacity(frame_s[m]) for m in table},
         }
-        return DeliveryController(
+        return RateController(
             thresholds=table,
             modes=usable_modes(table, payload, frame_s),
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
-            family_refusal=self.cfg.family_refusal,
-            climb=self.cfg.climb,
             **{**floor, **priced, **self.cfg.rate},  # type: ignore[arg-type]
         )
-
-    def _rate_controller(self) -> RateController:
-        thresholds = self.timing.mode_threshold_db
-        floor: dict[str, object] = {"floor_modes": self.timing.floor_modes}
-        limits = self._echo_limits()
-        if limits:
-            floor["echo_limit"] = limits
-        if self.cfg.controller not in CONTROLLERS:
-            raise ValueError(f"no rate controller {self.cfg.controller!r}")
-        if self.cfg.controller in ("delivery", "c1"):
-            # the advice in every control frame: C1's choice for the frames received here
-            # (ADR-0094 §2 item 6)
-            return self._delivery_controller()
-        if thresholds is None:
-            return RateController(**{**floor, **self._current_rate()})  # type: ignore[arg-type]
-        payload = self.timing.data_capacity or {m: 0 for m in thresholds}
-        frame_s = {m: self.timing.data_frame_s_for(m) for m in thresholds}
-        return RateController(
-            thresholds=dict(thresholds),
-            modes=usable_modes(thresholds, payload, frame_s),
-            **{**floor, **self._current_rate()},  # type: ignore[arg-type]
-        )
-
-    def _current_rate(self) -> dict[str, float | int | None]:
-        """:attr:`GrantConfig.rate` as the current controller takes it: with a sender-side
-        prototype (``delivery-s``, ``d1``) the receiver's advice is the current controller's, and
-        the prototype's own settings are not its."""
-        if self.cfg.controller not in ("delivery-s", "d1"):
-            return self.cfg.rate
-        known = set(RateController.__dataclass_fields__)
-        return {k: v for k, v in self.cfg.rate.items() if k in known}
 
     # ── keying ────────────────────────────────────────────────────────
 
@@ -1935,9 +1841,6 @@ class GrantedEngine:
         self.role = Role.SLAVE
         self._heard(frame)
         self._measure_lateness(frame)
-        # the request is the first measurement of how the caller is heard; a lower bound if it
-        # came on the tone floor (ADR-0016)
-        self.rate.seed(frame.snr_db, lower_bound=frame.floor)
         self._ans_sticky = self._acceptance_floor(frame)
         self.actions.append(Event("connected", f"{self.remote_call} (slave)"))
         self.actions.append(Event("role", "slave"))
@@ -1989,14 +1892,11 @@ class GrantedEngine:
         self.state = State.CONNECTED
         self.role = Role.MASTER
         self._heard(frame)
-        self.rate.seed(frame.snr_db, lower_bound=frame.floor)
-        self._recommended = self.cfg.initial_mode
         if ack.snr_db is not None:
-            first = self.rate.first_mode(ack.snr_db)
-            self._recommended = max(self.cfg.initial_mode, min(self._cap(), first))
+            # the slave's reading of the call: how it hears this station, where the rate
+            # controller's prior starts (ADR-0008)
             self.peer_snr_db = ack.snr_db
-            if self._sender is not None:
-                self._sender.seed(ack.snr_db)
+            self.rate.seed(ack.snr_db)
             # the first header goes in the family the slave's reading of the call asks for: a
             # floor reading is a lower bound, never too fast
             if self.timing.floor_modes > 0:
@@ -2221,8 +2121,7 @@ class GrantedEngine:
         slot, self._slot = self._slot, None
         if slot is None:
             return
-        if self._rx:
-            self._observe(self._rx)
+        self._observe(self._rx)
         self._restart_rx()
         if not slot.open_window:
             memory = self.cfg.floor_answer_memory
@@ -2252,9 +2151,7 @@ class GrantedEngine:
         ):
             self._silence_level += 1
         if slot.data:
-            self._back_off()
-        if slot.granted and self._silent >= 2:
-            self.rate.observe(None, 0, 1)
+            self.rate.silent(self.cfg.silence_step)
         if self._silent > self.cfg.max_retries:
             self._end_session("no response")
 
@@ -2313,14 +2210,11 @@ class GrantedEngine:
         )
 
     def _send_header(self) -> None:
-        rung = self._recommend(self._slave_floor_only)
-        # D1: the slave's data goes in its own C1's family, which its control frames state
-        # (``data_floor``); the recommendation is no measure of it. The header's rung is what
-        # the slave reckons its room in (``_schedule_slave``), so it states the rung the slot is
-        # sized at: sending the advice there, a floor rung over a slot sized in OFDM frames, gave
-        # the slave five tone frames' room where the master reckoned five OFDM frames, and the
-        # master's next header went 9 s into the slave's 27 s (04-results.md §4)
-        sized = self.robust_mode(self._slave_floor_only) if self._own_only() else rung
+        # the slave's slot is sized in the family it says its data goes in (``data_floor``), and
+        # the header says which: the slave reckons its room as ``n`` frames of it. Sized in one
+        # family and stated in another, five OFDM frames' slot was read as five tone frames,
+        # 27 s, and the master's next header went 9 s into it (ADR-0099 §2.2)
+        sized = self.robust_mode(self._slave_floor_only)
         n, open_window, index = self._grant_size(sized)
         wanted = self._wants_floor() or self._silent >= 2 or any(self._recent_silent)
         elide = self._elide(n, open_window, wanted)
@@ -2348,11 +2242,10 @@ class GrantedEngine:
         # granted nothing: a wait and a floor poll. An ordinary header is cheap, so it goes
         # (ADR-0076)
         if self.cfg.header_above_recommendation and not hdr_floor:
-            # D1: above the station's own choice is a try's frame, the same bet
-            recommendation = (
-                self._burst_mode() if self._own_only() else min(self._recommended, self._cap())
-            )
-            elide = elide and not any(f.mode > recommendation for f in data)
+            # above the station's own choice is a try's frame, or a pinned rung's, the same bet
+            # (ADR-0099 §2.2)
+            chosen = self._own_choice()
+            elide = elide and not any(f.mode > chosen for f in data)
         level = 0 if elide else self.level
         if not elide:
             self._possible.add(wanted)
@@ -2380,7 +2273,8 @@ class GrantedEngine:
                 flag=open_window,
                 measure=measuring,
                 snr_db=self._heard_db,
-                rung=sized,
+                slot_floor=self.timing.is_floor(sized),
+                missed=self._missed,
                 n=index if open_window else n,
                 **self._ack_fields(),
             )
@@ -2466,7 +2360,7 @@ class GrantedEngine:
     def _slave_control(self, ctl: GrantFrame, frame: SoftFrame) -> None:
         if not self._placed(frame, True):
             if ctl.kind is GrantKind.HEADER:
-                self._take_ack(ctl, recommendation=False)
+                self._take_ack(ctl, fresh=False)
             return
         self._heard(frame)
         self._measure_lateness(frame)
@@ -2553,7 +2447,7 @@ class GrantedEngine:
         self._window = None
         room = 0.0
         if grant is not None:
-            room = grant.n * self._frame_s(self.timing.is_floor(grant.rung))
+            room = grant.n * self._frame_s(grant.slot_floor)
         self._schedule(
             _Answer(
                 what="ans",
@@ -2606,8 +2500,7 @@ class GrantedEngine:
         """A transmission of the master's this station will not answer: what it heard of it is
         still news of the path."""
         self._answered_end = anchor
-        if self._rx:
-            self._observe(self._rx)
+        self._observe(self._rx)
         self._restart_rx()
 
     def _key_answer(self) -> None:
@@ -2662,7 +2555,7 @@ class GrantedEngine:
         window_end: float | None = None,
         not_before: float | None = None,
     ) -> None:
-        snr = self._observe(self._rx) if self._rx else None
+        snr = self._observe(self._rx)
         self._restart_rx()
         if snr is not None:
             self._heard_db = snr
@@ -2681,7 +2574,7 @@ class GrantedEngine:
             flag=self._disc_requested,
             measure=self._measure_out is not None,
             snr_db=self._heard_db,
-            rung=self._recommend(),
+            missed=self._missed,
             n=min(7, self._queued_frames()),
             **self._ack_fields(),
         )
@@ -2700,11 +2593,7 @@ class GrantedEngine:
         limit = self._cap() if self._pinned is None else min(self._pinned, self._cap())
         if self.timing.floor_modes > 0 and self.timing.is_floor(limit):
             return True
-        return (
-            self._sender is not None
-            and self._sender.snr_db is not None
-            and self.timing.is_floor(self._burst_mode())
-        )
+        return self.rate.snr_db is not None and self.timing.is_floor(self._burst_mode())
 
     def _queued_frames(self) -> int:
         cap = data_capacity(self.timing.capacity(self._burst_mode()))
@@ -2835,18 +2724,10 @@ class GrantedEngine:
                 # try's, or the other family's frames in flight never went — C1 at the sender
                 # sent empty headers for 160 s, the try never decided (04-results.md §3.21)
                 probe = None
-        recommendation = min(self._recommended, self._cap())
-        asked = None if self._peer_rung is None else min(self._peer_rung, self._cap())
-        if self._own_only():
-            # D1: the stuck frames' targets are bounded by the station's own choice alone
-            recommendation = asked = self._burst_mode()
-        elif self._own_rung is not None:
-            # the sender's own choice bounds its stranded frames as the advice does: on ITU
-            # NVIS at 500 Hz the receiver's C1 advised OFDM rung 5 while the sender's own had
-            # gone to the floor, and blocks cut at OFDM went fourteen copies over 200 s
-            # (04-results.md §3.26)
-            recommendation = min(recommendation, self._own_rung)
-            asked = None if asked is None else min(asked, self._own_rung)
+        # the stuck frames' targets are bounded by the station's own choice (ADR-0099 §2.2); a
+        # split, by its choice when it last read an answer (ADR-0086)
+        chosen = self._burst_mode()
+        asked = self._answered_rung
         # what an unheard answer would have said is not resent blind: it waits for an answer —
         # through one silent slot. Two in a row and the answers are not getting through, and
         # the frames go again rather than not at all
@@ -2859,11 +2740,21 @@ class GrantedEngine:
             due = self.cfg.reencode_early_after if hopeless else self.cfg.max_combines
             # D3: HARQ cannot rescue a block whose family the path does not carry — it comes
             # down at its next transmission, not after its copies and rounds of pieces there
-            refused = self._sender is not None and self._sender.refuses(rec.mode)
+            refused = self.rate.refuses(rec.mode)
             if refused:
                 due = 1
-            if rec.tx_count >= due and recommendation < rec.mode:
-                target = self._reencode_target(len(rec.body), rec.mode, recommendation)
+            # a block in pieces that went its copies at their rung without arriving is evidence
+            # of its own that the rung does not carry it: split again below it, in its family,
+            # whatever the choice (ADR-0099 §2.2, ADR-0086's split again) — new data can decode
+            # at a rung its pieces never do, and the choice would hold the block there for good
+            spent = rec.pieces is not None and rec.tx_count >= due
+            pieces_stuck = spent or (
+                rec.pieces is not None
+                and self._piece_bound is not None
+                and rec.mode > self._piece_bound
+            )
+            if (rec.tx_count >= due and chosen < rec.mode) or pieces_stuck:
+                target = self._reencode_target(len(rec.body), rec.mode, chosen)
                 if target is not None:
                     rec.mode = target
                     rec.pieces = None
@@ -2874,7 +2765,12 @@ class GrantedEngine:
                     # own rung until the session timed out. Not on silence alone: with the band
                     # gone, frames of a fast rung split onto the floor made each try 25 s, and
                     # the master tried past where the timed-out slave reckons it gives up
-                    if asked is None or asked >= rec.mode:
+                    bound = asked
+                    if pieces_stuck:
+                        bound = rec.mode - 1 if bound is None else min(bound, rec.mode - 1)
+                    if bound is not None and self._piece_bound is not None:
+                        bound = min(bound, self._piece_bound)
+                    if bound is None or bound >= rec.mode:
                         continue
                     # and not before the copy the receiver combines with every one it holds
                     # (it starts over only after that one fails): split after four, a rung-4
@@ -2883,9 +2779,14 @@ class GrantedEngine:
                     # are never combined, so a block in pieces goes again in pieces at `due`
                     if not (hopeless or refused) and rec.pieces is None and rec.tx_count <= due:
                         continue
-                    target = self._split_rung(len(rec.body), rec.mode, asked)
+                    target = self._split_rung(len(rec.body), rec.mode, bound)
                     if target is None:
                         continue
+                    if spent:
+                        below = rec.mode - 1
+                        self._piece_bound = (
+                            below if self._piece_bound is None else min(self._piece_bound, below)
+                        )
                     rec.mode = target
                     rec.pieces = pieces(rec.body, self.timing.capacity(target))
                     rec.piece_sends = [0] * len(rec.pieces)
@@ -2919,10 +2820,7 @@ class GrantedEngine:
         ):
             at = mode
             if probe is not None:
-                # a try is one new frame of the transmission — or, with the climb, all of them
-                at = probe
-                if not self.cfg.climb:
-                    probe = None
+                at, probe = probe, None  # a try is one new frame of the transmission
             cap = data_capacity(self.timing.capacity(at))
             take = min(cap, len(self._tx_queue))
             if self._pin_body is not None:
@@ -2949,12 +2847,11 @@ class GrantedEngine:
             rv = RV_SEQUENCE[(rec.tx_count - 1) % len(RV_SEQUENCE)]
             follows = min(MAX_FOLLOWS, len(seqs) - 1 - i)
             frames.append(TxFrame(Container.DATA, payload, mode=rec.mode, rv=rv, follows=follows))
-            if self._sender is not None:
-                # every copy of a block, re-encoded or not, is charged to the rung it was cut at:
-                # a try of OFDM whose blocks strand and go again on the floor cost all of that
-                air = self._frame_s(self.timing.is_floor(rec.mode))
-                origin = rec.mode if rec.origin is None else rec.origin
-                self._sent_copies.append((rec.seq, origin, air))
+            # every copy of a block, re-encoded or not, is charged to the rung it was cut at: a
+            # try of OFDM whose blocks strand and go again on the floor cost all of that
+            air = self._frame_s(self.timing.is_floor(rec.mode))
+            origin = rec.mode if rec.origin is None else rec.origin
+            self._sent_copies.append((rec.seq, origin, air))
         self.stats.frames_sent += len(frames)
         return frames
 
@@ -3037,11 +2934,11 @@ class GrantedEngine:
         self.stats.frames_sent += count
         return frames
 
-    def _take_ack(self, ctl: GrantFrame, *, recommendation: bool = True) -> None:
-        """The other station's acknowledgement of this one's data, and its recommendation — or
-        its report of this station's measurement (a header decoded late reports nothing: the
-        next one says it again)."""
-        if self._measure_out is not None and recommendation:
+    def _take_ack(self, ctl: GrantFrame, *, fresh: bool = True) -> None:
+        """The other station's acknowledgement of this one's data, and what it says of this
+        station's last transmission — or its report of this station's measurement. A header
+        decoded late (``fresh`` false) reports nothing: the next one says it again."""
+        if self._measure_out is not None and fresh:
             if ctl.reports:
                 mode, sent = self._measure_out
                 self._measure_out = None
@@ -3073,20 +2970,20 @@ class GrantedEngine:
             self._tx_base = seq_after(self._tx_base)
         if progress and self._patience_until is not None:
             self._patience_until = self.now + self._disc_patience()
-        if recommendation:
-            self._recommended = max(0, min(self._cap(), ctl.rung))
-            self._peer_rung = ctl.rung
-            if self._sender is not None and self._sent_copies:
-                self._judge_copies(newly)
-            if self._sender is not None and self._sender.snr_db is not None:
-                self._own_rung = self._sender.modes[self._sender._index]
+        if fresh and self._sent_copies:
+            # an answer to a transmission of this station's: how many of its frames the other
+            # station never detected, recorded (ADR-0099; the account already counts them)
+            self.peer_missed = None if ctl.missed == MISSED_UNKNOWN else ctl.missed
+            self.stats.frames_missed += self.peer_missed or 0
+            self._judge_copies(newly)
+        if fresh and self.rate.snr_db is not None:
+            self._answered_rung = self.rate.modes[self.rate._index]
 
     def _judge_copies(self, newly: set[int]) -> None:
-        """C1-S: what an acknowledgement says of the copies sent since the last one — a block
-        it acknowledges for the first time was delivered by one of them, every other copy was
-        air spent for nothing (lost, never detected, or of a block already delivered whose
-        acknowledgement was lost)."""
-        assert self._sender is not None
+        """What an acknowledgement says of the copies sent since the last one, to the rate
+        controller — a block it acknowledges for the first time was delivered by one of them,
+        every other copy was air spent for nothing (lost, never detected, or of a block already
+        delivered whose acknowledgement was lost)."""
         credited: set[int] = set()
         outcomes = []
         for seq, mode, air in reversed(self._sent_copies):
@@ -3097,7 +2994,7 @@ class GrantedEngine:
             outcomes.append(FrameOutcome(mode, air, capacity, True, ok, False, None))
         self._sent_copies = []
         self._price()
-        self._sender.observe_frames(outcomes[::-1], self.peer_snr_db)
+        self.rate.observe_frames(outcomes[::-1], self.peer_snr_db)
 
     # ── receiving data ────────────────────────────────────────────────
 
@@ -3327,62 +3224,19 @@ class GrantedEngine:
                 rec.seq = None
 
     def _observe(self, records: list[_RxRecord]) -> float | None:
-        """What a transmission's data said of the path, to the rate controller (ADR-0020's
-        rules). Returns the SNR measured on it."""
-        ok = sum(1 for r in records if r.payload is not None)
-        failed = sum(
-            1
-            for r in records
-            if r.payload is None
-            and r.frame.trusted
-            and (r.frame.rv in SELF_DECODABLE_RVS or r.combined)
-        )
+        """What this station heard of the other's transmission being closed: the SNR measured on
+        it (its frames that decoded or that the PHY trusts), the rung its data went at, and how
+        many of the frames a count stated it never detected, said in this station's next
+        control frame (ADR-0099). Returns the SNR."""
         snrs = [r.frame.snr_db for r in records if r.payload is not None or r.frame.trusted]
-        snr = sum(snrs) / len(snrs) if snrs else None
-        modes = [r.frame.mode for r in records]
-        if isinstance(self.rate, DeliveryController):
-            self._price()
-            self.rate.observe_frames(self._outcomes(records), snr)
-            return snr
-        if not modes:
-            return snr
-        if failed and self._asked is not None and min(modes) > self._asked:
-            self.rate.observe_snr(snr)  # the sender's choice, not news of the path
-        else:
-            # the rung most of it went at; of two as common, the slower (stated, so the port
-            # takes the same one)
-            self.rate.observe(snr, ok, failed, max(sorted(set(modes)), key=modes.count))
-        return snr
-
-    def _outcomes(self, records: list[_RxRecord]) -> list[FrameOutcome]:
-        """What each data frame of the transmission being closed came to, for a prototype of
-        the rate controller's review — the frames its header (or a count this station can
-        believe) stated and nothing reported included, at the rung most of the transmission
-        went at: a frame never heard is air spent for nothing."""
-        out = []
-        for r in records:
-            if r.payload is None and not r.frame.trusted:
-                continue  # a frame neither decoded nor trusted is no frame of the path
-            rung = r.frame.mode
-            capacity = data_capacity(self.timing.capacity(rung)) if self.timing.data_capacity else 0
-            out.append(
-                FrameOutcome(
-                    mode=rung,
-                    air_s=max(0.0, r.frame.t_end - r.frame.t_start),
-                    capacity=capacity,
-                    detected=True,
-                    decoded=r.payload is not None,
-                    combined=r.combined,
-                    snr_db=r.frame.snr_db,
-                    measure=self._rx_measure,
-                )
-            )
-        slots = {r.slot for r in records}
-        stated = None
-        floor = None
+        decoded = [r.frame.mode for r in records if r.payload is not None]
+        if decoded:
+            self._last_rx_mode = decoded[-1]
+        stated: int | None = None
         if self._grid is not None:
-            _, stated, floor = self._grid
+            _, stated, _ = self._grid
         else:
+            # without the opening control frame, a count this station can believe (R2)
             believed = [
                 r.slot + 1 + r.frame.follows
                 for r in records
@@ -3393,33 +3247,12 @@ class GrantedEngine:
             ]
             if believed:
                 stated = max(believed)
-        if stated:
-            heard = [r.frame.mode for r in records if r.payload is not None or r.frame.trusted]
-            mode: int | None
-            if heard:
-                mode = max(sorted(set(heard)), key=heard.count)
-            elif self._last_rx_mode is not None and (
-                floor is None or self.timing.is_floor(self._last_rx_mode) == floor
-            ):
-                mode = self._last_rx_mode
-            else:
-                mode = None
-            if mode is not None:
-                capacity = (
-                    data_capacity(self.timing.capacity(mode)) if self.timing.data_capacity else 0
-                )
-                air = self._frame_s(self.timing.is_floor(mode))
-                for k in range(stated):
-                    if k not in slots:
-                        out.append(
-                            FrameOutcome(
-                                mode, air, capacity, False, False, False, None, self._rx_measure
-                            )
-                        )
-        decoded = [o.mode for o in out if o.decoded]
-        if decoded:
-            self._last_rx_mode = decoded[-1]
-        return out
+        if stated is None:
+            self._missed = MISSED_UNKNOWN
+        else:
+            slots = {r.slot for r in records}
+            self._missed = min(MAX_DATA, sum(1 for k in range(stated) if k not in slots))
+        return sum(snrs) / len(snrs) if snrs else None
 
     def _receive_window(self) -> tuple[int, list[int], int]:
         bitmap = 0

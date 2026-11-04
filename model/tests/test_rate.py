@@ -1,9 +1,9 @@
-"""The rate controller's review, Gate 3: the prototypes beside the current controller
-(``aether_model.link.rate_review``, ``docs/research/rate-control/03-candidates.md``).
+"""The rate controller (ADR-0094, ADR-0099): C1 at the sender, the one controller.
 
-Bench-only. These hold that each prototype runs a session to its end on both airs, that the
-engine counts a frame its receiver never detected as air spent, and that the switch changes
-nothing for the current controller — whose own behaviour the granted vectors pin."""
+These hold that a session runs to its end on both airs, that the receiver says how many frames
+of a transmission it never detected (protocol 12), the controller's account, prior, tries and
+silence step, the family refused (D3), and that the stuck frames' targets and the slave's slot
+go by the station's own choice (D1)."""
 
 from __future__ import annotations
 
@@ -16,17 +16,11 @@ from aether_model.link.frames import GrantFrame, data_capacity, seq_after
 from aether_model.link.granted import GrantConfig, GrantedEngine, State, _TxRecord
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container
-from aether_model.link.rate import RateController
-from aether_model.link.rate_review import (
-    CONTROLLERS,
-    DeliveryController,
-    FrameOutcome,
-    decode_probability,
-)
+from aether_model.link.rate import FrameOutcome, RateController, decode_probability
 from aether_model.link.sim import TwoStationSim
 
 
-def _pair(air: AirInterface, controller: str) -> tuple[GrantedEngine, GrantedEngine]:
+def _pair(air: AirInterface) -> tuple[GrantedEngine, GrantedEngine]:
     timing = phy_timing(air.params)
 
     def config() -> GrantConfig:
@@ -35,7 +29,6 @@ def _pair(air: AirInterface, controller: str) -> tuple[GrantedEngine, GrantedEng
             max_mode=air.n_rungs - 1,
             max_burst_s=26.0,
             disc_drain_s=1e9,
-            controller=controller,
         )
 
     return (
@@ -45,69 +38,42 @@ def _pair(air: AirInterface, controller: str) -> tuple[GrantedEngine, GrantedEng
 
 
 @pytest.mark.parametrize("air", [WIDE, NARROW], ids=["2300", "500"])
-@pytest.mark.parametrize("controller", CONTROLLERS)
-def test_every_controller_carries_a_session_to_its_end(air: AirInterface, controller: str) -> None:
-    a, b = _pair(air, controller)
+def test_a_session_carries_to_its_end(air: AirInterface) -> None:
+    a, b = _pair(air)
     payload = bytes((i * 37) % 256 for i in range(3000))
     sim = TwoStationSim(a, b, snr_db=6.0, seed=5)
     a.connect("KK4XYZ")
     a.send(payload)
     a.disconnect()
     sim.run(until=1800.0)
-    assert sim.delivered(1) == payload, f"{controller} delivered {len(sim.delivered(1))} bytes"
+    assert sim.delivered(1) == payload, f"delivered {len(sim.delivered(1))} bytes"
 
 
-def test_the_switch_builds_the_controller_it_names() -> None:
-    kinds = {
-        "current": RateController,
-        "delivery": DeliveryController,
-        "delivery-s": RateController,  # the receiver's advice is the current controller's
-        "c1": DeliveryController,  # ADR-0094: the advice is C1's too
-    }
-    for name, kind in kinds.items():
-        a, _ = _pair(WIDE, name)
-        assert type(a.rate) is kind, name
-    for name in ("delivery-s", "c1"):
-        a, _ = _pair(WIDE, name)
-        assert isinstance(a._sender, DeliveryController), name
-        assert a._sender is not a.rate, name
-    with pytest.raises(ValueError, match="no rate controller"):
-        _pair(WIDE, "nonesuch")
+def test_the_receiver_says_how_many_frames_it_never_detected() -> None:
+    """Protocol 12 (ADR-0099): every control frame says how many data frames of the other
+    station's last transmission, by a count stated in it, its sender never detected. On a path
+    that loses one data frame in three before detection the sender learns of every one."""
+    a, b = _pair(WIDE)
+    decided: dict[float, bool] = {}  # asked at the preamble and again at the frame
 
+    def unheard(rx: int, container: Container, t0: float) -> bool:
+        if container is not Container.DATA or rx != 1:
+            return False
+        if t0 not in decided:
+            decided[t0] = len(decided) % 3 == 2
+        return decided[t0]
 
-def test_a_frame_never_detected_is_air_spent() -> None:
-    """The receiver's outcomes carry every frame the header stated, heard or not: on a path
-    that loses one data frame in three before detection, the delivery account sees them."""
-    a, b = _pair(WIDE, "delivery")
-    seen: list[FrameOutcome] = []
-    original = DeliveryController.observe_frames
-
-    def spy(self: DeliveryController, frames: list[FrameOutcome], snr: float | None) -> None:
-        seen.extend(frames)
-        original(self, frames, snr)
-
-    DeliveryController.observe_frames = spy  # type: ignore[method-assign]
-    try:
-        count = [0]
-
-        def unheard(rx: int, container: Container, t0: float) -> bool:
-            if container is not Container.DATA or rx != 1:
-                return False
-            count[0] += 1
-            return count[0] % 3 == 0
-
-        sim = TwoStationSim(a, b, snr_db=12.0, seed=2, unheard=unheard)
-        payload = bytes(range(256)) * 8
-        a.connect("KK4XYZ")
-        a.send(payload)
-        a.disconnect()
-        sim.run(until=900.0)
-    finally:
-        DeliveryController.observe_frames = original  # type: ignore[method-assign]
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=2, unheard=unheard)
+    payload = bytes(range(256)) * 8
+    a.connect("KK4XYZ")
+    a.send(payload)
+    a.disconnect()
+    sim.run(until=900.0)
     assert sim.delivered(1) == payload
-    missed = [f for f in seen if not f.detected]
-    assert missed, "no frame the header stated was counted unheard"
-    assert all(not f.decoded and f.air_s > 0 for f in missed)
+    lost = sum(decided.values())
+    assert lost > 0
+    assert a.stats.frames_missed == lost, (a.stats.frames_missed, lost)
+    assert b.stats.frames_missed == 0  # the slave sent no data
 
 
 def test_the_prior_passes_ninety_per_cent_at_the_threshold() -> None:
@@ -120,9 +86,9 @@ def test_a_silent_step_lands_on_a_rung_the_echo_allows() -> None:
     """C1 at the sender steps down after silence as R9 does, but never onto a rung the echo
     rules out (ADR-0087): from the first OFDM rung of the 500 Hz air on a 7 ms echo, one step
     goes past rungs 3 and 4 to the floor's rung 2."""
-    a, _ = _pair(NARROW, "delivery")
+    a, _ = _pair(NARROW)
     ctl = a.rate
-    assert isinstance(ctl, DeliveryController)
+    assert isinstance(ctl, RateController)
     ctl.echo = 0.012
     assert ctl._echo_out(ctl.modes.index(3)) and ctl._echo_out(ctl.modes.index(4))
     ctl._index = ctl.modes.index(5)
@@ -140,10 +106,10 @@ def test_a_try_is_decided_on_more_frames_than_the_prior_weighs() -> None:
     (``04-results.md`` §3.14). Nor does one lucky frame make a rung above choosable."""
     timing = phy_timing(NARROW.params)
 
-    def fresh() -> tuple[DeliveryController, int, int]:
-        a, _ = _pair(NARROW, "delivery")
+    def fresh() -> tuple[RateController, int, int]:
+        a, _ = _pair(NARROW)
         ctl = a.rate
-        assert isinstance(ctl, DeliveryController)
+        assert isinstance(ctl, RateController)
         ctl.seed(8.0)
         return ctl, ctl.modes[ctl._index], ctl.modes[ctl._index + 1]
 
@@ -172,9 +138,9 @@ def test_the_wait_before_a_try_is_air_at_the_rung_tried() -> None:
     transmission here) a try of OFDM (six 1.05 s frames) comes after two floor transmissions,
     not six — six floor transmissions were 160 s on the harness (``04-results.md`` §3.16)."""
     timing = phy_timing(NARROW.params)
-    a, _ = _pair(NARROW, "delivery")
+    a, _ = _pair(NARROW)
     ctl = a.rate
-    assert isinstance(ctl, DeliveryController)
+    assert isinstance(ctl, RateController)
     ctl.seed(0.0)
     ctl._index = ctl.modes.index(4)
     ctl._cancel_try()
@@ -188,13 +154,13 @@ def test_the_wait_before_a_try_is_air_at_the_rung_tried() -> None:
     assert transmissions == 2
 
 
-def _strong_path() -> tuple[DeliveryController, int, int, list[FrameOutcome], FrameOutcome]:
+def _strong_path() -> tuple[RateController, int, int, list[FrameOutcome], FrameOutcome]:
     """A 2 300 Hz controller seeded at 10 dB on an OFDM rung, a transmission there that decodes
     whole at a reading of 15 dB, and a frame of the rung above that is lost."""
     timing = phy_timing(WIDE.params)
-    a, _ = _pair(WIDE, "delivery")
+    a, _ = _pair(WIDE)
     ctl = a.rate
-    assert isinstance(ctl, DeliveryController)
+    assert isinstance(ctl, RateController)
     ctl.seed(10.0)
     here, up = ctl.modes[ctl._index], ctl.modes[ctl._index + 1]
     assert ctl.floor_modes <= here < up, "both rungs OFDM"
@@ -245,9 +211,9 @@ def test_a_rungs_account_ages_with_the_air_sent_at_other_rungs() -> None:
     NVIS path two minutes later, and it delivered two blocks of the next seventeen frames
     (``04-results.md`` §3.24)."""
     timing = phy_timing(NARROW.params)
-    a, _ = _pair(NARROW, "delivery")
+    a, _ = _pair(NARROW)
     ctl = a.rate
-    assert isinstance(ctl, DeliveryController)
+    assert isinstance(ctl, RateController)
     ctl.seed(2.0)
     ofdm, top = 5, 2
 
@@ -271,11 +237,11 @@ def test_a_slave_on_its_own_floor_rung_is_granted_floor_slots(
     answer's ``data_floor``: the master sizes the slot in floor frames. Before, the slave asked
     for frames of its floor rung, was granted as many OFDM frames' air, which no floor frame
     fits, and its reply never went (``04-results.md`` §3.18)."""
-    a, b = _pair(WIDE, "delivery-s")
+    a, b = _pair(WIDE)
     original = GrantedEngine._burst_mode
 
     def burst_mode(self: GrantedEngine) -> int:
-        if self is b and self._sender is not None and self._sender.snr_db is not None:
+        if self is b and self.rate is not None and self.rate.snr_db is not None:
             return 3  # tone50-75, a floor rung, whatever the master recommends
         return original(self)
 
@@ -293,13 +259,13 @@ def test_a_try_across_the_floors_edge_with_nothing_to_cut_lets_the_floor_frames_
     rung; with nothing left to cut, the floor frames waiting for an answer go as before. They
     had been held out of every transmission, no frame went at the try's rung to decide it, and
     the master sent empty headers until the Test ran out of time (``04-results.md`` §3.21)."""
-    a, b = _pair(NARROW, "delivery-s")
+    a, b = _pair(NARROW)
     sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
     a.connect("KK4XYZ")
     sim.run(until=60.0)
     assert a.state is State.CONNECTED
-    ctl = a._sender
-    assert isinstance(ctl, DeliveryController)
+    ctl = a.rate
+    assert isinstance(ctl, RateController)
     ctl.observe_snr(0.0)
     top = max(m for m in ctl.modes if m < ctl.floor_modes)
     ofdm = min(m for m in ctl.modes if m >= ctl.floor_modes)
@@ -315,13 +281,13 @@ def test_a_try_across_the_floors_edge_with_nothing_to_cut_lets_the_floor_frames_
     assert frames and {f.mode for f in frames} == {ofdm}  # with data to cut, the try's
 
 
-@pytest.mark.parametrize("controller", ["delivery-s", "c1"])
-def test_a_stranded_frame_comes_down_under_the_senders_own_choice(controller: str) -> None:
-    """A sender whose own C1 has moved to the floor while the other station still advises OFDM
-    brings a block stranded at OFDM down, as it would under the advice. Under the advice alone,
-    blocks cut at OFDM on ITU NVIS at 500 Hz went fourteen copies over 200 s while every new
-    block went on the floor (``04-results.md`` §3.26)."""
-    a, b = _pair(NARROW, controller)
+def test_a_stranded_frame_comes_down_under_the_senders_own_choice() -> None:
+    """A block stranded at OFDM comes down once the station's own choice has gone to the floor:
+    whole to the floor's rung that fits it, or in pieces. Under the old advice alone, blocks cut
+    at OFDM on ITU NVIS at 500 Hz went fourteen copies over 200 s while every new block went on
+    the floor (``rate-control/04-results.md`` §3.26); nothing but the station's own choice bounds
+    them now (ADR-0099 §2.2)."""
+    a, b = _pair(NARROW)
     sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
     a.connect("KK4XYZ")
     sim.run(until=60.0)
@@ -338,25 +304,26 @@ def test_a_stranded_frame_comes_down_under_the_senders_own_choice(controller: st
         a._tx_next = seq_after(seq)
         return seq
 
-    a._recommended = a._peer_rung = seventh
-    # without the sender's own choice the advice keeps both where they are
-    a._own_rung = None
     kept = [stranded(first, 22), stranded(seventh, 36)]
+    # with the choice above them both, both stay where they are
+    a.rate._index = a.rate.modes.index(9)
+    a._answered_rung = 9  # the choice when the last answer was read
     a._data_frames(math.inf)
     assert [a._records[s].mode for s in kept] == [first, seventh]
-    # with it, the one the floor's rung 1 carries whole is re-encoded there, the other split
+    # with it on the floor, the one rung 1 carries whole is re-encoded there, the other split
     # (two pieces at rung 1 or rung 0: the more robust, ADR-0086)
-    a._own_rung = own
+    a.rate._index = a.rate.modes.index(own)
+    a._answered_rung = own  # an answer read since: a split goes by it, never by silence alone
     a._data_frames(math.inf)
     assert [a._records[s].mode for s in kept] == [own, 0]
     assert a._records[kept[0]].pieces is None and a._records[kept[1]].pieces is not None
     assert a.stats.frames_reencoded >= 1 and a.stats.frames_split >= 1
 
 
-# ── D3: a family refused (the second review, rate-control-2/03-candidates.md §2.3) ──────
+# ── D3: a family refused (ADR-0099 §2.3) ───────────────────────────────────────────────
 
 
-def _d3_pair(on: bool = True) -> tuple[GrantedEngine, GrantedEngine]:
+def _d3_pair() -> tuple[GrantedEngine, GrantedEngine]:
     timing = phy_timing(NARROW.params)
 
     def config() -> GrantConfig:
@@ -365,7 +332,6 @@ def _d3_pair(on: bool = True) -> tuple[GrantedEngine, GrantedEngine]:
             max_mode=NARROW.n_rungs - 1,
             max_burst_s=26.0,
             disc_drain_s=1e9,
-            family_refusal=on,
         )
 
     return (
@@ -374,7 +340,7 @@ def _d3_pair(on: bool = True) -> tuple[GrantedEngine, GrantedEngine]:
     )
 
 
-def _transmission(ctl: DeliveryController, mode: int, decoded: int, frames: int = 6) -> None:
+def _transmission(ctl: RateController, mode: int, decoded: int, frames: int = 6) -> None:
     ctl.observe_frames(
         [
             FrameOutcome(
@@ -389,11 +355,9 @@ def _transmission(ctl: DeliveryController, mode: int, decoded: int, frames: int 
 def test_d3_refuses_ofdm_when_the_choice_leaves_it_after_ofdm_delivered_nothing() -> None:
     """OFDM frames that delivered nothing refuse the family once the choice is a floor rung — the
     account has then judged every OFDM rung worse than the floor on what OFDM just did; an OFDM
-    frame that delivers lifts it. While the choice stays on OFDM nothing is refused. Off,
-    nothing ever is."""
+    frame that delivers lifts it. While the choice stays on OFDM nothing is refused."""
     a, _ = _d3_pair()
-    ctl = a._sender
-    assert ctl is not None and ctl.family_refusal
+    ctl = a.rate
     ctl.seed(6.0)
     ctl._index = ctl.modes.index(9)
     _transmission(ctl, 9, decoded=0)
@@ -404,33 +368,18 @@ def test_d3_refuses_ofdm_when_the_choice_leaves_it_after_ofdm_delivered_nothing(
     _transmission(ctl, 6, decoded=1)
     ctl._index = ctl.modes.index(2)
     assert not ctl.refuses(6)
-    off, _ = _d3_pair(on=False)
-    assert off._sender is not None
-    off._sender.seed(6.0)
-    _transmission(off._sender, 5, decoded=0)
-    off._sender._index = 0
-    assert not off._sender.refuses(5)
 
 
-def test_d3_refuses_ofdm_over_the_familys_echo_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the family's echo limit, a path that reads over it keeps every OFDM rung off — the
-    start too: from a 0 dB reading the prior rates OFDM rung 6 best on a 7 ms echo, where the
-    floor's tone rungs carry and OFDM's 5 ms prefix does not (``01-evidence.md`` §3)."""
-    import aether_model.link.granted as g
-
-    monkeypatch.setattr(g, "FAMILY_ECHO_LIMIT", {NARROW.n_rungs: 0.004})
+def test_d3_refuses_ofdm_when_the_echo_rules_out_every_ofdm_rung() -> None:
+    """A path whose echo is over every OFDM rung's own limit refuses the family as a whole — no
+    family-wide limit is set (ADR-0099 §2.3), but rungs' limits that cover the family do it."""
     a, _ = _d3_pair()
-    ctl = a._sender
-    assert ctl is not None
-    assert all(ctl.echo_limit[m] == pytest.approx(0.004) for m in ctl.modes if m >= 5)
-    assert ctl.echo_limit[3] == pytest.approx(0.0038)  # the floor's own limits stand
-    assert ctl.first_mode(0.0) >= 5
+    ctl = a.rate
+    ctl.echo_limit = {**ctl.echo_limit, **{m: 0.004 for m in ctl.modes if m >= 5}}
+    assert not ctl.refuses(5)
     ctl.observe_echo(0.012, 0.0)
-    assert ctl.refuses(5) and ctl.first_mode(0.0) < 5
-    # the advice, the current controller, is held to the same limit
-    assert a.rate.echo_limit[9] == pytest.approx(0.004)
-    off, _ = _d3_pair(on=False)
-    assert off._sender is not None and 9 not in off._sender.echo_limit
+    assert ctl.refuses(5) and ctl.refuses(14) and not ctl.refuses(2)
+    assert ctl.first_mode(0.0) < 5
 
 
 def test_d3_brings_a_block_stuck_at_a_refused_family_down_at_once() -> None:
@@ -438,64 +387,40 @@ def test_d3_brings_a_block_stuck_at_a_refused_family_down_at_once() -> None:
     (``max_combines``, ADR-0085); once it is, the block comes down at its next transmission —
     whole to the floor's rung that fits it, or in pieces (ADR-0086) — not after its copies:
     HARQ cannot rescue a frame whose family the path does not carry."""
-    for on in (False, True):
-        a, b = _d3_pair(on)
-        sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
-        a.connect("KK4XYZ")
-        sim.run(until=60.0)
-        assert a.state is State.CONNECTED and a._sender is not None
-        seqs = []
-        for mode, body in ((5, 22), (7, 36)):
-            seq = a._tx_next
-            a._records[seq] = _TxRecord(seq, bytes(body), mode, origin=mode, tx_count=1)
-            a._tx_next = seq_after(seq)
-            seqs.append(seq)
-        a._recommended = a._peer_rung = 7
-        a._own_rung = 1  # the sender's own choice has gone to the floor
-        _transmission(a._sender, 5, decoded=0)
-        a._sender._index = a._sender.modes.index(1)
-        a._data_frames(math.inf)
-        modes = [a._records[s].mode for s in seqs]
-        if on:
-            assert all(a.timing.is_floor(m) for m in modes), modes
-            assert a._records[seqs[1]].pieces is not None  # 36 bytes fit no floor rung ≤ 1
-        else:
-            assert modes == [5, 7]
-
-
-# ── D1: one controller, at the sender (rate-control-2/03-candidates.md §2.1) ─────────────
-
-
-def test_d1_brings_a_stranded_frame_down_under_its_own_choice_whatever_the_advice() -> None:
-    """Under D1 the other station's recommendation steers nothing: a block stranded at OFDM comes
-    down when the station's own C1 has gone to the floor, though the advice still names a rung
-    above the block's. Under ``delivery-s`` before any acknowledgement (no own rung yet) the
-    advice keeps it where it is."""
-    for controller, comes_down in (("delivery-s", False), ("d1", True)):
-        a, b = _pair(NARROW, controller)
-        sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
-        a.connect("KK4XYZ")
-        sim.run(until=60.0)
-        assert a.state is State.CONNECTED and a._sender is not None
+    a, b = _d3_pair()
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
+    a.connect("KK4XYZ")
+    sim.run(until=60.0)
+    assert a.state is State.CONNECTED
+    seqs = []
+    for mode, body in ((5, 22), (7, 36)):
         seq = a._tx_next
-        a._records[seq] = _TxRecord(seq, bytes(22), 5, origin=5, tx_count=a.cfg.max_combines + 1)
+        a._records[seq] = _TxRecord(seq, bytes(body), mode, origin=mode, tx_count=1)
         a._tx_next = seq_after(seq)
-        a._recommended = a._peer_rung = 9  # the advice: faster than the block's rung
-        a._own_rung = None
-        a._sender._index = a._sender.modes.index(1)  # the station's own choice: the floor
-        a._data_frames(math.inf)
-        assert a.timing.is_floor(a._records[seq].mode) == comes_down, controller
+        seqs.append(seq)
+    a.rate._index = a.rate.modes.index(9)  # not refused yet: they stay for their copies
+    a._data_frames(math.inf)
+    assert [a._records[s].mode for s in seqs] == [5, 7]
+    _transmission(a.rate, 5, decoded=0)
+    a.rate._index = a.rate.modes.index(1)  # the choice gone to the floor
+    a._answered_rung = 1  # as the answer that told it said
+    a._data_frames(math.inf)
+    modes = [a._records[s].mode for s in seqs]
+    assert all(a.timing.is_floor(m) for m in modes), modes
+    assert a._records[seqs[1]].pieces is not None  # 36 bytes fit no floor rung ≤ 1
 
 
-def test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states() -> None:
+# ── D1: one controller, at the sender (ADR-0099 §2.2) ──────────────────────────────────
+
+
+def test_the_slaves_slot_is_sized_and_stated_in_the_family_the_slave_states() -> None:
     """The master grants the slave's slot in frames of the family the slave says its data goes in
-    (``data_floor``), not of the rung the master recommends: under D1 the slave does not follow
-    the recommendation. And the header states that rung, which the slave reckons its room in: the
-    slave's room is the master's reckoning of the slot, whatever the advice — with the advice in
-    the header, a floor rung over a slot sized in OFDM frames, the slave of the final checks'
-    Trimode run sent 27 s of tone frames into a slot the master reckoned at 6 s
-    (rate-control-2/04-results.md §4)."""
-    a, b = _pair(NARROW, "d1")
+    (``data_floor``), and the header states that family, which the slave reckons its room in: the
+    slave's room is the master's reckoning of the slot. With the old advice's rung in the header,
+    a floor rung over a slot sized in OFDM frames, the slave of the final checks' Trimode run
+    sent 27 s of tone frames into a slot the master reckoned at 6 s
+    (``rate-control-2/04-results.md`` §4.1, ADR-0099 §2.2)."""
+    a, b = _pair(NARROW)
     sim = TwoStationSim(a, b, snr_db=12.0, seed=3)
     a.connect("KK4XYZ")
     sim.run(until=60.0)
@@ -518,70 +443,55 @@ def test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states() -> None:
 
     a._grant_size = spy  # type: ignore[method-assign]
     a._key_granting = key  # type: ignore[method-assign]
-    a._recommend = lambda floor_only=False: 0  # type: ignore[method-assign]  # advice: the floor
     for floor_only in (False, True):
         a._slave_floor_only = floor_only
         a._send_header()
         assert sized and a.timing.is_floor(sized[-1]) == floor_only
         grant_s, header = sent[-1]
-        assert header.rung == sized[-1]
+        assert header.slot_floor == floor_only
         # what the slave reckons its data's room in (``_schedule_slave``) fits the master's slot
-        room = header.n * a._frame_s(a.timing.is_floor(header.rung))
+        room = header.n * a._frame_s(header.slot_floor)
         assert header.n > 0 and room <= grant_s + 1e-9
 
 
-# ── the climb (rate-control-2/03-candidates.md §2.4) ──────────────────────────────────
+# ── the echo (ADR-0087) ────────────────────────────────────────────────────────────────
 
 
-def _climb_pair(air: AirInterface, on: bool) -> tuple[GrantedEngine, GrantedEngine]:
-    timing = phy_timing(air.params)
-
-    def config() -> GrantConfig:
-        return GrantConfig(
-            capabilities=bandwidth_capabilities(air.params),
-            max_mode=air.n_rungs - 1,
-            max_burst_s=26.0,
-            disc_drain_s=1e9,
-            controller="d1",
-            family_refusal=True,
-            climb=on,
-        )
-
-    return (
-        GrantedEngine("W4ODA", timing, config(), seed=11),
-        GrantedEngine("KK4XYZ", timing, config(), seed=12),
-    )
+def _narrow_echo() -> RateController:
+    a, _ = _pair(NARROW)
+    return a.rate
 
 
-def test_the_climb_tries_the_best_rung_that_could_beat_the_floors_top() -> None:
-    """At 2 300 Hz with the answers on the floor, the first OFDM rung is worth less than the
-    floor's top even with nothing lost, so the next-rung try never came (the polar path, where
-    rungs 9 and 15 delivered 300-440 bit/s pinned). With the climb a clean transmission at the
-    floor's top starts a try at once, at a rung that could beat it."""
-    for on in (False, True):
-        a, _ = _climb_pair(WIDE, on)
-        ctl = a._sender
-        assert ctl is not None and ctl.climb == on
-        ctl.seed(-2.0)  # the floor's reading on a fading path: a lower bound
-        ctl.families = (True, True)
-        ctl._index = ctl.modes.index(5)
-        first_ofdm = ctl.modes[ctl.modes.index(5) + 1]
-        assert ctl._priced(first_ofdm, ctl.lossless(first_ofdm)) < ctl.value(5)
-        _transmission(ctl, 5, decoded=6)  # every frame decoded alone
-        if on:
-            assert ctl._probing is not None and ctl._probing > first_ofdm
-            assert ctl._priced(ctl._probing, ctl.lossless(ctl._probing)) > ctl.value(5)
-        else:
-            assert ctl._probing is None
+def test_an_echo_keeps_the_rungs_it_breaks_off_the_ladder() -> None:
+    """ADR-0087: a floor reading of -3 dB is a quiet path at -3 dB or ITU's disturbed NVIS at
+    any SNR, and on the second the 500 Hz air's rungs 3 and 4 do not carry. The echo the
+    floor's frames read tells the two apart: read, the start and every choice keep off the
+    rungs it breaks; gone, they are back on offer. (The OFDM rungs have no limit of their own:
+    on such a path it is D3 that keeps the family off, by what its frames deliver.)"""
+    from aether_model.link.rate import NARROW_ECHO_LIMIT
+
+    quiet = _narrow_echo()
+    assert quiet.first_mode(-3.0) >= min(NARROW_ECHO_LIMIT)
+    rc = _narrow_echo()
+    rc.observe_echo(0.01, -3.0)
+    assert rc.first_mode(-3.0) not in NARROW_ECHO_LIMIT
+    rc.seed(-3.0)
+    assert rc.recommend() not in NARROW_ECHO_LIMIT
+    rc.observe_echo(0.0, 5.0)
+    rc.observe_echo(0.0, 5.0)
+    rc.observe_echo(0.0, 5.0)
+    rc.observe_echo(0.0, 5.0)
+    assert not any(rc._echo_out(rc.modes.index(m)) for m in NARROW_ECHO_LIMIT)
 
 
-@pytest.mark.parametrize("air", [WIDE, NARROW], ids=["2300", "500"])
-def test_a_session_with_the_climb_carries_its_message(air: AirInterface) -> None:
-    a, b = _climb_pair(air, True)
-    sim = TwoStationSim(a, b, snr_db=12.0, seed=5)
-    payload = bytes(range(256)) * 12
-    a.connect("KK4XYZ")
-    a.send(payload)
-    a.disconnect()
-    sim.run(until=1500.0)
-    assert sim.delivered(1) == payload
+def test_an_echo_read_at_once_takes_the_choice_down() -> None:
+    """A choice the echo rules out does not wait for its frames to fail: the next transmission
+    goes at the best rung the echo allows. A weak frame's reading counts for nothing
+    (``echo_min_snr_db``): its noise is as large as a 4 ms echo's spill."""
+    rc = _narrow_echo()
+    rc.seed(-3.0)
+    rc._index = rc.modes.index(4)
+    rc.observe_echo(0.05, rc.echo_min_snr_db - 1.0)
+    assert rc.echo is None and rc.recommend() == 4
+    rc.observe_echo(0.01, -3.0)
+    assert rc.recommend() not in (3, 4)

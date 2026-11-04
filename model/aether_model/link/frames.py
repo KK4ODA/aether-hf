@@ -264,7 +264,7 @@ station one slot, defined by what it states; a station keys only in a slot grant
 decoded in time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes
 are not version 7's, and neither is any of its timing."""
 
-PROTOCOL_VERSION = 11
+PROTOCOL_VERSION = 12
 """The link protocol a station speaks, in the connect body's version byte; what a release
 states (``link_protocol``); a station ignores a call of another, and says so. The same number
 names different frames in different versions, so a session between two versions cannot run.
@@ -282,7 +282,13 @@ request inside a session, and an acknowledgement that reports a measurement (:da
 none of which a station of version 8 reads. 10 since tone4x100-93 (ADR-0081): rung 4 of the
 500 Hz ladder is a tone kind where it was QPSK ⅓. 11 since a stuck frame is sent in pieces
 (ADR-0086): a DATA frame's FRAGMENT flag and its two header bytes, which a station of version 10
-does not read."""
+does not read. 12 since one rate controller, at the sender (ADR-0099): the control frame's five
+bits that recommended a rung say the family a header's slot is sized in and how many frames of
+the transmission answered the receiver never detected (:class:`GrantFrame`)."""
+
+MISSED_UNKNOWN = 7
+"""A control frame's ``missed`` when its sender read no count for the transmission it answers,
+so cannot say how many of its frames it never detected (ADR-0099)."""
 
 CAP_LEVEL_SHIFT = 3
 CAP_LEVEL_MASK = 0x03 << CAP_LEVEL_SHIFT
@@ -440,7 +446,7 @@ class GrantFrame:
         1: session (7) | fam (1)
         2: flag (1) | id / measure (1) | SNR (6)
         3: base       4–5: bitmap         (selective acknowledgement)
-        6: rung (5) | n (3)
+        6: slot family (1) | missed (3) | 0 (1) | n (3)
 
     ``count``: data frames after this one in its transmission, exactly (0–6), and their family
     (``data_floor``) — with it a receiver that reads this frame and none of them still knows
@@ -454,8 +460,13 @@ class GrantFrame:
     report — it sends no data until it has (ADR-0077). ``base``/``bitmap``: what the sender has
     received of the other station's data, or with :data:`REPORT` set, which of its last
     measurement's frames arrived. ``snr_db``: how the sender hears the other
-    station, −31 … +31 dB (ADR-0021). ``rung``: recommended for the other station's data.
-    ``n``: frames granted (or an open window's size step) / frames queued, at most 7.
+    station, −31 … +31 dB (ADR-0021). ``slot_floor`` (a header): the slot's ``n`` frames are the
+    floor's — the family the slave says its data goes in, which the slave reckons its room in.
+    ``missed``: frames of the other station's last transmission, by a count its sender stated,
+    that this station neither decoded nor detected — 0–6, :data:`MISSED_UNKNOWN` when it read no
+    count (protocol 12, ADR-0099: only the receiver can know it; in protocol 11 these five bits
+    recommended a rung). ``n``: frames granted (or an open window's size step) / frames queued,
+    at most 7.
     ``session`` is the session number's low seven bits: data frames carry all eight."""
 
     kind: GrantKind
@@ -470,7 +481,8 @@ class GrantFrame:
     base: int = 0
     bitmap: int = 0
     snr_db: float | None = None
-    rung: int = 0
+    slot_floor: bool = False
+    missed: int = 0
     n: int = 0
 
     def encode(self) -> bytes:
@@ -490,7 +502,9 @@ class GrantFrame:
                 self.base & 0xFF,
                 (self.bitmap >> 8) & 0xFF,
                 self.bitmap & 0xFF,
-                ((self.rung & 0x1F) << 3) | (min(self.n, 7) & 0x07),
+                (int(self.slot_floor) << 7)
+                | (min(self.missed, MISSED_UNKNOWN) << 4)
+                | (min(self.n, 7) & 0x07),
             ]
         )
 
@@ -516,7 +530,8 @@ class GrantFrame:
             snr_db=snr,
             base=payload[3],
             bitmap=(payload[4] << 8) | payload[5],
-            rung=payload[6] >> 3,
+            slot_floor=bool(payload[6] & 0x80),
+            missed=(payload[6] >> 4) & 0x07,
             n=payload[6] & 0x07,
         )
 

@@ -463,7 +463,7 @@ def run_point(
     header = a._send_header
 
     def wrapped_header() -> None:
-        modes.append(min(a._recommended, a.cfg.max_mode))
+        modes.append(a._burst_mode())  # the rung the caller's data goes at
         header()
 
     a._send_header = wrapped_header  # type: ignore[method-assign]
@@ -668,8 +668,7 @@ def replay_sidecar(path: Path, seed: int, rung: Hypothetical | None = None) -> d
 
 def overrides(text: str) -> dict[str, float | int | None]:
     """``key=value,key=value`` as a dict of numbers; ``none`` for a setting that can be
-    absent (``ceiling=none``: no ceiling); a word is kept as it is (``controller=delivery``,
-    a prototype of the rate controller's review)."""
+    absent (``ceiling=none``: no ceiling); a word is kept as it is."""
     out: dict[str, float | int | None] = {}
     for item in text.split(","):
         if item.strip():
