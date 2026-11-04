@@ -442,6 +442,10 @@ pub struct GrantConfig {
     /// ([`DeliveryController::refuses`]), and a block stuck at a refused family brought down at
     /// once. Off, nothing changes; a station on the air never sets it.
     pub family_refusal: bool,
+    /// Bench only: the second review's climb (`03-candidates.md` §2.4) for C1 at the sender — a
+    /// try goes to the best-rated rung that could beat the choice, starts after a clean
+    /// transmission, and fills its transmission ([`DeliveryController::set_climb`]).
+    pub climb: bool,
     /// The rung a session's data starts at before anything is measured.
     pub initial_mode: usize,
     /// The fastest rung this station uses.
@@ -549,6 +553,7 @@ impl Default for GrantConfig {
             rate: RateConfig::default(),
             controller: Controller::DeliveryS,
             family_refusal: false,
+            climb: false,
             initial_mode: 0,
             max_mode: 19,
             ceiling: None,
@@ -1244,6 +1249,7 @@ fn delivery_for(timing: &PhyTiming, config: &GrantConfig) -> DeliveryController 
         &echo_limits(timing, config),
     );
     controller.set_family_refusal(config.family_refusal);
+    controller.set_climb(config.climb);
     controller
 }
 
@@ -4358,7 +4364,12 @@ impl GrantedEngine {
             && seq_distance(self.tx_next, self.tx_base) < WINDOW
             && !self.tx_queue.is_empty()
         {
-            let at = probe.take().unwrap_or(mode);
+            // a try is one new frame of the transmission — or, with the climb, all of them
+            let at = if self.config.climb {
+                probe.unwrap_or(mode)
+            } else {
+                probe.take().unwrap_or(mode)
+            };
             let cap = data_capacity(self.timing.capacity(at));
             let mut take = cap.min(self.tx_queue.len());
             if let Some(body) = self.pin_body {

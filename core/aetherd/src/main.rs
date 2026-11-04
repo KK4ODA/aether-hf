@@ -623,6 +623,7 @@ fn station_config(
         link: GrantConfig {
             max_mode: config.radio.fastest_mode(),
             family_refusal: bench_link(simulated, "family_refusal"),
+            climb: bench_link(simulated, "climb"),
             controller: bench_controller(simulated).unwrap_or_default(),
             ..GrantConfig::default()
         },
@@ -1814,6 +1815,14 @@ fn say_bench_link(simulated: bool, daemon: &mut DaemonState) {
             Level::Info,
             "link",
             "bench: the rate review's D3 is on (AETHER_BENCH_LINK=family_refusal)",
+            "Idle",
+        );
+    }
+    if bench_link(simulated, "climb") {
+        daemon.log.record(
+            Level::Info,
+            "link",
+            "bench: the rate review's climb is on (AETHER_BENCH_LINK=climb)",
             "Idle",
         );
     }

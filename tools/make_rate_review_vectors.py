@@ -315,9 +315,16 @@ def main() -> int:
             print(f"{controller}:{name}: {sum(len(r.trace) for r in recorders)} steps")
     # the second review's candidates (rate-control-2/03-candidates.md §2), each with D3's OFDM
     # family refusable: D3 on today's pair, D1 (C1 at the sender alone) and D2 (C1 in both roles)
-    for label, controller in (("d3", "delivery-s"), ("d1", "d1"), ("d2", "c1")):
+    for label, controller, climb in (
+        ("d3", "delivery-s", False),
+        ("d1", "d1", False),
+        ("d2", "c1", False),
+        ("d1c", "d1", True),
+    ):
         granted.PROTOTYPE.clear()
         granted.PROTOTYPE.update(controller=controller, family_refusal=True)
+        if climb:
+            granted.PROTOTYPE["climb"] = True
         for name in D3_SESSIONS:
             recorders = {**granted.SESSIONS, **EXTRA}[name]()
             sessions.append({"name": f"{label}:{name}", "stations": [r.doc() for r in recorders]})

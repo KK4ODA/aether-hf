@@ -129,6 +129,10 @@ pub struct DeliveryController {
     family_refusal: bool,
     /// The last OFDM frames observed delivered nothing ([`judge_family`](Self::judge_family)).
     ofdm_failed: bool,
+    /// The second review's climb (`03-candidates.md` §2.4), bench only: a try goes to the best
+    /// rung that could beat the choice and starts after a clean transmission, across the
+    /// floor's edge too ([`climb_target`](Self::climb_target)); the model's `climb`.
+    climb: bool,
 }
 
 impl DeliveryController {
@@ -186,7 +190,38 @@ impl DeliveryController {
             families: None,
             family_refusal: false,
             ofdm_failed: false,
+            climb: false,
         }
+    }
+
+    /// The second review's climb, bench only (the model's `climb`).
+    pub const fn set_climb(&mut self, on: bool) {
+        self.climb = on;
+    }
+
+    /// Whether the climb is on.
+    #[must_use]
+    pub const fn climbs(&self) -> bool {
+        self.climb
+    }
+
+    /// The climb's try: of the usable rungs above the choice whose lossless delivery, priced per
+    /// exchange, beats the choice's estimate, the one the estimate rates best, the most robust
+    /// of equals (the model's `_climb_target`).
+    fn climb_target(&self) -> Option<usize> {
+        let here = self.value(self.modes[self.index]);
+        let mut best: Option<(usize, f64)> = None;
+        for i in self.index + 1..self.modes.len() {
+            let mode = self.modes[i];
+            if !self.usable(i) || self.priced(mode, self.lossless(mode)) <= here {
+                continue;
+            }
+            let value = self.value(mode);
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        best.map(|(i, _)| i)
     }
 
     /// D3, bench only: lets the OFDM family be refused as a whole — by the echo, when the path's
@@ -595,18 +630,31 @@ impl DeliveryController {
         self.index = index;
         let up = self.index + 1;
         if let Some(probe) = self.probing {
-            if !self.usable(up) || self.modes[up] != probe {
+            let still = if self.climb {
+                self.climb_target().is_some_and(|i| self.modes[i] == probe)
+            } else {
+                self.usable(up) && self.modes[up] == probe
+            };
+            if !still {
                 self.cancel_try(); // the choice moved from under the try
             }
             return;
         }
-        if !self.usable(up) {
-            return;
-        }
-        let mode = self.modes[up];
-        if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
-            return;
-        }
+        let mode = if self.climb {
+            let Some(target) = self.climb_target() else {
+                return;
+            };
+            self.modes[target]
+        } else {
+            if !self.usable(up) {
+                return;
+            }
+            let mode = self.modes[up];
+            if self.priced(mode, self.lossless(mode)) <= self.value(self.modes[self.index]) {
+                return;
+            }
+            mode
+        };
         let waited = self.since(mode) >= self.wait_s(mode) - WAIT_TOLERANCE_S;
         if waited || self.clean_climb(mode) {
             self.probing = Some(mode);
@@ -619,6 +667,11 @@ impl DeliveryController {
     /// of the last transmission at the current rung decoded alone (the model's `_clean_climb`).
     fn clean_climb(&self, mode: usize) -> bool {
         let here = self.modes[self.index];
+        if self.climb {
+            // the climb: a clean transmission is the evidence, the rung tried is the target's,
+            // and a try of it that failed since it last carried has doubled its wait
+            return self.clean_at == Some(here) && self.wait(mode) == self.probe_every;
+        }
         self.clean_at == Some(here)
             && (mode < self.floor_modes) == (here < self.floor_modes)
             && self.wait(mode) == self.probe_every

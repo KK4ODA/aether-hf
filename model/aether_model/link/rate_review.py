@@ -225,6 +225,16 @@ class DeliveryController(RateController):
     brings the family's stuck blocks down at once."""
     _ofdm_failed: bool = False
     """The last OFDM frames observed delivered nothing (:meth:`_judge_family`)."""
+    climb: bool = False
+    """The second review's climb (``03-candidates.md`` §2.4), bench only. A try goes to the rung
+    the estimate rates best among the usable rungs above the choice whose lossless delivery,
+    priced per exchange, beats the choice's estimate — not the next rung up, which from the
+    2 300 Hz floor's top is the first OFDM rung, worth less than the top with the answers on the
+    floor even with nothing lost, so no try of OFDM was ever due on the polar path. And a
+    transmission whose frames at the choice all decoded alone starts a try at once, across the
+    floor's edge too: on the equatorial flutter path the whole message went at the floor's top
+    before a try's wait ran out (``04-results.md`` §3). The engine fills the try's transmission
+    with frames at the rung tried."""
 
     # ── what the engine feeds it ──────────────────────────────────────
 
@@ -431,18 +441,42 @@ class DeliveryController(RateController):
         self._index = max(here, key=lambda i: (self.value(self.modes[i]), -i))
         up = self._index + 1
         if self._probing is not None:
-            if not self._usable(up) or self.modes[up] != self._probing:
+            if self.climb:
+                target = self._climb_target()
+                if target is None or self.modes[target] != self._probing:
+                    self._cancel_try()  # the choice moved from under the try
+            elif not self._usable(up) or self.modes[up] != self._probing:
                 self._cancel_try()  # the choice moved from under the try
             return
-        if not self._usable(up):
-            return
-        mode = self.modes[up]
-        if self._priced(mode, self.lossless(mode)) <= self.value(self.modes[self._index]):
-            return
+        if self.climb:
+            target = self._climb_target()
+            if target is None:
+                return
+            mode = self.modes[target]
+        else:
+            if not self._usable(up):
+                return
+            mode = self.modes[up]
+            if self._priced(mode, self.lossless(mode)) <= self.value(self.modes[self._index]):
+                return
         waited = self._since_probe.get(mode, 0.0) >= self._wait_s(mode) - WAIT_TOLERANCE_S
         if waited or self._clean_climb(mode):
             self._probing = mode
             self._since_probe[mode] = 0.0
+
+    def _climb_target(self) -> int | None:
+        """The climb's try (:attr:`climb`): of the usable rungs above the choice whose lossless
+        delivery, priced per exchange, beats the choice's estimate, the one the estimate rates
+        best, the most robust of equals — or ``None``."""
+        here = self.value(self.modes[self._index])
+        above = [
+            i
+            for i in range(self._index + 1, len(self.modes))
+            if self._usable(i) and self._priced(self.modes[i], self.lossless(self.modes[i])) > here
+        ]
+        if not above:
+            return None
+        return max(above, key=lambda i: (self.value(self.modes[i]), -i))
 
     def _clean_climb(self, mode: int) -> bool:
         """Whether the rung above, ``mode``, is tried without its wait: of the current rung's
@@ -454,6 +488,13 @@ class DeliveryController(RateController):
         reading rose and rated rung 14 higher, and the try came in the last transmission
         (``04-results.md`` §3.24, K5)."""
         here = self.modes[self._index]
+        if self.climb:
+            # the climb: a clean transmission is the evidence, the rung tried is the target's,
+            # and a try of it that failed since it last carried has doubled its wait
+            return (
+                self._clean_at == here
+                and self._probe_wait.get(mode, self.probe_every) == self.probe_every
+            )
         return (
             self._clean_at == here
             and (mode < self.floor_modes) == (here < self.floor_modes)

@@ -372,6 +372,10 @@ class GrantConfig:
     controller in both roles) and the review's other prototypes — ``d1`` (the second review's
     D1) is ``delivery-s`` with the advice steering nothing (:meth:`GrantedEngine._own_only`).
     :attr:`rate` overrides the current controller's parameters either way."""
+    climb: bool = False
+    """Bench only: the second review's climb (``03-candidates.md`` §2.4) for C1 at the sender —
+    a try goes to the best-rated rung that could beat the choice, starts after a clean
+    transmission, and fills its transmission (:attr:`DeliveryController.climb`)."""
     family_refusal: bool = False
     """Bench only: D3 of the rate controller's second review (``docs/research/rate-control-2/
     03-candidates.md`` §2.3) — the OFDM family refused as a whole by the echo or by outcomes
@@ -1638,6 +1642,7 @@ class GrantedEngine:
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
             family_refusal=self.cfg.family_refusal,
+            climb=self.cfg.climb,
             **{**floor, **priced, **self.cfg.rate},  # type: ignore[arg-type]
         )
 
@@ -2910,7 +2915,10 @@ class GrantedEngine:
         ):
             at = mode
             if probe is not None:
-                at, probe = probe, None
+                # a try is one new frame of the transmission — or, with the climb, all of them
+                at = probe
+                if not self.cfg.climb:
+                    probe = None
             cap = data_capacity(self.timing.capacity(at))
             take = min(cap, len(self._tx_queue))
             if self._pin_body is not None:

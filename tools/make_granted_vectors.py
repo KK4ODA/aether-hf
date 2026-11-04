@@ -99,6 +99,8 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
     named = {} if c.controller == GrantConfig().controller else {"controller": c.controller}
     if c.family_refusal:  # D3 of the second review, bench only (make_rate_review_vectors.py)
         named["family_refusal"] = True
+    if c.climb:  # the second review's climb, bench only
+        named["climb"] = True
     return {
         **named,
         "max_data_frames": c.max_data_frames,

@@ -511,3 +511,60 @@ def test_d1_sizes_the_slaves_slot_in_the_family_the_slave_states() -> None:
     a._slave_floor_only = True
     a._send_header()
     assert a.timing.is_floor(sized[-1])
+
+
+# ── the climb (rate-control-2/03-candidates.md §2.4) ──────────────────────────────────
+
+
+def _climb_pair(air: AirInterface, on: bool) -> tuple[GrantedEngine, GrantedEngine]:
+    timing = phy_timing(air.params)
+
+    def config() -> GrantConfig:
+        return GrantConfig(
+            capabilities=bandwidth_capabilities(air.params),
+            max_mode=air.n_rungs - 1,
+            max_burst_s=26.0,
+            disc_drain_s=1e9,
+            controller="d1",
+            family_refusal=True,
+            climb=on,
+        )
+
+    return (
+        GrantedEngine("W4ODA", timing, config(), seed=11),
+        GrantedEngine("KK4XYZ", timing, config(), seed=12),
+    )
+
+
+def test_the_climb_tries_the_best_rung_that_could_beat_the_floors_top() -> None:
+    """At 2 300 Hz with the answers on the floor, the first OFDM rung is worth less than the
+    floor's top even with nothing lost, so the next-rung try never came (the polar path, where
+    rungs 9 and 15 delivered 300-440 bit/s pinned). With the climb a clean transmission at the
+    floor's top starts a try at once, at a rung that could beat it."""
+    for on in (False, True):
+        a, _ = _climb_pair(WIDE, on)
+        ctl = a._sender
+        assert ctl is not None and ctl.climb == on
+        ctl.seed(-2.0)  # the floor's reading on a fading path: a lower bound
+        ctl.families = (True, True)
+        ctl._index = ctl.modes.index(5)
+        first_ofdm = ctl.modes[ctl.modes.index(5) + 1]
+        assert ctl._priced(first_ofdm, ctl.lossless(first_ofdm)) < ctl.value(5)
+        _transmission(ctl, 5, decoded=6)  # every frame decoded alone
+        if on:
+            assert ctl._probing is not None and ctl._probing > first_ofdm
+            assert ctl._priced(ctl._probing, ctl.lossless(ctl._probing)) > ctl.value(5)
+        else:
+            assert ctl._probing is None
+
+
+@pytest.mark.parametrize("air", [WIDE, NARROW], ids=["2300", "500"])
+def test_a_session_with_the_climb_carries_its_message(air: AirInterface) -> None:
+    a, b = _climb_pair(air, True)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=5)
+    payload = bytes(range(256)) * 12
+    a.connect("KK4XYZ")
+    a.send(payload)
+    a.disconnect()
+    sim.run(until=1500.0)
+    assert sim.delivered(1) == payload

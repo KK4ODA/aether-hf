@@ -125,6 +125,7 @@ fn config(doc: &Value) -> GrantConfig {
             .get("family_refusal")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        climb: doc.get("climb").and_then(Value::as_bool).unwrap_or(false),
         max_data_frames: int(&doc["max_data_frames"]),
         max_burst_s: opt(&doc["max_burst_s"]),
         max_retries: int(&doc["max_retries"]),
