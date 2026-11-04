@@ -20,6 +20,10 @@ on:
       bench_link:
         description: "A candidate's engine switches (AETHER_BENCH_LINK, e.g. family_refusal); empty runs the shipping default"
         default: ""
+      controller_only:
+        description: "Run the controller's choice alone, no pinned rungs (a candidate against a baseline's best rungs)"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -105,6 +109,8 @@ jobs:
             *-500|*-500-*) rungs="0,1,2,3,4,5,6,7,9,10,11,12,13,14" ;;
             *) rungs="0,1,2,3,4,5,7,8,9,10,11,12,14,15,16,17,18,19" ;;
           esac
+          # a pinned rung ignores the controller: a candidate's runs need only its own choice
+          if [ "${{ inputs.controller_only }}" = "true" ]; then rungs=""; fi
           out="${{ runner.temp }}/oracle"
           uv run python tools/rung_oracle.py "bench/scenarios/${{ matrix.scenario }}.toml" \
             --rungs "$rungs" --draws "${{ inputs.draws }}" --jobs 2 --drop-audio \
@@ -118,9 +124,10 @@ jobs:
           path: ${{ runner.temp }}/oracle
           retention-days: 30
 
+  # the regret needs the pinned rungs: a controller-only run is judged against a baseline's
   report:
     needs: oracle
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !inputs.controller_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
