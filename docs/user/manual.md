@@ -451,6 +451,11 @@ not touched.
 
 - **Signal analysis**: the constellation, spectrum and waterfall. **Undock** opens them in a
   window of their own, to keep in view from any tab. A tone frame has no constellation.
+  - The red lines on the spectrum and the waterfall are the edges of your widest transmission at
+    the bandwidth you run, by the FCC's 26 dB measure. They sit a little outside the bandwidth's
+    own number: the signal's skirts reach past it. A signal between them is on your frequency;
+    wait for it to clear before you call. The lines move when the bandwidth changes, and narrow
+    if *Fastest mode* keeps the station on the tone rungs.
   - The waterfall draws the noise dark and steady and a signal bright above it. **Floor** sets
     the level drawn black; with **auto** it follows the noise in the modem's passband. **Gain**
     is how many decibels above the floor reach full white, 3 to 90 dB (20 by default): lower it

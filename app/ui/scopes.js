@@ -23,6 +23,22 @@ export const PALETTES = {
 
 const $ = (id) => document.getElementById(id);
 
+/// A `#rrggbb` colour as its three channels; grey for anything else.
+function rgb(colour) {
+  const m = /^#([0-9a-f]{6})$/i.exec(colour);
+  if (!m) return [64, 64, 64];
+  const v = parseInt(m[1], 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+/// Where this station's widest transmission reaches, audio hertz, low and high: what the
+/// modem measured for the bandwidth it runs (`transmit_hz`), or its nominal channel from a
+/// modem that does not say.
+function transmitEdges(spectrum) {
+  const [lo, hi] = spectrum.transmit_hz ?? spectrum.passband_hz ?? [0, 0];
+  return hi > lo ? [lo, hi] : null;
+}
+
 // The share of each new spectrum in the waterfall's running average: polled eight times a
 // second, about a third of a second of memory.
 const WATERFALL_AVERAGE = 0.35;
@@ -81,11 +97,11 @@ const BODY = `
   <div class="plot-stack">
     <figure class="plot">
       <figcaption>Spectrum, 0–4 kHz <span class="plot-meta numerals" id="spectrum-caption" title="The strongest bin of the received audio, or what is being sent"></span></figcaption>
-      <canvas id="chart-spectrum" class="plot-spectrum" title="Spectrum of the received audio, 0 to 4 kHz; the modem's passband is shaded" width="600" height="110" role="img" aria-label="Spectrum of the received audio"></canvas>
+      <canvas id="chart-spectrum" class="plot-spectrum" title="Spectrum of the received audio, 0 to 4 kHz. The red lines, shaded between, are the edges of this station's widest transmission at the bandwidth it runs (the FCC's 26 dB measure): a signal between them is on your frequency" width="600" height="110" role="img" aria-label="Spectrum of the received audio"></canvas>
     </figure>
     <figure class="plot plot-grow">
       <figcaption>Waterfall</figcaption>
-      <canvas id="chart-waterfall" class="plot-waterfall" title="The received audio over time, newest at the top" width="600" height="140" role="img" aria-label="Waterfall of the received audio, newest at the top"></canvas>
+      <canvas id="chart-waterfall" class="plot-waterfall" title="The received audio over time, newest at the top. The red lines are the edges of this station's widest transmission at the bandwidth it runs (the FCC's 26 dB measure): a signal between them is on your frequency, so wait before calling" width="600" height="140" role="img" aria-label="Waterfall of the received audio, newest at the top"></canvas>
     </figure>
   </div>
   <div class="scope-toolbar" role="group" aria-label="Waterfall controls" title="The waterfall's controls: its floor, its range, its speed and its colours">
@@ -283,9 +299,11 @@ export function createScopes(host) {
     const high = 0;
     const x = (hz) => (hz / SPECTRUM_TOP_HZ) * width;
     const y = (db) => (1 - (Math.max(low, Math.min(high, db)) - low) / (high - low)) * (height - 14) + 2;
-    // the modem's passband, marked
-    const [lo, hi] = spectrum.passband_hz ?? [0, 0];
-    if (hi > lo) {
+    // where this station's transmission goes: shaded, its edges in the transmit colour, as
+    // on the waterfall
+    const edges = transmitEdges(spectrum);
+    if (edges) {
+      const [lo, hi] = edges;
       ctx.fillStyle = c.accent;
       ctx.globalAlpha = 0.06;
       ctx.fillRect(x(lo), 0, x(hi) - x(lo), height - 14);
@@ -316,6 +334,17 @@ export function createScopes(host) {
       ctx.fillStyle = c.ink;
       ctx.fillText(`${db}`, 4, y(db) - 6);
     }
+    if (edges) {
+      ctx.strokeStyle = c.tx;
+      ctx.lineWidth = 1;
+      for (const hz of edges) {
+        const at = Math.round(x(hz)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(at, 0);
+        ctx.lineTo(at, height - 14);
+        ctx.stroke();
+      }
+    }
     if (bins.length === 0) {
       caption.textContent = "waiting for audio";
       return;
@@ -345,13 +374,7 @@ export function createScopes(host) {
   function heat(fraction) {
     if (!palette) {
       const c = tokens();
-      const hex = (h) => {
-        const m = /^#([0-9a-f]{6})$/i.exec(h);
-        if (!m) return [64, 64, 64];
-        const v = parseInt(m[1], 16);
-        return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-      };
-      const stops = PALETTES[waterfall.palette] ?? [hex(c.plot), hex(c.accent), [255, 255, 255]];
+      const stops = PALETTES[waterfall.palette] ?? [rgb(c.plot), rgb(c.accent), [255, 255, 255]];
       palette = [];
       for (let i = 0; i < 256; i++) {
         const p = (i / 255) * (stops.length - 1);
@@ -429,6 +452,19 @@ export function createScopes(host) {
       row.data[px * 4 + 1] = g;
       row.data[px * 4 + 2] = b;
       row.data[px * 4 + 3] = 255;
+    }
+    // this station's transmit edges, painted into every line, so they run down the waterfall
+    // as two lines; a move to the other bandwidth shows as a step in them
+    const edges = transmitEdges(spectrum);
+    if (edges) {
+      const [r, g, b] = rgb(tokens().tx);
+      for (const hz of edges) {
+        const px = Math.round((hz / SPECTRUM_TOP_HZ) * width);
+        if (px < 0 || px >= width) continue;
+        row.data[px * 4] = r;
+        row.data[px * 4 + 1] = g;
+        row.data[px * 4 + 2] = b;
+      }
     }
     ctx.putImageData(row, 0, 0);
   }

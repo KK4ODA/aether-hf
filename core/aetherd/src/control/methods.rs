@@ -2199,8 +2199,13 @@ fn spectrum<P: Ptt>(station: &Station<P>) -> Value {
     json!({
         "bin_hz": spectrum.as_ref().map_or(0.0, |s| s.bin_hz),
         "bins_db": spectrum.as_ref().map_or(&[][..], |s| s.bins_db.as_slice()),
-        // where this modem's signal sits, so the display can mark its edges
+        // the modem's nominal channel, where the waterfall's auto floor reads the noise
         "passband_hz": [params.centre_hz - half, params.centre_hz + half],
+        // how far this station's widest transmission reaches, measured (the rules' edges):
+        // the display marks them, so an operator sees a signal that sits where this one goes
+        "transmit_hz": station
+            .transmit_edges_hz()
+            .map(|(lo, hi)| [(lo * 10.0).round() / 10.0, (hi * 10.0).round() / 10.0]),
         "transmitting": station.transmitting(),
     })
 }
@@ -2613,6 +2618,18 @@ mod tests {
         let width =
             result["passband_hz"][1].as_f64().unwrap() - result["passband_hz"][0].as_f64().unwrap();
         assert!((width - 2300.0).abs() < 1e-9, "{width}");
+        // the transmit edges are measured, not the nominal channel: the widest rung's skirts
+        // reach past it by the 26 dB measure, and stay inside the radio's audio
+        let (lo, hi) = (
+            result["transmit_hz"][0].as_f64().expect("measured"),
+            result["transmit_hz"][1].as_f64().expect("measured"),
+        );
+        assert!(
+            lo < result["passband_hz"][0].as_f64().unwrap()
+                && hi > result["passband_hz"][1].as_f64().unwrap(),
+            "{lo}..{hi}"
+        );
+        assert!(lo > 0.0 && hi < 3000.0 && hi - lo < 2800.0, "{lo}..{hi}");
         let response = call(&mut station, "constellation", json!({}));
         assert!(response.ok);
         let result = response.result.expect("result");

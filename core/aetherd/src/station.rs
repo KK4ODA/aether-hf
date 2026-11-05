@@ -5617,6 +5617,18 @@ impl<P: Ptt> Station<P> {
         }
     }
 
+    /// The audio this station's widest transmission reaches, hertz, low and high edge: every
+    /// rung up to `max_mode` with the control frames, at the bandwidth it runs, by the wider
+    /// reading of §97.3(a)(8) — the edges the rules judge (`regulatory_status`'s `widest`),
+    /// and what the panel's spectrum and waterfall mark, so an operator can see whether
+    /// another signal sits where this one would go. `None` on an air nothing is measured for.
+    #[must_use]
+    pub fn transmit_edges_hz(&self) -> Option<(f64, f64)> {
+        let air = self.occupancy?;
+        let top = self.config.link.max_mode.min(air.rungs.len() - 1);
+        Some(envelope(air, self.engine.timing(), top).range(crate::regulatory::Reading::Wider))
+    }
+
     /// Where the station stands with the rules: the situation, what its widest transmission
     /// would be, the ceiling on the link's rungs, the gate's last decision and the dials
     /// where its waveforms fit — for the panel's indicator and diagnostics.
@@ -5645,12 +5657,7 @@ impl<P: Ptt> Station<P> {
         };
         let top = self.config.link.max_mode.min(air.rungs.len() - 1);
         let timing = self.engine.timing().clone();
-        let envelope = |upto: usize| {
-            (0..=upto)
-                .map(|r| air.rungs[r].edges.union(air.control(timing.is_floor(r))))
-                .reduce(Edges::union)
-                .unwrap_or(air.control_floor)
-        };
+        let envelope = |upto: usize| envelope(air, &timing, upto);
         let widest = Transmission {
             what: format!(
                 "the {} Hz waveform up to rung {top} ({})",
@@ -5753,10 +5760,7 @@ impl<P: Ptt> Station<P> {
             .unwrap_or(self.config.link.max_mode)
             .min(air.rungs.len() - 1);
         let timing = self.engine.timing().clone();
-        let audio = (0..=top)
-            .map(|r| air.rungs[r].edges.union(air.control(timing.is_floor(r))))
-            .reduce(Edges::union)
-            .unwrap_or(air.control_floor);
+        let audio = envelope(air, &timing, top);
         let tx = Transmission {
             what: format!(
                 "the {} Hz waveform up to rung {top} ({})",
@@ -5836,6 +5840,15 @@ impl<P: Ptt> Station<P> {
             _ => None,
         }
     }
+}
+
+/// What every transmission up to rung `upto` occupies together, absolute audio hertz: each
+/// rung's data frames with its family's control frame.
+fn envelope(air: &AirOccupancy, timing: &PhyTiming, upto: usize) -> Edges {
+    (0..=upto.min(air.rungs.len() - 1))
+        .map(|r| air.rungs[r].edges.union(air.control(timing.is_floor(r))))
+        .reduce(Edges::union)
+        .unwrap_or(air.control_floor)
 }
 
 /// Whether a transmission sets up a contact — a call, an acceptance, a probe or its answer —
