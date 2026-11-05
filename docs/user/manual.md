@@ -91,8 +91,10 @@ To the right:
   dial is now. Click it for the reasoning.
 - **Modem** is quiet when the panel is talking to the daemon and red when it is not.
 - **Full**, **Compact** and **Mini** choose how much of the panel to show. **Full** is every
-  tab. **Compact** shrinks the window to the state, the four link readings and the channel's
-  activity over the last two minutes (what the radio hears, and when you transmitted).
+  tab. **Compact** shrinks the window to the state, the four link readings and the Status
+  tab's two plots, small and side by side: the speed over the last ten minutes (or the SNR,
+  if that is the one you chose in Full) and the channel's activity over the last two (what the
+  radio hears, and when you transmitted).
   **Mini** is the state and the four readings alone, for a corner of the screen. **Full**
   brings the window back to its size. Aether remembers the view, and the size of the window
   in Full, for the next start.

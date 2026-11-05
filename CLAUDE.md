@@ -2500,7 +2500,11 @@ busy band's three kinds in their colours. **The dial follows the knob**: the rad
 dial is read in the background once a second whenever the station is idle (`read_radio`, not
 only while recording), and a changed reading is a `dial` event the panel refreshes on.
 Cards of readings (`.tiles`) are as tall as their lines, never stretched: the Status tab's
-History card takes the spare height. **The receive-filter estimate, replaced (beta.131, its
+History card takes the spare height. Compact shows both of the History card's plots, short
+and side by side (the ten-minute one is whichever Full shows, Speed or SNR), stacked under
+470 px; a legend is laid out by `legendLayout` (a group — an item and the ones after it that
+carry their own gap — wraps whole), every chart hands its legend to `chartFrame` so a second
+row pushes the plot down, and a speed plot too short for its 1-2-5 labels marks decades only. **The receive-filter estimate, replaced (beta.131, its
 second fix after d1b0992):** on 7.074 MHz FT8 through a 3 kHz filter the panel said "about
 850 Hz wide" — the monitor averaged its quiet spectra, and FT8 fills the passband's middle in
 every period. `PassbandMonitor` now keeps the last 120 quiet spectra and takes each bin's 10th

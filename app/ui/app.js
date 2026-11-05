@@ -1139,28 +1139,43 @@ function chartFrame(id, fallbackWidth, height, low, high, legend = null) {
   const plotWidth = s.width - CHART_LEFT - CHART_RIGHT;
   // a legend wider than the chart wraps, and the plot starts under its last row rather
   // than behind it — the rows are counted here so the y scale knows where it may begin
-  const rows = legend ? legendRows(s.ctx, plotWidth, legend) : 1;
+  const rows = legend ? legendLayout(s.ctx, plotWidth, legend).rows : 1;
   const top = CHART_TOP + (rows - 1) * LEGEND_ROW;
   const bottom = height - CHART_BOTTOM;
   const y = (value) => top + (1 - (value - low) / (high - low)) * (bottom - top);
   return { ...s, c, plotWidth, bottom, top, y, legend };
 }
 
-/// How many rows a legend takes at this plot width.
-function legendRows(ctx, plotWidth, items) {
+/// Where each legend item goes at this plot width, and how many rows they take. A legend
+/// wider than the chart wraps; an item and the ones after it that carry a gap of their own
+/// (the busy band's kinds after "busy") are a group, and a group wraps whole when it fits a
+/// row of its own, so no kind is left on a row without its name.
+function legendLayout(ctx, plotWidth, items) {
   const right = CHART_LEFT + plotWidth;
-  let at = CHART_LEFT;
-  let rows = 1;
-  items.forEach(([, text, gap], index) => {
-    const width = ctx.measureText(text).width;
-    if (index > 0) at += gap ?? LEGEND_GAP;
-    if (at > CHART_LEFT && at + width > right) {
-      at = CHART_LEFT;
-      rows += 1;
+  const widths = items.map(([, text]) => ctx.measureText(text).width);
+  const groupWidth = (start) => {
+    let width = widths[start];
+    for (let i = start + 1; i < items.length && items[i][2] !== undefined; i++) {
+      width += items[i][2] + widths[i];
     }
-    at += width;
+    return width;
+  };
+  const places = [];
+  let at = CHART_LEFT;
+  let row = 0;
+  items.forEach(([, , gap], index) => {
+    if (index > 0) at += gap ?? LEGEND_GAP;
+    const grouped = gap !== undefined;
+    const needed = grouped ? widths[index] : groupWidth(index);
+    const fitsAlone = needed <= right - CHART_LEFT;
+    if (at > CHART_LEFT && at + (fitsAlone ? needed : widths[index]) > right) {
+      at = CHART_LEFT;
+      row += 1;
+    }
+    places.push({ x: at, row });
+    at += widths[index];
   });
-  return rows;
+  return { places, rows: row + 1 };
 }
 
 /// Horizontal grid lines every `step`, labelled at the left.
@@ -1209,21 +1224,11 @@ function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
 function drawLegend(f, items) {
   const { ctx } = f;
   ctx.textAlign = "left";
-  // a legend wider than the chart wraps to a second row rather than running off the
-  // right edge; the frame was told the items, so the plot already starts below it
-  const right = CHART_LEFT + f.plotWidth;
-  let at = CHART_LEFT;
-  let row = 8;
-  items.forEach(([colour, text, gap], index) => {
-    const width = ctx.measureText(text).width;
-    if (index > 0) at += gap ?? LEGEND_GAP;
-    if (at > CHART_LEFT && at + width > right) {
-      at = CHART_LEFT;
-      row += LEGEND_ROW;
-    }
+  // the frame was told the items, so the plot already starts below the legend's last row
+  const { places } = legendLayout(ctx, f.plotWidth, items);
+  items.forEach(([colour, text], index) => {
     ctx.fillStyle = colour;
-    ctx.fillText(text, at, row);
-    at += width;
+    ctx.fillText(text, places[index].x, 8 + places[index].row * LEGEND_ROW);
   });
 }
 
@@ -1298,18 +1303,31 @@ function drawSpeedChart() {
     high = Math.max(high, point.bps, point.sending ?? 0, point.receiving ?? 0);
   }
   high = SPEED_TICKS.find((tick) => tick >= high) ?? high;
+  const legendColours = tokens();
+  const legend = [
+    [legendColours.ink, "bit/s"],
+    [legendColours.tx, "sending at"],
+    [legendColours.rx, "receiving at"],
+    [legendColours.accent, "goodput"],
+  ];
   const f = chartFrame(
     "chart-speed",
     450,
     chartHeight("chart-speed"),
     Math.log10(SPEED_FLOOR_BPS),
     Math.log10(high),
+    legend,
   );
   const { ctx, c } = f;
   const y = (bps) => f.y(Math.log10(Math.max(SPEED_FLOOR_BPS, bps)));
+  // a short plot (Compact's) has its 1-2-5 ticks closer than a label is tall: it marks the
+  // decades only
+  const decade = y(SPEED_FLOOR_BPS) - y(SPEED_FLOOR_BPS * 10);
+  const decades = SPEED_TICKS.filter((tick) => /^10+$/.test(String(tick)));
+  const ticks = decade * Math.log10(2) >= 14 ? SPEED_TICKS : decades;
   ctx.lineWidth = 1;
   ctx.textAlign = "right";
-  for (const tick of SPEED_TICKS) {
+  for (const tick of ticks) {
     if (tick > high) break;
     ctx.strokeStyle = c.grid;
     ctx.beginPath();
@@ -1320,12 +1338,7 @@ function drawSpeedChart() {
     ctx.fillText(tick >= 1000 ? `${tick / 1000}k` : String(tick), CHART_LEFT - 6, y(tick));
   }
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
-  drawLegend(f, [
-    [c.ink, "bit/s"],
-    [c.tx, "sending at"],
-    [c.rx, "receiving at"],
-    [c.accent, "goodput"],
-  ]);
+  drawLegend(f, legend);
 
   // the on-air rate of the rung the data went at, each way: a dashed step in the transmit and
   // receive colours, drawn only while data moved that way — the ceiling each direction works
@@ -1404,7 +1417,14 @@ function drawSnrChart() {
   }
   low = Math.floor(low / 5) * 5;
   high = Math.ceil(high / 5) * 5;
-  const f = chartFrame("chart-snr", 450, chartHeight("chart-snr"), low, high);
+  const legendColours = tokens();
+  const legend = [
+    [legendColours.ink2, "SNR, dB"],
+    [legendColours.accent, "● heard here"],
+    [legendColours.error, "○ not decoded"],
+    [legendColours.tx, "■ they hear you"],
+  ];
+  const f = chartFrame("chart-snr", 450, chartHeight("chart-snr"), low, high, legend);
   const { ctx, c } = f;
   drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
   const x = drawTimeAxis(f, now, SNR_SPAN_MS, 2 * 60_000, 5 * 60_000);
@@ -1486,12 +1506,7 @@ function drawSnrChart() {
       ctx.stroke();
     }
   }
-  drawLegend(f, [
-    [c.ink2, "SNR, dB"],
-    [c.accent, "● heard here"],
-    [c.error, "○ not decoded"],
-    [c.tx, "■ they hear you"],
-  ]);
+  drawLegend(f, legend);
 }
 
 // ── the stations heard ──────────────────────────────────────────────
@@ -2258,8 +2273,7 @@ let currentView = "full";
 let sizeBeforeCompact = null;
 
 // In the desktop shell the window follows the view: a small view fits the state strip, the
-// four readings and, in Compact, the activity chart; coming back restores what the operator
-// had. In a browser tab there is no window to size; the layout still compacts.
+// four readings and, in Compact, the two plots; coming back restores what the operator had. In a browser tab there is no window to size; the layout still compacts.
 async function fitShellWindow(view) {
   const tauri = window.__TAURI__;
   const getWindow = tauri?.window?.getCurrentWindow;
