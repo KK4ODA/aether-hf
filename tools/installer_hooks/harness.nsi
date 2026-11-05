@@ -1,6 +1,6 @@
 ; Drives the installer's hooks (app/src-tauri/windows/hooks.nsh) one scenario at a time, with
-; waits shortened to a tenth: /SCENARIO=letgo|unletgo|say|post, /UPDATE and /P as the real
-; installer takes them, and /D=<folder> last for $INSTDIR. It writes what it found to
+; waits shortened to a tenth: /SCENARIO=letgo|unletgo|say|post|installed, /UPDATE and /P as
+; the real installer takes them, and /D=<folder> last for $INSTDIR. It writes what it found to
 ; result.txt beside itself: the registers and the stack it must get back as it left them, and
 ; the last holder the report read. `run.py` builds it twice, silent and with a window
 ; (-DINTERACTIVE), with -DHOOKS=<path to hooks.nsh>.
@@ -66,6 +66,8 @@ Section
     StrCpy $R5 "$7|$8"
   ${ElseIf} $R2 == "post"
     !insertmacro NSIS_HOOK_POSTUNINSTALL
+  ${ElseIf} $R2 == "installed"
+    !insertmacro NSIS_HOOK_POSTINSTALL
   ${EndIf}
   Pop $R4
   FileOpen $R3 "$EXEDIR\result.txt" w

@@ -14,8 +14,9 @@ from bundler 2.10 that stopped updates with *Failed to kill Aether HF*.
   two holders that never let go (set aside, and the report reads the list); an earlier
   `.old` still in use (`.old2`); a modem that stops when asked, and one that does not (never
   closed by force); the report's names and process ids; a fresh install; the uninstaller and
-  its cleanup; the short wait when someone is there. It also checks that the hooks give back
-  the registers and the stack as they found them.
+  its cleanup; the short wait when someone is there; the notice to Explorer, once the files
+  are written, that the icons changed. It also checks that the hooks give back the registers
+  and the stack as they found them.
 - **`--installer`** builds the real installer, with the Tauri CLI `release.yml` pins
   (`TAURI_CLI`), from placeholder binaries in a copy of `app/` in the work folder, and runs it
   silently: a fresh install, an update while the shell holds on until asked, an update while

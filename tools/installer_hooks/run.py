@@ -303,6 +303,13 @@ def hook_scenarios(bench: Bench) -> None:
     bench.check(f"the modem asked after the 0.3 s glance: {span:.1f} s of looking", span < 1.2)
     bench.check("not set aside", (inst / "aetherd.exe").exists())
 
+    print("12. after an update's files are written: Explorer is told the icons changed")
+    bench.fresh(both)
+    result = bench.harness("installed", "/UPDATE", "/P")
+    bench.check("POSTINSTALL ran to the end", result.get("scenario") == "installed")
+    bench.unchanged(result)
+    bench.check("the Restart Manager not asked", not bench.log())
+
 
 def bundle(bench: Bench) -> Path:
     """The real installer, by the pinned Tauri CLI, from placeholder binaries."""
