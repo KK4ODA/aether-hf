@@ -122,11 +122,13 @@ tabular figures (its Display cut for the large readouts); monospace is kept for 
 character by character — callsigns, the log, the configuration and paths. No fonts are bundled
 or fetched.
 
-The logo shows for about a second when the panel first opens in a session and then gets out
-of the way (`.splash` in the stylesheet, `splash()` in `app.js`). The artwork lives in
-`Logos/`; `python tools/make_icons.py` cuts the icon tile out of its black surround and
-writes `src-tauri/icons/` (every size the bundler wants, including the `.ico`) and the
-panel's `mark.png`, `favicon.png` and `logo.png`.
+The mark and the name show for a couple of seconds when the panel first opens in a session
+and then get out of the way (`.splash` in the stylesheet, `splash()` in `app.js`); the name is
+set in the panel's own type, on the icon's graphite. The artwork is one file,
+`Logos/Aether HF Icon.svg` (the tile and the mark); `python tools/make_icons.py` draws every
+size from it and writes `src-tauri/icons/` (every size the bundler wants, including the
+`.ico`) and the panel's `mark.png`, `favicon.png` and `mark.svg` (the mark alone, for the
+splash).
 
 ## Updates
 

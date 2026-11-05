@@ -170,8 +170,9 @@ other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives 
   bold element is the header's display well (`#strip`: `#strip-state`, `#dial`, `#strip-rung`,
   `#strip-snr`, the TX/RX/Busy lamps), filled by `setState`/`applyMetrics`; `#lamp-link` is the
   *Modem* lamp, quiet when up and red when down. Compact is the well on its own row over the
-  four link readings. The artwork is in `Logos/`; `tools/make_icons.py` writes the
-  bundler's icons and the panel's mark, favicon and splash logo from it. The shell starts
+  four link readings. The artwork is `Logos/Aether HF Icon.svg` (2026-11-05: an A whose
+  crossbar is a wave, `#dde0e3` on the `#16181b` tile); `tools/make_icons.py` draws the
+  bundler's icons, the panel's mark and favicon, and the splash's `mark.svg` from it. The shell starts
   the daemon `CREATE_NO_WINDOW` and asks Tauri for a dark title bar. The panel's tabs are
   Status (readings, chart, counters as pills), Session (call, keying and drive, record,
   send/receive), Setup (one numbered flow: callsign, radio interface and modem devices,

@@ -3555,31 +3555,49 @@ footer.bar > span {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
   padding: 0 16px;
-  background: #000;
+  /* the icon's graphite in either theme, so its colours are fixed values, not tokens */
+  background: #16181b;
+  text-align: center;
   transition: opacity 260ms ease-out;
 }
 
-/* the splash is black in either theme, so its words are fixed light greys, not tokens */
+.splash-mark {
+  width: min(20vw, 28vh, 180px);
+  height: auto;
+  display: block;
+  margin-bottom: 28px;
+}
+
+/* the header's brand, large: Aether in the mark's colour, HF lighter and grey */
+.splash-name {
+  margin: 0;
+  font: 600 clamp(30px, 4.4vw, 44px) / 1.1 var(--display);
+  color: #dde0e3;
+}
+
+.splash-hf {
+  font-weight: 400;
+  color: #969da4;
+}
+
+.splash-tagline {
+  margin: 8px 0 0;
+  color: #969da4;
+  font-size: 15px;
+}
+
 .splash-by {
-  margin: 4px 0 0;
-  color: #d8dde6;
-  font-size: 1.05rem;
+  margin: 36px 0 0;
+  color: #dde0e3;
+  font-size: 14px;
 }
 
 .splash-thanks {
-  margin: 0;
+  margin: 6px 0 0;
   max-width: 40rem;
-  color: #8a93a3;
-  font-size: 0.85rem;
-  text-align: center;
-}
-
-.splash img {
-  width: min(62vw, 620px);
-  height: auto;
-  display: block;
+  color: #969da4;
+  font-size: 13px;
 }
 
 .splash.gone {
