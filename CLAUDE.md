@@ -2499,6 +2499,15 @@ label column). The channel chart's legend says RX/TX as the header's lamps do an
 busy band's three kinds in their colours. **The dial follows the knob**: the radio's
 dial is read in the background once a second whenever the station is idle (`read_radio`, not
 only while recording), and a changed reading is a `dial` event the panel refreshes on.
+Cards of readings (`.tiles`) are as tall as their lines, never stretched: the Status tab's
+History card takes the spare height. **The receive-filter estimate, replaced (beta.131, its
+second fix after d1b0992):** on 7.074 MHz FT8 through a 3 kHz filter the panel said "about
+850 Hz wide" — the monitor averaged its quiet spectra, and FT8 fills the passband's middle in
+every period. `PassbandMonitor` now keeps the last 120 quiet spectra and takes each bin's 10th
+percentile (a bin's noise between the signals), needs 12 before it reads, draws the edge
+6 dB under the middle or halfway to the profile's floor, whichever is lower, and takes a dip as
+the edge only when the next 150 Hz stays down (a notch is not an edge). A third fault in it
+gets a review, not a patch.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

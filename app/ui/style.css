@@ -1069,6 +1069,7 @@ main:has(> #session-banner:not([hidden])) .state-strip {
 
 .reading .label {
   font-size: var(--fs-sm);
+  line-height: 16px;
   font-weight: 400;
   color: var(--text-2);
   white-space: nowrap;
@@ -1077,10 +1078,10 @@ main:has(> #session-banner:not([hidden])) .state-strip {
 }
 
 .reading .value {
-  font: 300 var(--fs-2xl) / 1.15 var(--display);
-  font-size: clamp(15px, 15cqi, var(--fs-2xl));
+  font: 300 22px / 1.1 var(--display);
+  font-size: clamp(15px, 15cqi, 22px);
   font-variant-numeric: tabular-nums;
-  margin-top: 2px;
+  margin-top: 1px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -1088,8 +1089,9 @@ main:has(> #session-banner:not([hidden])) .state-strip {
 }
 
 .reading .sub {
-  margin-top: 1px;
-  min-height: 1.2em;
+  margin-top: 0;
+  line-height: 16px;
+  min-height: 16px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2019,18 +2021,31 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 }
 
 /* cells of one meter bridge: a hairline between neighbours, none round the outside. Each
-   starts at the top, so the names of a row line up whatever lies under them */
+   starts at the top, so the names of a row line up whatever lies under them; tight, so a
+   card of readings is the name, the number and its line */
 .tile {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  padding: var(--s2) var(--s3);
+  padding: 3px var(--s3);
   border-left: 1px solid var(--border);
 }
 
 .tiles > .tile:nth-child(4n + 1) {
   border-left: 0;
   padding-left: 0;
+}
+
+/* a card of readings: its name close over the tiles, and no more room round them than the
+   hairlines need */
+.console-card:has(> .tiles) {
+  gap: 2px;
+  padding-top: var(--s2);
+  padding-bottom: var(--s2);
+}
+
+.console-card:has(> .tiles) > .card-head {
+  min-height: 0;
 }
 
 /* a window of rows: a table with its name and tools in a head strip, scrolling inside */
@@ -2099,14 +2114,19 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   min-width: 0;
 }
 
+.status-readings {
+  align-self: start;
+}
+
+/* the readings as tall as they are: the History card takes the window's spare height */
 .status-readings > .card {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
 }
 
 .status-readings .tiles {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-auto-rows: 1fr;
+  grid-auto-rows: auto;
 }
 
 .status-readings .tiles > .tile {
@@ -3796,6 +3816,7 @@ body.compact:not(.mini) #history-card canvas {
 @media (max-width: 1000px) {
   .status-body {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .status-readings .tiles {

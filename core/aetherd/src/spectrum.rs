@@ -122,24 +122,36 @@ const PASSBAND_DROP_DB: f32 = 6.0;
 /// Bins in a row that must stay below the drop before an edge is called, so a single noisy
 /// bin is not one: about 36 Hz at 12 Hz resolution.
 const EDGE_RUN: usize = 3;
+/// Where in the profile's bins, lowest first, the floor outside the filter is read: the
+/// twentieth. A 3 kHz filter leaves a quarter of the measured range outside it.
+const FLOOR_QUANTILE: f64 = 0.05;
+/// How far past an edge the profile must stay down, in hertz: the median of the bins beyond
+/// the run must be below the drop too. A filter's skirt stays down; a notch the radio's DSP
+/// puts in, or a gap a signal left, comes back up within it.
+const EDGE_HOLD_HZ: f64 = 150.0;
 /// How far either side of the centre the in-band reference noise level is taken from, in
 /// hertz: well inside the narrowest filter anyone runs (500 Hz → ±250), so the reference is
 /// real in-band noise whatever the filter.
 const REFERENCE_HALF_HZ: f64 = 180.0;
-/// Quiet spectra to fold in before the width estimate is trusted; at about two a second
-/// that is a few seconds of noise.
+/// Quiet spectra kept before the width is trusted: a few seconds of noise at two a second.
+/// A few looks are enough, since an edge has to fall halfway to the floor and stay there.
 const MIN_OBSERVATIONS: usize = 12;
-/// The noise profile's exponential-moving-average weight for each new spectrum: enough to
-/// follow a filter change in a second or two, smooth enough that one noisy window does not
-/// move the edges.
-const PASSBAND_EMA_ALPHA: f32 = 0.2;
+/// Quiet spectra each bin's noise is read over: about a minute at two a second, so a filter
+/// change shows within a minute.
+const HISTORY: usize = 120;
+/// The share of a bin's looks its noise is read at: the tenth percentile. Band noise is in
+/// every look; a signal only in those it was on the air for. On 7074 kHz the FT8 stations stop
+/// together for two seconds in every fifteen, so even a bin a signal holds every period is
+/// quiet in a look in seven — and an average of the looks, which this replaced, read a band
+/// full of FT8 near the middle as a filter 850 Hz wide (the author, beta.130).
+const NOISE_QUANTILE: f64 = 0.1;
 
-/// The receiver's passband width in hertz, measured from a smoothed noise spectrum: the span
-/// between the bins either side of `center_hz` where the power has fallen `PASSBAND_DROP_DB`
-/// below the in-band noise and stays there. `None` when there is no window, or the middle of
-/// the band is at the very floor (nothing to measure). Full width when nothing drops — a
-/// filter wider than the modem, or silence — so it can only ever report *narrower* than the
-/// truth, never a false narrowing.
+/// The receiver's passband width in hertz, measured from a noise profile: the span between
+/// the bins either side of `center_hz` where the power has fallen `PASSBAND_DROP_DB` below the
+/// in-band noise — or, deeper, halfway to the floor outside the filter, whichever is lower —
+/// and stays there (`EDGE_HOLD_HZ` past the drop). `None` when there is no
+/// window, or the middle of the band is at the very floor (nothing to measure). Full width
+/// when nothing drops — a filter wider than the modem, or silence.
 #[must_use]
 pub fn passband_width_hz(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option<f64> {
     if bins_db.is_empty() || bin_hz <= 0.0 {
@@ -161,8 +173,34 @@ pub fn passband_width_hz(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option
     if !reference.is_finite() {
         return None;
     }
-    let threshold = reference - PASSBAND_DROP_DB;
-    // scan outward for the first run of EDGE_RUN bins below the threshold
+    // the floor the audio falls to outside the radio's filter: the profile's low end over the
+    // whole measured range. A filter's edge falls most of the way to it; signals in the
+    // passband lift its middle a few decibels at most, and the band noise either side of them
+    // stays far above it. Where the band noise is barely over the floor, the plain drop under
+    // the middle is the test, as it always was
+    let mut sorted: Vec<f32> = bins_db.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(f32::total_cmp);
+    let floor = sorted[((sorted.len() - 1) as f64 * FLOOR_QUANTILE).round() as usize];
+    let threshold = (reference - PASSBAND_DROP_DB).min(f32::midpoint(reference, floor));
+    let hold = bin_of(EDGE_HOLD_HZ).max(EDGE_RUN);
+    // whether the profile stays down beyond `start`, going `step`: the median of the next
+    // `hold` bins under the drop too, or too few bins left to say (the measured range ends)
+    let stays_down = |start: isize, step: isize| -> bool {
+        let mut beyond: Vec<f32> = (0..hold as isize)
+            .map(|i| start + step * i)
+            .filter(|&j| j >= 0 && (j as usize) < bins_db.len())
+            .map(|j| bins_db[j as usize])
+            .collect();
+        if beyond.len() < EDGE_RUN {
+            return true;
+        }
+        beyond.sort_by(f32::total_cmp);
+        beyond[beyond.len() / 2] < threshold
+    };
+    // scan outward for the first run of EDGE_RUN bins below the threshold that stays down
     let edge = |step: isize| -> usize {
         let mut index = center as isize;
         let mut below = 0usize;
@@ -170,9 +208,14 @@ pub fn passband_width_hz(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option
             if bins_db[index as usize] < threshold {
                 below += 1;
                 if below >= EDGE_RUN {
-                    // the edge is where the run began
-                    return (index + step.signum() * (EDGE_RUN as isize - 1))
-                        .clamp(0, bins_db.len() as isize - 1) as usize;
+                    let run_start = index - step * (EDGE_RUN as isize - 1);
+                    if stays_down(run_start, step) {
+                        return (index + step.signum() * (EDGE_RUN as isize - 1))
+                            .clamp(0, bins_db.len() as isize - 1)
+                            as usize;
+                    }
+                    // a dip that comes back up: a notch or a gap, not the filter's edge
+                    below = 0;
                 }
             } else {
                 below = 0;
@@ -191,12 +234,13 @@ pub fn passband_width_hz(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option
 /// than the modem's bandwidth — the mismatch that carries only the middle of every burst and
 /// looks like a dead band — is caught without asking the rig anything. Band noise fills the
 /// whole SSB passband; a filter confines it, and the confinement is in the audio whatever the
-/// radio, the mode or the keying. Fed only quiet audio (no signal, not transmitting), so what
-/// it measures is the receiver's own shape, not a narrowband signal that happens to be on.
+/// radio, the mode or the keying. Fed audio the busy detector calls quiet, not transmitting;
+/// each bin's noise is its low percentile over the last minute of it ([`NOISE_QUANTILE`]), so
+/// signals that come and go — a band of FT8 — never stand in for the noise.
 #[derive(Debug, Clone, Default)]
 pub struct PassbandMonitor {
-    /// Exponential moving average of the power spectrum, dBFS per bin; empty until the first.
-    profile: Vec<f32>,
+    /// The last [`HISTORY`] quiet spectra, dBFS per bin, oldest first.
+    history: VecDeque<Vec<f32>>,
     bin_hz: f64,
     seen: usize,
 }
@@ -208,28 +252,49 @@ impl PassbandMonitor {
         Self::default()
     }
 
-    /// Fold a spectrum of quiet audio into the running noise profile.
+    /// Keep a spectrum of quiet audio among the last [`HISTORY`].
     pub fn observe(&mut self, spectrum: &Spectrum) {
-        self.bin_hz = spectrum.bin_hz;
-        if self.profile.len() != spectrum.bins_db.len() {
-            self.profile.clone_from(&spectrum.bins_db);
-            self.seen = 1;
-            return;
+        if self
+            .history
+            .front()
+            .is_some_and(|first| first.len() != spectrum.bins_db.len())
+            || (self.bin_hz - spectrum.bin_hz).abs() > 1e-9
+        {
+            self.history.clear();
         }
-        for (average, &now) in self.profile.iter_mut().zip(&spectrum.bins_db) {
-            *average += PASSBAND_EMA_ALPHA * (now - *average);
+        self.bin_hz = spectrum.bin_hz;
+        self.history.push_back(spectrum.bins_db.clone());
+        while self.history.len() > HISTORY {
+            self.history.pop_front();
         }
         self.seen = self.seen.saturating_add(1);
     }
 
+    /// The noise profile: each bin's [`NOISE_QUANTILE`] over the spectra kept.
+    fn profile(&self) -> Vec<f32> {
+        let looks = self.history.len();
+        let Some(first) = self.history.front() else {
+            return Vec::new();
+        };
+        let at = ((looks - 1) as f64 * NOISE_QUANTILE).round() as usize;
+        let mut column = Vec::with_capacity(looks);
+        (0..first.len())
+            .map(|bin| {
+                column.clear();
+                column.extend(self.history.iter().map(|spectrum| spectrum[bin]));
+                *column.select_nth_unstable_by(at, f32::total_cmp).1
+            })
+            .collect()
+    }
+
     /// The receiver's passband width in hertz around `center_hz`, once enough quiet audio
-    /// has been folded in for the estimate to be steady.
+    /// has been kept for each bin's noise to be read.
     #[must_use]
     pub fn width_hz(&self, center_hz: f64) -> Option<f64> {
-        if self.seen < MIN_OBSERVATIONS {
+        if self.history.len() < MIN_OBSERVATIONS {
             return None;
         }
-        passband_width_hz(&self.profile, self.bin_hz, center_hz)
+        passband_width_hz(&self.profile(), self.bin_hz, center_hz)
     }
 
     /// How many spectra have been folded in, for a test that must tell a monitor kept away
@@ -281,6 +346,96 @@ mod tests {
         // false "too narrow"
         let w = passband_width_hz(&flat, bin_hz, 1500.0).expect("a width");
         assert!(w > 2300.0, "flat noise read as {w} Hz, would false-warn");
+    }
+
+    #[test]
+    fn a_notch_in_the_passband_is_not_its_edge() {
+        // a radio's manual notch, 60 Hz wide and deep, at 1800 Hz in a 2.4 kHz filter: the
+        // profile comes back up past it, so the edge is the filter's, not the notch's
+        let bin_hz = 48_000.0 / WINDOW as f64;
+        let mut notched = filtered_noise(bin_hz, 300.0, 2700.0);
+        for (k, bin) in notched.iter_mut().enumerate() {
+            if (k as f64 * bin_hz - 1800.0).abs() <= 30.0 {
+                *bin = -80.0;
+            }
+        }
+        let w = passband_width_hz(&notched, bin_hz, 1500.0).expect("a width");
+        assert!((w - 2400.0).abs() < 120.0, "notched filter read as {w} Hz");
+    }
+
+    /// Band noise in a filter `[lo, hi]` Hz, each bin's power drawn afresh as noise is (an
+    /// exponential, so a single look varies by several decibels), and, in `busy` of the looks,
+    /// FT8-like signals 15 dB over the noise on a share `held` of the bins between 900 and
+    /// 2100 Hz — a band of FT8 thickest near the middle, gone in the period's quiet gap.
+    fn ft8_band(
+        bin_hz: f64,
+        lo: f64,
+        hi: f64,
+        looks: usize,
+        busy: f64,
+        held: f64,
+    ) -> Vec<Spectrum> {
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut uniform = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            ((z >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        };
+        let bins = (TOP_HZ / bin_hz) as usize + 1;
+        (0..looks)
+            .map(|_| {
+                let signals = uniform() < busy;
+                let bins_db = (0..bins)
+                    .map(|k| {
+                        let hz = k as f64 * bin_hz;
+                        let level = if hz >= lo && hz <= hi { -40.0 } else { -95.0 };
+                        let noise = level + 10.0 * (-uniform().ln()).log10();
+                        if signals && (900.0..=2100.0).contains(&hz) && uniform() < held {
+                            (level + 15.0).max(noise) as f32
+                        } else {
+                            noise as f32
+                        }
+                    })
+                    .collect();
+                Spectrum { bin_hz, bins_db }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_band_full_of_ft8_is_not_a_narrow_filter_and_a_narrow_filter_still_is() {
+        // the author on 7074 kHz with a 3 kHz filter, beta.130: the average of the looks read
+        // 850 Hz. Signals on most bins near the middle, in most looks, must not stand in for
+        // the noise; a 500 Hz filter under the same traffic must still read narrow
+        let bin_hz = 48_000.0 / WINDOW as f64;
+        let mut monitor = PassbandMonitor::new();
+        for (look, spectrum) in ft8_band(bin_hz, 200.0, 3200.0, HISTORY, 0.85, 0.85)
+            .iter()
+            .enumerate()
+        {
+            monitor.observe(spectrum);
+            // from the first reading on, not only once a minute of looks is kept
+            if look + 1 >= MIN_OBSERVATIONS {
+                let wide = monitor.width_hz(1500.0).expect("a width");
+                assert!(
+                    wide > 2300.0 - 400.0,
+                    "a 3 kHz filter in an FT8 band read as {wide} Hz after {} looks",
+                    look + 1
+                );
+            }
+        }
+        let mut monitor = PassbandMonitor::new();
+        for spectrum in ft8_band(bin_hz, 1250.0, 1750.0, HISTORY, 0.85, 0.85) {
+            monitor.observe(&spectrum);
+        }
+        let narrow = monitor.width_hz(1500.0).expect("a width");
+        assert!(
+            (narrow - 500.0).abs() < 150.0,
+            "a 500 Hz filter read as {narrow} Hz"
+        );
     }
 
     #[test]
