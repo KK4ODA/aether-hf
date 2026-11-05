@@ -10703,7 +10703,10 @@ mod tests {
         assert_eq!(station.identifier_check("G4ABC")["enabled"], true);
         assert_eq!(station.identifier_check("G4ABC")["setting"], false);
         // CWID OFF from the program leaves the station's own rule
-        station.set_host(HostPresence { cw_id: false, ..program });
+        station.set_host(HostPresence {
+            cw_id: false,
+            ..program
+        });
         assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
         station.set_host(program);
         station.set_host(HostPresence::default());
