@@ -1085,7 +1085,7 @@ the manifest carries `link_protocol` (`make_update_manifest.py`), the shell's `L
 (`update.rs`, test-held to `frames.rs`) titles such an offer "Update required", and a call or
 answer in another protocol fills the panel's mismatch banner (`what` = `version`, `note_version`).
 **A protocol bump changes `LINK_PROTOCOL` in the shell too** (the test says so). The splash and
-Help / About credit KK4ODA and the on-air testers (ND1J, WC4Y, KE4QCM, W4TGA).
+Help / About credit KK4ODA and the on-air testers (ND1J, WC4Y, KE4QCM, W4TGA, KQ4SAX, KO4WX).
 
 **The scenario harness (ADR-0042).** `aetherd --channel HOST:PORT` takes its audio from a channel
 server in lockstep (`channel_link.rs`: the playback clock is the server's, silence counted; keys
