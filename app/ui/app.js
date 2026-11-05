@@ -1151,14 +1151,15 @@ function legendRows(ctx, plotWidth, items) {
   const right = CHART_LEFT + plotWidth;
   let at = CHART_LEFT;
   let rows = 1;
-  for (const [, text] of items) {
+  items.forEach(([, text, gap], index) => {
     const width = ctx.measureText(text).width;
+    if (index > 0) at += gap ?? LEGEND_GAP;
     if (at > CHART_LEFT && at + width > right) {
       at = CHART_LEFT;
       rows += 1;
     }
-    at += width + 14;
-  }
+    at += width;
+  });
   return rows;
 }
 
@@ -1202,7 +1203,9 @@ function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
   return x;
 }
 
-/// The legend line along the top: the unit first, then each series in its colour.
+/// The legend line along the top: the unit first, then each series in its colour. An item's
+/// third element is the gap before it, when it belongs with the one before (the busy band's
+/// kinds after "busy").
 function drawLegend(f, items) {
   const { ctx } = f;
   ctx.textAlign = "left";
@@ -1211,17 +1214,21 @@ function drawLegend(f, items) {
   const right = CHART_LEFT + f.plotWidth;
   let at = CHART_LEFT;
   let row = 8;
-  for (const [colour, text] of items) {
+  items.forEach(([colour, text, gap], index) => {
     const width = ctx.measureText(text).width;
+    if (index > 0) at += gap ?? LEGEND_GAP;
     if (at > CHART_LEFT && at + width > right) {
       at = CHART_LEFT;
       row += LEGEND_ROW;
     }
     ctx.fillStyle = colour;
     ctx.fillText(text, at, row);
-    at += width + 14;
-  }
+    at += width;
+  });
 }
+
+/// The space between a legend's items, in canvas pixels.
+const LEGEND_GAP = 14;
 
 /// Height of one legend row, in canvas pixels.
 const LEGEND_ROW = 11;
@@ -2497,14 +2504,18 @@ function drawChart() {
   }
   low = Math.floor((low - 3) / 5) * 5;
   high = Math.ceil((high + 3) / 5) * 5;
-  // names only: what the colours of the busy band and a red peak mean is the chart's tooltip
+  // names only, RX and TX as the header's lamps say them; the busy band's three kinds after
+  // "busy", each in its colour, close together. A red peak is the chart's tooltip
   const legend = [
     [null, "dBFS"],
-    [null, "▍ receiving"],
-    [null, "▍ transmitting"],
+    [null, "▍ RX"],
+    [null, "▍ TX"],
     [null, "- - floor"],
     [null, "· · threshold"],
-    [null, "▬ busy"],
+    [null, "busy:"],
+    [null, "▬ level", 6],
+    [null, "▬ shape", 6],
+    [null, "▬ frame", 6],
   ];
   const f = chartFrame("chart", 450, chartHeight("chart"), low, high, legend);
   const { ctx, c } = f;
@@ -2577,9 +2588,9 @@ function drawChart() {
   ctx.setLineDash([]);
 
   // the band along the top while the channel was busy, in the colour of the path that
-  // marked it: red for the level (the line crossed), the lamp's own orange for the
-  // passband's shape, and the decoded-frame teal of the SNR chart for a frame. Slot-wide,
-  // so consecutive samples join into one span
+  // marked it: red for the level (the line crossed), the lamp's own amber for the
+  // passband's shape, and the light neutral for a decoded frame. Slot-wide, so
+  // consecutive samples join into one span
   const reasonColour = { level: c.error, shape: c.busy, frame: c.accent };
   for (const point of history) {
     if (!point.busy) continue;
@@ -2587,8 +2598,8 @@ function drawChart() {
     ctx.fillRect(x(point.at) - slot, f.top, slot, BUSY_BAND);
   }
 
-  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.busy];
-  drawLegend(f, legend.map(([, text], i) => [colours[i], text]));
+  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
+  drawLegend(f, legend.map(([, text, gap], i) => [colours[i], text, gap]));
 }
 
 window.addEventListener("resize", () => {

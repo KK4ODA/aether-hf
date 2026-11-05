@@ -207,7 +207,7 @@
               </figure>
               <figure class="chart">
                 <figcaption title="The received level and the busy detector's decisions, over the last two minutes">Channel and activity, last two minutes</figcaption>
-                <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — red for the level, amber for the passband's shape, teal for a decoded frame — and a peak drawn red only where it crossed the threshold" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
+                <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — red for the level, amber for the passband's shape, white for a decoded frame — and a peak drawn red only where it crossed the threshold" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
               </figure>
             </div>
           </section>
@@ -282,7 +282,7 @@
             <div class="btn-group" role="group" aria-label="Without a session" title="Test the path without a session, or run the field test">
               <button id="btn-probe" title="One frame and one answer: whether the station in Call hears you, and how well, both ways">Probe</button>
               <button id="btn-beacon" title="Put this station's callsign on the air once, addressed to nobody">Beacon</button>
-              <select id="beacon-every" class="compact" title="Repeat the beacon every so many minutes while you are at the station, the first one now; once is the Beacon button alone" aria-label="Repeat the beacon">
+              <select id="beacon-every" class="narrow" title="Repeat the beacon every so many minutes while you are at the station, the first one now; once is the Beacon button alone" aria-label="Repeat the beacon">
                 <option value="0">once</option>
                 <option value="10">every 10 min</option>
                 <option value="15">every 15 min</option>
@@ -708,23 +708,25 @@
                 </select>
                 <span class="host-owned" id="reg-sideband-host" title="Not used: the host program keys the radio, and Aether's rules are None" hidden>Host</span>
               </div>
-              <h4 class="sub-heading" title="Details that go into every recording, so a report needs no follow-up">Field log</h4>
-              <div class="row">
-                <label for="op-grid" title="Your Maidenhead locator">Grid</label>
-                <input id="op-grid" title="Maidenhead locator, four or six characters: EM73 places you within about 100 × 200 km, EM73tv within about 5 × 8 km; six let the log work out the path length" type="text" class="port" placeholder="EM73tv" autocomplete="off" spellcheck="false" />
-              </div>
-              <div class="row">
-                <label for="op-rig" title="The radio">Rig</label>
-                <input id="op-rig" title="The radio, for the field log" type="text" class="prose" placeholder="FTDX10" autocomplete="off" />
-              </div>
-              <div class="row">
-                <label for="op-power" title="Transmit power">Power</label>
-                <input id="op-power" title="Transmit power in watts, for the field log and the power limits the rules set on some bands" type="text" inputmode="decimal" class="port" placeholder="30" autocomplete="off" />
-                <span class="sub" title="Watts">W</span>
-              </div>
-              <div class="row">
-                <label for="op-antenna" title="The antenna">Antenna</label>
-                <input id="op-antenna" title="The antenna, for the field log" type="text" class="prose" placeholder="EFHW at 10 m" autocomplete="off" />
+              <div class="field-group" role="group" aria-labelledby="field-log-title">
+                <h4 class="sub-heading" id="field-log-title" title="Details that go into every recording, so a report needs no follow-up">Field log</h4>
+                <div class="row">
+                  <label for="op-grid" title="Your Maidenhead locator">Grid</label>
+                  <input id="op-grid" title="Maidenhead locator, four or six characters: EM73 places you within about 100 × 200 km, EM73tv within about 5 × 8 km; six let the log work out the path length" type="text" class="port" placeholder="EM73tv" autocomplete="off" spellcheck="false" />
+                </div>
+                <div class="row">
+                  <label for="op-rig" title="The radio">Rig</label>
+                  <input id="op-rig" title="The radio, for the field log" type="text" class="prose" placeholder="FTDX10" autocomplete="off" />
+                </div>
+                <div class="row">
+                  <label for="op-power" title="Transmit power">Power</label>
+                  <input id="op-power" title="Transmit power in watts, for the field log and the power limits the rules set on some bands" type="text" inputmode="decimal" class="port" placeholder="30" autocomplete="off" />
+                  <span class="sub" title="Watts">W</span>
+                </div>
+                <div class="row">
+                  <label for="op-antenna" title="The antenna">Antenna</label>
+                  <input id="op-antenna" title="The antenna, for the field log" type="text" class="prose" placeholder="EFHW at 10 m" autocomplete="off" />
+                </div>
               </div>
             </li>
 
@@ -737,19 +739,21 @@
                 <label for="wz-profile" title="A known interface">Interface</label>
                 <select id="wz-profile" title="Fill in the devices and keying below for a known interface: picking one fills them in once, and you can change any of them afterwards; the fields below are what the modem uses, and changing them by hand shows Manual here"></select>
               </div>
-              <h4 class="sub-heading" title="The sound card's input and output">Modem devices</h4>
-              <div class="row">
-                <label for="dev-in" title="The sound card's input">Capture</label>
-                <select id="dev-in" title="Sound card input carrying the radio's receive audio"></select>
-              </div>
-              <div class="row">
-                <label for="dev-out" title="The sound card's output">Playback</label>
-                <select id="dev-out" title="Sound card output feeding the radio's transmit audio"></select>
-              </div>
-              <div class="row">
-                <span class="label-like" title="The transmit audio level: it sets the radio's output power, and each profile keeps its own">Transmit level</span>
-                <span class="numerals" id="setup-tx-level" title="The transmit level this station runs at, in dB below full scale. It is part of the profile, and it is set with the slider and Set drive under Keying and drive on the Session tab. A host program's drive level (VarAC's DRIVELEVEL) is not used" role="status" aria-live="polite">−12 dB</span>
-                <button class="quiet small" id="setup-tx-goto" title="Open Keying and drive on the Session tab, where the level is set against the radio's ALC">Set…</button>
+              <div class="field-group" role="group" aria-labelledby="modem-devices-title">
+                <h4 class="sub-heading" id="modem-devices-title" title="The sound card's input and output, and the level the modem plays at">Modem devices</h4>
+                <div class="row">
+                  <label for="dev-in" title="The sound card's input">Capture</label>
+                  <select id="dev-in" title="Sound card input carrying the radio's receive audio"></select>
+                </div>
+                <div class="row">
+                  <label for="dev-out" title="The sound card's output">Playback</label>
+                  <select id="dev-out" title="Sound card output feeding the radio's transmit audio"></select>
+                </div>
+                <div class="row">
+                  <span class="label-like" title="The transmit audio level: it sets the radio's output power, and each profile keeps its own">Transmit level</span>
+                  <span class="numerals" id="setup-tx-level" title="The transmit level this station runs at, in dB below full scale. It is part of the profile, and it is set with the slider and Set drive under Keying and drive on the Session tab. A host program's drive level (VarAC's DRIVELEVEL) is not used" role="status" aria-live="polite">−12 dB</span>
+                  <button class="quiet small" id="setup-tx-goto" title="Open Keying and drive on the Session tab, where the level is set against the radio's ALC">Set…</button>
+                </div>
               </div>
               <div class="row">
                 <label for="dev-ptt" title="How the radio is keyed">Keying</label>
@@ -830,9 +834,9 @@
               </div>
               <div class="row">
                 <label for="radio-wait" title="What counts as a busy channel">Busy channel</label>
-                <label class="check" title="Wait for a clear channel before calling, probing or beaconing"><input id="radio-wait" title="Wait for a clear channel before calling" type="checkbox" checked /> Wait for clear</label>
                 <input id="radio-busy-db" title="How far above the noise floor counts as busy, in dB" type="text" inputmode="decimal" class="port" value="6" aria-label="Busy threshold in dB above the noise floor" />
                 <span class="sub" title="Decibels above the noise floor">dB</span>
+                <label class="check" title="Wait for a clear channel before calling, probing or beaconing"><input id="radio-wait" title="Wait for a clear channel before calling" type="checkbox" checked /> Wait for clear</label>
               </div>
               <div class="row">
                 <label for="radio-turnaround" title="How long your radio takes to hear again after it stops sending">Turnaround</label>
@@ -851,9 +855,9 @@
               </div>
               <div class="row">
                 <label for="radio-cwid" title="The Morse identifier at the end of each session">Morse ID</label>
-                <label class="check" id="radio-cwid-box" title="Send this station's callsign in Morse at the end of each session: the last thing it sends for the session, never during one, on a beacon or on a KISS frame. A US callsign always sends it (§97.119); for any other callsign it is your choice, off by default, or the host program's CWID ON"><input id="radio-cwid" title="Send this station's callsign in Morse at the end of each session" type="checkbox" /> On</label>
                 <input id="radio-cwid-wpm" title="Morse speed in words per minute; under the US rules an automatically keyed identifier goes no faster than 20 wpm (§97.119(b)(1)), whatever is set here" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
                 <span class="sub" title="Words per minute">wpm</span>
+                <label class="check" id="radio-cwid-box" title="Send this station's callsign in Morse at the end of each session: the last thing it sends for the session, never during one, on a beacon or on a KISS frame. A US callsign always sends it (§97.119); for any other callsign it is your choice, off by default, or the host program's CWID ON"><input id="radio-cwid" title="Send this station's callsign in Morse at the end of each session" type="checkbox" /> On</label>
               </div>
               <div class="row">
                 <label for="reg-margin" title="The margin kept at a segment's edges">Band edges</label>
@@ -892,14 +896,14 @@
               </div>
               <div class="row">
                 <label for="host-enabled" title="Winlink Express, Pat, VarAC or RMS Trimode on the VARA-compatible interface">Host programs</label>
-                <label class="check" title="Let a host program use this station over the VARA-compatible interface; while it is attached it sets the callsign and the bandwidth"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> On</label>
                 <input id="host-port" title="The command port a host program connects to; the data port is the next number up" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
+                <label class="check" title="Let a host program use this station over the VARA-compatible interface; while it is attached it sets the callsign and the bandwidth"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> On</label>
               </div>
               <div class="row">
                 <label for="kiss-enabled" title="APRS and packet programs on the KISS port">KISS programs</label>
-                <label class="check" title="Open a KISS port: APRS and packet programs hand this station frames to send, and get every frame it hears"><input id="kiss-enabled" title="Open a KISS port for APRS and packet programs" type="checkbox" /> On</label>
                 <input id="kiss-host" title="The address the KISS port listens on: 127.0.0.1 lets only programs on this computer in" type="text" class="address" value="127.0.0.1" spellcheck="false" aria-label="KISS listen address" />
                 <input id="kiss-port" title="The KISS port: 8100 is VARA HF's, so a program set up for VARA needs no change" type="text" inputmode="numeric" class="port" value="8100" aria-label="KISS port" />
+                <label class="check" title="Open a KISS port: APRS and packet programs hand this station frames to send, and get every frame it hears"><input id="kiss-enabled" title="Open a KISS port for APRS and packet programs" type="checkbox" /> On</label>
               </div>
               <p class="note warn" id="kiss-exposed" title="Why an address other than 127.0.0.1 is a risk" hidden>
                 Any computer that can reach this address can make your station transmit, and the

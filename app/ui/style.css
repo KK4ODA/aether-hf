@@ -2231,6 +2231,47 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   margin-top: var(--s2);
 }
 
+/* settings that belong together under their own heading (Field log, Modem devices): the
+   heading runs into a hairline to the card's edge, and its rows sit inset behind a hairline
+   down their left — grouped the way a settings form groups, without a box inside the box.
+   The inset comes out of the label column, so the fields still line up with the card's
+   other rows */
+.setup .field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+  margin-top: var(--s2);
+}
+
+.setup .field-group > .sub-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  margin: 0;
+}
+
+.setup .field-group > .sub-heading::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.setup .field-group > .row {
+  margin-left: 3px;
+  padding-left: calc(var(--s3) - 1px);
+  border-left: 1px solid var(--border);
+}
+
+/* a number's unit takes one width, so the checkboxes after it line up from row to row */
+.setup .steps .row > input.port + .sub {
+  min-width: 2.5em;
+}
+
+.setup .steps .field-group > .row > label:not(.check):not(.label-inline),
+.setup .steps .field-group > .row > .label-like {
+  flex-basis: calc(8.5rem - 3px - var(--s3));
+}
+
 .stepper {
   display: flex;
   flex-wrap: wrap;
@@ -2753,11 +2794,13 @@ textarea {
   transition: border-color var(--t-fast), background var(--t-fast);
 }
 
+/* a field is exactly a button's height, so a row of fields and buttons lines up */
 input[type="text"],
 input[type="email"],
 input[type="url"],
 select {
   min-height: var(--control-h);
+  height: var(--control-h);
 }
 
 input[type="text"]:hover,
@@ -2813,6 +2856,7 @@ select.compact {
 
 select.compact {
   min-height: var(--control-h-sm);
+  height: var(--control-h-sm);
   padding: 0 24px 0 8px;
   font-size: var(--fs-sm);
   background-position: right 8px center;
@@ -2968,7 +3012,6 @@ button.primary {
   background: var(--accent);
   color: var(--accent-ink);
   border-color: var(--accent);
-  font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
@@ -2976,10 +3019,9 @@ button.primary:hover:not(:disabled) {
   border-color: transparent;
 }
 
+/* the same key as every other, its word in red: Abort, Delete */
 button.danger {
   color: var(--status-error);
-  background: transparent;
-  border-color: color-mix(in srgb, var(--status-error) 50%, var(--border-strong));
 }
 
 button.danger:hover:not(:disabled) {

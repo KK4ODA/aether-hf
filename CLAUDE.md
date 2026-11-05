@@ -2489,7 +2489,14 @@ explanatory sub-lines or notes. A new control follows it. **Fields fit what they
 short select is `.narrow` (its widest option, whatever the font: Windows' Segoe is wider than
 Linux's), a text field is `calc(Nch + 20px)` for N monospaced characters (the 20 px are its
 padding and border), and the long selects share the 34rem column. A one-line value (the log, a
-path) ellipsises with the whole of it in its `title`. **The dial follows the knob**: the radio's
+path) ellipsises with the whole of it in its `title`. Every field and select is exactly a
+button's height (`--control-h`), so a row of both lines up; buttons are one family (the light
+key for a box's one action, the others filled, `.danger` the same key with its word in red). In
+Setup every row's box starts in the field column — a value first, its unit (one width), then
+any checkbox — and settings that belong together sit in a `.field-group` (the heading on a
+hairline to the card's edge, the rows inset behind a left hairline, the inset taken out of the
+label column). The channel chart's legend says RX/TX as the header's lamps do and names the
+busy band's three kinds in their colours. **The dial follows the knob**: the radio's
 dial is read in the background once a second whenever the station is idle (`read_radio`, not
 only while recording), and a changed reading is a `dial` event the panel refreshes on.
 
