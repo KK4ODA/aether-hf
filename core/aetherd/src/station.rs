@@ -1738,6 +1738,13 @@ impl<P: Ptt> Station<P> {
         self.frequency.read_at_s = Some(now);
     }
 
+    /// The radio's dial as last read, without asking the radio: what the run loop compares to
+    /// tell the panel the dial moved.
+    #[must_use]
+    pub fn dial_read(&self) -> Option<u64> {
+        self.frequency.value
+    }
+
     /// The link engine, for a status display.
     #[must_use]
     pub fn engine(&self) -> &GrantedEngine {
@@ -11914,10 +11921,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let mut station = reading_station(true, &dir);
         listen(&mut station, 2.0);
+        // with nothing recording only the dial is read, once a second, so a knob turned at the
+        // radio reaches the panel within a second (the author, 2026-11-05)
+        let idle = station.ptt.inner().asked.clone();
         assert!(
-            station.ptt.inner().asked.is_empty(),
-            "the radio was asked with nothing recording"
+            idle.iter().all(|a| a.dial && !a.meter && !a.settings),
+            "with nothing recording only the dial is read: {idle:?}"
         );
+        assert!(
+            (1..=3).contains(&idle.len()),
+            "the dial once a second: {idle:?}"
+        );
+        station.ptt.inner_mut().dial = 7_074_500;
+        listen(&mut station, 1.1);
+        assert_eq!(
+            station.dial_read(),
+            Some(7_074_500),
+            "the knob, within a second"
+        );
+        station.ptt.inner_mut().dial = 7_082_000;
+        listen(&mut station, 1.1);
+        assert_eq!(station.dial_read(), Some(7_082_000));
+        station.ptt.inner_mut().asked.clear();
         station
             .start_recording(Some("radio"), None)
             .expect("start the recording");

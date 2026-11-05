@@ -2485,7 +2485,13 @@ is judged by the keyed-audio watch on its own (`KeyedAudio::judge_next_alone`), 
 it), gain 3–90 dB, default 20, drawn from a per-bin average over a noise floor tracked in the
 passband, with a gamma on the colour map. **The panel's rule now:** names, values and units on
 screen; every explanation in a `title` (box titles carry the box's), no `details.help-pop`, no
-explanatory sub-lines or notes. A new control follows it.
+explanatory sub-lines or notes. A new control follows it. **Fields fit what they hold**: a
+short select is `.narrow` (its widest option, whatever the font: Windows' Segoe is wider than
+Linux's), a text field is `calc(Nch + 20px)` for N monospaced characters (the 20 px are its
+padding and border), and the long selects share the 34rem column. A one-line value (the log, a
+path) ellipsises with the whole of it in its `title`. **The dial follows the knob**: the radio's
+dial is read in the background once a second whenever the station is idle (`read_radio`, not
+only while recording), and a changed reading is a `dial` event the panel refreshes on.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised

@@ -1306,6 +1306,7 @@ fn serve(
     let mut reported = AudioLosses::default();
     let mut last_metrics = std::time::Instant::now();
     let mut last_keyed = false;
+    let mut last_dial: Option<u64> = None;
     let mut last_stall_logged: Option<std::time::Instant> = None;
     let heartbeat = Heartbeat::start();
     let mut last_ptt_fault: Option<std::time::Instant> = None;
@@ -1386,6 +1387,16 @@ fn serve(
             last_metrics = std::time::Instant::now();
             control.publish(&Event::new("metrics", metrics(station)));
             station.reset_busy_peak();
+        }
+        // the radio's dial, the moment a reading differs: a knob turned at the radio shows on
+        // the panel within a second, with the rules' verdict on the new dial, not at its next
+        // five-second poll
+        let dial = station.dial_read();
+        if dial != last_dial {
+            last_dial = dial;
+            if dial.is_some() {
+                control.publish(&Event::new("dial", json!({ "frequency_hz": dial })));
+            }
         }
         // `ptt` reports the transmitter, not the session: a host uses it to know when the
         // radio is keyed, and a state change is a different thing entirely

@@ -1794,10 +1794,11 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   background: color-mix(in srgb, var(--status-warning) 6%, var(--bg-2));
 }
 
-/* 1 · the dial: the one number checked before every call, and the rules' word on it */
+/* 1 · the dial: the one number checked before every call, and the rules' word on it. The
+   rules' chip stands on the title's line, not between the title and the readout */
 .op-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
   gap: var(--s2) var(--s5);
 }
@@ -1821,6 +1822,8 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   align-items: flex-start;
   gap: var(--s1);
   min-width: 0;
+  /* the chip (26 px) centred on the title's line (20 px) */
+  margin-top: -3px;
 }
 
 .op-note:empty {
@@ -1927,17 +1930,27 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   background: transparent;
 }
 
-/* 5 · what is kept: the recording, the last session, the folder, the test's report */
+/* 5 · what is kept: the recording folder, on one line across the card */
 .rec-facts {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s1) var(--s5);
   margin: 0;
+}
+
+/* the folder on one line: the start of a long path gives way, the full path is its tooltip */
+.rec-fact .path-row {
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
 }
 
 .rec-fact .path {
   flex: 0 1 auto;
   min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
 }
 
 .rec-fact .btn-group {
@@ -1996,7 +2009,7 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
 /* ── the other tabs, as consoles ─────────────────────────────────── */
 
 /* Every tab is built the Session tab's way: boxes, each named at its top left inside it, the
-   explanations behind a small ?, and the one thing that is the tab given the room. */
+   explanations in tooltips, and the one thing that is the tab given the room. */
 
 /* readings as tiles inside a named box: the number large, its name above, the rest below */
 .tiles {
@@ -2005,11 +2018,12 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   gap: 0;
 }
 
-/* cells of one meter bridge: a hairline between neighbours, none round the outside */
+/* cells of one meter bridge: a hairline between neighbours, none round the outside. Each
+   starts at the top, so the names of a row line up whatever lies under them */
 .tile {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   padding: var(--s2) var(--s3);
   border-left: 1px solid var(--border);
 }
@@ -2774,9 +2788,11 @@ textarea::placeholder {
   color: var(--text-3);
 }
 
+/* a text field's width is the characters it holds plus its padding and border (20 px), so a
+   monospaced value fits exactly whatever the font: a callsign's nine characters here */
 input[type="text"] {
   font-family: var(--mono);
-  width: 11ch;
+  width: calc(9ch + 20px);
 }
 
 select {
@@ -2831,26 +2847,26 @@ input[type="range"] {
 
 input.port {
   font-family: var(--mono);
-  width: 7ch;
+  width: calc(6ch + 20px);
   text-transform: none;
   letter-spacing: normal;
 }
 
 /* a six-character locator shown whole, padding and all */
 input#op-grid {
-  width: 10ch;
+  width: calc(6ch + 20px);
 }
 
 input.mhz {
   font-family: var(--mono);
-  width: 10ch;
+  width: calc(9ch + 20px);
   text-transform: none;
   letter-spacing: normal;
 }
 
 input.address {
   font-family: var(--mono);
-  width: 16ch;
+  width: calc(21ch + 20px);
   text-transform: none;
   letter-spacing: normal;
 }
@@ -2883,10 +2899,6 @@ input.address {
   flex-wrap: wrap;
   color: var(--text-2);
   font-size: var(--fs-sm);
-}
-
-#ptt-line {
-  flex: 0 1 16ch;
 }
 
 /* prose, not a callsign: the notes that go into a recording */
@@ -3244,10 +3256,14 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   background: var(--surface-3);
 }
 
+/* one line an entry: the end of a long one gives way, the whole of it is its tooltip, and a
+   selection still copies all of it */
 .log-text {
   color: var(--text);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .log-entry[data-level="error"] {
@@ -3770,10 +3786,6 @@ body.compact:not(.mini) #history-card canvas {
 }
 
 @media (max-width: 900px) {
-  .rec-facts {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .help-grid {
     grid-template-columns: minmax(0, 1fr);
   }

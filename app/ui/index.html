@@ -207,7 +207,7 @@
               </figure>
               <figure class="chart">
                 <figcaption title="The received level and the busy detector's decisions, over the last two minutes">Channel and activity, last two minutes</figcaption>
-                <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — the level, the passband's shape or a decoded frame — and a peak drawn red only where it crossed the line" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
+                <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — red for the level, amber for the passband's shape, teal for a decoded frame — and a peak drawn red only where it crossed the threshold" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
               </figure>
             </div>
           </section>
@@ -228,7 +228,7 @@
         <!-- 1. where the station is: the dial, what the rules say of it, the remembered dials -->
         <section class="card console-card op-card" id="op-card" aria-labelledby="dial-title" title="The radio's dial, what the rules say of transmitting there, and the dials you keep">
           <div class="op-head">
-            <div class="dial-readout" title="The radio's dial right now, read over CAT, rigctld or FLRig every couple of seconds. The signal itself sits about 1.5 kHz above this on USB">
+            <div class="dial-readout" title="The radio's dial right now, read over CAT, rigctld or FLRig once a second while the station is idle. The signal itself sits about 1.5 kHz above this on USB">
               <h2 class="card-title" id="dial-title" title="The radio's dial. The list starts as the frequency plan's proposals and is yours to edit: Add keeps a dial with a name (the same dial again renames it), Remove drops the chosen one, and it is saved beside the modem's configuration. Picking a dial from the list tunes the radio there when it is keyed over CAT, rigctld or FLRig — not during a session, a call, a probe, a Test or a transmission, when the list is held still; a serial line or a CM108 interface cannot tune, and the list is still a list. When the radio's own dial matches an entry, the list follows it. A radio that cannot report its dial shows a Dial is at field instead: the rules need to know where you are.">Radio dial</h2>
               <span class="numerals dial-hero-hz" id="dial-hero" role="status" aria-live="polite" title="The radio's dial, as it reports it or as you declared it">—</span>
             </div>
@@ -510,7 +510,7 @@
         <!-- 2. the receiver's own numbers, and the programs attached -->
         <section class="card console-card tiles-card" id="receiver-card" aria-labelledby="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached">
           <div class="card-head">
-            <h2 class="card-title" id="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached. Rate control is the rate controller's smoothed SNR and the margin it keeps above the mode's threshold. They hear you at is what the other station measured on your last burst, carried back in its acknowledgement. Mode confidence is how clearly the last frame's mode was read from its chips; below 1.3 is a guess. The busy detector line gives every number behind its decision: the level of the latest 25 ms block, the noise floor, the margin between them, the threshold, the largest margin since the last reading, the passband's shape (flat noise reads about 6 dB, a narrowband signal 15 and up) and which path last marked the channel busy. Host program and KISS say what is attached; Audio is the sound card's input.">Receiver</h2>
+            <h2 class="card-title" id="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached. Rate control is how the other station hears you, smoothed, which your station picks its rung by, and how many frames of your last transmission it never heard. They hear you at is what the other station measured on your last burst, carried back in its acknowledgement. Mode confidence is how clearly the last frame's mode was read from its chips; below 1.3 is a guess. The busy detector line gives every number behind its decision: the level of the latest 25 ms block, the noise floor, the margin between them, the threshold, the largest margin since the last reading, the passband's shape (flat noise reads about 6 dB, a narrowband signal 15 and up) and which path last marked the channel busy. Host program and KISS say what is attached; Audio is the sound card's input.">Receiver</h2>
           </div>
           <div class="tiles" id="readings-receiver">
             <div class="reading tile" title="How the other station hears you, smoothed: what your station chooses its speed by. Below it, how many frames of your last transmission the other station never heard at all">
@@ -754,13 +754,13 @@
               <div class="row">
                 <label for="dev-ptt" title="How the radio is keyed">Keying</label>
                 <select id="dev-ptt" title="What keys the radio: Host (the host program keys it on PTT ON), a serial port, a CM108 interface, rigctld or FLRig; none for VOX or listening only"></select>
-                <select id="ptt-line" title="How the port keys the radio: a serial line, or the radio's own CAT command" aria-label="How the port keys the radio">
+                <select id="ptt-line" class="narrow" title="How the port keys the radio: a serial line, or the radio's own CAT command" aria-label="How the port keys the radio">
                   <option value="rts">RTS line</option>
                   <option value="dtr">DTR line</option>
                   <option value="both">RTS and DTR</option>
                   <option value="cat">CAT command</option>
                 </select>
-                <select id="ptt-gpio" title="The codec's GPIO pin wired to PTT; 3 on DRA and URI boards" aria-label="Which GPIO pin keys the radio" hidden>
+                <select id="ptt-gpio" class="narrow" title="The codec's GPIO pin wired to PTT; 3 on DRA and URI boards" aria-label="Which GPIO pin keys the radio" hidden>
                   <option value="1">GPIO 1</option>
                   <option value="2">GPIO 2</option>
                   <option value="3" selected>GPIO 3</option>
@@ -1078,7 +1078,7 @@
                 <li><strong>The rules</strong>: the badge beside the dial says <em>Legal</em>, <em>Warning</em> or <em>TX blocked</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
                 <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not <em>Tuner tone</em>) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider.</li>
                 <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter: what you send stays in the box with its time and a ✓ once the other station has all of it (… on its way, ✗ if the session ended first).</li>
-                <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off) or Pat (<code>varahf</code>) at it.</li>
+                <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off), Pat (<code>varahf</code>) or VarAC at it. The program then sets the callsign and the bandwidth: Setup shows <em>Host</em> in their places, and Aether goes back to its own when the program leaves.</li>
                 <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change.</li>
               </ol>
             </section>
@@ -1088,9 +1088,9 @@
               <div class="card-head"><h2 class="card-title" id="help-test-title" title="Running a test session and contributing it">Running a test session</h2></div>
               <p class="sub">
                 A test session is how a contact becomes a measurement the project can use: a probe, a
-                call, a message, a short burst at every mode from just under the fastest the message was acknowledged at,
-                and a file sized to what about two minutes at the measured rate carry (as little as 256
-                bytes on a slow path) — recorded, in about five minutes (ten at most). The other
+                call, a message, a file of about two minutes at the message's rate (at least 256
+                bytes), then a short measurement at each rung from just under the fastest the transfers
+                reached — recorded, in about five minutes (ten at most). The other
                 station only has to be listening — a person at the panel or an unattended station set to
                 answer only.
               </p>
@@ -1122,7 +1122,7 @@
               <ul class="help-steps">
                 <li><strong>SNR</strong> is what this receiver measured on the last frame it found, referenced to 3 kHz. <em>They hear you at</em> is what the other station measured on your last burst, carried back in its acknowledgement.</li>
                 <li><strong>Tuning</strong> is the carrier offset the receiver removed: positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check.</li>
-                <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the mode's on-air rate. <strong>Mode</strong> is the rung the data is moving at; the Diagnostics tab shows the rate controller's smoothed SNR and the margin it keeps.</li>
+                <li><strong>Throughput</strong> counts application bytes both ways over the last thirty seconds; the <em>Speed</em> chart shows it against the on-air rate of the rung each way. <strong>Mode</strong> is the rung the data is moving at. Each station picks the rung for its own data; the Diagnostics tab's <em>Rate control</em> shows how the other station hears you, smoothed, and how many frames of your last transmission it missed.</li>
                 <li><strong>Signal above noise</strong> and the channel chart are the busy detector's view of Aether's channel; <strong>Receive level</strong> is the sound card's whole input, the radio's whole passband, which the Setup tab helps you set.</li>
                 <li><strong>Signal analysis</strong> on the Diagnostics tab — constellation, spectrum and waterfall — can be <em>undocked</em> into a window of its own. <strong>Compact</strong> in the header shrinks the panel to the state and four readings for a small window. Hover over any box title, control or reading for its explanation.</li>
               </ul>
@@ -1138,7 +1138,9 @@
                 <dt>Where to operate</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/frequency-plan.md" target="_blank" rel="noopener" title="The frequency plan">docs/user/frequency-plan.md</a></dd>
                 <dt>The rules Aether checks</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/fcc-regulatory-controls.md" target="_blank" rel="noopener" title="FCC regulatory controls: how Aether reads Part 97, with links to the e-CFR">docs/user/fcc-regulatory-controls.md</a></dd>
                 <dt>The field-test protocol</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/field-test.md" target="_blank" rel="noopener" title="How a field test is run and reported">docs/user/field-test.md</a></dd>
-                <dt>Host programs</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/spec/host-interfaces.md" target="_blank" rel="noopener" title="The VARA-compatible host interface">docs/spec/host-interfaces.md</a></dd>
+                <dt>VarAC, Winlink Express and Pat</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/host-programs.md" target="_blank" rel="noopener" title="Setting up VarAC, Winlink Express and Pat with Aether">docs/user/host-programs.md</a></dd>
+                <dt>KISS programs</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/kiss.md" target="_blank" rel="noopener" title="APRS and packet programs, and VarAC broadcasts, on the KISS port">docs/user/kiss.md</a></dd>
+                <dt>A Winlink gateway</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/winlink-gateway.md" target="_blank" rel="noopener" title="RMS Trimode at the gateway and Winlink Express in the field, step by step">docs/user/winlink-gateway.md</a></dd>
                 <dt>A gateway</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/blob/master/docs/user/gateway-kit.md" target="_blank" rel="noopener" title="Running Aether HF as an unattended gateway">docs/user/gateway-kit.md</a></dd>
                 <dt>Bugs and ideas</dt><dd><a class="numerals" href="https://github.com/KK4ODA/aether-hf/issues" target="_blank" rel="noopener" title="Report a bug or suggest an idea">github.com/KK4ODA/aether-hf/issues</a></dd>
               </dl>

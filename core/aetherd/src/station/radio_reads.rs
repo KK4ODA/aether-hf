@@ -13,8 +13,11 @@
 //! queued, not transmitting), so a reading is never on the keying port when a slot needs the
 //! key; the keying thread takes the run loop's own requests before any reading in any case
 //! (`ThreadedPtt`). The S-meter four times a second, the dial once a second, the settings every
-//! five. Only a keying interface on a thread of its own reads in the background: CAT, rigctld
-//! and `FLRig`.
+//! five. The dial is read once a second whenever the station is idle, recording or not: the
+//! panel's dial readout and the rules' verdict follow a knob turned at the radio within a second
+//! or so, where the display's own ten-second ask left them behind (the author, 2026-11-05).
+//! Only a keying interface on a thread of its own reads in the background: CAT, rigctld and
+//! `FLRig`.
 
 use super::Station;
 use crate::ptt::{Asked, Ptt, Readings};
@@ -61,16 +64,18 @@ impl<P: Ptt> Station<P> {
             let at = now - readings.at.elapsed().as_secs_f64();
             self.keep_readings(at, &readings);
         }
-        if self.recording.is_none() || self.transmitting || self.movable().is_err() {
+        if self.transmitting || self.movable().is_err() {
             return;
         }
+        let recording = self.recording.is_some();
         let reads = &self.radio_reads;
         let asked = Asked {
-            meter: self.ptt.inner().reads_meter()
+            meter: recording
+                && self.ptt.inner().reads_meter()
                 && reads.meter_misses < METER_GIVE_UP
                 && now >= reads.next_meter,
             dial: self.ptt.can_tune() && now >= reads.next_dial,
-            settings: now >= reads.next_settings,
+            settings: recording && now >= reads.next_settings,
         };
         if !asked.any() {
             return;
@@ -107,8 +112,10 @@ impl<P: Ptt> Station<P> {
             }
         }
         if let Some(hz) = readings.dial_hz {
-            // fresher than the display's ten-second cadence, and the rules check reads it too
+            // fresher than the display's ten-second cadence, and the rules check reads it too;
+            // the display need not ask the radio itself, on the run loop, while these come
             self.read_dial(hz, at);
+            self.frequency.next_ask_s = self.frequency.next_ask_s.max(at + 10.0);
         }
         let Some(recording) = self.recording.as_mut() else {
             return;

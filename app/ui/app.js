@@ -191,6 +191,10 @@ function onEvent(frame) {
     case "regulatory":
       onRegulatory(data);
       break;
+    case "dial":
+      // the radio's dial moved: the readout, the list and the rules' verdict follow now
+      refreshStatus();
+      break;
     case "bandwidth":
       // the station moved to its other bandwidth, or back (ADR-0026): another ladder of modes
       renderBandwidth(data);
@@ -1313,7 +1317,7 @@ function drawSpeedChart() {
     [c.ink, "bit/s"],
     [c.tx, "sending at"],
     [c.rx, "receiving at"],
-    [c.accent, "goodput, both ways"],
+    [c.accent, "goodput"],
   ]);
 
   // the on-air rate of the rung the data went at, each way: a dashed step in the transmit and
@@ -2493,16 +2497,14 @@ function drawChart() {
   }
   low = Math.floor((low - 3) / 5) * 5;
   high = Math.ceil((high + 3) / 5) * 5;
+  // names only: what the colours of the busy band and a red peak mean is the chart's tooltip
   const legend = [
-    [null, "level, dBFS"],
+    [null, "dBFS"],
     [null, "▍ receiving"],
     [null, "▍ transmitting"],
-    [null, "- - noise floor"],
-    [null, "· · busy threshold"],
-    [null, "▏ peak that tripped it"],
-    [null, "▬ busy: level"],
-    [null, "▬ busy: shape"],
-    [null, "▬ busy: frame"],
+    [null, "- - floor"],
+    [null, "· · threshold"],
+    [null, "▬ busy"],
   ];
   const f = chartFrame("chart", 450, chartHeight("chart"), low, high, legend);
   const { ctx, c } = f;
@@ -2585,7 +2587,7 @@ function drawChart() {
     ctx.fillRect(x(point.at) - slot, f.top, slot, BUSY_BAND);
   }
 
-  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.error, c.error, c.busy, c.accent];
+  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.busy];
   drawLegend(f, legend.map(([, text], i) => [colours[i], text]));
 }
 
@@ -5033,6 +5035,7 @@ function log(message, level = false, tag = "panel") {
   const text = document.createElement("span");
   text.className = "log-text";
   text.textContent = message;
+  text.title = message;
   entry.append(when, label, text);
   entry.hidden = !logShows(entry);
   pane.append(entry);
@@ -5322,7 +5325,7 @@ function wire() {
       return;
     }
     const sure = window.confirm(
-      `Run a test session with ${remote}? It sends a probe, a message, a short burst at every mode and a file — about five minutes of transmitting, ten at most, all recorded. Stop test ends it at any time.`,
+      `Run a test session with ${remote}? It sends a probe, a message, a file and a short measurement at each rung — about five minutes, ten at most, all recorded. Stop test ends it at any time.`,
     );
     if (!sure) return;
     $("test-result").textContent = `Test session with ${remote}: starting…`;
@@ -6052,6 +6055,7 @@ function applyRecordingsDir(dir) {
   recordingsDir = dir;
   const line = $("recordings-dir");
   line.textContent = dir ?? "set a recordings folder, or none is written";
+  line.title = dir ?? "Where recordings and their reports are written on this machine";
   const have = Boolean(dir);
   $("btn-open-recordings").disabled = !have;
   $("btn-copy-recordings").disabled = !have;

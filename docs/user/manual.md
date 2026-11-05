@@ -284,7 +284,8 @@ The Session tab is where you operate. It has five boxes.
 ### Radio dial
 
 - The **dial** as the radio reports it, and a chip with what the rules say about transmitting
-  there.
+  there. Over CAT, rigctld or FLRig it is read once a second while the station is idle, so a
+  knob turned at the radio shows within a second or so. During a session it is read less often.
 - The **dial list**: remembered frequencies, starting from the
   [frequency plan](frequency-plan.md)'s proposals. **Picking one tunes the radio there** when
   it is keyed over CAT, rigctld or FLRig. The list is held still during a session, a call, a
@@ -468,8 +469,8 @@ not touched.
 
 ## 9. Log, and sending files
 
-The **Log** is everything the modem and the panel reported since the panel opened, newest last.
-Filters: *All*, *Problems*, *Rules*, *Sessions*, *Beacons*. **Clear** empties the panel's copy;
+The **Log** is everything the modem and the panel reported since the panel opened, newest last,
+one line an entry: hover over a line for the whole of it. Filters: *All*, *Problems*, *Rules*, *Sessions*, *Beacons*. **Clear** empties the panel's copy;
 the modem's own log file is kept.
 
 A `keying` line says how long your radio takes to key and how long Aether takes to prepare a
