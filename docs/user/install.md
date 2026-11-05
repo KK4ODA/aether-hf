@@ -53,7 +53,7 @@ restarts the modem, which takes a few seconds.
 
 **Keying, and the dial.** Setup step 2 keys the radio through a serial line (RTS or DTR), the
 radio's own *CAT command*, a CM108-class interface's GPIO pin, `rigctld` or FLRig; or it leaves
-keying to a *host program* (VarAC or Winlink Express keys the radio, see
+keying to the *Host* program (VarAC or Winlink Express keys the radio, see
 [host-programs.md](host-programs.md)), or to *none* for a VOX interface. Its *Interface*
 list fills the fields in for a known interface (an Icom with USB audio, a Yaesu, a
 SignaLink, a DRA or URI board) once, when you pick it; the fields are what the modem uses, and

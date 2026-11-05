@@ -1859,59 +1859,6 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   font-size: var(--fs-sm);
 }
 
-/* help that stays out of the way: a small ? that opens its note over the page */
-.help-pop {
-  position: relative;
-  flex: none;
-}
-
-.help-pop > summary {
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: 1px solid transparent;
-  border-radius: var(--r-pill);
-  color: var(--text-3);
-  font: 600 var(--fs-xs) / 1 var(--face);
-  cursor: pointer;
-  user-select: none;
-  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
-}
-
-.help-pop > summary::-webkit-details-marker {
-  display: none;
-}
-
-.help-pop > summary:hover,
-.help-pop[open] > summary {
-  color: var(--text);
-  border-color: var(--text-3);
-  background: var(--surface-2);
-}
-
-.help-pop > p {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 30;
-  width: min(460px, calc(100vw - 48px));
-  margin: 0;
-  padding: var(--s3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-pop);
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  line-height: 1.55;
-  white-space: normal;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
 /* 4 · the conversation: two panes, each a window with its name and tools in a head strip */
 .workspace {
   flex: 1 1 auto;
@@ -2229,8 +2176,25 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   flex: 0 1 34rem;
 }
 
-.setup .field-note {
-  margin: 0 0 0 calc(8.5rem + 10px);
+/* a setting a host program owns: the field's place, greyed, saying whose it is */
+.host-owned {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
+  min-width: 11ch;
+  padding: 4px 9px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  cursor: default;
+}
+
+.host-owned[hidden] {
+  display: none;
+}
+
+.setup .steps .row > .host-owned.as-select {
+  flex: 0 1 34rem;
 }
 
 /* a field is as wide as what it holds, not as wide as the window: a long select reads as a
@@ -2308,15 +2272,6 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   flex: 1 1 320px;
 }
 
-.cwid-sent {
-  color: var(--status-warning);
-}
-
-/* a callsign that must identify: the box is ticked and greyed out, and this says why */
-.cwid-required {
-  color: var(--text-2);
-}
-
 /* step 6 stays at the foot of the window while the steps scroll past it */
 /* the save is a bar fixed to the foot of the tab, not a seventh plate floating over the
    sixth: it has the cabinet's colour, a strong rule above it and room under the last step */
@@ -2327,6 +2282,10 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   background: var(--surface-2);
   border-color: var(--border-strong);
   box-shadow: 0 -12px 20px -8px rgba(0, 0, 0, 0.55);
+}
+
+#radio-cwid-wpm[data-capped="true"] {
+  color: var(--status-warning);
 }
 
 .save-rest {
@@ -3120,10 +3079,6 @@ button[aria-pressed="true"]:not(.ghost):not(.chip) {
   outline: none;
 }
 
-.composer-log:empty::before {
-  content: "What you send stays here, with the time it went and a ✓ once the other station has it.";
-  color: var(--text-3);
-}
 
 .tx-line .when {
   color: var(--text-3);
@@ -3875,10 +3830,6 @@ body.compact:not(.mini) #history-card canvas {
   .setup .steps .row > label:not(.check):not(.label-inline) {
     min-width: 0;
     flex-basis: 100%;
-  }
-
-  .setup .field-note {
-    margin-left: 0;
   }
 
   .tiles,

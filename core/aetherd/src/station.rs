@@ -2211,14 +2211,17 @@ impl<P: Ptt> Station<P> {
 
     /// The Morse identifier this station sends when it identifies as `call` (ADR-0075): the
     /// operator's when the setting is on, and — for a callsign that requires one
-    /// (`cwid::required_for`: a US callsign) — one at the operator's speed whatever the
-    /// setting says. `None`: this callsign sends none.
+    /// (`cwid::required_for`: a US callsign) or while a program attached has said `CWID ON`
+    /// (§2.7) — one at the operator's speed whatever the setting says. `None`: this callsign
+    /// sends none.
     #[must_use]
     pub fn identifier_for(&self, call: &str) -> Option<CwId> {
         self.config.cw_id.or_else(|| {
-            crate::cwid::required_for(call).map(|_| CwId {
-                wpm: self.config.cw_id_wpm,
-                ..CwId::default()
+            (crate::cwid::required_for(call).is_some() || self.host_asks_identifier()).then(|| {
+                CwId {
+                    wpm: self.config.cw_id_wpm,
+                    ..CwId::default()
+                }
             })
         })
     }
@@ -7639,6 +7642,7 @@ mod tests {
             attached: true,
             listening: true,
             chat: false,
+            cw_id: false,
         };
         let message = b"Winlink by way of Aether.";
         for attached in [true, false] {
@@ -10681,6 +10685,40 @@ mod tests {
     }
 
     #[test]
+    fn a_host_programs_callsign_and_morse_id_go_with_it() {
+        // what a program's MYCALL and CWID ON set is the program's: while it is attached the
+        // station answers as it says and identifies when it asks (ADR-0075 §2.7), and when it
+        // goes the station is its own again
+        let mut station = idle_station();
+        assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
+        let program = HostPresence {
+            attached: true,
+            listening: true,
+            chat: false,
+            cw_id: true,
+        };
+        station.set_host(program);
+        assert_eq!(station.set_callsigns(&["G4ABC".to_owned()]), Ok(true));
+        assert_eq!(station.callsigns(), ["G4ABC".to_owned()]);
+        assert_eq!(station.identifier_check("G4ABC")["enabled"], true);
+        assert_eq!(station.identifier_check("G4ABC")["setting"], false);
+        // CWID OFF from the program leaves the station's own rule
+        station.set_host(HostPresence { cw_id: false, ..program });
+        assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
+        station.set_host(program);
+        station.set_host(HostPresence::default());
+        assert_eq!(station.callsigns(), ["W4ODA".to_owned()]);
+        assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
+        // a MYCALL said during a call is held for its end; a program that leaves before then
+        // takes it with it
+        station.set_host(program);
+        station.connect("KK4ABC").expect("idle");
+        assert_eq!(station.set_callsigns(&["G4ABC".to_owned()]), Ok(false));
+        station.set_host(HostPresence::default());
+        assert_eq!(station.pending_callsigns, Some(vec!["W4ODA".to_owned()]));
+    }
+
+    #[test]
     fn a_host_program_moves_the_bandwidth_between_sessions_and_takes_it_back() {
         // VARA's BW commands set the modem's mode (ADR-0026): the station moves while idle,
         // holds the host's bandwidth while the host is attached, and goes back when it goes
@@ -10690,6 +10728,7 @@ mod tests {
             attached: true,
             listening: true,
             chat: true,
+            cw_id: false,
         });
         assert_eq!(station.host_bandwidth(Some(500)), Ok(500));
         assert_eq!(station.bandwidth_hz(), 500);
@@ -10745,6 +10784,7 @@ mod tests {
             attached: true,
             listening: false,
             chat: false,
+            cw_id: false,
         });
         assert!(!air.b.answering());
         air.a.connect("KK4XYZ").expect("idle");
@@ -10763,6 +10803,7 @@ mod tests {
             attached: true,
             listening: true,
             chat: false,
+            cw_id: false,
         });
         air.run(90.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
@@ -10796,6 +10837,7 @@ mod tests {
             attached: true,
             listening: true,
             chat: false,
+            cw_id: false,
         });
         assert!(!air.b.answering());
     }
@@ -10812,6 +10854,7 @@ mod tests {
                 attached: true,
                 listening: station.now() % 3.5 < 3.0,
                 chat: false,
+                cw_id: false,
             });
             station.playback(&mut out).expect("playback");
             station.capture(&quiet_block(seed)).expect("capture");

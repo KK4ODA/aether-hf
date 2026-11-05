@@ -115,10 +115,11 @@ A banner across every tab tells you about something that needs attention:
 A **chime** plays when a session comes up and when it ends. Untick **Chime** on the Session tab
 to silence it.
 
-### Tooltips and the ? buttons
+### Tooltips
 
-Every control and reading has a tooltip: hover over it. Every box has a small **?** that opens an
-explanation of that box. Press Escape or click elsewhere to close it.
+Every control, reading and box title has a tooltip: hover over it. A box's title explains the
+whole box; a field's tooltip says what the field does, its range and its default. The window shows
+only names, values and units.
 
 ## 4. Setup
 
@@ -127,8 +128,7 @@ when it is done and amber when it has unsaved changes.
 
 ### Profiles
 
-The **Profile** bar at the top keeps every Setup setting, the transmit level and the waterfall
-settings under a name: one per radio, per place, or per way of working (for example
+The **Profile** bar at the top keeps every Setup setting and the transmit level under a name: one per radio, per place, or per way of working (for example
 "Standalone" and "VarAC", which differ in who keys the radio).
 
 - Pick a profile to switch to it. A `*` after the name means the running settings have changed
@@ -142,19 +142,23 @@ settings under a name: one per radio, per place, or per way of working (for exam
 - **More** has New profile, Rename, Duplicate and Delete.
 
 What belongs to this computer stays out of a profile: the update channel, debug mode, the KISS
-port's address, the panel's port, the log file and the recordings folder.
+port's address, the panel's port, the log file, the recordings folder and the waterfall's
+settings.
 
 ### Step 1: Callsign and rules
 
 - **Callsign**: yours, with an SSID (`KK4ODA-1`) or a suffix (`KK4ODA/P`) if you use one, up to
-  nine characters. A host program's own callsign is answered to as well.
+  nine characters. With **Host programs** on (step 5) the box reads **Host**: the program's own
+  callsign (its `MYCALL`) is the one the modem answers to and identifies as while the program is
+  attached, and the one set here comes back when the program leaves. Turn Host programs off to
+  change it.
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*.
 - **Control**: *Local* (you are at the radio), *Remote* (you are at the radio through a control
   link), or *Automatic* (nobody at the control point: an unattended mailbox or gateway). Aether
   never guesses this.
 - **License class**: decides which frequencies are yours.
 - **Sideband**: USB, the convention for data. On LSB the signal lands below the dial, mirrored.
-- **For the field log**: grid (six characters lets the log work out the distance), rig, power in
+- **Field log**: grid (six characters lets the log work out the distance), rig, power in
   watts, antenna. They go into every recording, so a report needs no follow-up. Each may be left
   empty.
 
@@ -175,9 +179,9 @@ Aether keys nothing the rules refuse, but you remain the control operator.
   - **rigctld** (Hamlib) or **FLRig** keys the radio and reads its dial; a host program can tune
     through either at the same time.
   - A **CM108-class** interface (DRA, URI) keys through its codec's GPIO pin, 3 on those boards.
-  - **Host program**: VarAC or Winlink Express owns the radio and keys it when Aether says
-    PTT ON, as with VARA. Aether then cannot read the dial, so the rules in step 1 are set to
-    None and you check every transmission. Keep this in a profile of its own.
+  - **Host**: VarAC or Winlink Express owns the radio and keys it when Aether says PTT ON, as
+    with VARA. Aether then cannot read the dial, so the rules in step 1 are set to None and you
+    check every transmission; their fields read **Host**. Keep this in a profile of its own.
   - **None**: a VOX interface such as a SignaLink, or listening only.
 
 A radio's USB connection often shows two ports. On a Yaesu the *Enhanced* port carries CAT and
@@ -196,8 +200,9 @@ the sound card's own noise.
 
 - **Bandwidth**: *2300 Hz* for Winlink, Pat and the most data; *500 Hz* for peer-to-peer and
   VarAC. Both stations of a session use the same. A change takes effect once the station is
-  idle, with no restart. A host program's `BW500` or `BW2300` moves it while the program is
-  attached.
+  idle, with no restart. With **Host programs** on (step 5) the box reads **Host**: the
+  program's `BW500` or `BW2300` sets it while the program is attached, and the setting here comes
+  back when it leaves. Set the bandwidth in the program.
 - **Answer only**: take calls and answer probes, but make no call and send no beacon.
 - **Fastest mode**: the highest rung the link may climb to. The last entry is the fastest your
   bandwidth has, and stays the fastest when you change bandwidth. Choose a lower one only to cap
@@ -227,12 +232,13 @@ the sound card's own noise.
   - It sends your callsign without its SSID: `KK4ODA-1` goes out as `KK4ODA`, and a `-T` or
     `-R` is dropped too. The rules ask for your assigned call sign (§97.119), and the SSID is
     not part of it. A `/` part such as `W4/G4ABC` or `/P` is kept.
-  - A US callsign always sends it. The box is ticked and greyed out, with the note *Required for
-    US callsigns (§97.119)*. What you had set is kept for any other callsign.
-  - Any other callsign: your choice, off by default.
+  - A US callsign always sends it. The box is ticked and greyed out; its tooltip says why
+    (§97.119). What you had set is kept for any other callsign.
+  - Any other callsign: your choice, off by default. A host program's `CWID ON` turns it on for
+    the program's sessions.
   - A call or probe that leads to no session is identified 30 s after, on its own.
   - The US rules cap an automatic identifier at 20 wpm, whatever is set here (§97.119(b)(1)).
-    The line beside the speed says so when it applies. 20 wpm can sound slow: a callsign is
+    The speed is marked when the cap applies, and its tooltip says so. 20 wpm can sound slow: a callsign is
     long in Morse.
   - A US station identifies only at the end. A session longer than ten minutes is not identified
     in between: see *FCC regulatory controls*.
@@ -262,7 +268,7 @@ the sound card's own noise.
 
 ### Step 6: Save
 
-**Save these settings** writes them to the modem's configuration. Most take effect at once. A new
+**Save** writes them to the modem's configuration. Most take effect at once. A new
 sound card, any keying setting, Host programs, compression, the update channel or the callsign
 restarts the modem, which takes a few seconds; the panel comes back by itself. **Copy as TOML** copies the settings for a configuration file, and **Discard changes**
 puts every field back to what the modem is using.
@@ -353,8 +359,8 @@ Click the box's heading to open it.
 - **Key 1 s**: keys the radio for one second with no audio, to check the PTT. The log then
   says whether the radio's receive audio changed while it was keyed. A radio that transmits goes
   quiet (or plays back its own signal). If it reads the same as the band, the radio did not key.
-- **Tuner tone, 10 s**: a steady tone for an antenna tuner. Do not set drive with it.
-- **Set drive, 4 bursts**: four six-second bursts of the real waveform, five seconds apart.
+- **Tuner tone**: a steady tone for ten seconds, for an antenna tuner. Do not set drive with it.
+- **Set drive**: four six-second bursts of the real waveform, five seconds apart.
 - **Transmit level**: the slider, in dB below full scale. **Last transmit peak** is the modem's
   own headroom.
 
@@ -442,6 +448,12 @@ not touched.
 
 - **Signal analysis**: the constellation, spectrum and waterfall. **Undock** opens them in a
   window of their own, to keep in view from any tab. A tone frame has no constellation.
+  - The waterfall draws the noise dark and steady and a signal bright above it. **Floor** sets
+    the level drawn black; with **auto** it follows the noise in the modem's passband. **Gain**
+    is how many decibels above the floor reach full white, 3 to 90 dB (20 by default): lower it
+    for more contrast. **Speed** is lines a second; **Palette** the colours.
+  - These settings are kept for this computer and survive a restart. A profile does not carry
+    them.
 - **Receiver**: how the other station hears you, smoothed, which is what your station chooses its
   speed by, and how many frames of your last transmission the other station never heard at all;
   how the other station hears you on its last report,
@@ -530,12 +542,19 @@ Turn on **Host programs** in Setup step 5, then point the program's VARA HF sett
 
 - **Aether keys the radio** (CAT, rigctld, FLRig, serial, CM108 or VOX): the usual setup for
   Winlink Express and Pat.
-- **The host program keys the radio** (Setup step 2, *host program*): VarAC with its RIG tab's PTT
+- **The host program keys the radio** (Setup step 2, *Host*): VarAC with its RIG tab's PTT
   and frequency control on CAT, as with VARA.
 
 The full setup for each program is in [VarAC, Winlink Express and Pat with Aether](host-programs.md).
 A Winlink gateway — RMS Trimode at the gateway, Winlink Express in the field — is set up step
 by step in [Winlink through an Aether gateway](winlink-gateway.md).
+
+While **Host programs** is on, the program sets the callsign and the bandwidth: Setup shows
+**Host** in their places. What the program sets lasts while it is attached; when it leaves,
+Aether goes back to its own callsign and bandwidth. A program's `CWID ON` turns the Morse ID on
+for its sessions. The first transmission after a program attaches is checked on its own: if the
+receive audio does not change while the radio is keyed, the Log says the radio may not be
+transmitting, so a program set to key a port nothing is wired to is found at once.
 
 The host program sees only its own sessions. A session you start from the panel is not reported
 to it, though the program's BUSY reads ON while it runs. Unless the program keys the radio, it is
@@ -659,7 +678,9 @@ did not transmit. The other station hears nothing, and a session can look connec
 only. Check the keying in Setup step 2, and that the radio's own setting for it matches (on many
 radios, RTS or DTR keying works only on one of its two USB serial ports, or after a menu setting).
 Then press **Key 1 s** and watch the radio and the log. Aether says this once after three
-transmissions in a row, and again every ten minutes while it goes on.
+transmissions in a row, and again every ten minutes while it goes on. The first transmission after
+a host program attaches is judged on its own, so a program keying the wrong port is caught at its
+first try.
 
 **The log says the sound card's playback skipped some milliseconds inside a transmission.** Your
 computer or its USB audio stalled while Aether was sending. What went on the air had a short
@@ -667,7 +688,7 @@ hole, and the other station may not decode the frame across it; it asks again. T
 ones for capture skips above.
 
 **A host program says nothing is connected, or VARA is missing.** Check **Host programs** is on in
-step 5 and the program points at 127.0.0.1 and the right port. With *host program* keying, the
+step 5 and the program points at 127.0.0.1 and the right port. With *Host* keying, the
 program must be attached before the panel can transmit.
 
 **The panel says the modem is not running (the Modem lamp is red).** The daemon has stopped or is

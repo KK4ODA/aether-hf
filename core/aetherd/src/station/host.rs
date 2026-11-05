@@ -16,6 +16,7 @@ const UNANSWERED_QUIET_S: f64 = 60.0;
 /// What the host program attached now said. With none attached the station is its own: it
 /// answers every call to its callsigns.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // what the program said, one command each
 pub struct HostPresence {
     /// A program holds the host command port.
     pub attached: bool,
@@ -25,6 +26,9 @@ pub struct HostPresence {
     /// have no use for (ADR-0069); what it still decides is the KISS programs' priority
     /// (ADR-0019).
     pub chat: bool,
+    /// It said `CWID ON`: the program's sessions end with the Morse identifier whatever the
+    /// station's own setting, as when either asks (ADR-0075 §2.7).
+    pub cw_id: bool,
 }
 
 impl HostPresence {
@@ -67,10 +71,33 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.host.presence = presence;
+        if presence.attached && !was.attached {
+            // the keying the program and the station were each set up for is first tried here:
+            // the first transmission keyed is judged on its own, not after three that changed
+            // nothing (`keyed_audio.rs`)
+            if let Some(watch) = self.keyed_audio.as_mut() {
+                watch.judge_next_alone();
+            }
+        }
         if !presence.attached && was.attached {
             // what it asked for goes with it; withdrawing a request cannot fail
             let _ = self.host_bandwidth(None);
+            // and the callsign its MYCALL set: the station answers as its own again, once a
+            // session under way has ended
+            let own = vec![self.config.callsign.clone()];
+            // a MYCALL it said during a session is held for the session's end: that goes too
+            if self.engine.callsigns != own || self.pending_callsigns.is_some() {
+                let _ = self.set_callsigns(&own);
+            }
         }
+        if presence.cw_id != was.cw_id {
+            self.refresh_identifier_length();
+        }
+    }
+
+    /// Whether a program attached asked for the Morse identifier (`CWID ON`).
+    pub(super) fn host_asks_identifier(&self) -> bool {
+        self.host.presence.attached && self.host.presence.cw_id
     }
 
     /// Whether calls are answered, for the log: at once when it changes, then at most once

@@ -268,6 +268,12 @@ pub const RULES: &[Rule] = &[
         nullable: true,
         ..rule("panel.interface")
     },
+    Rule {
+        scope: Scope::Machine,
+        why: "how this computer's screen draws the waterfall: a profile switched to for another \
+              radio or program must not change it",
+        ..rule("panel.waterfall.*")
+    },
     // ── the regulatory policy (ADR-0018) ───────────────────────────────────────────
     Rule {
         options: &["", "none", "us-fcc-part97"],
@@ -469,7 +475,7 @@ interface = "manual"
 [panel.waterfall]
 auto = true
 floor_db = -90.0
-gain_db = 45.0
+gain_db = 20.0
 speed = 8
 palette = "aether"
 
@@ -888,7 +894,10 @@ mod tests {
             !is_portable("kiss.bind"),
             "a profile never opens this machine's KISS port to a network"
         );
-        assert!(is_portable("panel.waterfall.gain_db"));
+        assert!(
+            !is_portable("panel.waterfall.gain_db"),
+            "the waterfall is the screen's, and a profile switch leaves it as it was"
+        );
         assert!(!is_portable("control.token"), "a secret never leaves");
         assert!(!is_portable("control.bind"), "this installation's port");
         assert!(!is_portable("log.file"), "a path on this machine");

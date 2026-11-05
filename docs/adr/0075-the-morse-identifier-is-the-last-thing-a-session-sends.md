@@ -84,7 +84,8 @@ station's identifier was still to come.
      `pending`. The log says once at start, and once on a callsign change, when a US callsign is
      forced over a setting of off;
    * a host's `CWID OFF` on a US station is answered `OK`, recorded, and changes nothing;
-     `CWID ON` is recorded and acts on nothing;
+     `CWID ON` turns the identifier on while the program is attached (§2.7, amended
+     2026-11-04);
    * the panel's *Morse ID* box is ticked and greyed out for a US callsign, with the note
      *Required for US callsigns (§97.119)* and a tooltip; what the operator had set is kept for
      any other callsign;
@@ -102,6 +103,15 @@ station's identifier was still to come.
 6. **A stop waits for the end.** The daemon's wind-down is 22 s (was 12): its DISC, the other
    station's answer and both identifiers. The shell waits 30 s before it kills the daemon (was 20)
    and the systemd unit 30 s (was 15). The log says when a stop came first.
+7. **A program's `CWID ON` is honoured** (amended 2026-11-04, the author's decision after the
+   2026-11-02 house and truck sessions: settings that live in both the program and the modem
+   should not have to be made to agree by hand). While a host program is attached and its last
+   word was `CWID ON`, its sessions end with the identifier whatever `[radio] cw_id` says: either
+   side asking for it is enough. `CWID OFF` leaves the station's own rule (the setting, and §2.3
+   for a US callsign). The program's word goes when it detaches (`HostFlags.cw_id`,
+   `HostPresence.cw_id`, `Station::identifier_for`; test
+   `a_host_programs_callsign_and_morse_id_go_with_it`). RMS Trimode says `CWID ON` at every start,
+   so a non-US gateway run by it now identifies. No wire change, no configuration key.
 
 **The invariant each rule keeps** is I1, no radiated overlap: every identifier keys in a slot the
 other station granted and keeps, after a slot that can no longer be in use, or on a channel heard

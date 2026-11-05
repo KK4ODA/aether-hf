@@ -12,7 +12,7 @@ is one click.
 | | The host program owns the radio | Aether owns the radio |
 |---|---|---|
 | Like | VarAC with VARA: VarAC tunes the radio and keys it | VARA keying the radio itself |
-| Aether's keying (Setup step 2) | **host program** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
+| Aether's keying (Setup step 2) | **Host** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
 | The host program's rig control | PTT and frequency on CAT | none when Aether keys by CAT (only one program can open the CAT port); frequency control only, when Aether keys by a serial line or a CM108 pin |
 | Aether's rules check (step 1) | **None** — you check every transmission, as with VARA | on: every transmission judged at the dial |
 | Tuning | the host program (VarAC's Auto-QSY, CQ slots) | Aether's dial list (Session tab), or by hand |
@@ -22,16 +22,15 @@ is one click.
 
 In **Aether**:
 
-1. Setup step 2, *Keying*: **host program — VarAC or Winlink Express keys the radio on PTT
-   ON**. The rules in step 1 change to **None** with it: Aether cannot read the dial of a radio
-   it does not control. *ms before the audio* (150) is how long Aether waits after `PTT ON`
-   before it starts the audio; VARA allows 100.
-2. Setup step 4, *Bandwidth*: whichever you use most. VarAC says `BW500` when it starts, and
-   Aether moves to 500 Hz for as long as VarAC is attached, without a restart; it goes back to
-   this one when VarAC closes.
-3. Setup step 5: **Host programs** on (port 8300), and **KISS programs** on (port 8100) for
-   VarAC's broadcasts.
-4. Save, and save it as a profile — *VarAC*, say.
+1. Setup step 2, *Keying*: **Host** — VarAC or Winlink Express keys the radio on `PTT ON`.
+   The rules in step 1 change to **None** with it, and their fields read **Host**: Aether cannot
+   read the dial of a radio it does not control. The milliseconds beside it (150) are how long
+   Aether waits after `PTT ON` before it starts the audio; VARA allows 100.
+2. Setup step 5: **Host programs** on (port 8300), and **KISS programs** on (port 8100) for
+   VarAC's broadcasts. With Host programs on, Setup's *Callsign* and *Bandwidth* read **Host**:
+   VarAC's `MYCALL` and `BW500` set them while it is attached, and Aether's own come back when it
+   closes. Set them in VarAC.
+3. Save, and save it as a profile — *VarAC*, say.
 
 In **VarAC**, *Settings*:
 
@@ -123,9 +122,15 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
 
 ## How Aether follows the program
 
-* **The bandwidth.** Setup step 4 is Aether's own. A program's `BW500`, `BW2300` or `BW2750` (run as 2300) moves it while
-  the program is attached — between sessions, never during one — and it comes back when the
-  program closes. A 2300 Hz station also answers a 500 Hz call at 500 Hz, as VARA's *Accept
+* **One place for each setting.** With Setup step 5's *Host programs* on, the callsign (step 1)
+  and the bandwidth (step 4) read **Host**: the program sets them. With *Keying* **Host**
+  (step 2), the rules' fields read **Host** too. What is underneath is kept for when no program
+  is attached.
+* **The callsign.** The program's `MYCALL` is what the station answers to and identifies as while
+  the program is attached. When the program closes, Aether goes back to the callsign in Setup.
+* **The bandwidth.** A program's `BW500`, `BW2300` or `BW2750` (run as 2300) moves the station
+  while the program is attached — between sessions, never during one — and it comes back to
+  Setup's when the program closes. A 2300 Hz station also answers a 500 Hz call at 500 Hz, as VARA's *Accept
   500 Hz connections* does, and comes back 20 s after the session; a 500 Hz station never answers
   a 2300 Hz call. The panel's header shows the bandwidth, and why, whenever it is not Aether's own.
 * **Two stations in different bandwidths** (ADR-0035). A probe is answered whatever the two
@@ -145,8 +150,8 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   *host program · not answering* until then, and the log names every call left unanswered.
 * **The Morse ID at the end** (ADR-0075, as VARA does). Each station's Morse ID is the last
   thing it sends for a session. A US callsign always sends it; `CWID OFF` from the program is
-  answered `OK` and changes nothing. Any other callsign sends it only if Setup step 4's *Morse
-  ID* is ticked, and `CWID ON` does not turn it on: the setting is Aether's. It sends the
+  answered `OK` and changes nothing. Any other callsign sends it if Setup step 4's *Morse ID* is
+  ticked, or while the program has said `CWID ON` (RMS Trimode does at start). It sends the
   callsign without its SSID: a program's `MYCALL KK4ODA-1` or `KK4ODA-1-T` is identified as
   `KK4ODA`.
   * The program hears `DISCONNECTED` only once its station's ID has gone out. So VarAC going
@@ -157,6 +162,9 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   * Nothing identifies a session between its call and its end. VarAC's *Call ID interval* sends
     `DE <your callsign>` as chat text, which Aether carries as data; Winlink sends the callsigns
     only at the start. See *FCC regulatory controls*, *What identifies a long session*.
+* **The keying check.** The first transmission after a program attaches is judged on its own:
+  if the radio's receive audio does not change while it is keyed, the Log says the radio may not
+  be transmitting. A program keying a port nothing is wired to is caught at its first try.
 * **Aether's own sessions.** A call or a Test session started from Aether's Session tab while a
   program is attached is not the program's: the program keys the radio for it, when it owns the
   radio, and sees the channel busy — and is told nothing else. Its idle timer cannot end the

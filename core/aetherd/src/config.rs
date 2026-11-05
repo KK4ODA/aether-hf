@@ -659,7 +659,8 @@ pub struct PanelSection {
 }
 
 /// The waterfall's controls, as any waterfall has them. Kept here rather than in the
-/// browser so they are the station's — they travel in a profile — and not the window's.
+/// browser so they survive a restart and every window of the panel draws alike; this
+/// computer's, not a profile's — switching profiles leaves the waterfall as it was.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WaterfallSection {
@@ -685,7 +686,7 @@ fn default_waterfall_floor() -> f64 {
 }
 
 fn default_waterfall_gain() -> f64 {
-    45.0
+    20.0
 }
 
 fn default_waterfall_speed() -> u32 {

@@ -1428,6 +1428,7 @@ fn host_presence(daemon: &DaemonState) -> aetherd::station::HostPresence {
         attached: flags.attached.load(std::sync::atomic::Ordering::SeqCst),
         listening: flags.listening.load(std::sync::atomic::Ordering::SeqCst),
         chat: flags.chat.load(std::sync::atomic::Ordering::SeqCst),
+        cw_id: flags.cw_id.load(std::sync::atomic::Ordering::SeqCst),
     }
 }
 

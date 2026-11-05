@@ -509,6 +509,7 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                         flags.chat.store(false, Ordering::SeqCst);
                         flags.ignore_dcd.store(false, Ordering::SeqCst);
                         flags.listening.store(false, Ordering::SeqCst);
+                        flags.cw_id.store(false, Ordering::SeqCst);
                         flags.attached.store(false, Ordering::SeqCst);
                     });
                 if spawned.is_err() {
@@ -640,6 +641,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     .ignore_dcd
                     .store(host.recorded.ignore_kiss_dcd, Ordering::SeqCst);
                 flags.listening.store(host.listening, Ordering::SeqCst);
+                flags.cw_id.store(host.cw_id, Ordering::SeqCst);
                 for reply in &outcome.replies {
                     if !say(&mut writer, reply) {
                         return;

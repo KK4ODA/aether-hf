@@ -70,6 +70,10 @@ pub struct KeyedAudio {
     test: bool,
     /// The next transmission keyed will be one.
     test_next: bool,
+    /// The next transmission with a reading is judged on its own: the first since a host
+    /// program attached, where the keying the program and the station were each set up for
+    /// meets.
+    alone_next: bool,
     /// Transmissions in a row whose audio changed nothing.
     run: u32,
     /// When it was last said.
@@ -110,6 +114,12 @@ impl KeyedAudio {
         self.test_next = true;
     }
 
+    /// The next transmission that can be judged is said on its own when it changed nothing,
+    /// not after [`UNCHANGED_RUN`] in a row.
+    pub fn judge_next_alone(&mut self) {
+        self.alone_next = true;
+    }
+
     /// The key went up at `now`.
     pub fn keyed(&mut self, now: f64) {
         self.keyed_at = Some(now);
@@ -135,12 +145,15 @@ impl KeyedAudio {
         if test {
             return Some(Said::Test(reading));
         }
+        let alone = std::mem::take(&mut self.alone_next);
         if !unchanged {
             self.run = 0;
             return None;
         }
         self.run += 1;
-        if self.run < UNCHANGED_RUN || self.said_at.is_some_and(|at| now - at < SAY_AGAIN_S) {
+        if !alone
+            && (self.run < UNCHANGED_RUN || self.said_at.is_some_and(|at| now - at < SAY_AGAIN_S))
+        {
             return None;
         }
         self.said_at = Some(now);
@@ -202,10 +215,13 @@ impl Said {
                 "keyed",
                 format!(
                     "the radio's receive audio did not change while it was keyed, {run} \
-                     transmissions in a row ({:.0} dBFS keyed; {:.0} to {:.0} dBFS receiving): \
+                     transmission{} in a row ({:.0} dBFS keyed; {:.0} to {:.0} dBFS receiving): \
                      the radio may not be transmitting. Check the keying in Setup step 2, then \
                      press Key 1 s under Keying and drive",
-                    reading.keyed, reading.heard_low, reading.heard_high
+                    if run == 1 { "" } else { "s" },
+                    reading.keyed,
+                    reading.heard_low,
+                    reading.heard_high
                 ),
             ),
         }
@@ -281,6 +297,26 @@ mod tests {
         // one that changes it starts the count over
         assert_eq!(transmission(&mut ka, &mut t, 5.6, -47.0), None);
         assert_eq!(ka.run, 0);
+    }
+
+    #[test]
+    fn the_first_transmission_after_a_program_attaches_is_judged_on_its_own() {
+        // a program keying the radio, or the station keying it for the program: where the two
+        // setups meet, a dead key is said at the first transmission, not the third
+        let mut ka = KeyedAudio::default();
+        let mut t = 0.0;
+        ka.judge_next_alone();
+        // too short to judge: the check waits for one that can be
+        assert_eq!(transmission(&mut ka, &mut t, 0.2, -27.0), None);
+        let said = transmission(&mut ka, &mut t, 5.6, -27.0).expect("said at once");
+        assert!(matches!(said, Said::Unchanged(_, 1)), "{said:?}");
+        let (name, line) = said.line();
+        assert_eq!(name, "keyed");
+        assert!(line.contains("1 transmission in a row"), "{line}");
+        // a radio that does transmit says nothing, and the next is counted as before
+        ka.judge_next_alone();
+        assert_eq!(transmission(&mut ka, &mut t, 5.6, -47.0), None);
+        assert_eq!(transmission(&mut ka, &mut t, 5.6, -27.0), None);
     }
 
     #[test]

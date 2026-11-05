@@ -585,7 +585,7 @@ async function refreshStatus() {
   applyClosing(status);
   $("btn-send").disabled = status.state !== "connected";
   $("send-note").textContent =
-    status.state === "connected" ? "" : "Connect to a station first.";
+    status.state === "connected" ? "" : "Not connected";
 }
 
 let modeTable = [];
@@ -669,12 +669,9 @@ let cwidChecked = null;
 
 function showCwid() {
   const box = $("radio-cwid");
-  const note = $("cwid-required");
   const forced = cwidRequired !== null;
   box.disabled = forced;
   box.checked = forced || cwidSetting;
-  note.hidden = !forced;
-  if (forced) note.textContent = cwidRequired;
   const why = forced
     ? `${cwidRequired}: this callsign identifies in Morse at the end of every session, whatever the box says`
     : "Send this station's callsign in Morse at the end of each session: the last thing it sends for the session";
@@ -702,13 +699,13 @@ function checkCwidRequired() {
 }
 
 function showCwidCap() {
-  const note = $("cwid-sent");
-  const wpm = Number($("radio-cwid-wpm").value);
+  const field = $("radio-cwid-wpm");
+  const wpm = Number(field.value);
   const capped = $("radio-cwid").checked && identifierMax !== null && Number.isFinite(wpm) && wpm > identifierMax;
-  note.hidden = !capped;
-  note.textContent = capped
-    ? `sent at ${identifierMax} wpm: the rules' limit on an automatic identifier (§97.119(b)(1))`
-    : "";
+  field.dataset.capped = String(capped);
+  field.title = capped
+    ? `Sent at ${identifierMax} wpm: the rules' limit on an automatic identifier (§97.119(b)(1))`
+    : "Morse speed in words per minute; under the US rules an automatically keyed identifier goes no faster than 20 wpm (§97.119(b)(1)), whatever is set here";
 }
 
 // The rung the SNR chart draws the threshold of: the one the data is moving at when data moves
@@ -1495,8 +1492,8 @@ let stationBandwidthHz = null;
 // which stations the list shows: all, those whose beacons were heard, those worked
 let heardFilter = "all";
 const HEARD_EMPTY = {
-  all: "Nobody yet. Stations appear here as soon as a beacon, a call, a probe, an answer or a session is heard.",
-  beacons: "No beacon heard yet. A station's beacons are counted here as soon as one is heard.",
+  all: "Nobody yet.",
+  beacons: "No beacon heard yet.",
   sessions: "No session yet with a station on this list.",
 };
 const ACTIVITY_TEXT = {
@@ -1630,10 +1627,15 @@ function applyDial(status) {
   const reading = $("dial-reading");
   const hero = $("dial-hero");
   const heroSub = $("dial-hero-sub");
+  const source = (text, why) => {
+    heroSub.textContent = text;
+    heroSub.title = why;
+    hero.title = why;
+  };
   if (status.frequency_hz) {
     reading.textContent = `radio: ${formatHz(status.frequency_hz)} Hz`;
     hero.textContent = `${formatHz(status.frequency_hz)} Hz`;
-    heroSub.textContent = "";
+    source("", "The radio's dial, as it reports it");
     if (status.frequency_hz !== lastDialHz) {
       lastDialHz = status.frequency_hz;
       // not over a pick waiting to be tuned: the pick is what the operator wants next
@@ -1642,20 +1644,20 @@ function applyDial(status) {
   } else if (hostOwnsTheDial(status)) {
     reading.textContent = "";
     hero.textContent = "—";
-    heroSub.textContent = "the host program tunes the radio";
+    source("Host", "The host program tunes the radio: choose the frequency there");
   } else if (!canTune && liveConfig?.regulatory?.dial_hz) {
     const hz = liveConfig.regulatory.dial_hz;
     reading.textContent = `declared: ${formatHz(hz)} Hz`;
     hero.textContent = `${formatHz(hz)} Hz`;
-    heroSub.textContent = "declared — this radio cannot report its dial";
+    source("declared", "The dial you declared: this radio cannot report its own");
   } else if (canTune) {
     reading.textContent = "radio: no reading yet";
     hero.textContent = "—";
-    heroSub.textContent = "no reading from the radio yet";
+    source("no reading", "No reading from the radio yet");
   } else {
     reading.textContent = "tuning needs CAT, rigctld or FLRig keying (Setup step 2)";
     hero.textContent = "—";
-    heroSub.textContent = "reading the dial needs CAT, rigctld or FLRig keying (Setup step 2)";
+    source("", "Reading the dial needs CAT, rigctld or FLRig keying (Setup step 2)");
   }
   dialHeld =
     status.probing === true ||
@@ -1922,7 +1924,7 @@ function renderSessions() {
   $("sessions-empty").hidden = rows.length > 0;
   $("sessions-empty").textContent = sessionsFilter
     ? `No session with ${sessionsFilter} in the history.`
-    : "No session yet. Each one is added here when it ends.";
+    : "No session yet.";
   $("sessions-table").parentElement.hidden = rows.length === 0;
   const body = $("sessions");
   body.replaceChildren();
@@ -2734,7 +2736,7 @@ function fillDevices(devices) {
     [
       // VARA's way with VarAC and Winlink Express: the host program owns the radio and keys
       // it on PTT ON (ADR-0025)
-      { name: "host", label: "host program — VarAC or Winlink Express keys the radio on PTT ON" },
+      { name: "host", label: "Host" },
       ...devicesSeen.serial_ports.map((p) => ({
         name: p.name,
         label: p.description ? `${p.name} — ${p.description}` : p.name,
@@ -2742,14 +2744,14 @@ function fillDevices(devices) {
       // a CM108-class interface keys through its own codec: no serial port at all
       ...devicesSeen.gpio_interfaces.map((i) => ({
         name: `gpio:${i.path}`,
-        label: `${i.name} — keys by GPIO`,
+        label: `${i.name} (GPIO)`,
       })),
-      { name: "rigctld", label: "rigctld — Hamlib rig control over the network" },
+      { name: "rigctld", label: "rigctld" },
       // FLRig holds the CAT port and serves several programs: a host program can tune through
       // it while Aether keys and reads the dial there, so the rules check keeps working
-      { name: "flrig", label: "FLRig — keying and the dial through FLRig's XML-RPC server" },
+      { name: "flrig", label: "FLRig" },
     ],
-    "none (VOX or receive only)",
+    "None",
   );
   for (const [id, value] of chosen) if (value) select($(id), value);
   showKeyingFields();
@@ -2884,6 +2886,7 @@ async function loadConfig() {
   $("record-send").checked = liveConfig.record?.send_to_project !== false;
   $("record-standing").value = liveConfig.record?.notes ?? "";
   $("host-enabled").checked = liveConfig.host?.enabled === true;
+  applyHostOwned();
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
   const kiss = liveConfig.kiss ?? {};
   $("kiss-enabled").checked = kiss.enabled === true;
@@ -3089,6 +3092,23 @@ function hostOwnsTheDial(status) {
   return liveConfig?.ptt?.kind === "host" && status.regulatory?.policy !== "rules";
 }
 
+/// The settings a host program owns, greyed to "Host" in their places: with Host programs on,
+/// the program's MYCALL is the callsign and its BW command the bandwidth while it is attached;
+/// with the radio keyed by the host program, the rules are None and their fields unused. The
+/// fields keep their values underneath, saved as they were, for when the program is not there.
+function applyHostOwned() {
+  const programs = $("host-enabled").checked;
+  const keyed = $("dev-ptt").value === "host";
+  const own = (id, owned) => {
+    $(id).hidden = owned;
+    $(`${id}-host`).hidden = !owned;
+  };
+  own("wz-call", programs);
+  own("radio-bandwidth", programs);
+  for (const id of ["reg-profile", "reg-control", "reg-license", "reg-sideband"]) own(id, keyed);
+  checkRulesStep();
+}
+
 /// When the host program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
 /// nothing to drive, and the card says where the frequency is chosen.
 function applyHostOwnsRadio() {
@@ -3118,7 +3138,7 @@ function showKeyingFields() {
     address.setAttribute("aria-label", chosen === "flrig" ? "FLRig address" : "rigctld address");
   }
   $("host-lead-fields").hidden = !host;
-  $("host-keyed-note").hidden = !host;
+  applyHostOwned();
   const cat = onPort && $("ptt-line").value === "cat";
   $("cat-row").hidden = !cat;
   $("civ-fields").hidden = !cat || $("ptt-protocol").value !== "icom";
@@ -3426,7 +3446,7 @@ async function profileFormOk() {
   if (purpose === "save-as" && unsavedSettings().length > 0) {
     setupAnswer = await saveSetupChanges();
     if (!setupAnswer) {
-      noteProfile("Setup's changes could not be saved, so no profile was made: see the note by Save these settings.", "error");
+      noteProfile("Setup's changes could not be saved, so no profile was made: see the note by Save.", "error");
       return;
     }
   }
@@ -3606,7 +3626,7 @@ async function saveProfile() {
   if (unsavedSettings().length > 0) {
     setupAnswer = await saveSetupChanges();
     if (!setupAnswer) {
-      noteProfile("Setup's changes could not be saved, so the profile was not: see the note by Save these settings.", "error");
+      noteProfile("Setup's changes could not be saved, so the profile was not: see the note by Save.", "error");
       return;
     }
   }
@@ -3760,7 +3780,7 @@ const PROFILES = [
   },
   {
     id: "cm108",
-    name: "DRA, URI, RA-40 or another CM108 interface (keys by GPIO)",
+    name: "DRA, URI, RA-40 or another CM108",
     match: /C-Media|USB PnP Sound Device|USB Audio Device/i,
     ptt: "gpio",
     line: "rts",
@@ -3776,7 +3796,7 @@ const PROFILES = [
   },
   {
     id: "manual",
-    name: "Manual — the devices and keying below, as you set them",
+    name: "Manual",
     match: null,
     ptt: null,
     line: null,
@@ -3827,11 +3847,18 @@ function interfaceMatches(profile) {
   return true;
 }
 
+/// What picking an interface fills in, or what this machine seems to have: the list's tooltip.
+function interfaceNote(note) {
+  const base =
+    "Fill in the devices and keying below for a known interface: picking one fills them in once, and you can change any of them afterwards";
+  $("wz-profile").title = note ? `${note}. ${base}` : base;
+}
+
 /// Show `index` when the fields are still what it fills in, and Manual otherwise.
 function showInterface(index) {
   const shown = index >= 0 && interfaceMatches(PROFILES[index]) ? index : MANUAL;
   $("wz-profile").value = String(shown);
-  $("wz-profile-note").textContent = PROFILES[shown]?.note ?? "";
+  interfaceNote(PROFILES[shown]?.note ?? "");
   if (shown === MANUAL) noteDetectedInterface();
 }
 
@@ -3843,8 +3870,7 @@ function noteDetectedInterface() {
     (p) => p.match && devicesSeen.devices.some((d) => p.match.test(d.name)),
   ).map((p) => p.name);
   if (seen.length === 0) return;
-  $("wz-profile-note").textContent =
-    `This machine has a device that looks like ${seen.join(" or ")}: pick yours above to fill the fields below in for it.`;
+  interfaceNote(`This machine has a device that looks like ${seen.join(" or ")}: pick yours to fill the fields below in for it`);
 }
 
 /// A field below changed by hand: the list says Manual unless it is still what the chosen
@@ -3856,7 +3882,7 @@ function interfaceEdited() {
 
 function applyProfile() {
   const profile = PROFILES[Number($("wz-profile").value)] ?? PROFILES[MANUAL];
-  $("wz-profile-note").textContent = profile.note;
+  interfaceNote(profile.note);
   if (!profile.match) return;
   const matching = devicesSeen.devices.filter((d) => profile.match.test(d.name));
   const input = matching.find((d) => d.input)?.name;
@@ -3998,9 +4024,8 @@ function fillKissRungs() {
     const option = document.createElement("option");
     option.value = String(mode.index);
     // the tone floor's first two rungs are the same frames in both bandwidths (ADR-0013)
-    option.textContent = mode.index < 2
-      ? `${mode.index} — ${mode.name} · heard at 500 and 2300 Hz`
-      : `${mode.index} — ${mode.name} · this bandwidth only`;
+    option.textContent = `${mode.index} — ${mode.name}`;
+    option.title = mode.index < 2 ? "Heard by stations at 500 and 2300 Hz" : "Heard only by stations of this bandwidth";
     choice.append(option);
   }
   select(choice, before);
@@ -4277,7 +4302,7 @@ async function wizardSave() {
 }
 
 /// Setup's form to the modem: the answer to `config.set`, or nothing when it was refused, the
-/// reason on the save bar. Shared by *Save these settings* and the profile bar's Save.
+/// reason on the save bar. Shared by Setup's *Save* and the profile bar's Save.
 async function saveSetupChanges() {
   $("wz-save-note").textContent = "";
   const call_ = $("wz-call").value.trim().toUpperCase();
@@ -4374,7 +4399,7 @@ async function saveTxLevel() {
 }
 
 function tuneButton(playing) {
-  $("wz-tune").textContent = playing ? "Stop the tone" : `Tuner tone, ${TUNE_SECONDS} s`;
+  $("wz-tune").textContent = playing ? "Stop the tone" : "Tuner tone";
   $("wz-tune").setAttribute("aria-pressed", String(playing));
   clearTimeout(tuneTimer);
   tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
@@ -4392,7 +4417,7 @@ const DRIVE_GAP_S = 5;
 let driveTimer = null;
 
 function driveButton(sending) {
-  $("wz-drive").textContent = sending ? "Stop the bursts" : `Set drive, ${DRIVE_BURSTS} bursts`;
+  $("wz-drive").textContent = sending ? "Stop the bursts" : "Set drive";
   $("wz-drive").setAttribute("aria-pressed", String(sending));
   clearTimeout(driveTimer);
   // the whole check plus a little; the daemon stops on its own either way
@@ -4862,7 +4887,7 @@ function rulesChosen() {
 
 function checkRulesStep() {
   const call_ = $("wz-call").value.trim().toUpperCase();
-  const plausible = /^[A-Z0-9/-]{1,9}$/.test(call_);
+  const plausible = $("host-enabled").checked || /^[A-Z0-9/-]{1,9}$/.test(call_);
   const chosen = rulesChosen();
   markStep(1, plausible && chosen);
   $("step-1").dataset.needs = String(!chosen);
@@ -5413,11 +5438,11 @@ function wire() {
     $(id).addEventListener("input", checkAppSettings);
   }
   $("btn-kiss-disconnect").addEventListener("click", () => kissDisconnect(null));
+  $("host-enabled").addEventListener("change", applyHostOwned);
   wireSignalCard();
   wireRules();
   wireKeying();
   wireLog();
-  wireHelpNotes();
   wireAbout();
   loadHistory();
   renderFrames(); // what was kept shows before the first new frame does
@@ -5426,9 +5451,9 @@ function wire() {
     const value = $("wz-call").value.trim().toUpperCase();
     const plausible = /^[A-Z0-9\/-]{1,9}$/.test(value);
     checkRulesStep();
-    $("wz-call-note").textContent = plausible
-      ? `Will go on the air as ${value}.`
-      : "Letters, digits, - and /; up to nine characters.";
+    $("wz-call").title = plausible
+      ? `Will go on the air as ${value}`
+      : "Your callsign: letters, digits, - and /, up to nine characters. An SSID (KK4ODA-1) or a suffix (KK4ODA/P) is fine";
     checkCwidRequired();
     writeConfig();
   });
@@ -6030,22 +6055,6 @@ function applyRecordingsDir(dir) {
   const have = Boolean(dir);
   $("btn-open-recordings").disabled = !have;
   $("btn-copy-recordings").disabled = !have;
-}
-
-// The Session tab's help is a small ? whose note opens over the page (details.help-pop): it
-// closes again on a click anywhere else, or on Escape, as a popover does.
-function wireHelpNotes() {
-  const closeAll = (except) => {
-    for (const pop of document.querySelectorAll("details.help-pop[open]")) {
-      if (pop !== except) pop.open = false;
-    }
-  };
-  document.addEventListener("click", (event) => {
-    closeAll(event.target instanceof Element ? event.target.closest("details.help-pop") : null);
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeAll(null);
-  });
 }
 
 // Under the desktop shell the opener shows the folder: it may open the folder the shell

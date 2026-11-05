@@ -107,6 +107,9 @@ pub struct HostFlags {
     /// It said `LISTEN ON` (or `LISTEN CQ`, or `CHAT ON`, which includes it): calls to the
     /// station are answered. VARA's default is off, and so is a program's here until it says.
     pub listening: Arc<AtomicBool>,
+    /// It said `CWID ON`: its sessions end with the Morse identifier, whatever the station's
+    /// own setting (ADR-0075 §2.7).
+    pub cw_id: Arc<AtomicBool>,
 }
 
 /// One client, as the status shows it.

@@ -10,11 +10,11 @@
 
 export const SPECTRUM_TOP_HZ = 4000;
 
-// The waterfall's colours: the panel's own runs from the display well through a cold steel
-// to a warm white, so a weak signal reads as a shape and a strong one as heat; the others are
-// the ones operators know from other waterfalls.
+// The waterfall's colours. The panel's own is a radio's: the noise a deep navy, a weak signal
+// blue, a strong one cyan to white, so the band reads as dark water with the signals standing
+// out of it; the others are the ones operators know from other waterfalls.
 export const PALETTES = {
-  aether: [[16, 18, 20], [28, 44, 66], [52, 98, 136], [128, 170, 190], [226, 222, 196], [255, 250, 236]],
+  aether: [[2, 5, 18], [4, 22, 78], [14, 78, 186], [44, 160, 252], [176, 232, 255], [255, 255, 236]],
   blue: [[0, 0, 0], [0, 0, 110], [0, 70, 255], [0, 220, 255], [255, 255, 255]],
   turbo: [[48, 18, 59], [70, 107, 227], [26, 228, 182], [164, 252, 60], [251, 190, 26], [227, 72, 6], [122, 4, 3]],
   viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
@@ -22,6 +22,19 @@ export const PALETTES = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// The share of each new spectrum in the waterfall's running average: polled eight times a
+// second, about a third of a second of memory.
+const WATERFALL_AVERAGE = 0.35;
+// The auto floor's place above the noise, in dB: most of the noise draws black.
+const WATERFALL_FLOOR_ABOVE_NOISE_DB = 1;
+// How fast the noise estimate falls to a quieter reading and rises to a louder one, per poll:
+// it drops in the gaps between transmissions and climbs slowly under a long one (about twelve
+// seconds), so a signal filling the channel does not lift the floor to itself.
+const NOISE_FALL = 0.25;
+const NOISE_RISE = 0.01;
+// How far the colours' low end is bent down: the noise near the floor stays dark.
+const WATERFALL_GAMMA = 1.6;
 
 /// The design tokens a canvas needs, read from the style sheet so a chart follows the theme.
 export function tokens() {
@@ -78,7 +91,7 @@ const BODY = `
   <div class="scope-toolbar" role="group" aria-label="Waterfall controls" title="The waterfall's controls: its floor, its range, its speed and its colours">
     <label title="The level drawn as black, in dBFS; auto follows the noise">Floor <input id="wf-floor" title="The level drawn as black, in dBFS; auto follows the noise" type="range" min="-120" max="-40" step="1" value="-90" aria-label="Waterfall floor in dBFS" /> <span class="numerals scope-value" id="wf-floor-value" title="The floor in use">auto</span></label>
     <label class="check" title="Let the floor follow the noise"><input id="wf-auto" title="Let the floor follow the noise" type="checkbox" checked /> auto</label>
-    <label title="The range above the floor drawn in full colour, in dB">Gain <input id="wf-gain" title="The range above the floor drawn in full colour, in dB" type="range" min="15" max="90" step="1" value="45" aria-label="Waterfall range above the floor in dB" /> <span class="numerals scope-value" id="wf-gain-value" title="The range in use">45 dB</span></label>
+    <label title="The range above the floor drawn in full colour, in dB: smaller is more contrast">Gain <input id="wf-gain" title="The range above the floor drawn in full colour, in dB: smaller is more contrast" type="range" min="3" max="90" step="1" value="20" aria-label="Waterfall range above the floor in dB" /> <span class="numerals scope-value" id="wf-gain-value" title="The range in use">20 dB</span></label>
     <label title="How many lines the waterfall draws per second">Speed <select id="wf-speed" class="compact" title="How many lines the waterfall draws per second" aria-label="Waterfall lines per second"><option value="8">8/s</option><option value="4">4/s</option><option value="2">2/s</option><option value="1">1/s</option></select></label>
     <label title="The waterfall's colours">Palette <select id="wf-palette" class="compact" title="The waterfall's colours" aria-label="Waterfall palette"><option value="aether">Aether</option><option value="blue">Blue</option><option value="turbo">Turbo</option><option value="viridis">Viridis</option><option value="grey">Grey</option></select></label>
   </div>`;
@@ -99,9 +112,15 @@ export function mountSignalBody(container) {
 export function createScopes(host) {
   // the waterfall's controls, as any waterfall has them: the floor (auto follows the quietest
   // fifth of the spectrum), the range above it, lines per second, the palette
-  const waterfall = { auto: true, floor: -90, gain: 45, speed: 8, palette: "aether" };
+  const waterfall = { auto: true, floor: -90, gain: 20, speed: 8, palette: "aether" };
   let palette = null;
   let waterfallFloor = -90;
+  // each bin's power averaged over the last few spectra: one 85 ms transform's bins scatter by
+  // several decibels about the noise, which drew the background as grain; averaged, the noise
+  // is an even field and a signal stands out of it, as on a radio's waterfall
+  let averaged = null;
+  let averagedBins = null;
+  let noise = null;
   let spectrumTimer = null;
   let spectrumBusy = false;
   let spectrumPolls = 0;
@@ -235,6 +254,13 @@ export function createScopes(host) {
     try {
       const spectrum = await host.call("spectrum");
       drawSpectrum(spectrum);
+      // the average runs at every poll, whatever the waterfall's speed, and pauses while
+      // this station transmits: its own signal is not the band
+      const bins = spectrum.bins_db ?? [];
+      if (bins.length > 0 && !spectrum.transmitting) {
+        averagedBins = average(bins);
+        trackNoise(averagedBins, spectrum);
+      }
       // the spectrum refreshes eight times a second; the waterfall advances at its own pace
       spectrumPolls += 1;
       if (spectrumPolls % Math.max(1, Math.round(8 / waterfall.speed)) === 0) drawWaterfall(spectrum);
@@ -338,8 +364,38 @@ export function createScopes(host) {
     return palette[Math.max(0, Math.min(255, Math.round(fraction * 255)))];
   }
 
+  /// The noise in the modem's channel: the quieter third of the averaged bins inside it —
+  /// outside, a radio's filter makes the band quieter than the noise the signals sit in, and a
+  /// floor taken there drew all of the channel's noise bright.
+  function trackNoise(bins, spectrum) {
+    const [lo, hi] = spectrum.passband_hz ?? [300, 2700];
+    const inside = bins.filter((_, i) => {
+      const hz = i * spectrum.bin_hz;
+      return hz >= lo && hz <= hi;
+    });
+    const sample = inside.length >= 8 ? inside : bins;
+    const sorted = [...sample].sort((a, b) => a - b);
+    const quiet = sorted[Math.floor(sorted.length / 3)];
+    if (noise === null) noise = quiet;
+    else noise += (quiet - noise) * (quiet < noise ? NOISE_FALL : NOISE_RISE);
+    waterfallFloor = noise + WATERFALL_FLOOR_ABOVE_NOISE_DB;
+  }
+
+  /// Each bin's power, averaged over the spectra polled so far (linear, then back to dB).
+  function average(bins) {
+    if (!averaged || averaged.length !== bins.length) {
+      averaged = Float64Array.from(bins, (db) => 10 ** (db / 10));
+    } else {
+      for (let i = 0; i < bins.length; i++) {
+        averaged[i] += (10 ** (bins[i] / 10) - averaged[i]) * WATERFALL_AVERAGE;
+      }
+    }
+    return Array.from(averaged, (power) => 10 * Math.log10(Math.max(power, 1e-14)));
+  }
+
   function drawWaterfall(spectrum) {
-    const bins = spectrum.bins_db ?? [];
+    // the band, averaged; while this station transmits, what the sound card is sending
+    const bins = spectrum.transmitting ? (spectrum.bins_db ?? []) : (averagedBins ?? spectrum.bins_db ?? []);
     if (bins.length === 0) return;
     const canvas = $("chart-waterfall");
     const width = Math.max(1, canvas.clientWidth || 600);
@@ -351,11 +407,8 @@ export function createScopes(host) {
     const ctx = canvas.getContext("2d");
     // the newest line at the top; everything else moves down one
     ctx.drawImage(canvas, 0, 0, width, height - 1, 0, 1, width, height - 1);
-    // the floor follows the quietest fifth of the spectrum, slowly, so the noise stays dark
-    // and a signal stays bright whatever the receive level — unless the operator set it
-    const sorted = [...bins].sort((a, b) => a - b);
-    const quiet = sorted[Math.floor(sorted.length / 5)];
-    waterfallFloor += (quiet - waterfallFloor) * 0.1;
+    // the floor follows the noise in the channel (`trackNoise`), so the noise stays dark and a
+    // signal stays bright whatever the receive level; unless the operator set it
     if (waterfall.auto && spectrumPolls % 8 === 0) {
       $("wf-floor-value").textContent = `auto ${Math.round(waterfallFloor)} dBFS`;
     }
@@ -364,9 +417,14 @@ export function createScopes(host) {
     const row = ctx.createImageData(width, 1);
     const binHz = spectrum.bin_hz;
     for (let px = 0; px < width; px++) {
-      const hz = (px / width) * SPECTRUM_TOP_HZ;
-      const index = Math.min(bins.length - 1, Math.round(hz / binHz));
-      const [r, g, b] = heat((bins[index] - floor) / span);
+      // between two bins, the level in between: a pixel narrower than a bin draws no steps
+      const at = Math.min(bins.length - 1, (px / width) * SPECTRUM_TOP_HZ / binHz);
+      const below = Math.floor(at);
+      const above = Math.min(bins.length - 1, below + 1);
+      const db = bins[below] + (bins[above] - bins[below]) * (at - below);
+      // the low end bent down, so what sits at the noise stays dark and a signal lifts clear
+      const level = Math.max(0, Math.min(1, (db - floor) / span));
+      const [r, g, b] = heat(level ** WATERFALL_GAMMA);
       row.data[px * 4] = r;
       row.data[px * 4 + 1] = g;
       row.data[px * 4 + 2] = b;

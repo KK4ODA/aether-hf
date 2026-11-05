@@ -2472,6 +2472,21 @@ ITU NVIS: 182–275 s in the nightly; CI's quick set failed it on one OS of thre
 left CI's quick set (no `quick` tag): the nightly and the weekly speed check watch it, and the
 budget stays.
 
+**One place for each setting, and a quieter panel (2026-11-04, beta.128; the author: the
+bandwidth, PTT and callsign had to be matched by hand between Aether and the host program).**
+With Setup step 5's *Host programs* ticked, *Callsign* and *Bandwidth* show a greyed **Host**
+(`applyHostOwned`, `.host-owned`, the `<id>-host` spans); with *Keying* **Host** the rules'
+fields do. The values underneath are kept and saved. The station goes back to its own callsign
+and bandwidth when a program leaves (`set_host`), the first transmission after a program attaches
+is judged by the keyed-audio watch on its own (`KeyedAudio::judge_next_alone`), and a program's
+`CWID ON` turns the identifier on for a non-US callsign (`HostFlags.cw_id`,
+`HostPresence.cw_id`, `host_asks_identifier`; ADR-0075 §2.7 amended). The waterfall is
+`Scope::Machine` (`panel.waterfall.*`: never in a profile, so a profile switch no longer reset
+it), gain 3–90 dB, default 20, drawn from a per-bin average over a noise floor tracked in the
+passband, with a gamma on the colour map. **The panel's rule now:** names, values and units on
+screen; every explanation in a `title` (box titles carry the box's), no `details.help-pop`, no
+explanatory sub-lines or notes. A new control follows it.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in

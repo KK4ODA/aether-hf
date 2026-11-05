@@ -1195,7 +1195,10 @@ mod tests {
             profile.settings["host"]["bind"], "127.0.0.1:8300",
             "a preference travels"
         );
-        assert_eq!(profile.settings["panel"]["waterfall"]["palette"], "blue");
+        assert!(
+            profile.settings["panel"].get("waterfall").is_none(),
+            "the waterfall is this computer's: a profile switched to must not change it"
+        );
         assert_eq!(profile.settings["radio"]["max_mode"], 11);
         assert_eq!(
             profile.hardware.ptt_port,
@@ -1637,11 +1640,21 @@ mod tests {
                 path.display(),
                 applied.invalid
             );
-            // every leaf the file has arrived, with its value
+            // every leaf the file has arrived, with its value, unless a later version made the
+            // setting this computer's (the waterfall, 0.2.0-beta.128): that one is reported
+            // ignored and the running value kept
             let mut wrote = Vec::new();
             settings::leaves("", &profile.settings, &mut wrote);
             let after = portable(&applied.config);
             for (key, value) in &wrote {
+                if !settings::is_portable(key) {
+                    assert!(
+                        applied.ignored.contains(key),
+                        "{}: {key} is not a profile's to set, and was not reported ignored",
+                        path.display()
+                    );
+                    continue;
+                }
                 let kept = key
                     .split('.')
                     .try_fold(&after, |cursor, part| cursor.get(part))
