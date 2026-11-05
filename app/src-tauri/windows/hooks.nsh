@@ -278,6 +278,17 @@
   !insertmacro AETHER_LET_GO
 !macroend
 
+; Once the files are written, tell Explorer the program's icon may have changed. In an update
+; Tauri's installer writes the Start-menu shortcut again but leaves the desktop one alone, and
+; Explorer keeps the picture it cached for aether-hf.exe (the same path as before) until it
+; hears that icons changed: beta.133's new icon reached the Start menu and the taskbar, and the
+; desktop kept the old one. SHCNE_ASSOCCHANGED is that notice (SHCNF_FLUSH: it returns once
+; Explorer has had it); Tauri's template sends it only for file associations, and Aether
+; registers none.
+!macro NSIS_HOOK_POSTINSTALL
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x1000, p 0, p 0)'
+!macroend
+
 !macro NSIS_HOOK_POSTUNINSTALL
   ; what PREUNINSTALL had to set aside goes too, unless it is still in use
   Delete "$INSTDIR\${MAINBINARYNAME}.exe.old*"
