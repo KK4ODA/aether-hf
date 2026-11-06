@@ -48,7 +48,10 @@ only notes runs no CI (`paths` in `ci.yml`: Markdown, `docs/research/`, `docs/ad
 manual and `docs/spec/`); the nightly and the release's scheduled build run only when master moved
 since their last scheduled run (the `changed` job, which runs in every run that builds and
 decides only for the schedule: GitHub skips every job after a skipped one, whatever their own
-`if` says, and with the guard skipped on tags beta.136's first run built nothing past `plan`);
+`if` says, and with the guard skipped on tags beta.136's first run built nothing past `plan`;
+**never write the release workflow's dry-run marker, the word in square brackets, in a commit
+message that is not meant to start one**: the fix's own message quoted it and its push to master
+built every installer);
 artifacts are kept days, not weeks (3–7), and a
 published release deletes its run's copies; Installer hooks no longer runs on version bumps. Start
 the Rate oracle (about 2 hours of runner time a run), the weekly (about 4, 6.5 with the gateway's
