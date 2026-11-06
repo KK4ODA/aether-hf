@@ -1615,6 +1615,85 @@ body.signal-window .head-right {
   width: min(100%, calc(100vh - 170px));
 }
 
+/* The waterfall's own frequency scale: shown only where the spectrum, which carries the
+   scale, is not (Mini). A label every 500 Hz, centred on a short tick. */
+.wf-scale {
+  display: none;
+  position: relative;
+  height: 15px;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.wf-scale > span {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.wf-scale > span::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  height: 3px;
+  border-left: 1px solid var(--border-strong);
+}
+
+/* The undocked window's small views: Compact is the spectrum and the waterfall, Mini the
+   waterfall alone with its scale — for a corner of the screen beside a digital program. The
+   constellation, the captions and the waterfall's controls stay in Full; the header keeps the
+   mark, the live dot, the switch, Keep on top and Dock. */
+body.signal-window:not([data-view="full"]) .brand-name,
+body.signal-window:not([data-view="full"]) .bar-title,
+body.signal-window:not([data-view="full"]) .modem-lamp.on,
+body.signal-window:not([data-view="full"]) .plot-square,
+body.signal-window:not([data-view="full"]) .plot figcaption,
+body.signal-window:not([data-view="full"]) .scope-toolbar {
+  display: none;
+}
+
+body.signal-window:not([data-view="full"]) header.bar {
+  gap: var(--s2);
+  padding-top: 6px;
+  padding-bottom: 6px;
+  min-height: 0;
+}
+
+body.signal-window:not([data-view="full"]) .head-right {
+  gap: var(--s2);
+}
+
+body.signal-window:not([data-view="full"]) .signal-main {
+  padding: var(--s2);
+  gap: var(--s2);
+}
+
+body.signal-window:not([data-view="full"]) .signal-body {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--s2);
+}
+
+body.signal-window:not([data-view="full"]) .plot-stack {
+  gap: var(--s2);
+}
+
+body.signal-window[data-view="compact"] .plot-spectrum {
+  height: 72px;
+}
+
+body.signal-window[data-view="mini"] .plot-stack > .plot:not(.plot-grow) {
+  display: none;
+}
+
+body.signal-window[data-view="mini"] .wf-scale {
+  display: block;
+}
+
 /* ── the rules card ─────────────────────────────────────────────── */
 
 .reg-card-summary {

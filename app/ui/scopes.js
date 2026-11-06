@@ -87,6 +87,17 @@ export function surface(id, fallbackWidth, height) {
   return { ctx, width, height };
 }
 
+/// "500", "1 kHz": a frequency as the spectrum's axis writes it.
+function hzLabel(hz) {
+  return hz % 1000 === 0 ? `${hz / 1000} kHz` : String(hz);
+}
+
+// The waterfall's own frequency scale, every 500 Hz: drawn under it only where the spectrum,
+// which carries the scale, is not shown (the undocked window's Mini view).
+const SCALE = Array.from({ length: SPECTRUM_TOP_HZ / 500 - 1 }, (_, i) => (i + 1) * 500)
+  .map((hz) => `<span style="left: ${(hz / SPECTRUM_TOP_HZ) * 100}%">${hzLabel(hz)}</span>`)
+  .join("");
+
 // The card's body. One copy of the markup for the docked card and the undocked window; every
 // control and reading carries its tooltip (CONTRIBUTING §8).
 const BODY = `
@@ -102,6 +113,7 @@ const BODY = `
     <figure class="plot plot-grow">
       <figcaption>Waterfall</figcaption>
       <canvas id="chart-waterfall" class="plot-waterfall" title="The received audio over time, newest at the top. The red lines are the edges of this station's widest transmission at the bandwidth it runs (the FCC's 26 dB measure): a signal between them is on your frequency, so wait before calling" width="600" height="140" role="img" aria-label="Waterfall of the received audio, newest at the top"></canvas>
+      <div class="wf-scale numerals" id="wf-scale" title="Audio frequency across the waterfall, 0 to 4 kHz" aria-hidden="true">${SCALE}</div>
     </figure>
   </div>
   <div class="scope-toolbar" role="group" aria-label="Waterfall controls" title="The waterfall's controls: its floor, its range, its speed and its colours">
@@ -269,7 +281,8 @@ export function createScopes(host) {
     spectrumBusy = true;
     try {
       const spectrum = await host.call("spectrum");
-      drawSpectrum(spectrum);
+      // a view that hides the spectrum (the undocked window's Mini) still feeds the waterfall
+      if ($("chart-spectrum").clientWidth > 0) drawSpectrum(spectrum);
       // the average runs at every poll, whatever the waterfall's speed, and pauses while
       // this station transmits: its own signal is not the band
       const bins = spectrum.bins_db ?? [];
@@ -322,15 +335,18 @@ export function createScopes(host) {
       ctx.lineTo(x(hz), height - 14);
       ctx.stroke();
       ctx.fillStyle = c.ink;
-      ctx.fillText(hz % 1000 === 0 ? `${hz / 1000} kHz` : String(hz), x(hz), height - 12);
+      ctx.fillText(hzLabel(hz), x(hz), height - 12);
     }
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
+    // a label every 20 dB, or every 40 on a plot too short for them (the undocked Compact view)
+    const labelEvery = y(-40) - y(-20) >= 14 ? 20 : 40;
     for (const db of [-20, -40, -60, -80, -100]) {
       ctx.beginPath();
       ctx.moveTo(0, y(db));
       ctx.lineTo(width, y(db));
       ctx.stroke();
+      if (db % labelEvery !== 0) continue;
       ctx.fillStyle = c.ink;
       ctx.fillText(`${db}`, 4, y(db) - 6);
     }
@@ -424,8 +440,18 @@ export function createScopes(host) {
     const width = Math.max(1, canvas.clientWidth || 600);
     const height = Math.max(1, canvas.clientHeight || 140);
     if (canvas.width !== width || canvas.height !== height) {
+      // a new size keeps what is on screen: the frequencies stretched to the new width, the
+      // lines as they were (one a pixel), so resizing the window or changing its view does not
+      // wipe the minutes being watched
+      const kept = document.createElement("canvas");
+      kept.width = canvas.width;
+      kept.height = canvas.height;
+      kept.getContext("2d").drawImage(canvas, 0, 0);
       canvas.width = width;
       canvas.height = height;
+      if (kept.width > 0 && kept.height > 0) {
+        canvas.getContext("2d").drawImage(kept, 0, 0, kept.width, kept.height, 0, 0, width, kept.height);
+      }
     }
     const ctx = canvas.getContext("2d");
     // the newest line at the top; everything else moves down one

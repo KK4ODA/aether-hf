@@ -9,7 +9,7 @@
   </head>
   <!-- The signal-analysis card undocked: the same card as the panel's Diagnostics tab
        (scopes.js), in a window of its own that stays in view whatever tab the panel shows. -->
-  <body class="signal-window">
+  <body class="signal-window" data-view="full">
     <header class="bar">
       <h1 class="brand">
         <img class="brand-mark" src="mark.png" alt="" width="20" height="20" />
@@ -18,7 +18,12 @@
       <span class="bar-title" title="The constellation, spectrum and waterfall, undocked from the panel's Diagnostics tab">Signal analysis</span>
       <span class="live" id="signal-live" data-live="false" title="Whether the scopes are drawing: they pause while this window is minimised or the modem is out of reach">paused</span>
       <div class="head-right">
-        <span class="lamp modem-lamp" id="lamp-link" title="Modem: this window's connection to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
+        <span class="lamp modem-lamp" id="lamp-link" title="Modem: this window's connection to the modem; Compact and Mini show it only while the modem is out of reach" role="status" aria-label="Not connected to the modem">Modem</span>
+        <div class="view-switch" id="signal-view" role="group" aria-label="View" title="How much of the card to show: all of it, the spectrum and waterfall, or the waterfall alone; each keeps its own window size">
+          <button class="ghost" id="btn-signal-full" data-view="full" aria-pressed="true" title="Full view: the constellation, spectrum and waterfall, and the waterfall's controls">Full</button>
+          <button class="ghost" id="btn-signal-compact" data-view="compact" aria-pressed="false" title="Compact view: the spectrum and the waterfall, in a smaller window; the waterfall's controls are in Full">Compact</button>
+          <button class="ghost" id="btn-signal-mini" data-view="mini" aria-pressed="false" title="Mini view: the waterfall alone with its frequency scale, in the smallest window; its controls are in Full">Mini</button>
+        </div>
         <label class="check" id="on-top-box" title="Keep this window above the others, the panel included" hidden><input type="checkbox" id="on-top" title="Keep this window above the others, the panel included" /> Keep on top</label>
         <button class="small" id="btn-dock" title="Put the card back on the panel's Diagnostics tab and close this window">Dock</button>
       </div>

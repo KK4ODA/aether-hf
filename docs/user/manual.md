@@ -470,6 +470,14 @@ not touched.
 
 - **Signal analysis**: the constellation, spectrum and waterfall. **Undock** opens them in a
   window of their own, to keep in view from any tab. A tone frame has no constellation.
+  - The undocked window has its own **Full**, **Compact** and **Mini** at the right of its
+    title bar. **Full** is the whole card. **Compact** is the spectrum and the waterfall.
+    **Mini** is the waterfall alone, with a frequency scale under it, for a corner of the screen
+    while a digital program runs. The waterfall's controls are in Full and hold in every view.
+    Each view keeps its own window size: size it once and it comes back that way. The window
+    reopens in the view you left it in. **Keep on top** works in every view. In Compact and Mini
+    the **Modem** lamp shows only while the modem is out of reach. Resizing the window or
+    changing the view keeps what the waterfall has drawn.
   - The red lines on the spectrum and the waterfall are the edges of your widest transmission at
     the bandwidth you run, by the FCC's 26 dB measure. They sit a little outside the bandwidth's
     own number: the signal's skirts reach past it. A signal between them is on your frequency;
