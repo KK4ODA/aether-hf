@@ -1,10 +1,20 @@
 name: Nightly
+run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.confirm && 'Nightly (not started, "I need this answer" was not ticked)' || 'Nightly' }}
 
 on:
   schedule:
     - cron: "17 4 * * *"   # 04:17 UTC daily
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: "I need this answer: about 2 hours of runner time from the month's allowance"
+        type: boolean
+        default: false
 
+# Started by hand, it runs only with "I need this answer" ticked: November's first week spent
+# about 2,600 runner minutes on 21 hand-started oracle runs and 1,200 on three weekly re-runs,
+# against an account allowance of about 3,000 a month (CLAUDE.md, "GitHub Actions on the
+# author's account"). Unticked, every job is skipped and the run costs nothing.
 jobs:
   changed:
     # A scheduled run of an unchanged tree repeats the last one: the same scenarios, the same
@@ -38,7 +48,7 @@ jobs:
 
   full:
     needs: changed
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true') && (github.event_name != 'workflow_dispatch' || inputs.confirm) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -55,7 +65,7 @@ jobs:
 
   build:
     needs: changed
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true') }}
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true') && (github.event_name != 'workflow_dispatch' || inputs.confirm) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

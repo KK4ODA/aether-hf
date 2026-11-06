@@ -1,4 +1,5 @@
 name: Rate oracle
+run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.confirm && 'Rate oracle (not started, "I need this answer" was not ticked)' || 'Rate oracle' }}
 
 # The rate controller's oracle (tools/rung_oracle.py) on GitHub's runners: every regret scenario,
 # and the nightly's two echo tests, run at every usable rung and at the controller's own choice,
@@ -7,9 +8,17 @@ name: Rate oracle
 # alone, to judge a build against a baseline's best rungs. A run in a cloud session stops when the session goes quiet; here the runs finish, and each job keeps
 # its rows and sidecars as an artifact (docs/research/rate-control-2/00-brief.md, Gate 0).
 
+# Started by hand, it runs only with "I need this answer" ticked: November's first week spent
+# about 2,600 runner minutes on 21 hand-started oracle runs and 1,200 on three weekly re-runs,
+# against an account allowance of about 3,000 a month (CLAUDE.md, "GitHub Actions on the
+# author's account"). Unticked, every job is skipped and the run costs nothing.
 on:
   workflow_dispatch:
     inputs:
+      confirm:
+        description: "I need this answer: about 2 hours of runner time from the month's allowance"
+        type: boolean
+        default: false
       draws:
         description: "Draws of each scenario, comma separated (0 is the scenario's own seed)"
         default: "0,1,2,3,4,5,6,7,8,9"
@@ -23,6 +32,7 @@ on:
 
 jobs:
   build:
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.confirm) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -120,7 +130,7 @@ jobs:
   # the regret needs the pinned rungs: a controller-only run is judged against a baseline's
   report:
     needs: oracle
-    if: ${{ !cancelled() && !inputs.controller_only }}
+    if: ${{ !cancelled() && !inputs.controller_only && needs.oracle.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

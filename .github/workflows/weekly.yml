@@ -1,10 +1,19 @@
 name: Weekly
+run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.confirm && 'Weekly (not started, "I need this answer" was not ticked)' || 'Weekly' }}
 
+# Started by hand, it runs only with "I need this answer" ticked: November's first week spent
+# about 2,600 runner minutes on 21 hand-started oracle runs and 1,200 on three weekly re-runs,
+# against an account allowance of about 3,000 a month (CLAUDE.md, "GitHub Actions on the
+# author's account"). Unticked, every job is skipped and the run costs nothing.
 on:
   schedule:
     - cron: "41 2 * * 0"   # Sundays, 02:41 UTC
   workflow_dispatch:
     inputs:
+      confirm:
+        description: "I need this answer: about 4 hours of runner time from the month's allowance (6.5 with the gateway's day)"
+        type: boolean
+        default: false
       draws:
         description: "The speed check's draws of each scenario, comma separated (0 is the scenario's own seed)"
         default: "0,1,2,3,4,5,6,7,8,9"
@@ -12,9 +21,9 @@ on:
         description: "The speed check on these scenarios only (file names without .toml, space separated); empty runs all"
         default: ""
       long:
-        description: "Run the gateway's day too"
+        description: "Run the gateway's day too (about 2.5 hours more)"
         type: boolean
-        default: true
+        default: false
 
 jobs:
   # A gateway's day, compressed (bench/scenarios/long/): one gateway and three clients calling
@@ -22,7 +31,7 @@ jobs:
   # for days needs — every round's sessions ending, both ends idle, and the daemons' memory,
   # open files and threads flat from the first round's end to the last.
   long:
-    if: ${{ github.event_name == 'schedule' || inputs.long }}
+    if: ${{ github.event_name == 'schedule' || (inputs.confirm && inputs.long) }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -67,6 +76,7 @@ jobs:
   # puts over 1.10 is the one to run again before reading anything into it — by hand, with fresh
   # draws (`draws`, say 10–19) and those scenarios alone (`only`), the gateway's day left out.
   speed-build:
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.confirm) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -172,7 +182,7 @@ jobs:
 
   speed-report:
     needs: speed
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.speed.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

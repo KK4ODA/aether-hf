@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "ask": [
+      "mcp__github__actions_run_trigger",
+      "Bash(gh workflow run *)",
+      "Bash(gh run rerun *)",
+      "Bash(gh api *dispatches*)"
+    ]
+  }
+}

@@ -44,8 +44,14 @@ only notes runs no CI (`paths` in `ci.yml`: Markdown, `docs/research/`, `docs/ad
 manual and `docs/spec/`); the nightly and the release's scheduled build run only when master moved
 since their last scheduled run (the `changed` job); artifacts are kept days, not weeks (3–7), and a
 published release deletes its run's copies; Installer hooks no longer runs on version bumps. Start
-the Rate oracle (about 2 hours of runner time a run), the weekly (about 6.5) or the nightly (about
-2) by hand only when the answer is needed, and keep audio out of artifacts unless a run failed.
+the Rate oracle (about 2 hours of runner time a run), the weekly (about 4, 6.5 with the gateway's
+day) or the nightly (about 2) by hand only when the answer is needed, and keep audio out of
+artifacts unless a run failed. **Two safeguards hold that:** started by hand, those three run only
+with their `confirm` input ("I need this answer") ticked — unticked, every job skips and the run
+costs nothing, and the weekly's gateway day is off unless asked for — and `.claude/settings.json`
+makes a session ask the author before it starts or re-runs any workflow (the GitHub tool's
+`actions_run_trigger`, `gh workflow run`, `gh run rerun`, a `dispatches` call). Ask first, with the
+run's cost, and pass `confirm: true` only after the author says yes.
 
 ## Conventions
 - SNR is referenced to a **3 kHz** noise bandwidth; Doppler spread is the ITU-R F.1487
