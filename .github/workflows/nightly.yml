@@ -6,7 +6,39 @@ on:
   workflow_dispatch:
 
 jobs:
+  changed:
+    # A scheduled run of an unchanged tree repeats the last one: the same scenarios, the same
+    # build. It runs only when the branch has moved since the last scheduled run of this
+    # workflow (by commit, not by clock: the schedule starts hours late, so "a commit in the
+    # last day" would skip some commits for good). Started by hand, it always runs.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Has the branch moved since the last scheduled night?
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml \
+            --event schedule --status completed --limit 1 --json headSha \
+            --jq '.[0].headSha // ""' 2>/dev/null || true)"
+          if [[ -n "$last" && "$last" == "$GITHUB_SHA" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "unchanged since the last scheduled night (${GITHUB_SHA::7}): skipped"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "last scheduled night at ${last::7}, now ${GITHUB_SHA::7}: running"
+          fi
+
   full:
+    needs: changed
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -22,6 +54,8 @@ jobs:
       # and nowhere later; a step that ran them here failed every night from the start.
 
   build:
+    needs: changed
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -74,14 +108,14 @@ jobs:
         with:
           name: scenarios-${{ matrix.variant }}
           path: ${{ runner.temp }}/scenarios
-          retention-days: 14
+          retention-days: 5
 
   # How fast the sessions were against the committed baseline (tools/scenario_trend.py,
   # bench/baselines/scenarios.csv): a change that makes every session a third slower passes
   # every judgement above, and this is where it shows. The table goes in the run's summary.
   trend:
     needs: scenarios
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.scenarios.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -132,7 +166,7 @@ jobs:
         with:
           name: soak
           path: ${{ runner.temp }}/soak
-          retention-days: 14
+          retention-days: 5
 
   # The stations on the air run the last release, not this tree: this build calls the newest
   # v* release's daemon and is called by it (tools/mixed_pair.py). Skipped, and said so, when
@@ -162,14 +196,15 @@ jobs:
         with:
           name: mixed
           path: ${{ runner.temp }}/mixed
-          retention-days: 14
+          retention-days: 5
 
   # A failing night opens an issue labelled `nightly` — or comments on the one already open —
   # with what failed and why; a passing night closes it. The email GitHub sends says only
   # that the run failed.
   report:
     needs: [full, scenarios, trend, soak, mixed]
-    if: ${{ always() && github.event_name == 'schedule' }}
+    # a night the guard skipped says nothing: the issue stays as the last night left it
+    if: ${{ always() && github.event_name == 'schedule' && needs.full.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

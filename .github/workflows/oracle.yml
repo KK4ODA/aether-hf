@@ -115,7 +115,7 @@ jobs:
         with:
           name: oracle-${{ matrix.scenario }}-run${{ github.run_number }}
           path: ${{ runner.temp }}/oracle
-          retention-days: 30
+          retention-days: 7
 
   # the regret needs the pinned rungs: a controller-only run is judged against a baseline's
   report:

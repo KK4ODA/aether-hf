@@ -6,7 +6,8 @@ name: Release
 # stable one, and published to one rolling prerelease that is replaced every time.
 #
 # Every run builds everything; only tagged runs and nightlies publish. Running it by hand
-# without "publish" is the dry run: the same artifacts, kept for a week, no release. A push
+# without "publish" is the dry run: the same artifacts, kept three days, no release. The
+# scheduled nightly runs only when the default branch has moved since the last one. A push
 # to a branch whose commit message says `[dry-run]` does the same, which is how a change to
 # this pipeline is tried before it is trusted with a tag.
 
@@ -40,13 +41,47 @@ env:
   TAURI_CLI: "2.12.3"
 
 jobs:
+  changed:
+    # A scheduled run of an unchanged tree repeats the last one: the same scenarios, the same
+    # build. It runs only when the branch has moved since the last scheduled run of this
+    # workflow (by commit, not by clock: the schedule starts hours late, so "a commit in the
+    # last day" would skip some commits for good). Started by hand, it always runs.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Has the branch moved since the last scheduled nightly build?
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml \
+            --event schedule --status completed --limit 1 --json headSha \
+            --jq '.[0].headSha // ""' 2>/dev/null || true)"
+          if [[ -n "$last" && "$last" == "$GITHUB_SHA" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "unchanged since the last scheduled nightly build (${GITHUB_SHA::7}): skipped"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "last scheduled nightly build at ${last::7}, now ${GITHUB_SHA::7}: running"
+          fi
+
   plan:
     name: plan
-    # a branch push runs the pipeline only when asked; everything else depends on this job
+    # a branch push runs the pipeline only when asked, and the schedule only when the branch
+    # moved; everything else depends on this job
+    needs: changed
     if: >-
-      github.ref_type == 'tag'
-      || github.event_name != 'push'
-      || contains(github.event.head_commit.message, '[dry-run]')
+      !cancelled()
+      && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true')
+      && (github.ref_type == 'tag'
+          || github.event_name != 'push'
+          || contains(github.event.head_commit.message, '[dry-run]'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.plan.outputs.version }}
@@ -163,7 +198,7 @@ jobs:
         with:
           name: daemon-${{ matrix.triple }}
           path: dist/*
-          retention-days: 7
+          retention-days: 3
 
   # ── the desktop application ────────────────────────────────────────────────────────
   desktop:
@@ -261,7 +296,7 @@ jobs:
         with:
           name: desktop-${{ matrix.triple }}
           path: dist/*
-          retention-days: 7
+          retention-days: 3
 
   # ── what went into it ──────────────────────────────────────────────────────────────
   sbom:
@@ -284,7 +319,7 @@ jobs:
         with:
           name: sbom
           path: aether-hf-*.spdx.json
-          retention-days: 7
+          retention-days: 3
 
   # ── the modem has not got worse ────────────────────────────────────────────────────
   gate:
@@ -316,6 +351,10 @@ jobs:
     needs: [plan, daemon, desktop, sbom, gate]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # to delete this run's artifacts once the release holds the files (the last step)
+      actions: write
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.plan.outputs.version }}
@@ -431,3 +470,16 @@ jobs:
           # a manifest is a promise: every URL in it must already resolve, or a beta
           # installation is offered an update it cannot download
           python tools/check_manifest.py dist/latest.json
+
+      # The build jobs hand their files to this one as artifacts, about 140 MB a run. GitHub's
+      # docs exempt a public repository's runner minutes, not its artifact storage, and the
+      # account's allowance is 1 GB: a week of releases kept two gigabytes of copies of what
+      # the releases hold. Published, they go.
+      - name: The release holds the files now; the run's copies go
+        if: success()
+        continue-on-error: true
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --paginate \
+            --jq '.artifacts[].id' | while read -r id; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+          done

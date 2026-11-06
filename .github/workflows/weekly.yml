@@ -57,7 +57,7 @@ jobs:
         with:
           name: long
           path: ${{ runner.temp }}/long
-          retention-days: 30
+          retention-days: 7
 
   # The rate controller's speed check (docs/research/rate-control-2/03-candidates.md §4, answer 5;
   # ADR-0099): the oracle's scenarios at ten draws, this build's own choice against the newest
@@ -168,7 +168,7 @@ jobs:
         with:
           name: speed-${{ matrix.scenario }}
           path: ${{ runner.temp }}/speed
-          retention-days: 30
+          retention-days: 7
 
   speed-report:
     needs: speed

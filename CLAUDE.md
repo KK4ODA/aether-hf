@@ -34,6 +34,19 @@ python -m uv run pre-commit install
 ```
 CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3.12 and 3.13.
 
+**GitHub Actions on the author's account (2026-11-06).** The plan is GitHub Pro: $18 of included
+compute a month (about 3,000 Linux minutes) and **1 GB of artifact storage for the whole
+account**, shared with Packages. GitHub's docs exempt a public repository's standard-runner
+minutes from the compute, but not its artifact storage, and when the included usage ran out the
+author's CI and releases stopped. November's first six days on aether-hf: 18,455 Linux, 1,776
+Windows and 835 macOS minutes and about 9 GB of artifacts held on average. So: a push that changes
+only notes runs no CI (`paths` in `ci.yml`: Markdown, `docs/research/`, `docs/adr/`, except the
+manual and `docs/spec/`); the nightly and the release's scheduled build run only when master moved
+since their last scheduled run (the `changed` job); artifacts are kept days, not weeks (3–7), and a
+published release deletes its run's copies; Installer hooks no longer runs on version bumps. Start
+the Rate oracle (about 2 hours of runner time a run), the weekly (about 6.5) or the nightly (about
+2) by hand only when the answer is needed, and keep audio out of artifacts unless a run failed.
+
 ## Conventions
 - SNR is referenced to a **3 kHz** noise bandwidth; Doppler spread is the ITU-R F.1487
   **2σ** value; fading has unit mean power and is never normalised per block.

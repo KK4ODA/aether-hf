@@ -2,20 +2,20 @@ name: Installer hooks
 
 # The Windows installer's hooks (app/src-tauri/windows/hooks.nsh) under Wine, and the real
 # installer the pinned Tauri CLI builds: tools/installer_hooks/README.md. Run when the hooks,
-# the test or the release workflow (the CLI pin) change.
+# the test or the release workflow (the CLI pin) change. Not tauri.conf.json: every release
+# bump rewrites its version line, and the hooks ran for nothing at each one — start this by
+# hand after changing the bundler's settings there.
 on:
   push:
     branches: [master, main]
     paths:
       - app/src-tauri/windows/**
-      - app/src-tauri/tauri.conf.json
       - tools/installer_hooks/**
       - .github/workflows/release.yml
       - .github/workflows/installer-hooks.yml
   pull_request:
     paths:
       - app/src-tauri/windows/**
-      - app/src-tauri/tauri.conf.json
       - tools/installer_hooks/**
       - .github/workflows/release.yml
       - .github/workflows/installer-hooks.yml
@@ -54,3 +54,4 @@ jobs:
             ${{ runner.temp }}/installer-hooks/prefix/drive_c/t/*.log
             ${{ runner.temp }}/installer-hooks/prefix/drive_c/t/result.txt
           if-no-files-found: ignore
+          retention-days: 3
