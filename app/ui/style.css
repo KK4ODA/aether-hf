@@ -1463,6 +1463,169 @@ main:has(> #session-banner:not([hidden])) .state-strip {
   border-top: 1px solid var(--border);
 }
 
+/* The channel chart's scale sliders: two faders in the plot's right margin, Top on the left
+   and Bottom on the right, on one scale from 0 dBFS at the top to −140 at the bottom, and Auto
+   under them in the time axis's row. The script sets the rail's top and height from the
+   canvas, and where the faders start and end inside it (--rail-top, --rail-bottom) from the
+   plot, so they are as tall as the plot; each cap sits at --at, 0 at the top of its track and
+   1 at the bottom. */
+#channel-figure {
+  position: relative;
+}
+
+.scale-rail {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  width: 34px;
+  height: 180px;
+  --rail-top: 20px;
+  --rail-bottom: 20px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.rail-track {
+  position: absolute;
+  top: var(--rail-top);
+  bottom: var(--rail-bottom);
+  left: 0;
+  right: 0;
+}
+
+.vslider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 15px;
+  border-radius: var(--r-sm);
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+#scale-high {
+  left: 2px;
+}
+
+#scale-low {
+  left: 17px;
+}
+
+/* the track: a hairline groove the cap runs in */
+.vslider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+/* the cap: a fader's, with a line across it where its level is read */
+.vslider-cap {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  top: calc(var(--at, 0.5) * 100%);
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 2px;
+  background: var(--text-2);
+  box-shadow: 0 0 0 1px var(--well-edge);
+  transition:
+    background var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.vslider-cap::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 4px;
+  height: 1px;
+  background: var(--well);
+}
+
+.vslider:hover .vslider-cap,
+.vslider:focus-visible .vslider-cap,
+.vslider.held .vslider-cap {
+  background: var(--accent);
+}
+
+/* while Auto has the scale the caps follow it, hollow: where the scale is, not a hand's */
+.scale-rail.auto .vslider-cap {
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px var(--text-3);
+}
+
+.scale-rail.auto .vslider-cap::after {
+  background: var(--text-3);
+}
+
+.scale-rail.auto .vslider:hover .vslider-cap,
+.scale-rail.auto .vslider:focus-visible .vslider-cap {
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+.vslider:focus-visible {
+  outline-offset: 0;
+}
+
+/* the held or pointed-at slider's name and level, beside its cap over the plot's edge */
+.rail-readout {
+  position: absolute;
+  right: calc(100% + 4px);
+  top: calc(var(--at, 0.5) * 100%);
+  z-index: 2;
+  padding: 2px 6px;
+  transform: translateY(-50%);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-pop);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.rail-readout[hidden] {
+  display: none;
+}
+
+button.rail-auto {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  min-height: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-3);
+  background: transparent;
+  border-color: var(--border);
+}
+
+button.rail-auto:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+button.rail-auto[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
 canvas {
   display: block;
   width: 100%;
@@ -3283,7 +3446,7 @@ button.quiet:hover:not(:disabled) {
 }
 
 /* a toggle that is on — the tune tone playing, a recording running */
-button[aria-pressed="true"]:not(.ghost):not(.chip) {
+button[aria-pressed="true"]:not(.ghost):not(.chip):not(.rail-auto) {
   background: color-mix(in srgb, var(--status-tx) 18%, var(--surface-3));
   border-color: var(--status-tx);
   color: var(--text);

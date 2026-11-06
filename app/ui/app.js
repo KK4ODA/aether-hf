@@ -1130,21 +1130,24 @@ function chartHeight(id) {
   return Math.max(120, Math.round($(id).clientHeight || 180));
 }
 
-/// The frame both charts draw in: the surface, the tokens, and the y scale.
-function chartFrame(id, fallbackWidth, height, low, high, legend = null) {
+/// The frame both charts draw in: the surface, the tokens, and the y scale. `right` is the
+/// margin the plot leaves on its right: the channel chart's holds its scale sliders.
+function chartFrame(id, fallbackWidth, height, low, high, legend = null, right = CHART_RIGHT) {
   const s = surface(id, fallbackWidth, height);
   const c = tokens();
   s.ctx.clearRect(0, 0, s.width, s.height);
   s.ctx.font = `10.5px ${c.numerals}`;
   s.ctx.textBaseline = "middle";
-  const plotWidth = s.width - CHART_LEFT - CHART_RIGHT;
+  const plotWidth = s.width - CHART_LEFT - right;
+  // the legend runs over the right margin too: what stands there starts under it
+  const legendWidth = s.width - CHART_LEFT - CHART_RIGHT;
   // a legend wider than the chart wraps, and the plot starts under its last row rather
   // than behind it — the rows are counted here so the y scale knows where it may begin
-  const rows = legend ? legendLayout(s.ctx, plotWidth, legend).rows : 1;
+  const rows = legend ? legendLayout(s.ctx, legendWidth, legend).rows : 1;
   const top = CHART_TOP + (rows - 1) * LEGEND_ROW;
   const bottom = height - CHART_BOTTOM;
   const y = (value) => top + (1 - (value - low) / (high - low)) * (bottom - top);
-  return { ...s, c, plotWidth, bottom, top, y, legend };
+  return { ...s, c, plotWidth, legendWidth, bottom, top, y, legend };
 }
 
 /// Where each legend item goes at this plot width, and how many rows they take. A legend
@@ -1225,7 +1228,7 @@ function drawLegend(f, items) {
   const { ctx } = f;
   ctx.textAlign = "left";
   // the frame was told the items, so the plot already starts below the legend's last row
-  const { places } = legendLayout(ctx, f.plotWidth, items);
+  const { places } = legendLayout(ctx, f.legendWidth, items);
   items.forEach(([colour, text], index) => {
     ctx.fillStyle = colour;
     ctx.fillText(text, places[index].x, 8 + places[index].row * LEGEND_ROW);
@@ -2680,7 +2683,7 @@ function drawChart() {
   if (shown.length < 2) {
     // nothing measured yet: the scale and the time axis still, and a word for why it is empty
     const { low, high } = channelView.auto ? { low: -90, high: -30 } : channelView;
-    const f = chartFrame("chart", 450, chartHeight("chart"), low, high);
+    const f = chartFrame("chart", 450, chartHeight("chart"), low, high, null, SCALE_RAIL_WIDTH);
     drawValueAxis(f, low, high, valueStep(high - low));
     const { grid, label } = steps(f.plotWidth);
     drawTimeAxis(f, now, spanMs, grid, label);
@@ -2688,6 +2691,7 @@ function drawChart() {
     f.ctx.textAlign = "center";
     f.ctx.fillText("no audio measured yet", CHART_LEFT + f.plotWidth / 2, (f.top + f.bottom) / 2);
     showChannelAuto();
+    showScaleRail(f, low, high);
     return;
   }
   const { low, high } = channelRange(shown);
@@ -2705,7 +2709,7 @@ function drawChart() {
     [null, "▬ shape", 6],
     [null, "▬ frame", 6],
   ];
-  const f = chartFrame("chart", 450, chartHeight("chart"), low, high, legend);
+  const f = chartFrame("chart", 450, chartHeight("chart"), low, high, legend, SCALE_RAIL_WIDTH);
   const { ctx, c } = f;
   drawValueAxis(f, low, high, valueStep(high - low));
   const { grid, label } = steps(f.plotWidth);
@@ -2794,6 +2798,7 @@ function drawChart() {
   const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
   drawLegend(f, legend.map(([, text, gap], i) => [colours[i], text, gap]));
   showChannelAuto();
+  showScaleRail(f, low, high);
 }
 
 /// The value axis's step for a range: a label every 5 dB on a close scale, fewer on a wide one.
@@ -2854,15 +2859,29 @@ function setChannelSpan(seconds) {
   channelViewChanged();
 }
 
+/// Auto cleared: a hand starts from what the automatic scale shows, so nothing jumps.
+function fixScale() {
+  channelView.low = Math.min(
+    SCALE_HIGHEST - SCALE_LEAST_RANGE,
+    Math.max(SCALE_LOWEST, channelAutoRange.low),
+  );
+  const least = channelView.low + SCALE_LEAST_RANGE;
+  channelView.high = Math.min(SCALE_HIGHEST, Math.max(channelAutoRange.high, least));
+  channelView.auto = false;
+}
+
 function setChannelAuto(auto) {
-  if (!auto) {
-    // a hand starts from what the automatic scale shows, so nothing jumps
-    channelView.low = Math.max(SCALE_LOWEST, channelAutoRange.low);
-    const least = channelView.low + SCALE_LEAST_RANGE;
-    channelView.high = Math.min(SCALE_HIGHEST, Math.max(channelAutoRange.high, least));
-  }
-  channelView.auto = auto;
+  if (auto) channelView.auto = true;
+  else fixScale();
   channelViewChanged();
+}
+
+/// The levels a bound may take: Top at least the least range above the lowest level, Bottom as
+/// far under the highest.
+function boundLimits(which) {
+  return which === "high"
+    ? [SCALE_LOWEST + SCALE_LEAST_RANGE, SCALE_HIGHEST]
+    : [SCALE_LOWEST, SCALE_HIGHEST - SCALE_LEAST_RANGE];
 }
 
 /// A field's text as a level: a whole number of dBFS, a hyphen or a real minus before it.
@@ -2879,11 +2898,8 @@ function parseLevel(text) {
 function takeLevel(which, settle) {
   const field = which === "high" ? $("axes-high") : $("axes-low");
   const value = parseLevel(field.value);
-  const inBounds =
-    value !== null &&
-    (which === "high"
-      ? value <= SCALE_HIGHEST && value >= SCALE_LOWEST + SCALE_LEAST_RANGE
-      : value >= SCALE_LOWEST && value <= SCALE_HIGHEST - SCALE_LEAST_RANGE);
+  const [least, most] = boundLimits(which);
+  const inBounds = value !== null && value >= least && value <= most;
   if (!settle) {
     const fits =
       inBounds &&
@@ -2911,11 +2927,8 @@ function stepLevel(which, event) {
   const delta = (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 10 : 1);
   const field = which === "high" ? $("axes-high") : $("axes-low");
   const from = parseLevel(field.value) ?? channelView[which];
-  const limit =
-    which === "high"
-      ? [SCALE_LOWEST + SCALE_LEAST_RANGE, SCALE_HIGHEST]
-      : [SCALE_LOWEST, SCALE_HIGHEST - SCALE_LEAST_RANGE];
-  field.value = String(Math.min(limit[1], Math.max(limit[0], from + delta)));
+  const [least, most] = boundLimits(which);
+  field.value = String(Math.min(most, Math.max(least, from + delta)));
   takeLevel(which, true);
   field.select();
 }
@@ -2942,9 +2955,181 @@ function closeAxes(returnFocus = false) {
   if (returnFocus) $("btn-chart-axes").focus();
 }
 
+// ── the channel chart's scale sliders: Top and Bottom, beside the plot ─
+//
+// Two faders in the plot's right margin, one for each end of the level scale, on one scale
+// from 0 dBFS at the top to −140 at the bottom, so Top's cap always stands above Bottom's.
+// Dragging one fixes the scale and redraws the chart as it moves; **Auto**, under them, hands
+// the scale back to the readings. They set what Axes sets and are kept the same way
+// (`aether.channelChart`), and Compact keeps them: its plot has no caption to hang Axes from.
+
+/// The width the sliders take from the plot's right, in CSS pixels.
+const SCALE_RAIL_WIDTH = 34;
+
+/// The scale the chart was last drawn at, which the sliders and their readout show.
+let railScale = { low: CHANNEL_VIEW_DEFAULT.low, high: CHANNEL_VIEW_DEFAULT.high };
+
+/// A slider held by the pointer: which, and how far from its cap's centre it was taken.
+let scaleDrag = null;
+
+/// The slider under the pointer, whose value the readout shows.
+let scaleHover = null;
+
+/// How far down the sliders a level sits: 0 at the highest level, 1 at the lowest.
+function railFraction(value) {
+  const fraction = (SCALE_HIGHEST - value) / (SCALE_HIGHEST - SCALE_LOWEST);
+  return Math.min(1, Math.max(0, fraction));
+}
+
+/// The level at a height on a slider, to the decibel.
+function railLevelAt(slider, clientY) {
+  const box = slider.getBoundingClientRect();
+  const fraction = box.height > 0 ? (clientY - box.top) / box.height : 0;
+  const clamped = Math.min(1, Math.max(0, fraction));
+  return Math.round(SCALE_HIGHEST - clamped * (SCALE_HIGHEST - SCALE_LOWEST));
+}
+
+/// The sliders stand in the plot's right margin, as tall as the plot — the legend runs over
+/// the margin above them — and their caps sit at the levels the chart was drawn at.
+function showScaleRail(f, low, high) {
+  railScale = { low, high };
+  const rail = $("scale-rail");
+  const canvas = $("chart");
+  const shown = canvas.clientHeight;
+  // hidden (Mini, another tab): nothing to line up with until it is drawn again
+  if (shown > 0) {
+    const scale = shown / f.height;
+    rail.style.top = `${canvas.offsetTop + canvas.clientTop}px`;
+    rail.style.height = `${shown}px`;
+    rail.style.setProperty("--rail-top", `${f.top * scale}px`);
+    rail.style.setProperty("--rail-bottom", `${(f.height - f.bottom) * scale}px`);
+  }
+  const auto = channelView.auto;
+  rail.classList.toggle("auto", auto);
+  for (const which of ["high", "low"]) {
+    const slider = $(`scale-${which}`);
+    const [least, most] = boundLimits(which);
+    const value = Math.round(railScale[which]);
+    slider.style.setProperty("--at", railFraction(value).toFixed(4));
+    slider.setAttribute("aria-valuenow", String(Math.min(most, Math.max(least, value))));
+    slider.setAttribute("aria-valuetext", `${dbfs(value)} dBFS${auto ? ", automatic" : ""}`);
+  }
+  $("scale-auto").setAttribute("aria-pressed", String(auto));
+  showScaleReadout();
+}
+
+/// The readout beside a slider: its name and level, while it is held, under the pointer or
+/// reached with the keyboard.
+function showScaleReadout() {
+  const readout = $("scale-readout");
+  const focused = ["high", "low"].find((which) => $(`scale-${which}`).matches(":focus-visible"));
+  const which = scaleDrag?.which ?? scaleHover ?? focused ?? null;
+  if (!which) {
+    readout.hidden = true;
+    return;
+  }
+  const value = Math.round(railScale[which]);
+  readout.textContent = `${which === "high" ? "Top" : "Bottom"} ${dbfs(value)} dBFS`;
+  readout.style.setProperty("--at", railFraction(value).toFixed(4));
+  readout.hidden = false;
+}
+
+/// A slider moved to a level: the scale is the hand's from here, starting where Auto had it, and
+/// a bound that would leave less than the least range takes the other along.
+function setScaleBound(which, value) {
+  if (channelView.auto) fixScale();
+  const [least, most] = boundLimits(which);
+  const bound = Math.min(most, Math.max(least, value));
+  channelView[which] = bound;
+  if (which === "high") channelView.low = Math.min(channelView.low, bound - SCALE_LEAST_RANGE);
+  else channelView.high = Math.max(channelView.high, bound + SCALE_LEAST_RANGE);
+}
+
+/// The chart redrawn for a slider's move, once a frame however fast the pointer goes.
+let scaleFrame = 0;
+
+function redrawForScale() {
+  if (scaleFrame) return;
+  scaleFrame = requestAnimationFrame(() => {
+    scaleFrame = 0;
+    showChannelView();
+    drawChart();
+  });
+}
+
+function wireScaleRail() {
+  for (const which of ["high", "low"]) {
+    const slider = $(`scale-${which}`);
+    slider.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      // the press focuses it as a click would, with no keyboard ring
+      slider.setPointerCapture(event.pointerId);
+      // taken by its cap, the slider moves with the pointer from there; anywhere else on
+      // its track, the cap comes to the pointer
+      const cap = slider.querySelector(".vslider-cap").getBoundingClientRect();
+      const onCap = event.clientY >= cap.top - 3 && event.clientY <= cap.bottom + 3;
+      const offset = onCap ? event.clientY - (cap.top + cap.bottom) / 2 : 0;
+      scaleDrag = { which, pointer: event.pointerId, offset };
+      slider.classList.add("held");
+      setScaleBound(which, railLevelAt(slider, event.clientY - scaleDrag.offset));
+      redrawForScale();
+    });
+    slider.addEventListener("pointermove", (event) => {
+      if (scaleDrag?.pointer !== event.pointerId) return;
+      setScaleBound(which, railLevelAt(slider, event.clientY - scaleDrag.offset));
+      redrawForScale();
+    });
+    const release = (event) => {
+      if (scaleDrag?.pointer !== event.pointerId) return;
+      scaleDrag = null;
+      slider.classList.remove("held");
+      saveChannelView();
+      showScaleReadout();
+    };
+    slider.addEventListener("pointerup", release);
+    slider.addEventListener("pointercancel", release);
+    slider.addEventListener("lostpointercapture", release);
+    slider.addEventListener("pointerenter", () => {
+      scaleHover = which;
+      showScaleReadout();
+    });
+    slider.addEventListener("pointerleave", () => {
+      scaleHover = null;
+      showScaleReadout();
+    });
+    slider.addEventListener("focus", showScaleReadout);
+    slider.addEventListener("blur", showScaleReadout);
+    // as a slider does: the arrows 1 dB (10 with Shift), Page Up and Down 10, Home the least
+    // and End the most
+    slider.addEventListener("keydown", (event) => {
+      const [least, most] = boundLimits(which);
+      const now = Math.round(railScale[which]);
+      const ten = event.shiftKey ? 10 : 1;
+      const to = {
+        ArrowUp: now + ten,
+        ArrowRight: now + ten,
+        ArrowDown: now - ten,
+        ArrowLeft: now - ten,
+        PageUp: now + 10,
+        PageDown: now - 10,
+        Home: least,
+        End: most,
+      }[event.key];
+      if (to === undefined) return;
+      event.preventDefault();
+      setScaleBound(which, to);
+      saveChannelView();
+      showChannelView();
+      drawChart();
+    });
+  }
+  $("scale-auto").addEventListener("click", () => setChannelAuto(!channelView.auto));
+}
+
 function wireChannelAxes() {
   loadChannelView();
   showChannelView();
+  wireScaleRail();
   $("btn-chart-axes").addEventListener("click", () => (axesOpen() ? closeAxes() : openAxes()));
   for (const chip of document.querySelectorAll("#axes-span [data-span]")) {
     chip.addEventListener("click", () => setChannelSpan(Number(chip.dataset.span)));

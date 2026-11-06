@@ -95,7 +95,8 @@ To the right:
   tab's two plots, small and side by side: the speed over the last ten minutes (or the SNR,
   if that is the one you chose in Full) and the channel's activity (what the radio hears, and
   when you transmitted), drawn with the time span and level scale you set with **Axes** in Full.
-  Compact shows no **Axes** button: change them in Full.
+  Compact shows no **Axes** button, but the chart keeps its two level sliders and **Auto**; the
+  time span is changed in Full.
   **Mini** is the state and the four readings alone, for a corner of the screen. **Full**
   brings the window back to its size. Aether remembers the view, and the size of the window
   in Full, for the next start.
@@ -448,6 +449,16 @@ host program keying the radio gives none of these.
 
   Aether keeps these for the next start, on this computer. Compact draws the chart the same
   way. Escape or a click elsewhere closes **Axes**.
+
+  **Two sliders** at the right of the chart set the same level scale while you watch: the left
+  one is **Top**, the right one **Bottom**. Both run from 0 dBFS at the top to −140 at the
+  bottom, so Top's cap always sits above Bottom's. Drag a cap, or click a slider and use the
+  arrow keys (1 dB a press, 10 with Shift; Page Up and Page Down 10). The chart redraws as the
+  cap moves, and the slider shows its level beside it. Moving a slider clears **Auto** and
+  starts from the scale Auto had. Pushing one bound within 10 dB of the other moves the other
+  along. While **Auto** is on, the caps are hollow and follow the automatic scale. **Auto**,
+  under the sliders, turns it back on. The sliders and **Axes** are the same setting, kept for
+  the next start, and Compact shows the sliders too.
 - **Counters**: totals since the modem started; **Reset counters** sets them back to zero.
 
 What each reading means is in section 13.
