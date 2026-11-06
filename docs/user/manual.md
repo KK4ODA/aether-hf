@@ -423,8 +423,8 @@ host program keying the radio gives none of these.
   the receive colour). Each line shows only while data moves that way. **SNR by frame** is every frame heard, what the other station
   reports hearing you at, and the current mode's threshold. Below them, **Channel and activity**
   is the received level, a bar every half second, and the busy periods shaded along the top.
-  A cap on a bar (**peak**) is the highest level the busy detector saw in that half second:
-  red where it crossed the busy threshold (the dotted line), grey where it did not. Your own
+  Each bar is the loudest level the busy detector measured in its half second. A bar that
+  reaches the dotted line, the busy threshold, marked the channel busy by its level. Your own
   transmissions (**TX**) are short red ticks along the bottom edge, with no bar above them:
   the receiver is muted while you transmit. The dashed line is the busy detector's noise floor. Frames the modem
   finds never count as noise, and the quiet after them does, so in a session the floor stays

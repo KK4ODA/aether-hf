@@ -859,7 +859,8 @@ function applyMetrics(metrics) {
       at,
       level: metrics.transmitting === true ? null : level,
       // the largest level-over-floor the detector tested since the last sample: the decision
-      // is made forty times a second, and the bar is one sample of it in twenty
+      // is made forty times a second, and `level` is one instant of it in twenty — the bar is
+      // drawn to the louder of the two
       peak:
         metrics.transmitting === true || typeof metrics.excess_peak_db !== "number"
           ? null
@@ -2482,19 +2483,24 @@ function renderCounters(counters) {
 
 // ── the channel, over the span the operator chooses ─────────────────
 //
-// One reading every half second from the busy detector, drawn as a bar: its height is
-// the received level, dim while only noise is arriving and bright while a burst is being
-// received, and a short tick at the baseline where this station was transmitting and its
-// receiver was muted. A faint dashed rule marks every change between the two, so the
+// One reading every half second from the busy detector, drawn as a bar: its height is the
+// loudest level the detector measured in that half second, dim while only noise is arriving
+// and bright while a burst is being received, and a short tick at the baseline where this
+// station was transmitting and its receiver was muted. A faint dashed rule marks every change between the two, so the
 // rhythm of a session — burst, acknowledgement, burst — is read off the top of the chart.
 //
 // The busy lamp has three paths and the level is only one of them: behind a receiver's
 // AGC a narrowband signal sits within a decibel or two of the floor and is caught by the
 // passband's shape, and a decoded frame marks the channel on its own. The bars and the
-// threshold line show the level path alone, so a band along the top of the plot says
-// when the lamp was lit and in which path's colour, and a peak is drawn red only when it
-// is over the line — otherwise the chart shows bars under the line with the lamp on and
-// looks wrong when it is right.
+// threshold line show the level path alone — a bar that reaches the line marked the channel
+// busy by its level — so a band along the top of the plot says when the lamp was lit and in
+// which path's colour, or the chart shows bars under the line with the lamp on and looks
+// wrong when it is right.
+//
+// The bar used to be the level at one instant of its half second with the loudest instant
+// drawn as a cap above it, red where that crossed the line. Red on a bar already over the
+// line said nothing, and the cap read as a transmission (the author, 2026-11-06): one bar,
+// to the loudest, says it all.
 //
 // The time span and the level scale are the operator's (the caption's Axes): two minutes and
 // a scale fitted to the floor and the signals in view unless they choose otherwise, kept in
@@ -2591,29 +2597,24 @@ function agoLabel(backMs) {
   return backMs % 60_000 === 0 ? `−${backMs / 60_000} min` : `−${backMs / 1000} s`;
 }
 
-/// Whether a reading's peak crossed the busy line while the channel was busy: a peak that
-/// tripped the lamp, or helped to, drawn red.
-function crossedLine(point) {
-  return point.busy && typeof point.peak === "number" && point.peak - point.floor >= busyThresholdDb - 1e-6;
+/// The loudest a reading measured: the busy detector's peak since the last reading, or the
+/// level at the reading's instant when that is louder; null while this station transmitted.
+function loudest(point) {
+  const values = [point.level, point.peak].filter((v) => typeof v === "number");
+  return values.length ? Math.max(...values) : null;
 }
 
-/// The readings in a column of `barMs` ending at `end`, made one: the loudest level and peak,
+/// The readings in a column of `barMs` ending at `end`, made one: the loudest of them,
 /// whether this station transmitted or a burst arrived in any of them, and the busy band in
 /// the colour that says the most (the level crossing the line, then the shape, then a frame).
 function columnOf(samples, end) {
-  const column = { at: end, level: null, peak: null, crossed: false };
-  Object.assign(column, { tx: false, rx: false, busy: false, why: null });
+  const column = { at: end, level: null, tx: false, rx: false, busy: false, why: null };
   const rank = { level: 3, shape: 2, frame: 1 };
   for (const point of samples) {
     column.tx ||= point.tx;
     column.rx ||= point.rx;
-    if (point.level !== null && point.level !== undefined) {
-      column.level = column.level === null ? point.level : Math.max(column.level, point.level);
-    }
-    if (point.peak !== null && point.peak !== undefined) {
-      column.peak = column.peak === null ? point.peak : Math.max(column.peak, point.peak);
-      column.crossed ||= crossedLine(point);
-    }
+    const level = loudest(point);
+    if (level !== null) column.level = column.level === null ? level : Math.max(column.level, level);
     if (point.busy) {
       column.busy = true;
       if ((rank[point.why] ?? 0) >= (rank[column.why] ?? 0)) column.why = point.why ?? column.why;
@@ -2631,7 +2632,7 @@ function channelColumns(shown, spanMs, plotWidth) {
   if (per === 1) {
     return {
       barMs: SAMPLE_MS,
-      columns: shown.map((point) => ({ ...point, crossed: crossedLine(point) })),
+      columns: shown.map((point) => ({ ...point, level: loudest(point) })),
     };
   }
   const barMs = per * SAMPLE_MS;
@@ -2690,15 +2691,13 @@ function drawChart() {
     return;
   }
   const { low, high } = channelRange(shown);
-  // names only, RX and TX as the header's lamps say them; the busy band's three kinds after
-  // "busy", each in its colour, close together. TX and the peak are the same red, so each
-  // glyph shows where its mark sits: the transmitter's tick along the bottom, the peak's cap
-  // on a bar — with the peak unnamed, a red cap read as a transmission (the author, 2026-11-06)
+  // names only, RX and TX as the header's lamps say them, each glyph where its mark sits (a
+  // bar, a tick along the bottom); the busy band's three kinds after "busy", each in its
+  // colour, close together
   const legend = [
     [null, "dBFS"],
     [null, "▍ RX"],
     [null, "▂ TX"],
-    [null, "▀ peak"],
     [null, "- - floor"],
     [null, "· · threshold"],
     [null, "busy:"],
@@ -2729,15 +2728,6 @@ function drawChart() {
       ctx.fillStyle = column.rx ? c.rx : withAlpha(c.rx, 0.45);
       const top = Math.min(f.y(column.level), base - 1);
       ctx.fillRect(x0, top, bar, base - top);
-      // the peak the detector tested in this half second, above the sampled bar. Red only
-      // when it is over the line and the channel was busy — a peak that tripped it, or
-      // helped to; a peak under the line is grey whatever the lamp says, and the band at
-      // the top names the path that lit it when the level did not
-      if (column.peak !== null && column.peak !== undefined && column.peak > column.level) {
-        ctx.fillStyle = column.crossed ? c.error : withAlpha(c.ink, 0.5);
-        const peakY = Math.min(f.y(column.peak), top - 1);
-        ctx.fillRect(x0, peakY, bar, Math.max(1, top - peakY));
-      }
     }
     // the transmitter's tick, over the bar of a column that also heard the channel
     if (column.tx) {
@@ -2801,7 +2791,7 @@ function drawChart() {
   }
   ctx.restore();
 
-  const colours = [c.ink2, c.rx, c.tx, c.error, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
+  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
   drawLegend(f, legend.map(([, text, gap], i) => [colours[i], text, gap]));
   showChannelAuto();
 }
