@@ -2691,11 +2691,14 @@ function drawChart() {
   }
   const { low, high } = channelRange(shown);
   // names only, RX and TX as the header's lamps say them; the busy band's three kinds after
-  // "busy", each in its colour, close together. A red peak is the chart's tooltip
+  // "busy", each in its colour, close together. TX and the peak are the same red, so each
+  // glyph shows where its mark sits: the transmitter's tick along the bottom, the peak's cap
+  // on a bar — with the peak unnamed, a red cap read as a transmission (the author, 2026-11-06)
   const legend = [
     [null, "dBFS"],
     [null, "▍ RX"],
-    [null, "▍ TX"],
+    [null, "▂ TX"],
+    [null, "▀ peak"],
     [null, "- - floor"],
     [null, "· · threshold"],
     [null, "busy:"],
@@ -2798,7 +2801,7 @@ function drawChart() {
   }
   ctx.restore();
 
-  const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
+  const colours = [c.ink2, c.rx, c.tx, c.error, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
   drawLegend(f, legend.map(([, text, gap], i) => [colours[i], text, gap]));
   showChannelAuto();
 }

@@ -422,8 +422,11 @@ host program keying the radio gives none of these.
   at** (your data, in the transmit colour) and **receiving at** (the other station's data, in
   the receive colour). Each line shows only while data moves that way. **SNR by frame** is every frame heard, what the other station
   reports hearing you at, and the current mode's threshold. Below them, **Channel and activity**
-  is the received level, with this station's transmissions ticked and the busy periods shaded.
-  Its dashed line is the busy detector's noise floor. Frames the modem
+  is the received level, a bar every half second, and the busy periods shaded along the top.
+  A cap on a bar (**peak**) is the highest level the busy detector saw in that half second:
+  red where it crossed the busy threshold (the dotted line), grey where it did not. Your own
+  transmissions (**TX**) are short red ticks along the bottom edge, with no bar above them:
+  the receiver is muted while you transmit. The dashed line is the busy detector's noise floor. Frames the modem
   finds never count as noise, and the quiet after them does, so in a session the floor stays
   the band's own and does not climb to the other station's signal, however long the session
   runs. After the modem starts, and after the dial moves 10 kHz or more, the detector listens a
