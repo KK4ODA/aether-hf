@@ -46,7 +46,10 @@ docs. November's first six days on aether-hf: 18,455 Linux, 1,776
 Windows and 835 macOS minutes and about 9 GB of artifacts held on average. So: a push that changes
 only notes runs no CI (`paths` in `ci.yml`: Markdown, `docs/research/`, `docs/adr/`, except the
 manual and `docs/spec/`); the nightly and the release's scheduled build run only when master moved
-since their last scheduled run (the `changed` job); artifacts are kept days, not weeks (3–7), and a
+since their last scheduled run (the `changed` job, which runs in every run that builds and
+decides only for the schedule: GitHub skips every job after a skipped one, whatever their own
+`if` says, and with the guard skipped on tags beta.136's first run built nothing past `plan`);
+artifacts are kept days, not weeks (3–7), and a
 published release deletes its run's copies; Installer hooks no longer runs on version bumps. Start
 the Rate oracle (about 2 hours of runner time a run), the weekly (about 4, 6.5 with the gateway's
 day) or the nightly (about 2) by hand only when the answer is needed, and keep audio out of

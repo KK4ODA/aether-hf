@@ -45,8 +45,15 @@ jobs:
     # A scheduled run of an unchanged tree repeats the last one: the same scenarios, the same
     # build. It runs only when the branch has moved since the last scheduled run of this
     # workflow (by commit, not by clock: the schedule starts hours late, so "a commit in the
-    # last day" would skip some commits for good). Started by hand, it always runs.
-    if: github.event_name == 'schedule'
+    # last day" would skip some commits for good). A tag, a run started by hand and a branch
+    # push marked [dry-run] always build; any other branch push builds nothing.
+    # GitHub skips a job when any job before it in the chain was skipped, whatever its own
+    # condition says: with this guard skipped, beta.136's first tag run built nothing past
+    # `plan`. So it runs in every run that builds, and decides only for the schedule.
+    if: >-
+      github.ref_type == 'tag'
+      || github.event_name != 'push'
+      || contains(github.event.head_commit.message, '[dry-run]')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -60,6 +67,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ "$GITHUB_EVENT_NAME" != "schedule" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "started by $GITHUB_EVENT_NAME: running"
+            exit 0
+          fi
           last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml \
             --event schedule --status completed --limit 1 --json headSha \
             --jq '.[0].headSha // ""' 2>/dev/null || true)"
@@ -73,15 +85,9 @@ jobs:
 
   plan:
     name: plan
-    # a branch push runs the pipeline only when asked, and the schedule only when the branch
-    # moved; everything else depends on this job
+    # `changed` says whether this run builds; everything else depends on this job
     needs: changed
-    if: >-
-      !cancelled()
-      && (github.event_name != 'schedule' || needs.changed.outputs.run == 'true')
-      && (github.ref_type == 'tag'
-          || github.event_name != 'push'
-          || contains(github.event.head_commit.message, '[dry-run]'))
+    if: needs.changed.outputs.run == 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.plan.outputs.version }}
