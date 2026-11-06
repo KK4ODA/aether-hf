@@ -473,8 +473,8 @@ jobs:
 
       # The build jobs hand their files to this one as artifacts, about 140 MB a run. GitHub's
       # docs exempt a public repository's runner minutes, not its artifact storage, and the
-      # account's allowance is 1 GB: a week of releases kept two gigabytes of copies of what
-      # the releases hold. Published, they go.
+      # account's allowance is 2 GB: a week of releases kept about two gigabytes of copies of
+      # what the releases hold. Published, they go.
       - name: The release holds the files now; the run's copies go
         if: success()
         continue-on-error: true

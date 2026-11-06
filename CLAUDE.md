@@ -35,10 +35,14 @@ python -m uv run pre-commit install
 CI (`.github/workflows/ci.yml`) runs exactly those on Windows + Ubuntu, Python 3.12 and 3.13.
 
 **GitHub Actions on the author's account (2026-11-06).** The plan is GitHub Pro: $18 of included
-compute a month (about 3,000 Linux minutes) and **1 GB of artifact storage for the whole
-account**, shared with Packages. GitHub's docs exempt a public repository's standard-runner
-minutes from the compute, but not its artifact storage, and when the included usage ran out the
-author's CI and releases stopped. November's first six days on aether-hf: 18,455 Linux, 1,776
+compute a month (about 3,000 Linux minutes) and **2 GB of Actions storage for the whole account**
+(the billing page's figure; GitHub's docs table says 1 GB for Pro), shared with Packages. The
+billing page counts aether-hf's public-repository minutes against the $18 and then waives them
+(November's first six days: $204.55 used, $204.54 discounted, under a cent billed), so the compute
+meter reads full within a day or two of every month and is not a cost: CI and releases kept
+running with it full. What it does change is the private repositories, whose minutes are billed
+once it is full (pennies) or blocked under a $0 budget. Storage has no public exemption in the
+docs. November's first six days on aether-hf: 18,455 Linux, 1,776
 Windows and 835 macOS minutes and about 9 GB of artifacts held on average. So: a push that changes
 only notes runs no CI (`paths` in `ci.yml`: Markdown, `docs/research/`, `docs/adr/`, except the
 manual and `docs/spec/`); the nightly and the release's scheduled build run only when master moved
