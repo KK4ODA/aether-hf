@@ -53,7 +53,7 @@
         <span class="lamp modem-lamp" id="lamp-link" title="Modem: whether this panel is connected to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
         <div class="view-switch" id="view-switch" role="group" aria-label="View" title="How much of the panel to show: all of it, the readings with the channel's activity, or the readings alone">
           <button class="ghost" id="btn-view-full" data-view="full" aria-pressed="true" title="Full view: every tab, in the window you choose">Full</button>
-          <button class="ghost" id="btn-compact" data-view="compact" aria-pressed="false" title="Compact view: the state, the four readings that matter and the Status tab's two plots side by side, the speed (or the SNR, as chosen in Full) over ten minutes and the channel's activity over two, in a small window">Compact</button>
+          <button class="ghost" id="btn-compact" data-view="compact" aria-pressed="false" title="Compact view: the state, the four readings that matter and the Status tab's two plots side by side, the speed (or the SNR, as chosen in Full) over ten minutes and the channel's activity over the span and scale set with Axes in Full, in a small window">Compact</button>
           <button class="ghost" id="btn-view-mini" data-view="mini" aria-pressed="false" title="Mini view: the state and the four readings alone, in the smallest window">Mini</button>
         </div>
         <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
@@ -193,7 +193,7 @@
           </div>
 
           <!-- 3. the last minutes: the largest thing on the tab, and the first to grow -->
-          <section class="card console-card history-card" id="history-card" aria-labelledby="history-title" title="The link's speed or SNR over the last ten minutes, and the channel over the last two">
+          <section class="card console-card history-card" id="history-card" aria-labelledby="history-title" title="The link's speed or SNR over the last ten minutes, and the channel over the span you choose for it">
             <div class="card-head">
               <h2 class="card-title" id="history-title" title="The last minutes of the link and the channel. Speed is the session's application bytes both ways per second, against the on-air rate of the mode in use: a curve well under the mode line means the link is the limit, near it means the mode is working as fast as it can. SNR by frame is every frame heard, what the other station reports hearing you at, and the current mode's threshold. Channel and activity is the received level every half second — bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted, and a band along the top while the channel was busy, coloured by what marked it.">History</h2>
               <div class="chart-tabs" role="tablist" aria-label="Status chart, last ten minutes">
@@ -207,9 +207,34 @@
                 <canvas id="chart-speed" title="Connection speed: application bytes both ways per second, against the on-air rate of the rung your data went out at and the rung the other station's data came in at, over the last ten minutes, on a logarithmic scale" width="450" height="180" role="img" aria-label="Connection throughput both ways, and the on-air rates of the rungs the data went out and came in at, over the last ten minutes"></canvas>
                 <canvas id="chart-snr" title="SNR of every frame heard, what the other station reports hearing you at, and the current mode's threshold" width="450" height="180" role="img" aria-label="SNR in dB of every frame heard over the last ten minutes, with what the other station reports and the current mode's threshold" hidden></canvas>
               </figure>
-              <figure class="chart">
-                <figcaption title="The received level and the busy detector's decisions, over the last two minutes">Channel and activity, last two minutes</figcaption>
-                <canvas id="chart" title="Received level every half second: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — red for the level, amber for the passband's shape, white for a decoded frame — and a peak drawn red only where it crossed the threshold" width="450" height="180" role="img" aria-label="Received level as bars, half a second each, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
+              <figure class="chart" id="channel-figure">
+                <figcaption title="The received level and the busy detector's decisions, over the time span chosen with Axes">
+                  <span id="chart-caption" title="The received level and the busy detector's decisions, over the time span chosen with Axes">Channel and activity, last two minutes</span>
+                  <span class="plot-meta numerals" id="chart-scale" title="The level scale, fixed with Axes" hidden></span>
+                  <div class="axes-pop">
+                    <button id="btn-chart-axes" class="axes-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="chart-axes" title="The chart's time span and level scale, kept for the next start">Axes</button>
+                    <div class="axes-panel" id="chart-axes" role="dialog" aria-label="Channel and activity: axes" title="The chart's time span and level scale, kept for the next start" hidden>
+                      <span class="axes-name" id="axes-span-name" title="How far back the chart reaches">Time</span>
+                      <div class="chips" id="axes-span" role="group" aria-labelledby="axes-span-name" title="How far back the chart reaches">
+                        <button class="chip" data-span="30" aria-pressed="false" title="The last 30 seconds">30 s</button>
+                        <button class="chip" data-span="60" aria-pressed="false" title="The last minute">1 min</button>
+                        <button class="chip" data-span="120" aria-pressed="true" title="The last two minutes">2 min</button>
+                        <button class="chip" data-span="300" aria-pressed="false" title="The last five minutes; each bar is the loudest of the half seconds it covers">5 min</button>
+                        <button class="chip" data-span="600" aria-pressed="false" title="The last ten minutes; each bar is the loudest of the half seconds it covers">10 min</button>
+                      </div>
+                      <span class="axes-name" title="The level scale, in dBFS">Level</span>
+                      <label class="check" title="Fit the scale to the noise floor and the signals in view"><input id="axes-auto" type="checkbox" checked title="Fit the scale to the noise floor and the signals in view" /> Auto</label>
+                      <label class="axes-name axes-sub" for="axes-high" title="The level at the top of the chart, in dBFS">Top</label>
+                      <span class="axes-field"><input id="axes-high" type="text" inputmode="numeric" class="axes-db" autocomplete="off" spellcheck="false" title="The level at the top of the chart, in dBFS, from −130 to 0; the arrow keys step it 1 dB, with Shift 10" aria-label="Top of the level scale in dBFS" /><span class="sub">dBFS</span></span>
+                      <label class="axes-name axes-sub" for="axes-low" title="The level at the bottom of the chart, in dBFS">Bottom</label>
+                      <span class="axes-field"><input id="axes-low" type="text" inputmode="numeric" class="axes-db" autocomplete="off" spellcheck="false" title="The level at the bottom of the chart, in dBFS, from −140 to −10, at least 10 dB under the top; the arrow keys step it 1 dB, with Shift 10" aria-label="Bottom of the level scale in dBFS" /><span class="sub">dBFS</span></span>
+                      <div class="axes-foot">
+                        <button id="btn-axes-reset" class="small quiet" title="Back to two minutes and an automatic scale">Reset</button>
+                      </div>
+                    </div>
+                  </div>
+                </figcaption>
+                <canvas id="chart" title="Received level every half second — at the longer spans each bar is the loudest of the half seconds it covers: dim for noise, bright while a burst arrives, ticks where this station transmitted, the noise floor dashed and the busy threshold dotted; a band along the top while the channel was busy, coloured by what marked it — red for the level, amber for the passband's shape, white for a decoded frame — and a peak drawn red only where it crossed the threshold. Axes sets the time span and the level scale" width="450" height="180" role="img" aria-label="Received level as bars, bright while a burst is arriving; ticks where this station transmitted; the noise floor as a dashed line and the busy threshold as a dotted one; a band along the top while the channel was busy, coloured by the path that marked it"></canvas>
               </figure>
             </div>
           </section>

@@ -93,8 +93,9 @@ To the right:
 - **Full**, **Compact** and **Mini** choose how much of the panel to show. **Full** is every
   tab. **Compact** shrinks the window to the state, the four link readings and the Status
   tab's two plots, small and side by side: the speed over the last ten minutes (or the SNR,
-  if that is the one you chose in Full) and the channel's activity over the last two (what the
-  radio hears, and when you transmitted).
+  if that is the one you chose in Full) and the channel's activity (what the radio hears, and
+  when you transmitted), drawn with the time span and level scale you set with **Axes** in Full.
+  Compact shows no **Axes** button: change them in Full.
   **Mini** is the state and the four readings alone, for a corner of the screen. **Full**
   brings the window back to its size. Aether remembers the view, and the size of the window
   in Full, for the next start.
@@ -421,14 +422,29 @@ host program keying the radio gives none of these.
   at** (your data, in the transmit colour) and **receiving at** (the other station's data, in
   the receive colour). Each line shows only while data moves that way. **SNR by frame** is every frame heard, what the other station
   reports hearing you at, and the current mode's threshold. Below them, **Channel and activity**
-  is the received level over the last two minutes, with this station's transmissions ticked and
-  the busy periods shaded. Its dashed line is the busy detector's noise floor. Frames the modem
+  is the received level, with this station's transmissions ticked and the busy periods shaded.
+  Its dashed line is the busy detector's noise floor. Frames the modem
   finds never count as noise, and the quiet after them does, so in a session the floor stays
   the band's own and does not climb to the other station's signal, however long the session
   runs. After the modem starts, and after the dial moves 10 kHz or more, the detector listens a
   second before it learns anything: a sound card can start quieter than it goes on, and a radio
   settles after a retune. With *wait for a clear channel* on, a call or probe made then waits
   until the detector has listened, about 3½ seconds.
+
+  **Axes**, at the right of the chart's title, sets how the chart is drawn:
+
+  - **Time**: 30 s, 1 min, 2 min (the default), 5 min or 10 min. The title says the span.
+    At the longer spans, and in a narrow window, each bar is the loudest of the half seconds
+    it covers.
+  - **Level**: with **Auto** ticked, the scale fits the noise floor and the signals in view,
+    and **Top** and **Bottom** show what it chose. Clear **Auto** to set them yourself, in
+    dBFS: Top from −130 to 0, Bottom from −140 to −10, at least 10 dB apart. Type a value and
+    press Enter, or use the arrow keys (1 dB a press, 10 with Shift). A level above Top is
+    drawn to the top edge. With a fixed scale the title shows its range.
+  - **Reset** goes back to 2 minutes and Auto.
+
+  Aether keeps these for the next start, on this computer. Compact draws the chart the same
+  way. Escape or a click elsewhere closes **Axes**.
 - **Counters**: totals since the modem started; **Reset counters** sets them back to zero.
 
 What each reading means is in section 13.

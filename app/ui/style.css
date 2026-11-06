@@ -1346,6 +1346,123 @@ main:has(> #session-banner:not([hidden])) .state-strip {
   box-shadow: inset 0 -2px 0 var(--text-2);
 }
 
+/* the channel chart's axes: a quiet button at the end of its caption, and the panel it drops
+   over the plot — the time span, and the level scale fitted or held by hand */
+.axes-pop {
+  position: relative;
+  margin-left: auto;
+  flex: none;
+}
+
+.axes-btn {
+  min-height: 20px;
+  height: 20px;
+  padding: 0 7px 0 9px;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.axes-btn::after {
+  content: "";
+  width: 8px;
+  height: 5px;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23969da4' stroke-width='1.6'/></svg>")
+    no-repeat center / contain;
+  transition: transform var(--t-fast);
+}
+
+.axes-btn:hover:not(:disabled),
+.axes-btn[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+
+.axes-btn[aria-expanded="true"]::after {
+  transform: rotate(180deg);
+}
+
+.axes-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  justify-items: start;
+  gap: 10px 14px;
+  /* its own width, not the button's: an absolute box shrinks to the box it hangs from */
+  width: max-content;
+  max-width: calc(100vw - 2 * var(--s3));
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* no room under it in the window: it opens upward, over the chart above */
+.axes-panel.up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.axes-name {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+/* Top and Bottom belong to Level: set in under it */
+.axes-sub {
+  padding-left: 12px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.axes-panel .chip {
+  font-variant-numeric: tabular-nums;
+}
+
+.axes-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* a level of four characters ("-140"), right-aligned so the figures line up */
+.axes-panel input.axes-db {
+  width: calc(4ch + 20px);
+  min-height: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 2px 8px;
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+
+.axes-panel input.axes-db[aria-invalid="true"] {
+  border-color: var(--status-error);
+}
+
+.axes-foot {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
 canvas {
   display: block;
   width: 100%;
@@ -2155,8 +2272,12 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   min-height: 150px;
 }
 
+/* both captions one height, the channel chart's Axes button and all, so the two plots under
+   them share the card's height evenly */
 .history-card .chart figcaption {
   margin-bottom: 4px;
+  min-height: 20px;
+  align-items: center;
 }
 
 /* 2 · Stations: the stations heard first and largest, the sessions under them */

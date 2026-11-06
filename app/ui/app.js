@@ -872,7 +872,8 @@ function applyMetrics(metrics) {
       // where the bars alone would contradict it
       why: typeof metrics.busy_reason === "string" ? metrics.busy_reason : null,
     });
-    while (history.length && history[0].at < at - LEVEL_SPAN_MS) history.shift();
+    // as many as the longest span the operator can choose shows
+    while (history.length && history[0].at < at - CHANNEL_KEEP_MS) history.shift();
     drawChart();
     // the SNR chart's window slides with the clock even when no frame arrives
     drawStatusChart();
@@ -1113,7 +1114,6 @@ const CHART_LEFT = 40;
 const CHART_RIGHT = 8;
 const CHART_TOP = 20;
 const CHART_BOTTOM = 20;
-const LEVEL_SPAN_MS = 2 * 60 * 1000;
 
 /// A colour token with an alpha, for the quieter marks.
 function withAlpha(colour, alpha) {
@@ -1197,7 +1197,7 @@ function drawValueAxis(f, low, high, step) {
   }
 }
 
-/// A faint rule every `gridMs`, and a label at every `labelMs`: "−N min" and "now".
+/// A faint rule every `gridMs`, and a label at every `labelMs`: "−N s", "−N min" and "now".
 function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
   const { ctx, c, height } = f;
   const x = (at) => CHART_LEFT + ((at - (now - spanMs)) / spanMs) * f.plotWidth;
@@ -1212,8 +1212,7 @@ function drawTimeAxis(f, now, spanMs, gridMs, labelMs) {
   ctx.fillStyle = c.ink;
   for (let back = 0; back <= spanMs; back += labelMs) {
     ctx.textAlign = back === 0 ? "right" : back === spanMs ? "left" : "center";
-    const minutes = back / 60_000;
-    ctx.fillText(back === 0 ? "now" : `−${minutes} min`, x(now - back), height - 8);
+    ctx.fillText(agoLabel(back), x(now - back), height - 8);
   }
   return x;
 }
@@ -2425,6 +2424,8 @@ function setView(view) {
     button.setAttribute("aria-pressed", String(button.dataset.view === view));
   }
   if (view !== "full") selectTab($("tab-status"));
+  // Compact has no captions, so nothing to hold the axes' panel open over
+  closeAxes();
   fitShellWindow(view);
   try {
     localStorage.setItem("aether.view", view);
@@ -2479,7 +2480,7 @@ function renderCounters(counters) {
   }
 }
 
-// ── the channel, last two minutes ───────────────────────────────────
+// ── the channel, over the span the operator chooses ─────────────────
 //
 // One reading every half second from the busy detector, drawn as a bar: its height is
 // the received level, dim while only noise is arriving and bright while a burst is being
@@ -2494,30 +2495,201 @@ function renderCounters(counters) {
 // when the lamp was lit and in which path's colour, and a peak is drawn red only when it
 // is over the line — otherwise the chart shows bars under the line with the lamp on and
 // looks wrong when it is right.
+//
+// The time span and the level scale are the operator's (the caption's Axes): two minutes and
+// a scale fitted to the floor and the signals in view unless they choose otherwise, kept in
+// the browser like the History card's Speed/SNR choice. They are the screen's, not the
+// station's, so they go in no profile. Compact draws with them and shows no controls: they
+// are set in Full, where the caption is.
 
 const history = [];
 const BUSY_BAND = 4;
 
-function drawChart() {
-  const now = Date.now();
-  if (history.length < 2) {
-    // nothing measured yet: the scale and the time axis still, and a word for why it is empty
-    const f = chartFrame("chart", 450, chartHeight("chart"), -90, -30);
-    drawValueAxis(f, -90, -30, 10);
-    drawTimeAxis(f, now, LEVEL_SPAN_MS, 30_000, 60_000);
-    f.ctx.fillStyle = f.c.ink;
-    f.ctx.textAlign = "center";
-    f.ctx.fillText("no audio measured yet", CHART_LEFT + f.plotWidth / 2, (f.top + f.bottom) / 2);
-    return;
+/// How often the daemon sends a reading, and so how wide a bar is in time.
+const SAMPLE_MS = 500;
+
+/// The spans offered: a name for the button, the caption's words, the time axis's rules, and
+/// its label steps, the first used that leaves the labels room at the plot's width.
+const CHANNEL_SPANS = {
+  30: { caption: "last 30 seconds", grid: 5_000, labels: [10_000, 30_000] },
+  60: { caption: "last minute", grid: 10_000, labels: [30_000, 60_000] },
+  120: { caption: "last two minutes", grid: 30_000, labels: [60_000, 120_000] },
+  300: { caption: "last five minutes", grid: 60_000, labels: [60_000, 300_000] },
+  600: { caption: "last ten minutes", grid: 120_000, labels: [300_000, 600_000] },
+};
+
+/// The readings kept: as many as the longest span shows.
+const CHANNEL_KEEP_MS = Math.max(...Object.keys(CHANNEL_SPANS).map(Number)) * 1000;
+
+/// The level scale a hand may set, in dBFS, and the least range it may span.
+const SCALE_LOWEST = -140;
+const SCALE_HIGHEST = 0;
+const SCALE_LEAST_RANGE = 10;
+
+/// Labels this far apart at least, in canvas pixels: "−10 min" is about 40.
+const TIME_LABEL_GAP_PX = 56;
+
+/// A bar this wide at least, in canvas pixels: narrower, and the half seconds are drawn a
+/// column at a time, each the loudest of those it covers — one bar to a pixel or less blends
+/// dim noise and bright bursts into a colour neither is.
+const MIN_BAR_PX = 1.5;
+
+const CHANNEL_VIEW_KEY = "aether.channelChart";
+const CHANNEL_VIEW_DEFAULT = { span: 120, auto: true, low: -90, high: -30 };
+let channelView = { ...CHANNEL_VIEW_DEFAULT };
+/// The range the automatic scale chose at the last drawing: what the fields show while Auto
+/// is ticked, and where a hand starts from when it is cleared.
+let channelAutoRange = { low: CHANNEL_VIEW_DEFAULT.low, high: CHANNEL_VIEW_DEFAULT.high };
+
+/// A kept view, checked: a value it does not know is the default's, and a fixed scale that
+/// does not fit the bounds is no scale at all.
+function readChannelView(text) {
+  const view = { ...CHANNEL_VIEW_DEFAULT };
+  let kept = null;
+  try {
+    kept = JSON.parse(text ?? "null");
+  } catch {
+    kept = null;
   }
+  if (!kept || typeof kept !== "object") return view;
+  if (Object.hasOwn(CHANNEL_SPANS, String(kept.span))) view.span = Number(kept.span);
+  const low = Number(kept.low);
+  const high = Number(kept.high);
+  const fits =
+    Number.isInteger(low) &&
+    Number.isInteger(high) &&
+    low >= SCALE_LOWEST &&
+    high <= SCALE_HIGHEST &&
+    high - low >= SCALE_LEAST_RANGE;
+  if (fits) {
+    view.low = low;
+    view.high = high;
+  }
+  view.auto = kept.auto === false && fits ? false : true;
+  return view;
+}
+
+function loadChannelView() {
+  try {
+    channelView = readChannelView(localStorage.getItem(CHANNEL_VIEW_KEY));
+  } catch {
+    channelView = { ...CHANNEL_VIEW_DEFAULT };
+  }
+}
+
+function saveChannelView() {
+  try {
+    localStorage.setItem(CHANNEL_VIEW_KEY, JSON.stringify(channelView));
+  } catch {
+    // a browser that keeps nothing keeps nothing
+  }
+}
+
+/// "−30 s", "−2 min", "now": how long ago a point on the time axis is.
+function agoLabel(backMs) {
+  if (backMs === 0) return "now";
+  return backMs % 60_000 === 0 ? `−${backMs / 60_000} min` : `−${backMs / 1000} s`;
+}
+
+/// Whether a reading's peak crossed the busy line while the channel was busy: a peak that
+/// tripped the lamp, or helped to, drawn red.
+function crossedLine(point) {
+  return point.busy && typeof point.peak === "number" && point.peak - point.floor >= busyThresholdDb - 1e-6;
+}
+
+/// The readings in a column of `barMs` ending at `end`, made one: the loudest level and peak,
+/// whether this station transmitted or a burst arrived in any of them, and the busy band in
+/// the colour that says the most (the level crossing the line, then the shape, then a frame).
+function columnOf(samples, end) {
+  const column = { at: end, level: null, peak: null, crossed: false };
+  Object.assign(column, { tx: false, rx: false, busy: false, why: null });
+  const rank = { level: 3, shape: 2, frame: 1 };
+  for (const point of samples) {
+    column.tx ||= point.tx;
+    column.rx ||= point.rx;
+    if (point.level !== null && point.level !== undefined) {
+      column.level = column.level === null ? point.level : Math.max(column.level, point.level);
+    }
+    if (point.peak !== null && point.peak !== undefined) {
+      column.peak = column.peak === null ? point.peak : Math.max(column.peak, point.peak);
+      column.crossed ||= crossedLine(point);
+    }
+    if (point.busy) {
+      column.busy = true;
+      if ((rank[point.why] ?? 0) >= (rank[column.why] ?? 0)) column.why = point.why ?? column.why;
+    }
+  }
+  return column;
+}
+
+/// The bars to draw: a reading each while a bar is wide enough to see, and otherwise the
+/// readings gathered into columns on the clock's own grid, so a bar does not shimmer as the
+/// window slides.
+function channelColumns(shown, spanMs, plotWidth) {
+  const slotPx = (SAMPLE_MS / spanMs) * plotWidth;
+  const per = Math.max(1, Math.ceil(MIN_BAR_PX / slotPx));
+  if (per === 1) {
+    return {
+      barMs: SAMPLE_MS,
+      columns: shown.map((point) => ({ ...point, crossed: crossedLine(point) })),
+    };
+  }
+  const barMs = per * SAMPLE_MS;
+  const columns = [];
+  let bucket = [];
+  let end = null;
+  for (const point of shown) {
+    const at = Math.ceil(point.at / barMs) * barMs;
+    if (end !== null && at !== end) {
+      columns.push(columnOf(bucket, end));
+      bucket = [];
+    }
+    end = at;
+    bucket.push(point);
+  }
+  if (bucket.length) columns.push(columnOf(bucket, end));
+  return { barMs, columns };
+}
+
+/// The level scale for these readings: the operator's when Auto is cleared, otherwise the
+/// floor and the signals in view with a few decibels to spare, on 5 dB steps.
+function channelRange(shown) {
   let low = Infinity;
   let high = -Infinity;
-  for (const point of history) {
+  for (const point of shown) {
     low = Math.min(low, point.floor);
     high = Math.max(high, point.floor + busyThresholdDb + 6, point.level ?? point.floor, point.peak ?? point.floor);
   }
-  low = Math.floor((low - 3) / 5) * 5;
-  high = Math.ceil((high + 3) / 5) * 5;
+  if (Number.isFinite(low) && Number.isFinite(high)) {
+    channelAutoRange = { low: Math.floor((low - 3) / 5) * 5, high: Math.ceil((high + 3) / 5) * 5 };
+  }
+  return channelView.auto ? channelAutoRange : { low: channelView.low, high: channelView.high };
+}
+
+function drawChart() {
+  const now = Date.now();
+  const spanMs = channelView.span * 1000;
+  const span = CHANNEL_SPANS[channelView.span];
+  const shown = history.filter((point) => point.at > now - spanMs - SAMPLE_MS);
+  // the time axis's labels: the first step in the span's list that leaves them room
+  const steps = (plotWidth) => ({
+    grid: span.grid,
+    label: span.labels.find((step) => (step / spanMs) * plotWidth >= TIME_LABEL_GAP_PX) ?? spanMs,
+  });
+  if (shown.length < 2) {
+    // nothing measured yet: the scale and the time axis still, and a word for why it is empty
+    const { low, high } = channelView.auto ? { low: -90, high: -30 } : channelView;
+    const f = chartFrame("chart", 450, chartHeight("chart"), low, high);
+    drawValueAxis(f, low, high, valueStep(high - low));
+    const { grid, label } = steps(f.plotWidth);
+    drawTimeAxis(f, now, spanMs, grid, label);
+    f.ctx.fillStyle = f.c.ink;
+    f.ctx.textAlign = "center";
+    f.ctx.fillText("no audio measured yet", CHART_LEFT + f.plotWidth / 2, (f.top + f.bottom) / 2);
+    showChannelAuto();
+    return;
+  }
+  const { low, high } = channelRange(shown);
   // names only, RX and TX as the header's lamps say them; the busy band's three kinds after
   // "busy", each in its colour, close together. A red peak is the chart's tooltip
   const legend = [
@@ -2533,46 +2705,59 @@ function drawChart() {
   ];
   const f = chartFrame("chart", 450, chartHeight("chart"), low, high, legend);
   const { ctx, c } = f;
-  drawValueAxis(f, low, high, high - low > 40 ? 10 : 5);
-  const x = drawTimeAxis(f, now, LEVEL_SPAN_MS, 30_000, 60_000);
-  const slot = (500 / LEVEL_SPAN_MS) * f.plotWidth;
+  drawValueAxis(f, low, high, valueStep(high - low));
+  const { grid, label } = steps(f.plotWidth);
+  const x = drawTimeAxis(f, now, spanMs, grid, label);
+  const { barMs, columns } = channelColumns(shown, spanMs, f.plotWidth);
+  const slot = (barMs / spanMs) * f.plotWidth;
   const bar = Math.max(1, slot - 0.6);
   const base = f.bottom;
 
-  for (const point of history) {
-    const x0 = x(point.at) - slot;
-    if (point.tx) {
-      ctx.fillStyle = c.tx;
-      ctx.fillRect(x0, base - 5, bar, 5);
-    } else if (point.level !== null && point.level !== undefined) {
-      ctx.fillStyle = point.rx ? c.rx : withAlpha(c.rx, 0.45);
-      const top = Math.min(f.y(point.level), base - 1);
+  // everything the readings draw stays inside the plot: a fixed scale can be narrower than
+  // what arrives, and a bar past the top is cut at the top, not drawn into the legend
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(CHART_LEFT, f.top, f.plotWidth, base - f.top);
+  ctx.clip();
+
+  for (const column of columns) {
+    const x0 = x(column.at) - slot;
+    if (column.level !== null && column.level !== undefined) {
+      ctx.fillStyle = column.rx ? c.rx : withAlpha(c.rx, 0.45);
+      const top = Math.min(f.y(column.level), base - 1);
       ctx.fillRect(x0, top, bar, base - top);
       // the peak the detector tested in this half second, above the sampled bar. Red only
       // when it is over the line and the channel was busy — a peak that tripped it, or
       // helped to; a peak under the line is grey whatever the lamp says, and the band at
       // the top names the path that lit it when the level did not
-      if (point.peak !== null && point.peak !== undefined && point.peak > point.level) {
-        const crossed = point.peak - point.floor >= busyThresholdDb - 1e-6;
-        ctx.fillStyle = point.busy && crossed ? c.error : withAlpha(c.ink, 0.5);
-        const peakY = Math.min(f.y(point.peak), top - 1);
+      if (column.peak !== null && column.peak !== undefined && column.peak > column.level) {
+        ctx.fillStyle = column.crossed ? c.error : withAlpha(c.ink, 0.5);
+        const peakY = Math.min(f.y(column.peak), top - 1);
         ctx.fillRect(x0, peakY, bar, Math.max(1, top - peakY));
       }
     }
+    // the transmitter's tick, over the bar of a column that also heard the channel
+    if (column.tx) {
+      ctx.fillStyle = c.tx;
+      ctx.fillRect(x0, base - 5, bar, 5);
+    }
   }
 
-  // a rule at every change between receiving and transmitting
+  // a rule at every change between receiving and transmitting, while they stand apart: at
+  // the long spans a session's turns would otherwise be a fence
   ctx.strokeStyle = withAlpha(c.ink, 0.3);
   ctx.lineWidth = 1;
   ctx.setLineDash([2, 3]);
-  for (let i = 1; i < history.length; i++) {
-    if (history[i].tx !== history[i - 1].tx) {
-      const at = x(history[i].at) - slot;
-      ctx.beginPath();
-      ctx.moveTo(at, f.top);
-      ctx.lineTo(at, base);
-      ctx.stroke();
-    }
+  let lastRule = -Infinity;
+  for (let i = 1; i < shown.length; i++) {
+    if (shown[i].tx === shown[i - 1].tx) continue;
+    const at = x(shown[i].at) - (SAMPLE_MS / spanMs) * f.plotWidth;
+    if (at - lastRule < 4) continue;
+    lastRule = at;
+    ctx.beginPath();
+    ctx.moveTo(at, f.top);
+    ctx.lineTo(at, base);
+    ctx.stroke();
   }
   ctx.setLineDash([]);
 
@@ -2581,7 +2766,7 @@ function drawChart() {
   ctx.lineWidth = 1.25;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
-  history.forEach((point, index) => {
+  shown.forEach((point, index) => {
     if (index === 0) ctx.moveTo(x(point.at), f.y(point.floor));
     else ctx.lineTo(x(point.at), f.y(point.floor));
   });
@@ -2593,7 +2778,7 @@ function drawChart() {
   ctx.lineWidth = 1;
   ctx.setLineDash([2, 3]);
   ctx.beginPath();
-  history.forEach((point, index) => {
+  shown.forEach((point, index) => {
     const y = f.y(point.floor + busyThresholdDb);
     if (index === 0) ctx.moveTo(x(point.at), y);
     else ctx.lineTo(x(point.at), y);
@@ -2604,16 +2789,206 @@ function drawChart() {
   // the band along the top while the channel was busy, in the colour of the path that
   // marked it: red for the level (the line crossed), the lamp's own amber for the
   // passband's shape, and the light neutral for a decoded frame. Slot-wide, so
-  // consecutive samples join into one span
+  // consecutive columns join into one span
   const reasonColour = { level: c.error, shape: c.busy, frame: c.accent };
-  for (const point of history) {
-    if (!point.busy) continue;
-    ctx.fillStyle = reasonColour[point.why] ?? c.busy;
-    ctx.fillRect(x(point.at) - slot, f.top, slot, BUSY_BAND);
+  for (const column of columns) {
+    if (!column.busy) continue;
+    ctx.fillStyle = reasonColour[column.why] ?? c.busy;
+    ctx.fillRect(x(column.at) - slot, f.top, slot, BUSY_BAND);
   }
+  ctx.restore();
 
   const colours = [c.ink2, c.rx, c.tx, c.ink2, c.error, c.ink2, c.error, c.busy, c.accent];
   drawLegend(f, legend.map(([, text, gap], i) => [colours[i], text, gap]));
+  showChannelAuto();
+}
+
+/// The value axis's step for a range: a label every 5 dB on a close scale, fewer on a wide one.
+function valueStep(range) {
+  return range > 80 ? 20 : range > 40 ? 10 : 5;
+}
+
+// ── the channel chart's axes: the caption's button and what it opens ─
+
+function axesOpen() {
+  return !$("chart-axes").hidden;
+}
+
+/// What the caption, the button's panel and its fields say, from the view.
+function showChannelView() {
+  const span = CHANNEL_SPANS[channelView.span];
+  $("chart-caption").textContent = `Channel and activity, ${span.caption}`;
+  const scale = $("chart-scale");
+  scale.hidden = channelView.auto;
+  scale.textContent = channelView.auto ? "" : `${dbfs(channelView.low)} to ${dbfs(channelView.high)} dBFS`;
+  for (const chip of document.querySelectorAll("#axes-span [data-span]")) {
+    chip.setAttribute("aria-pressed", String(Number(chip.dataset.span) === channelView.span));
+  }
+  $("axes-auto").checked = channelView.auto;
+  for (const id of ["axes-high", "axes-low"]) {
+    $(id).disabled = channelView.auto;
+    $(id).removeAttribute("aria-invalid");
+  }
+  if (channelView.auto) {
+    showChannelAuto();
+  } else {
+    $("axes-high").value = String(channelView.high);
+    $("axes-low").value = String(channelView.low);
+  }
+}
+
+/// While Auto is ticked the fields show the range it chose, as it moves.
+function showChannelAuto() {
+  if (!channelView.auto || !axesOpen()) return;
+  $("axes-high").value = String(channelAutoRange.high);
+  $("axes-low").value = String(channelAutoRange.low);
+}
+
+/// A level with a real minus, as the axes write it.
+function dbfs(value) {
+  return value < 0 ? `−${Math.abs(value)}` : String(value);
+}
+
+function channelViewChanged() {
+  saveChannelView();
+  showChannelView();
+  drawChart();
+}
+
+function setChannelSpan(seconds) {
+  if (!Object.hasOwn(CHANNEL_SPANS, String(seconds))) return;
+  channelView.span = Number(seconds);
+  channelViewChanged();
+}
+
+function setChannelAuto(auto) {
+  if (!auto) {
+    // a hand starts from what the automatic scale shows, so nothing jumps
+    channelView.low = Math.max(SCALE_LOWEST, channelAutoRange.low);
+    const least = channelView.low + SCALE_LEAST_RANGE;
+    channelView.high = Math.min(SCALE_HIGHEST, Math.max(channelAutoRange.high, least));
+  }
+  channelView.auto = auto;
+  channelViewChanged();
+}
+
+/// A field's text as a level: a whole number of dBFS, a hyphen or a real minus before it.
+function parseLevel(text) {
+  const cleaned = String(text).trim().replace(/^[−–]/, "-").replace(/\s*dbfs$/i, "");
+  if (!/^[-+]?\d{1,3}$/.test(cleaned)) return null;
+  return Number(cleaned);
+}
+
+/// One bound typed or stepped. `settle` is the field being left (or Enter): an impossible value
+/// goes back to the last good one, and a bound that leaves less than the least range moves the
+/// other along. While typing, a value is drawn only when it already fits, so a half-typed "-2"
+/// on the way to "-25" moves nothing.
+function takeLevel(which, settle) {
+  const field = which === "high" ? $("axes-high") : $("axes-low");
+  const value = parseLevel(field.value);
+  const inBounds =
+    value !== null &&
+    (which === "high"
+      ? value <= SCALE_HIGHEST && value >= SCALE_LOWEST + SCALE_LEAST_RANGE
+      : value >= SCALE_LOWEST && value <= SCALE_HIGHEST - SCALE_LEAST_RANGE);
+  if (!settle) {
+    const fits =
+      inBounds &&
+      (which === "high" ? value - channelView.low : channelView.high - value) >= SCALE_LEAST_RANGE;
+    // an empty field or a lone minus is a value on its way, not a wrong one
+    const started = !["", "-", "−"].includes(field.value.trim());
+    field.setAttribute("aria-invalid", String(!inBounds && started));
+    if (!fits || value === channelView[which]) return;
+    channelView[which] = value;
+    saveChannelView();
+    $("chart-scale").textContent = `${dbfs(channelView.low)} to ${dbfs(channelView.high)} dBFS`;
+    drawChart();
+    return;
+  }
+  if (inBounds) {
+    channelView[which] = value;
+    if (which === "high") channelView.low = Math.min(channelView.low, value - SCALE_LEAST_RANGE);
+    else channelView.high = Math.max(channelView.high, value + SCALE_LEAST_RANGE);
+  }
+  channelViewChanged();
+}
+
+/// The arrow keys step a bound 1 dB, 10 with Shift, as a rig's knob does.
+function stepLevel(which, event) {
+  const delta = (event.key === "ArrowUp" ? 1 : -1) * (event.shiftKey ? 10 : 1);
+  const field = which === "high" ? $("axes-high") : $("axes-low");
+  const from = parseLevel(field.value) ?? channelView[which];
+  const limit =
+    which === "high"
+      ? [SCALE_LOWEST + SCALE_LEAST_RANGE, SCALE_HIGHEST]
+      : [SCALE_LOWEST, SCALE_HIGHEST - SCALE_LEAST_RANGE];
+  field.value = String(Math.min(limit[1], Math.max(limit[0], from + delta)));
+  takeLevel(which, true);
+  field.select();
+}
+
+function openAxes() {
+  const panel = $("chart-axes");
+  panel.hidden = false;
+  panel.classList.remove("up");
+  $("btn-chart-axes").setAttribute("aria-expanded", "true");
+  showChannelView();
+  // it drops over the chart, and opens upward when the window has no room below it
+  const box = panel.getBoundingClientRect();
+  const above = panel.parentElement.getBoundingClientRect().top;
+  if (box.bottom > window.innerHeight - 8 && box.height + 40 < above) {
+    panel.classList.add("up");
+  }
+  (document.querySelector('#axes-span [aria-pressed="true"]') ?? $("axes-auto")).focus();
+}
+
+function closeAxes(returnFocus = false) {
+  if (!axesOpen()) return;
+  $("chart-axes").hidden = true;
+  $("btn-chart-axes").setAttribute("aria-expanded", "false");
+  if (returnFocus) $("btn-chart-axes").focus();
+}
+
+function wireChannelAxes() {
+  loadChannelView();
+  showChannelView();
+  $("btn-chart-axes").addEventListener("click", () => (axesOpen() ? closeAxes() : openAxes()));
+  for (const chip of document.querySelectorAll("#axes-span [data-span]")) {
+    chip.addEventListener("click", () => setChannelSpan(Number(chip.dataset.span)));
+  }
+  $("axes-auto").addEventListener("change", () => setChannelAuto($("axes-auto").checked));
+  for (const which of ["high", "low"]) {
+    const field = $(`axes-${which}`);
+    field.addEventListener("input", () => takeLevel(which, false));
+    field.addEventListener("change", () => takeLevel(which, true));
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        stepLevel(which, event);
+      }
+    });
+    field.addEventListener("focus", () => field.select());
+  }
+  $("btn-axes-reset").addEventListener("click", () => {
+    channelView = { ...CHANNEL_VIEW_DEFAULT };
+    channelViewChanged();
+  });
+  // it closes as a menu does: Escape (on the button too), or the pointer going elsewhere
+  $("btn-chart-axes").parentElement.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !axesOpen()) return;
+    event.stopPropagation();
+    closeAxes(true);
+  });
+  document.addEventListener("click", (event) => {
+    if (axesOpen() && !event.target.closest?.(".axes-pop")) closeAxes();
+  });
+  // another window of the panel changed them
+  window.addEventListener("storage", (event) => {
+    if (event.key !== CHANNEL_VIEW_KEY) return;
+    loadChannelView();
+    showChannelView();
+    drawChart();
+  });
 }
 
 window.addEventListener("resize", () => {
@@ -5398,6 +5773,7 @@ function wire() {
   $("chart-tab-snr").addEventListener("click", () => selectStatusChart("snr", true));
   $("chart-tab-speed").addEventListener("click", () => selectStatusChart("speed", true));
   selectStatusChart(storedStatusChart());
+  wireChannelAxes();
   // notes typed before an automatic recording starts go with it
   $("record-notes").addEventListener("change", () => {
     const notes = $("record-notes").value.trim();
