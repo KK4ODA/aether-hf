@@ -476,13 +476,19 @@ not touched.
     while a digital program runs. The waterfall's controls are in Full and hold in every view.
     Each view keeps its own window size: size it once and it comes back that way. The window
     reopens in the view you left it in. **Keep on top** works in every view. In Compact and Mini
-    the **Modem** lamp shows only while the modem is out of reach. Resizing the window or
+    the **Modem** lamp shows only while the modem is out of reach, and Mini's frequency scale
+    follows the **Span**. Resizing the window or
     changing the view keeps what the waterfall has drawn.
   - The red lines on the spectrum and the waterfall are the edges of your widest transmission at
     the bandwidth you run, by the FCC's 26 dB measure. They sit a little outside the bandwidth's
     own number: the signal's skirts reach past it. A signal between them is on your frequency;
     wait for it to clear before you call. The lines move when the bandwidth changes, and narrow
     if *Fastest mode* keeps the station on the tone rungs.
+  - **Span** is the audio the spectrum and the waterfall show. **0–3 kHz**, the default, holds
+    any SSB filter's audio whole, with your signal centred. **0–4 kHz** also shows a wide data
+    filter and its skirt. **Channel** zooms on your own channel: the red lines with 200 Hz either
+    side, about 900–2100 Hz at 500 Hz (at 2300 Hz it is 0–3 kHz). The spectrum's title says the
+    span. Changing it keeps what the waterfall has drawn, moved to the new scale.
   - The waterfall draws the noise dark and steady and a signal bright above it. **Floor** sets
     the level drawn black; with **auto** it follows the noise in the modem's passband. **Gain**
     is how many decibels above the floor reach full white, 3 to 90 dB (20 by default): lower it

@@ -92,11 +92,54 @@ function hzLabel(hz) {
   return hz % 1000 === 0 ? `${hz / 1000} kHz` : String(hz);
 }
 
-// The waterfall's own frequency scale, every 500 Hz: drawn under it only where the spectrum,
-// which carries the scale, is not shown (the undocked window's Mini view).
-const SCALE = Array.from({ length: SPECTRUM_TOP_HZ / 500 - 1 }, (_, i) => (i + 1) * 500)
-  .map((hz) => `<span style="left: ${(hz / SPECTRUM_TOP_HZ) * 100}%">${hzLabel(hz)}</span>`)
-  .join("");
+// The audio the spectrum and the waterfall show. The daemon sends 0–4 kHz, but a radio's SSB
+// filter ends near 3 kHz, and the top quarter was always black while the signal, centred on
+// 1500 Hz, sat left of centre (the author, 2026-11-06). 0–3 kHz is centred on it and still
+// shows any SSB filter's audio whole; 0–4 kHz shows a wide data filter's skirt; Channel zooms
+// on the modem's own channel — a 500 Hz signal is a sliver of 3 kHz.
+const SPAN_CHOICES = ["3k", "4k", "channel"];
+const SPANS = { "3k": [0, 3000], "4k": [0, SPECTRUM_TOP_HZ] };
+
+/// Room either side of the red lines in the Channel span, in hertz: a signal beside the channel,
+/// about to wander onto it, is still in view.
+const CHANNEL_SPARE_HZ = 200;
+
+/// The span to draw, in audio hertz: a fixed one, or for Channel this station's widest
+/// transmission (the red lines) with CHANNEL_SPARE_HZ either side, on 50 Hz steps — 900–2100 Hz
+/// at 500 Hz, 0–3 kHz at 2300.
+function spanOf(choice, spectrum) {
+  if (choice !== "channel") return SPANS[choice] ?? SPANS["3k"];
+  const edges = transmitEdges(spectrum);
+  if (!edges) return SPANS["3k"];
+  const [a, b] = edges;
+  return [
+    Math.max(0, Math.floor((a - CHANNEL_SPARE_HZ) / 50) * 50),
+    Math.min(SPECTRUM_TOP_HZ, Math.ceil((b + CHANNEL_SPARE_HZ) / 50) * 50),
+  ];
+}
+
+/// "0–3 kHz", "950–2050 Hz": a span as the caption says it.
+function spanLabel([lo, hi]) {
+  return lo % 1000 === 0 && hi % 1000 === 0 ? `${lo / 1000}–${hi / 1000} kHz` : `${lo}–${hi} Hz`;
+}
+
+/// The frequencies a span's axis labels: every 100, 250, 500 or 1000 Hz, the finest that puts
+/// no more than eight inside it, its edges left bare.
+function ticksOf([lo, hi]) {
+  const step = [100, 250, 500, 1000].find((s) => Math.ceil(hi / s) - Math.floor(lo / s) - 1 <= 8) ?? 1000;
+  const ticks = [];
+  for (let hz = Math.floor(lo / step) * step + step; hz < hi; hz += step) ticks.push(hz);
+  return ticks;
+}
+
+/// The waterfall's own frequency scale: drawn under it only where the spectrum, which carries
+/// the scale, is not shown (the undocked window's Mini view).
+function scaleOf(span) {
+  const [lo, hi] = span;
+  return ticksOf(span)
+    .map((hz) => `<span style="left: ${((hz - lo) / (hi - lo)) * 100}%">${hzLabel(hz)}</span>`)
+    .join("");
+}
 
 // The card's body. One copy of the markup for the docked card and the undocked window; every
 // control and reading carries its tooltip (CONTRIBUTING §8).
@@ -107,16 +150,17 @@ const BODY = `
   </figure>
   <div class="plot-stack">
     <figure class="plot">
-      <figcaption>Spectrum, 0–4 kHz <span class="plot-meta numerals" id="spectrum-caption" title="The strongest bin of the received audio, or what is being sent"></span></figcaption>
-      <canvas id="chart-spectrum" class="plot-spectrum" title="Spectrum of the received audio, 0 to 4 kHz. The red lines, shaded between, are the edges of this station's widest transmission at the bandwidth it runs (the FCC's 26 dB measure): a signal between them is on your frequency" width="600" height="110" role="img" aria-label="Spectrum of the received audio"></canvas>
+      <figcaption><span>Spectrum, <span id="spectrum-span" title="The audio shown, chosen with Span under the waterfall">${spanLabel(SPANS["3k"])}</span></span> <span class="plot-meta numerals" id="spectrum-caption" title="The strongest bin of the received audio in the span shown, or what is being sent"></span></figcaption>
+      <canvas id="chart-spectrum" class="plot-spectrum" title="Spectrum of the received audio across the span chosen with Span. The red lines, shaded between, are the edges of this station's widest transmission at the bandwidth it runs (the FCC's 26 dB measure): a signal between them is on your frequency" width="600" height="110" role="img" aria-label="Spectrum of the received audio"></canvas>
     </figure>
     <figure class="plot plot-grow">
       <figcaption>Waterfall</figcaption>
       <canvas id="chart-waterfall" class="plot-waterfall" title="The received audio over time, newest at the top. The red lines are the edges of this station's widest transmission at the bandwidth it runs (the FCC's 26 dB measure): a signal between them is on your frequency, so wait before calling" width="600" height="140" role="img" aria-label="Waterfall of the received audio, newest at the top"></canvas>
-      <div class="wf-scale numerals" id="wf-scale" title="Audio frequency across the waterfall, 0 to 4 kHz" aria-hidden="true">${SCALE}</div>
+      <div class="wf-scale numerals" id="wf-scale" title="Audio frequency across the waterfall, over the span chosen with Span" aria-hidden="true">${scaleOf(SPANS["3k"])}</div>
     </figure>
   </div>
-  <div class="scope-toolbar" role="group" aria-label="Waterfall controls" title="The waterfall's controls: its floor, its range, its speed and its colours">
+  <div class="scope-toolbar" role="group" aria-label="Waterfall controls" title="The waterfall's controls: the audio it and the spectrum show, its floor, its range, its speed and its colours">
+    <label title="The audio the spectrum and the waterfall show: 0–3 kHz, any SSB filter whole; 0–4 kHz, a wide data filter and its skirt; Channel, this station's channel with room either side">Span <select id="wf-span" class="compact" title="The audio the spectrum and the waterfall show: 0–3 kHz, any SSB filter whole; 0–4 kHz, a wide data filter and its skirt; Channel, this station's channel with room either side" aria-label="Spectrum and waterfall span"><option value="3k">0–3 kHz</option><option value="4k">0–4 kHz</option><option value="channel">Channel</option></select></label>
     <label title="The level drawn as black, in dBFS; auto follows the noise">Floor <input id="wf-floor" title="The level drawn as black, in dBFS; auto follows the noise" type="range" min="-120" max="-40" step="1" value="-90" aria-label="Waterfall floor in dBFS" /> <span class="numerals scope-value" id="wf-floor-value" title="The floor in use">auto</span></label>
     <label class="check" title="Let the floor follow the noise"><input id="wf-auto" title="Let the floor follow the noise" type="checkbox" checked /> auto</label>
     <label title="The range above the floor drawn in full colour, in dB: smaller is more contrast">Gain <input id="wf-gain" title="The range above the floor drawn in full colour, in dB: smaller is more contrast" type="range" min="3" max="90" step="1" value="20" aria-label="Waterfall range above the floor in dB" /> <span class="numerals scope-value" id="wf-gain-value" title="The range in use">20 dB</span></label>
@@ -140,7 +184,7 @@ export function mountSignalBody(container) {
 export function createScopes(host) {
   // the waterfall's controls, as any waterfall has them: the floor (auto follows the quietest
   // fifth of the spectrum), the range above it, lines per second, the palette
-  const waterfall = { auto: true, floor: -90, gain: 20, speed: 8, palette: "aether" };
+  const waterfall = { auto: true, floor: -90, gain: 20, speed: 8, palette: "aether", span: "3k" };
   let palette = null;
   let waterfallFloor = -90;
   // each bin's power averaged over the last few spectra: one 85 ms transform's bins scatter by
@@ -154,6 +198,9 @@ export function createScopes(host) {
   let spectrumPolls = 0;
   let constellationBusy = false;
   let pushTimer = null;
+  // the span the waterfall's lines were drawn over, and the one the captions say
+  let drawnSpan = null;
+  let shownSpan = null;
 
   function load() {
     try {
@@ -162,6 +209,7 @@ export function createScopes(host) {
     } catch {
       // nothing kept, or nothing readable: the defaults
     }
+    if (!SPAN_CHOICES.includes(waterfall.span)) waterfall.span = "3k";
     palette = null;
   }
 
@@ -185,6 +233,7 @@ export function createScopes(host) {
     $("wf-gain-value").textContent = `${waterfall.gain} dB`;
     $("wf-speed").value = String(waterfall.speed);
     $("wf-palette").value = waterfall.palette;
+    $("wf-span").value = waterfall.span;
   }
 
   // The waterfall's controls are the station's, not the window's: they are written to the
@@ -237,6 +286,12 @@ export function createScopes(host) {
       palette = null;
       changed(false);
     });
+    // the span is the screen's, kept in the browser alone: a key in `[panel.waterfall]` would be
+    // a new shape of the configuration, and a version going back could not read it
+    $("wf-span").addEventListener("change", () => {
+      waterfall.span = SPAN_CHOICES.includes($("wf-span").value) ? $("wf-span").value : "3k";
+      save();
+    });
     show();
   }
 
@@ -281,8 +336,10 @@ export function createScopes(host) {
     spectrumBusy = true;
     try {
       const spectrum = await host.call("spectrum");
+      const span = spanOf(waterfall.span, spectrum);
+      showSpan(span);
       // a view that hides the spectrum (the undocked window's Mini) still feeds the waterfall
-      if ($("chart-spectrum").clientWidth > 0) drawSpectrum(spectrum);
+      if ($("chart-spectrum").clientWidth > 0) drawSpectrum(spectrum, span);
       // the average runs at every poll, whatever the waterfall's speed, and pauses while
       // this station transmits: its own signal is not the band
       const bins = spectrum.bins_db ?? [];
@@ -292,7 +349,7 @@ export function createScopes(host) {
       }
       // the spectrum refreshes eight times a second; the waterfall advances at its own pace
       spectrumPolls += 1;
-      if (spectrumPolls % Math.max(1, Math.round(8 / waterfall.speed)) === 0) drawWaterfall(spectrum);
+      if (spectrumPolls % Math.max(1, Math.round(8 / waterfall.speed)) === 0) drawWaterfall(spectrum, span);
     } catch {
       // the next tick tries again; a missed frame of a scope is nothing
     } finally {
@@ -300,7 +357,15 @@ export function createScopes(host) {
     }
   }
 
-  function drawSpectrum(spectrum) {
+  /// The captions and the waterfall's scale, when the span changes.
+  function showSpan(span) {
+    if (shownSpan && shownSpan[0] === span[0] && shownSpan[1] === span[1]) return;
+    shownSpan = span;
+    $("spectrum-span").textContent = spanLabel(span);
+    $("wf-scale").innerHTML = scaleOf(span);
+  }
+
+  function drawSpectrum(spectrum, [lo, hi]) {
     const canvas = $("chart-spectrum");
     const { ctx, width, height } = surface("chart-spectrum", 600, canvas.clientHeight || 110);
     const c = tokens();
@@ -310,7 +375,7 @@ export function createScopes(host) {
     const binHz = spectrum.bin_hz;
     const low = -110;
     const high = 0;
-    const x = (hz) => (hz / SPECTRUM_TOP_HZ) * width;
+    const x = (hz) => ((hz - lo) / (hi - lo)) * width;
     const y = (db) => (1 - (Math.max(low, Math.min(high, db)) - low) / (high - low)) * (height - 14) + 2;
     // where this station's transmission goes: shaded, its edges in the transmit colour, as
     // on the waterfall
@@ -329,7 +394,7 @@ export function createScopes(host) {
     ctx.font = `10px ${c.numerals}`;
     ctx.textBaseline = "top";
     ctx.textAlign = "center";
-    for (let hz = 500; hz < SPECTRUM_TOP_HZ; hz += 500) {
+    for (const hz of ticksOf([lo, hi])) {
       ctx.beginPath();
       ctx.moveTo(x(hz), 0);
       ctx.lineTo(x(hz), height - 14);
@@ -365,23 +430,26 @@ export function createScopes(host) {
       caption.textContent = "waiting for audio";
       return;
     }
+    // the bins in the span, and one either side so the trace reaches the plot's edges
+    const first = Math.max(0, Math.floor(lo / binHz));
+    const last = Math.min(bins.length - 1, Math.ceil(hi / binHz));
     ctx.strokeStyle = spectrum.transmitting ? c.tx : c.accent;
     ctx.lineWidth = 1.25;
     ctx.beginPath();
-    bins.forEach((db, index) => {
+    for (let index = first; index <= last; index++) {
       const at = x(index * binHz);
-      if (index === 0) ctx.moveTo(at, y(db));
-      else ctx.lineTo(at, y(db));
-    });
+      if (index === first) ctx.moveTo(at, y(bins[index]));
+      else ctx.lineTo(at, y(bins[index]));
+    }
     ctx.stroke();
-    let peak = 0;
+    let peak = first;
     let peakDb = -Infinity;
-    bins.forEach((db, index) => {
-      if (db > peakDb) {
-        peakDb = db;
+    for (let index = first; index <= last; index++) {
+      if (bins[index] > peakDb) {
+        peakDb = bins[index];
         peak = index;
       }
-    });
+    }
     caption.textContent = spectrum.transmitting
       ? "transmitting — the sound card's own output"
       : `peak ${Math.round(peak * binHz)} Hz at ${peakDb.toFixed(0)} dBFS`;
@@ -432,17 +500,22 @@ export function createScopes(host) {
     return Array.from(averaged, (power) => 10 * Math.log10(Math.max(power, 1e-14)));
   }
 
-  function drawWaterfall(spectrum) {
+  function drawWaterfall(spectrum, span) {
+    const [lo, hi] = span;
     // the band, averaged; while this station transmits, what the sound card is sending
     const bins = spectrum.transmitting ? (spectrum.bins_db ?? []) : (averagedBins ?? spectrum.bins_db ?? []);
     if (bins.length === 0) return;
+    // an auto floor with no noise heard yet is its starting −90 dBFS, under any real noise: the
+    // first lines drew solid white until the station first listened between transmissions
+    if (waterfall.auto && noise === null) return;
     const canvas = $("chart-waterfall");
     const width = Math.max(1, canvas.clientWidth || 600);
     const height = Math.max(1, canvas.clientHeight || 140);
-    if (canvas.width !== width || canvas.height !== height) {
-      // a new size keeps what is on screen: the frequencies stretched to the new width, the
-      // lines as they were (one a pixel), so resizing the window or changing its view does not
-      // wipe the minutes being watched
+    const respanned = drawnSpan !== null && (drawnSpan[0] !== lo || drawnSpan[1] !== hi);
+    if (canvas.width !== width || canvas.height !== height || respanned) {
+      // a new size or span keeps what is on screen: each line's frequencies moved to where the
+      // new span puts them, the lines as they were (one a pixel), so resizing the window,
+      // changing its view or its span does not wipe the minutes being watched
       const kept = document.createElement("canvas");
       kept.width = canvas.width;
       kept.height = canvas.height;
@@ -450,9 +523,13 @@ export function createScopes(host) {
       canvas.width = width;
       canvas.height = height;
       if (kept.width > 0 && kept.height > 0) {
-        canvas.getContext("2d").drawImage(kept, 0, 0, kept.width, kept.height, 0, 0, width, kept.height);
+        const [was0, was1] = drawnSpan ?? span;
+        const left = ((was0 - lo) / (hi - lo)) * width;
+        const right = ((was1 - lo) / (hi - lo)) * width;
+        canvas.getContext("2d").drawImage(kept, 0, 0, kept.width, kept.height, left, 0, right - left, kept.height);
       }
     }
+    drawnSpan = span;
     const ctx = canvas.getContext("2d");
     // the newest line at the top; everything else moves down one
     ctx.drawImage(canvas, 0, 0, width, height - 1, 0, 1, width, height - 1);
@@ -462,17 +539,17 @@ export function createScopes(host) {
       $("wf-floor-value").textContent = `auto ${Math.round(waterfallFloor)} dBFS`;
     }
     const floor = waterfall.auto ? waterfallFloor : waterfall.floor;
-    const span = waterfall.gain;
+    const rangeDb = waterfall.gain;
     const row = ctx.createImageData(width, 1);
     const binHz = spectrum.bin_hz;
     for (let px = 0; px < width; px++) {
       // between two bins, the level in between: a pixel narrower than a bin draws no steps
-      const at = Math.min(bins.length - 1, (px / width) * SPECTRUM_TOP_HZ / binHz);
+      const at = Math.min(bins.length - 1, (lo + (px / width) * (hi - lo)) / binHz);
       const below = Math.floor(at);
       const above = Math.min(bins.length - 1, below + 1);
       const db = bins[below] + (bins[above] - bins[below]) * (at - below);
       // the low end bent down, so what sits at the noise stays dark and a signal lifts clear
-      const level = Math.max(0, Math.min(1, (db - floor) / span));
+      const level = Math.max(0, Math.min(1, (db - floor) / rangeDb));
       const [r, g, b] = heat(level ** WATERFALL_GAMMA);
       row.data[px * 4] = r;
       row.data[px * 4 + 1] = g;
@@ -485,7 +562,7 @@ export function createScopes(host) {
     if (edges) {
       const [r, g, b] = rgb(tokens().tx);
       for (const hz of edges) {
-        const px = Math.round((hz / SPECTRUM_TOP_HZ) * width);
+        const px = Math.round(((hz - lo) / (hi - lo)) * width);
         if (px < 0 || px >= width) continue;
         row.data[px * 4] = r;
         row.data[px * 4 + 1] = g;
