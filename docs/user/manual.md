@@ -565,6 +565,8 @@ zip stays in the `shared` folder beside your settings.
 **About** shows the version, the daemon, the update channel and the latest release, and where
 this station keeps its configuration, logs and recordings. **Check for Updates** asks the release
 channel for a newer version; the updates window shows what it finds and installs it when you say.
+Its buttons, **Install and restart** among them, stay at the bottom of the window at any size; the
+release notes scroll above them.
 On Windows the installer waits for the application to close, closes it if it must (the modem
 stops first), and moves aside a file something else still holds
 ([install.md](install.md#updating) says how).

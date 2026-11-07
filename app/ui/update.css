@@ -4,10 +4,19 @@
  * colour is a semantic status: green for "you are current" and "complete", blue for the
  * offer and the work in progress, amber for a restart, red for a failure. */
 
+/* The window's height and no more: the middle scrolls, and the buttons — Install and restart
+ * above all — stay in sight at the bottom whatever the window's size or the notes' length. */
 body.updater {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+body.updater > header,
+body.updater > footer {
+  flex: none;
 }
 
 .updater-title {
@@ -35,6 +44,7 @@ body.updater {
   width: 100%;
   margin: 0 auto;
   min-height: 0;
+  overflow-y: auto;
   display: flex;
 }
 
@@ -191,10 +201,12 @@ body.updater {
   mix-blend-mode: difference;
 }
 
-/* the release notes: Markdown as git-cliff writes it, rendered small and quiet */
+/* the release notes: Markdown as git-cliff writes it, rendered small and quiet. They take the
+ * window's spare height and scroll inside it; in a window too small for a few lines of them the
+ * middle scrolls instead. */
 .notes {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -212,10 +224,10 @@ body.updater {
 }
 
 .notes-body {
+  flex: 1;
   overflow: auto;
   padding: 10px 14px;
-  min-height: 80px;
-  max-height: 44vh;
+  min-height: 0;
   font-size: 12.5px;
   line-height: 1.5;
 }
