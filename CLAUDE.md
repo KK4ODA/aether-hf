@@ -2674,8 +2674,29 @@ again). The log also says when a program opens or closes a data connection (`dat
 connection n …`, `DataEnd`), to see whether Trimode closes its data port after `FQ`. The harness's
 host stand-ins fault a `CONNECTED` after a `PENDING` with no `PTT ON` between; note that its
 `PENDING_SETTLE` and the key wait are wall-clock while the harness runs 2–5× faster than the
-air, so a held `CONNECTED` shows there 4–8 air-seconds after the `PENDING`. Owed: the bench's
-test C again (connect, wait 15 min, connect) and a gateway session with `[host] trace = true`.
+air, so a held `CONNECTED` shows there 4–8 air-seconds after the `PENDING`. Owed: a gateway
+session with `[host] trace = true`; the bench's test C passed (next paragraph).
+
+**Test C on beta.141 (2026-11-07 evening, the Trimode bench; times UTC).** Both daemons beta.141,
+the scratch Trimode started by hand (its Vara opened data connection 1 at 22:56:13), Winlink
+Express `KK4ODA` with an empty Outbox, 15 dB. *Session 1*: call heard 22:58:47.785, the acceptance
+keyed at .815, and the host trace read `PENDING`, `PTT ON`, `CONNECTED`, `PTT OFF` (released
+22:58:53.606; no listening-window hold). Winlink Express's *radio-only message hub* confirm box,
+left unanswered, held its first reply 3 min. Trimode wrote `FQ` at 23:02:03, the adapter had it at
+.290 (150 ms after the slot keyed, so it went at 23:02:05.6–07.5); Winlink Express read it at
+23:02:07 and forced the hang-up at 23:02:37; the gateway closed 23:02:45.2, and its closing
+identifier ran 23:02:45.448–50.407 (`DISCONNECTED` is said on `identified`, a millisecond before
+that `PTT OFF`). Nothing keyed at the gateway for 16 min 46 s. *Session 2*: call heard
+23:19:36.341, acceptance keyed at .400, `CONNECTED` held at .369 (the end of a listening window)
+and said at 37.896 (Trimode held its scan for the `PENDING`); the trace read `PENDING`, `PTT ON`,
+`PENDING` (the hold's repeat), `CONNECTED`, `PTT OFF` (42.178). Trimode logged *Vara 2300 connect*
+at 23:19:38 with no *no PTT is being done* and no *No PTT from Vara* (beta.140's test C drew both
+in the same second), and the session ran to its end: `FQ` 23:20:32–33 (adapter .747, 123 ms
+after the slot keyed), read 23:20:37, forced 23:21:07, closed 23:21:14.5, identifier to 19.745.
+*Data port*: one connection from 22:56:13 to 23:22:13.869, when Trimode was closed by hand
+(`data port: connection 1 closed by the program`); nothing after either `FQ`. So Trimode does not
+close its data port to end a session: it keeps it for its whole run, and after `FQ` nothing from it
+reaches the modem until the client's forced disconnect, 30 s later.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
