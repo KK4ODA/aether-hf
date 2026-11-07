@@ -2570,7 +2570,15 @@ chose — the adapter sets the control API's `connect` `keep_bandwidth` once the
 *calling X at 2300 Hz, as the host program asked, though it was last heard running 500 Hz* — and
 ADR-0058's four-try fallback to 500 Hz now applies to program calls too (it had excluded
 `host_hz`, so Winlink Express, which always says a `BW`, never fell back). The "moved for this
-call" bit waits, by decision, until wrong memories show up again.
+call" bit waits, by decision, until wrong memories show up again. **The undocked signal window
+has a Busy lamp and Tune** (2026-11-07, the author's ask from the field): `#lamp-busy` follows
+the `metrics` events as the panel's does, `#btn-tune` is the `tune` method (10 s, a second press
+stops), a refusal shows on `#signal-said` for 8 s; the small views drop the mark and the live
+dot and say *On top*, so their header is one row down to ~440 px on Linux, and their least
+width is 500 (Windows' fonts are wider). Tested against a stand-in modem through Playwright's
+`routeWebSocket` (a dry run's silent loopback never settles the busy detector, so it refuses a
+tone). **beta.138 was not tagged on 2026-11-07 morning**: the author's field test that day ran
+beta.137, without ADR-0102.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
