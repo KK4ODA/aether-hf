@@ -201,6 +201,12 @@ body.updater > footer {
   mix-blend-mode: difference;
 }
 
+/* the blend inverts what lies under the text, so the text itself must be light: in the light
+ * theme --text is dark, and the reading vanished into the empty bar */
+:root[data-theme="light"] .progress-text {
+  color: var(--plot-bg);
+}
+
 /* the release notes: Markdown as git-cliff writes it, rendered small and quiet. They take the
  * window's spare height and scroll inside it; in a window too small for a few lines of them the
  * middle scrolls instead. */

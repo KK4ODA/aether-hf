@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "updater-window",
-  "description": "The updates window: it listens for the shell's `update` events and calls the shell's own update_* commands. The panel's window is served by the daemon and has no IPC at all.",
+  "description": "The updates window: it listens for the shell's `update` events and calls the shell's own update_* commands. The panel's window is served by the daemon and has no IPC at all. It reads the main window's theme (the panel's Light or dark) and sets its own title bar to match.",
   "windows": [
     "updater"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:window:allow-set-theme"
   ]
 }

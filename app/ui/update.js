@@ -315,6 +315,23 @@ function wire() {
   });
 }
 
+// The panel's colours, dark or light. In a browser this page is the daemon's, like the panel,
+// and theme.js finds the choice in the storage they share. Under the shell it is the shell's own
+// page, another origin, whose storage the panel never writes; the main window's title bar
+// carries the choice instead (the panel sets it to match), so it is read there when this window
+// opens and whenever it comes to the front.
+async function followThePanel() {
+  try {
+    const main = await tauri.window.Window.getByLabel("main");
+    const theme = await main?.theme();
+    if ((theme === "light" || theme === "dark") && theme !== window.aetherTheme?.get()) {
+      window.aetherTheme?.set(theme);
+    }
+  } catch {
+    // an older shell, or no main window: this window keeps the colours it has
+  }
+}
+
 async function start() {
   wire();
   if (!tauri) {
@@ -322,6 +339,8 @@ async function start() {
     render(demo(phase));
     return;
   }
+  followThePanel();
+  window.addEventListener("focus", followThePanel);
   await tauri.event.listen("update", (event) => render(event.payload));
   try {
     render(await invoke("update_view"));

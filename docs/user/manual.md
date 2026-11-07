@@ -103,8 +103,8 @@ To the right:
   the window in Full, for the next start.
 - **Light** turns the panel black on white, for a screen in daylight or sunlight. The lit
   lamps are filled with their colour so they show in glare. Press it again for the dark
-  panel. The undocked signal window follows, and Aether remembers the choice for the next
-  start. The waterfall keeps its own colours.
+  panel. The undocked signal window and the updates window follow, and Aether remembers the
+  choice for the next start. The waterfall keeps its own colours.
 - A chip shows **programs attached** (a host program or KISS programs), and another shows the
   **bandwidth** when the station is running one that is not its own setting.
 
