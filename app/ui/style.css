@@ -1809,8 +1809,20 @@ body.signal-window .head-right {
 /* The undocked window's small views: Compact is the spectrum and the waterfall, Mini the
    waterfall alone with its scale — for a corner of the screen beside a digital program. The
    constellation, the captions and the waterfall's controls stay in Full; the header keeps the
-   mark, the live dot, the switch, Keep on top and Dock. */
-body.signal-window:not([data-view="full"]) .brand-name,
+   Busy lamp, Tune, the switch, On top and Dock — on one row down to the views' least width.
+   The mark and the live dot go: the window's own title bar names it, and a waterfall that
+   moves is live (the Modem lamp shows when it cannot be). */
+.signal-window .label-short {
+  display: none;
+}
+
+body.signal-window:not([data-view="full"]) .label-short {
+  display: inline;
+}
+
+body.signal-window:not([data-view="full"]) .label-long,
+body.signal-window:not([data-view="full"]) .brand,
+body.signal-window:not([data-view="full"]) #signal-live,
 body.signal-window:not([data-view="full"]) .bar-title,
 body.signal-window:not([data-view="full"]) .modem-lamp.on,
 body.signal-window:not([data-view="full"]) .plot-square,
@@ -1855,6 +1867,14 @@ body.signal-window[data-view="mini"] .plot-stack > .plot:not(.plot-grow) {
 
 body.signal-window[data-view="mini"] .wf-scale {
   display: block;
+}
+
+/* the modem's answer to a tone it refused: one line, the whole of it in its title */
+.signal-window #signal-said {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── the rules card ─────────────────────────────────────────────── */

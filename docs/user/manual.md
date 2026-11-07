@@ -486,10 +486,15 @@ not touched.
     **Mini** is the waterfall alone, with a frequency scale under it, for a corner of the screen
     while a digital program runs. The waterfall's controls are in Full and hold in every view.
     Each view keeps its own window size: size it once and it comes back that way. The window
-    reopens in the view you left it in. **Keep on top** works in every view. In Compact and Mini
+    reopens in the view you left it in. **Keep on top** works in every view; Compact and Mini
+    call it **On top**. In Compact and Mini
     the **Modem** lamp shows only while the modem is out of reach, and Mini's frequency scale
     follows the **Span**. Resizing the window or
     changing the view keeps what the waterfall has drawn.
+  - Every view of the undocked window has a **Busy** lamp, the same as the panel's, and **Tune**,
+    the Session tab's *Tuner tone*: a steady tone for ten seconds for an antenna tuner. Press it
+    again (**Stop**) to end the tone early. If the modem refuses the tone (a session, a busy
+    channel, the rules), the reason shows under the title bar for a few seconds.
   - The red lines on the spectrum and the waterfall are the edges of your widest transmission at
     the bandwidth you run, by the FCC's 26 dB measure. They sit a little outside the bandwidth's
     own number: the signal's skirts reach past it. A signal between them is on your frequency;

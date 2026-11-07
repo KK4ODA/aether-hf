@@ -18,18 +18,21 @@
       <span class="bar-title" title="The constellation, spectrum and waterfall, undocked from the panel's Diagnostics tab">Signal analysis</span>
       <span class="live" id="signal-live" data-live="false" title="Whether the scopes are drawing: they pause while this window is minimised or the modem is out of reach">paused</span>
       <div class="head-right">
+        <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal — the level over the threshold, a narrowband signal's shape in the passband, or a decoded frame" role="img" aria-label="Channel clear">Busy</span>
+        <button class="small" id="btn-tune" aria-pressed="false" title="Key the radio with a steady tone at the transmit level for ten seconds, for an antenna tuner; press again to stop. Refused during a session and while the channel is busy, and judged by the rules first">Tune</button>
         <span class="lamp modem-lamp" id="lamp-link" title="Modem: this window's connection to the modem; Compact and Mini show it only while the modem is out of reach" role="status" aria-label="Not connected to the modem">Modem</span>
         <div class="view-switch" id="signal-view" role="group" aria-label="View" title="How much of the card to show: all of it, the spectrum and waterfall, or the waterfall alone; each keeps its own window size">
           <button class="ghost" id="btn-signal-full" data-view="full" aria-pressed="true" title="Full view: the constellation, spectrum and waterfall, and the waterfall's controls">Full</button>
           <button class="ghost" id="btn-signal-compact" data-view="compact" aria-pressed="false" title="Compact view: the spectrum and the waterfall, in a smaller window; the waterfall's controls are in Full">Compact</button>
           <button class="ghost" id="btn-signal-mini" data-view="mini" aria-pressed="false" title="Mini view: the waterfall alone with its frequency scale, in the smallest window; its controls are in Full">Mini</button>
         </div>
-        <label class="check" id="on-top-box" title="Keep this window above the others, the panel included" hidden><input type="checkbox" id="on-top" title="Keep this window above the others, the panel included" /> Keep on top</label>
+        <label class="check" id="on-top-box" title="Keep this window above the others, the panel included" hidden><input type="checkbox" id="on-top" title="Keep this window above the others, the panel included" /> <span class="label-long">Keep on top</span><span class="label-short">On top</span></label>
         <button class="small" id="btn-dock" title="Put the card back on the panel's Diagnostics tab and close this window">Dock</button>
       </div>
     </header>
     <main class="signal-main">
       <p class="note warn" id="signal-note" title="Why the scopes are not drawing" role="status" hidden></p>
+      <p class="note warn" id="signal-said" title="What the modem answered when it refused the tone" role="status" hidden></p>
       <div class="signal-body" id="signal-body"></div>
     </main>
     <script type="module" src="signal.js"></script>

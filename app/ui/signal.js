@@ -104,6 +104,7 @@ function connect() {
       return;
     }
     if (frame.event !== undefined) {
+      if (frame.event === "metrics") showBusy(frame.data ?? {});
       // the constellation is drawn in Full only; Compact and Mini do not ask for it
       if (frame.event === "frame" && scopes.running() && view === "full") scopes.frame();
       // a profile loaded or the waterfall changed from the panel: follow it
@@ -118,6 +119,8 @@ function connect() {
   });
   socket.addEventListener("close", () => {
     setLink(false);
+    showBusy({});
+    tuneButton(false);
     scopes.stop();
     for (const [id, waiting] of pending) {
       waiting.reject(new Error("the connection closed"));
@@ -130,6 +133,73 @@ function connect() {
 }
 
 document.addEventListener("visibilitychange", wanted);
+
+// ── busy and the tuner tone ─────────────────────────────────────────
+// The two things an operator reaches for with the waterfall in a corner of the screen: whether
+// the channel is taken, and a tone for the antenna tuner — without bringing the panel up. The
+// lamp follows the modem's `metrics` events as the panel's does; the tone is the panel's own
+// Tuner tone (the `tune` method), ten seconds, stopped by a second press.
+
+const TUNE_SECONDS = 10;
+let tuneTimer = null;
+let saidTimer = null;
+
+function showBusy(metrics) {
+  const busy = metrics.channel_busy === true;
+  const label = !busy
+    ? connected()
+      ? "Channel clear"
+      : "Busy: no reading, the modem is out of reach"
+    : metrics.busy_reason === "frame"
+      ? "Channel busy: a frame decoded"
+      : metrics.busy_reason === "shape"
+        ? "Channel busy: a narrowband signal is in the passband"
+        : metrics.busy_reason === "level"
+          ? "Channel busy: the level crossed the threshold"
+          : "Channel busy";
+  const lamp = $("lamp-busy");
+  lamp.classList.toggle("on", busy);
+  if (lamp.getAttribute("aria-label") !== label) lamp.setAttribute("aria-label", label);
+  if (lamp.title !== label) lamp.title = label;
+}
+
+function tuneButton(playing) {
+  const button = $("btn-tune");
+  button.textContent = playing ? "Stop" : "Tune";
+  button.setAttribute("aria-pressed", String(playing));
+  clearTimeout(tuneTimer);
+  tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
+}
+
+/// The modem's answer to a refused tone, on one line for a few seconds: why the radio did not
+/// key is the one thing the operator has to see.
+function say(text) {
+  const line = $("signal-said");
+  clearTimeout(saidTimer);
+  line.textContent = text;
+  line.title = text;
+  line.hidden = !text;
+  if (text) saidTimer = setTimeout(() => say(""), 8000);
+}
+
+$("btn-tune").addEventListener("click", async () => {
+  if ($("btn-tune").getAttribute("aria-pressed") === "true") {
+    tuneButton(false);
+    try {
+      await call("tune", { duration_s: 0 });
+    } catch (error) {
+      say(error.message);
+    }
+    return;
+  }
+  try {
+    await call("tune", { duration_s: TUNE_SECONDS });
+    say("");
+    tuneButton(true);
+  } catch (error) {
+    say(error.message);
+  }
+});
 // the panel's own controls changed the waterfall: the browser's store says so
 window.addEventListener("storage", (event) => {
   if (event.key === "aether.waterfall") scopes.reload();
@@ -210,9 +280,9 @@ const VIEWS = ["full", "compact", "mini"];
 const VIEW_KEY = "aether.signal.view";
 const SIZES_KEY = "aether.signal.sizes";
 // a view's window until the operator sizes it (Full's is the one the shell opens), and the
-// least it may shrink to: the small views' header — the mark, the live dot, the switch, Keep
-// on top and Dock — is about 410 px with Linux's fonts and wider with Windows', and on one row
-// down to 460; below it the header would wrap and take the waterfall's room
+// least it may shrink to: the small views' header — Busy, Tune, the switch, On top and Dock —
+// is about 440 px with Linux's fonts and wider with Windows', and on one row down to 500;
+// below it the header would wrap and take the waterfall's room
 const VIEW_SIZE = {
   full: { width: 860, height: 640 },
   compact: { width: 640, height: 380 },
@@ -220,8 +290,8 @@ const VIEW_SIZE = {
 };
 const VIEW_MIN = {
   full: { width: 420, height: 320 },
-  compact: { width: 460, height: 220 },
-  mini: { width: 460, height: 150 },
+  compact: { width: 500, height: 220 },
+  mini: { width: 500, height: 150 },
 };
 let view = "full";
 // while the window is being sized for a view, its resizes are not the operator's
