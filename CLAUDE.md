@@ -2633,9 +2633,34 @@ is not the disconnect's fix; and an operator's probe unanswered goes once more b
 reported (`PROBE_TRIES` 2, `ProbeTry`, `probe_outcome`/`advance_probe` in the daemon — the engine
 and its vectors unchanged; `status.probe_try` `[n, of]`; the log says `<call>: no answer, probing
 again (2/2)`; the panel *Probing KK4ODA-1… 1/2*, *2/2*, *no answer to 2 probes*). A Test's own
-probe still goes once. Owed to the author's Trimode bench (`C:\Dev\AetherBench\trimode\`,
-`[sim] snr_db`): one session strong, one weak — whether Trimode hangs up after `FQ` only when
-`BUFFER 0` comes within a few seconds of it.
+probe still goes once. Both readings were tested on the Trimode bench the same afternoon (next
+paragraph).
+
+**The Trimode bench of 2026-11-07 (beta.140; `C:\Dev\AetherBench\trimode\`).** Scratch Trimode
+1.4.4.0 and Winlink Express 1.8.5.0 (`KK4ODA`, empty Outbox, so Trimode sends `FQ`) over two `[sim]`
+daemons; times UTC. *After FQ*: at 15 dB Trimode wrote `FQ` at 17:54:53.93 and logged *Starting /
+Finished Vara disconnect on confirmed sent* and *Starting the disconnect timer* in that second, before
+the adapter's `BUFFER 3` for it; its Relay link closed 4 s later, `BUFFER 0` came 5.5 s after `FQ`
+(with the client's acknowledgement), and Trimode sent no `DISCONNECT`; Winlink Express forced it 30 s
+after it read `FQ`. At 0 dB the same, `BUFFER 0` 12.4 s after `FQ`. So Trimode decides as it writes
+`FQ`, and a `BUFFER 0` later — before its Relay link closes (the field's 13:54) or after (both bench
+runs) — changes nothing. Not reached on the bench: `FQ` confirmed within a second or two (both times
+Trimode wrote it 1–225 ms after the slave's slot had keyed, so it went in the next transmission; −5 dB
+was not run). *No PTT*: a connect 16 min after the gateway last keyed (its closing identifier, told to
+Trimode as `PTT ON`/`PTT OFF`) drew *Vara connection is active, but no PTT is being done* and *No PTT
+from Vara. Connection appears to be hung* in the second of `CONNECTED`, the text in the welcome to the
+client; 10 s later Trimode restarted its "Vara" (the stub) and reattached — no `ABORT` this time — and
+the gateway's session was left with no program (Winlink Express stalled after `FF`). The host trace at
+a connect was the same in all three: the acceptance keys first, `CONNECTED` is said during it (the
+scanning program's hold, ADR-0051), and that keying is never told as `PTT ON`/`PTT OFF` — the first
+`PTT ON` the program hears is the next transmission. Only the time since the last PTT it was told of
+differed: none since Trimode started its Vara 8 min before (A) or restarted it 1 min before (B, when the
+daemons were restarted), 16 min (C). Open: whether Trimode skips the check in a run with no PTT yet or
+measures from the Vara's start (then its limit is over 8 and at most 13 min, from the field). Bench
+notes: the scratch Relay did not start Trimode this time (start `RMS Trimode\RMS Trimode.exe` by hand);
+Trimode now launches `vara-stub\vara-stub.exe`, not `noop.exe`; Trimode's VARA log has no `BUFFER` or
+`PTT` lines, so time them from the daemon's `aetherd.log` against the order of the untimed host trace
+(`stderr.log`; test A's is `stderr-testA.log`, October's logs `*.before-20261107`).
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
