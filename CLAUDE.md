@@ -2589,11 +2589,21 @@ program's call went at 2300 Hz).
 **The sessions of 2026-11-07 (mobile ↔ gateway, 40 m, both sides with audio, `[host] trace` on;
 beta.139 adds the panel's Light button and a maximized small view going to Full).** Read, not
 yet acted on — the author's calls. (1) *The slow disconnect is Trimode's*: Trimode writes FQ
-(3 bytes), the adapter says `BUFFER 0` a second after it is delivered, and Trimode sends no
+(3 bytes), the adapter says `BUFFER 0` once it is acknowledged, and Trimode sends no
 `DISCONNECT`; Winlink Express hangs up 30 s after FQ ("Forced disconnect. B2 requested
-disconnect with break"). Trimode's 11-06 log says *Starting Vara disconnect on confirmed
-sent*, so it waits for something the adapter does not say: owed Trimode's logs of the day. In
-Winlink Express's log an indented line is one it sent, an unindented one it received. (2) *The
+disconnect with break"). Trimode logs *Starting Vara disconnect on confirmed sent* and
+*Finished…* in the second it writes FQ, then *Starting the disconnect timer* (it waits for the
+client). ADR-0096's guess — one `BUFFER` check when its RMS Relay link closes — is disproved:
+at 13:54 `BUFFER 0` came 4 s before the Relay link closed and Trimode still did not hang up.
+Untested reading: a check of the buffer at once after FQ, which the adapter's `BUFFER` (bytes
+not yet acknowledged, counted after compression — 9 for FQ's 3) cannot pass; the bench (15 dB,
+2026-10-07) did hang up. In Winlink Express's log an indented line is one it sent, an
+unindented one it received. Trimode's ABORT at 15:02:06 was its own *No PTT from Vara.
+Connection appears to be hung* (logged 1 s after `CONNECTED`, though it had keyed), the only
+one of the day, 30 s after the operator changed its channel to 7083.5 kHz over Google Remote
+Desktop (`FA007082000` 15:01:23–15:04:24; the 15:01 calls were on 7082). Trimode re-sends the
+FTDX10's whole setup (mode, filters, the USB sound card's `EX` routing, `FA`) at every
+`LISTEN` cycle, ~13 times a minute, scanning off. (2) *The
 unanswered probe*: heard at the gateway, refused because it landed in one of Trimode's
 half-second `LISTEN OFF` gaps (every ~3.6 s, scanning off too); a call is retried into a
 listening window, a probe goes once. (3) *KK4ODA-1's audio*: its FTDX10 USB codec lost 3.4 s of
@@ -2603,9 +2613,10 @@ the mobile with dropouts inside the long tone frames (timing slips of ~20 ms wit
 envelope notch, found by the best symbol timing along a 40 ms-symbol frame): the mobile never
 decoded three acceptances (the call failed after Winlink Express's 4 tries, 76 s, before
 ADR-0058's move could come) and the gateway's rung-5 data failed until re-encoded, 2.5 min to
-the welcome; the mobile's frames reached the gateway clean. Trimode also ABORTed its first
-session 4.5 s after the acceptance went out (cause owed to its logs). The bandwidth redesign
-("narrower of the two") waits for a clean 2300 Hz session.
+the welcome; the mobile's frames reached the gateway clean. Google Remote Desktop, with audio,
+was connected to the gateway throughout (the author); idle and at 500 Hz the losses were small,
+so it is a suspect with the 2300 Hz load, not proven: the next session without it says. The
+bandwidth redesign ("narrower of the two") waits for a clean 2300 Hz session.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
