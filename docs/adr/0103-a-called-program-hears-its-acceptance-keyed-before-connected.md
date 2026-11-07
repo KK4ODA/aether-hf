@@ -100,8 +100,15 @@ Why it was not told:
   told `CONNECTED` for a call it heard the `PENDING` of with no `PTT ON` between. In the six
   host-program scenarios, beta.140's daemon has the fault at every answered call and this build
   at none (§4).
-* Owed: the bench's test C again (connect, wait 15 min, connect) on the scratch Trimode, and a
-  gateway session with `[host] trace = true` for §2.4.
+* **On the Trimode bench (2026-11-07 evening, beta.141 at both ends).** Test C passes. A connect
+  16 min 46 s after the gateway's last keying drew neither *no PTT is being done* nor *No PTT
+  from Vara* (beta.140's test C drew both in the second of `CONNECTED`), and the session ran to
+  its end. The trace read `PENDING`, `PTT ON`, `CONNECTED`, `PTT OFF` at the first connect and
+  `PENDING`, `PTT ON`, `PENDING`, `CONNECTED`, `PTT OFF` at the second (a hold at the end of a
+  listening window, said after `PENDING_SETTLE`). §2.4's reading is ruled out: Trimode kept one
+  data connection from its Vara's start to its own exit and sent nothing after either `FQ`, so
+  Winlink Express's forced disconnect 30 s after `FQ` still ends the session. Still owed: a
+  gateway session on the air with `[host] trace = true`.
 
 ## 4. Measured
 
