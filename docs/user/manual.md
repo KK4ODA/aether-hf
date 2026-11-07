@@ -98,8 +98,9 @@ To the right:
   Compact shows no **Axes** button, but the chart keeps its two level sliders and **Auto**; the
   time span is changed in Full.
   **Mini** is the state and the four readings alone, for a corner of the screen. **Full**
-  brings the window back to its size. Aether remembers the view, and the size of the window
-  in Full, for the next start.
+  brings the window back to its size. Maximizing the window in Compact or Mini switches it
+  to Full; restored, it goes back to Full's size. Aether remembers the view, and the size of
+  the window in Full, for the next start.
 - **Light** turns the panel black on white, for a screen in daylight or sunlight. The lit
   lamps are filled with their colour so they show in glare. Press it again for the dark
   panel. The undocked signal window follows, and Aether remembers the choice for the next

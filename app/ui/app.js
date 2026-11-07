@@ -2274,6 +2274,10 @@ const VIEWS = ["full", "compact", "mini"];
 const VIEW_WIDTH = { compact: 640, mini: 520 };
 let currentView = "full";
 let sizeBeforeCompact = null;
+// The full view's size, owed to a window that went to Full while maximized: on Windows any
+// size the panel sets (the least size too) restores a maximized window, so it is set when the
+// operator restores the window instead.
+let sizeOnRestore = null;
 
 // In the desktop shell the window follows the view: a small view fits the state strip, the
 // four readings and, in Compact, the two plots; coming back restores what the operator had. In a browser tab there is no window to size; the layout still compacts.
@@ -2285,12 +2289,17 @@ async function fitShellWindow(view) {
   try {
     const win = getWindow();
     if (view !== "full") {
-      // from one small view to the other, the full view's size is the one kept
+      // from one small view to the other, the full view's size is the one kept; a maximized
+      // window's is the screen, so the size kept for Full is the one to come back to
       if (!sizeBeforeCompact) {
-        const scale = await win.scaleFactor();
-        const size = await win.innerSize();
-        sizeBeforeCompact = { width: size.width / scale, height: size.height / scale };
+        if (await win.isMaximized()) sizeBeforeCompact = sizeOnRestore ?? savedWindowSize();
+        if (!sizeBeforeCompact) {
+          const scale = await win.scaleFactor();
+          const size = await win.innerSize();
+          sizeBeforeCompact = { width: size.width / scale, height: size.height / scale };
+        }
       }
+      sizeOnRestore = null;
       // let the small layout settle before measuring what it needs
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const height = Math.ceil(document.body.getBoundingClientRect().height) + 4;
@@ -2299,13 +2308,45 @@ async function fitShellWindow(view) {
         new LogicalSize(Math.min(sizeBeforeCompact.width, VIEW_WIDTH[view]), height),
       );
     } else if (sizeBeforeCompact) {
-      await win.setMinSize(new LogicalSize(420, 300));
-      await win.setSize(new LogicalSize(sizeBeforeCompact.width, sizeBeforeCompact.height));
+      if (await win.isMaximized()) {
+        // the window stays as the operator made it; Full's size waits for its restore
+        sizeOnRestore = sizeBeforeCompact;
+      } else {
+        await win.setMinSize(new LogicalSize(420, 300));
+        await win.setSize(new LogicalSize(sizeBeforeCompact.width, sizeBeforeCompact.height));
+      }
       sizeBeforeCompact = null;
     }
   } catch {
     // the shell refused (an older shell without the panel's capability) or a browser
   }
+}
+
+// A small view whose window is maximized goes to Full: a window made to fill the screen is
+// one the operator wants the whole panel in (KK4ODA, 2026-11-07). Restored after that, the
+// window gets Full's size back.
+let maximizeCheck = null;
+
+function followMaximize() {
+  const getWindow = window.__TAURI__?.window?.getCurrentWindow;
+  const LogicalSize = window.__TAURI__?.dpi?.LogicalSize ?? window.__TAURI__?.window?.LogicalSize;
+  if (!getWindow || !LogicalSize) return;
+  clearTimeout(maximizeCheck);
+  maximizeCheck = setTimeout(async () => {
+    try {
+      const win = getWindow();
+      if (await win.isMaximized()) {
+        if (currentView !== "full") setView("full");
+      } else if (sizeOnRestore && currentView === "full") {
+        const size = sizeOnRestore;
+        sizeOnRestore = null;
+        await win.setMinSize(new LogicalSize(420, 300));
+        await win.setSize(new LogicalSize(size.width, size.height));
+      }
+    } catch {
+      // an older shell without the panel's window capability: the view stays as chosen
+    }
+  }, 150);
 }
 
 // The full view's window, kept between launches: sized once, it opens that way again. Without
@@ -6020,6 +6061,8 @@ function wire() {
   }
   if (view !== "full") setView(view);
   window.addEventListener("resize", rememberWindowSize);
+  window.addEventListener("resize", followMaximize);
+  followMaximize();
   // the stations' "3 min ago", the dial and the rules' verdict on it move on their own: a dial
   // turned on the radio shows its LEGAL / WARNING / TX BLOCKED within five seconds
   setInterval(() => {
