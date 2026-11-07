@@ -2564,6 +2564,13 @@ author then chose to let the host programs own the radio at both ends (`[ptt] ki
 the rules check left to the operator): Trimode had tried COM6 and got *Access denied* while Aether
 held it, and Winlink Express offers no FLRig, Hamlib or OmniRig. Trimode reports its channel to
 the Winlink system from its own settings (3591.5 kHz) whatever the radio is on (7101 kHz then).
+**ADR-0102 (the author's decisions, 2026-11-07):** a program's call goes in the bandwidth its `BW`
+chose — the adapter sets the control API's `connect` `keep_bandwidth` once the program has said a
+`BW` (`HostState.bandwidth_asked`), `Station::connect_keeping` then skips ADR-0035's move and logs
+*calling X at 2300 Hz, as the host program asked, though it was last heard running 500 Hz* — and
+ADR-0058's four-try fallback to 500 Hz now applies to program calls too (it had excluded
+`host_hz`, so Winlink Express, which always says a `BW`, never fell back). The "moved for this
+call" bit waits, by decision, until wrong memories show up again.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
