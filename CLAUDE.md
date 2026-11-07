@@ -2618,6 +2618,10 @@ was connected to the gateway throughout (the author); idle and at 500 Hz the los
 so it is a suspect with the 2300 Hz load, not proven: the next session without it says. The
 bandwidth redesign ("narrower of the two") waits for a clean 2300 Hz session.
 
+**Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
+one command per block (or join them with `;` only where a failure need not stop the next), and
+tag a release by its commit hash when master has moved past it.
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
