@@ -315,26 +315,21 @@ function renderTestProgress(t) {
 }
 
 // How many probes the modem sends before it says a probe went unanswered (the daemon's
-// PROBE_TRIES): the first is "1 of 2" from the moment the button is pressed.
+// PROBE_TRIES): the first is "1/2" from the moment the button is pressed.
 const PROBE_TRIES = 2;
-// The tries the modem said it made for the probe out now.
-let probeTries = 1;
 
 function noteProbe(detail) {
   const line = $("probe-result");
   // "KK4XYZ: no answer, probing again (2/2)": the first went unanswered and a second is out
   const again = /^(.*): no answer, probing again \((\d+)\/(\d+)\)$/.exec(detail);
   if (again) {
-    probeTries = Number(again[2]);
     line.textContent = `Probing ${again[1]}… ${again[2]}/${again[3]}`;
     delete line.dataset.state;
     return;
   }
+  // "KK4XYZ: no answer to 2 probes", said as the modem says it
   const unanswered = detail.includes("no answer");
-  const tries = probeTries > 1 ? ` to ${probeTries} probes` : "";
-  line.textContent = unanswered
-    ? `${detail.replace(/: no answer$/, `: no answer${tries}`)} — try again, or change band`
-    : detail;
+  line.textContent = unanswered ? `${detail}.` : detail;
   line.dataset.state = unanswered ? "warn" : "ok";
 }
 
@@ -5937,7 +5932,6 @@ function wire() {
     $("probe-result").textContent = `Probing ${remote}… 1/${PROBE_TRIES}`;
     delete $("probe-result").dataset.state;
     probeTarget = remote;
-    probeTries = 1;
     const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
     if (!ok) $("probe-result").textContent = "";
   });

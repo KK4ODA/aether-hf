@@ -2646,15 +2646,21 @@ impl<P: Ptt> Station<P> {
         let Some(probe) = self.probe_try.as_mut() else {
             return detail;
         };
-        if detail.ends_with(": no answer") && probe.attempt < PROBE_TRIES {
+        let unanswered = detail.ends_with(": no answer");
+        if unanswered && probe.attempt < PROBE_TRIES {
             probe.due = true;
             return format!(
                 "{detail}, probing again ({}/{PROBE_TRIES})",
                 probe.attempt + 1
             );
         }
+        let tries = probe.attempt;
         self.probe_try = None;
-        detail
+        if unanswered && tries > 1 {
+            format!("{detail} to {tries} probes")
+        } else {
+            detail
+        }
     }
 
     /// Send the operator's probe again when the last went unanswered: called once per audio
@@ -8098,7 +8104,7 @@ mod tests {
             probes,
             vec![
                 "probe:KK4XYZ: no answer, probing again (2/2)",
-                "probe:KK4XYZ: no answer"
+                "probe:KK4XYZ: no answer to 2 probes"
             ],
             "{events:?}"
         );
@@ -8776,7 +8782,9 @@ mod tests {
         station
             .send_datagram(datagram(vec![0x82; 20], None))
             .expect("queued");
-        run_alone(&mut station, 6.0, |_| false);
+        // the probe, unanswered, goes again; the identifier the aborted call still owes goes
+        // ahead of it, and is refused, so the rest waits out one more hold
+        run_alone(&mut station, 20.0, |_| false);
         assert_eq!(station.stats.transmissions, 0, "nothing was keyed");
         let whats: Vec<String> = station
             .take_regulatory_reports()

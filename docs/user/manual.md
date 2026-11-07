@@ -324,8 +324,8 @@ Type the other station's callsign, with its SSID if it uses one, then:
   Disconnect.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
   you and how well, both ways. If the first probe gets no answer, Aether sends a second; the line
-  under the buttons says *Probing KK4XYZ… 1/2*, then *2/2*. Only after both go unanswered does it
-  say *no answer*. A gateway run by RMS Trimode ignores a probe for half a second every few
+  under the buttons says *Probing KK4XYZ… 1/2*, then *2/2*. If neither is answered it says
+  *KK4XYZ: no answer to 2 probes.* A gateway run by RMS Trimode ignores a probe for half a second every few
   seconds, so one probe can be missed when the other station hears you fine.
 - **Beacon**: puts your callsign on the air once, on the tone floor, addressed to nobody, so
   anyone listening can report hearing you. The list beside it repeats it every 10, 15, 20, 30 or
