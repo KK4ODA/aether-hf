@@ -702,9 +702,10 @@ pub struct FrameReport {
     pub to: Option<String>,
     /// A control frame's fields, spelled out.
     pub control: Option<String>,
-    /// The bandwidth the frame says its sender runs, hertz: a beacon's (ADR-0024), a call's,
-    /// an answer's, a probe's or a probe answer's capability byte (ADR-0035); none for any
-    /// other frame, or for a beacon from before ADR-0024.
+    /// The bandwidth the frame says its sender runs, hertz: a beacon's (ADR-0024), a call's, a
+    /// probe's or a probe answer's capability byte (ADR-0035); none for any other frame, for a
+    /// beacon from before ADR-0024, or for an answer to a call, which goes in the call's
+    /// bandwidth whatever its sender runs (ADR-0101).
     pub bandwidth_hz: Option<u32>,
     /// How many more frames of its burst an ordinary data frame said follow it (ADR-0041);
     /// none for control and tone frames, which cannot say.
@@ -3930,7 +3931,14 @@ impl<P: Ptt> Station<P> {
                     if let Ok(connect) = ConnectBody::decode(&body) {
                         report.from = Some(connect.src);
                         report.to = Some(connect.dst);
-                        report.bandwidth_hz = stated_bandwidth_hz(connect.caps);
+                        // An answer goes in the bandwidth it was called in, whatever its sender
+                        // runs: a 2 300 Hz station moves to answer a 500 Hz call (ADR-0026). Taken
+                        // as what it runs, KK4ODA's belief that KK4ODA-1 ran 500 Hz was renewed by
+                        // every answer to its 500 Hz calls, and both stations, set to 2 300 Hz,
+                        // met at 500 Hz for good (2026-11-06, ADR-0101). A call says it still.
+                        if header.kind == DataKind::ConnectReq {
+                            report.bandwidth_hz = stated_bandwidth_hz(connect.caps);
+                        }
                     }
                 }
                 DataKind::Probe | DataKind::ProbeAck => {
@@ -10282,6 +10290,20 @@ mod tests {
         // OFDM: its first report is a floor rung
         let reports = air.b.take_frame_reports();
         assert!(reports[0].mode < 2 && reports[0].decoded, "{reports:?}");
+        // and the caller has not learnt that the wide station runs 500 Hz from an answer that
+        // went at 500 Hz because the call did (ADR-0101): KK4ODA and KK4ODA-1, both set to
+        // 2 300 Hz, had met at 500 Hz for good that way
+        let answers: Vec<_> = air
+            .a
+            .take_frame_reports()
+            .into_iter()
+            .filter(|r| r.kind == "answer")
+            .collect();
+        assert!(
+            !answers.is_empty() && answers.iter().all(|r| r.bandwidth_hz.is_none()),
+            "{answers:?}"
+        );
+        assert_eq!(air.a.known_bandwidth("KK4XYZ"), None);
         let message = b"answered in the bandwidth it was called in";
         air.a.send(message);
         air.run(120.0, |_, b| b.received_len() >= message.len());

@@ -680,6 +680,12 @@ and run **Set drive** again.
 - After four unanswered tries at 2300 Hz to a station not known to run 2300 Hz, Aether tries at
   500 Hz.
 
+**Two 2300 Hz stations keep meeting at 500 Hz.** One of them remembers the other as a 500 Hz
+station, from an earlier session or a time it really ran 500 Hz. The Stations tab's *Hz* column
+shows what each station remembers. Probe the other station once: the answer says the bandwidth it
+really runs, and the next call goes at 2300 Hz. An answer to a call does not count, because it
+always goes in the call's bandwidth.
+
 **Disconnect does not close the session at once.** It sends what is still queued first. On a
 slow path that can take a while, so it waits a minute at most, then closes anyway. The banner
 counts the seconds down. To close now, press **Abort**.
