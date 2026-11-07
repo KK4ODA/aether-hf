@@ -104,3 +104,7 @@ context → decision → alternatives considered → consequences.
 | [0097](0097-a-host-program-that-starts-aether-as-vara-starts-a-stand-in.md) | A host program that starts Aether as VARA starts a stand-in | accepted |
 | [0098](0098-only-a-left-sessions-slave-answers-its-header.md) | Only the station that was a left session's slave answers its header | accepted |
 | [0099](0099-one-rate-controller-at-the-sender-and-link-protocol-12.md) | One rate controller, at the sender, and link protocol 12 | accepted for building |
+| [0100](0100-a-held-connected-waits-no-longer-than-a-pending-programs-scan.md) | A held CONNECTED waits no longer than a pending program's scan | accepted |
+| [0101](0101-an-answer-does-not-say-what-bandwidth-its-sender-runs.md) | An answer does not say what bandwidth its sender runs | accepted |
+| [0102](0102-a-programs-call-goes-in-the-bandwidth-it-chose.md) | A program's call goes in the bandwidth it chose | accepted |
+| [0103](0103-a-called-program-hears-its-acceptance-keyed-before-connected.md) | A called program hears its acceptance keyed before CONNECTED | accepted |

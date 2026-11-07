@@ -338,7 +338,10 @@ class Host:
     and sends no ``LISTEN`` until ``CONNECTED`` or ``CANCELPENDING`` (KK4ODA-1, 2026-11-06,
     ADR-0100); a ``PENDING`` left without either for 20 s is a fault. A ``PENDING`` that lands in
     the last quarter of its window still meets the ``LISTEN OFF`` its scan had decided, as the
-    gateway's crossed it that night. ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
+    gateway's crossed it that night. Any program told ``CONNECTED`` for a call it heard the
+    ``PENDING`` of, with no ``PTT ON`` between them, is a fault: Trimode judges a link hung when it
+    hears ``CONNECTED`` with no PTT for minutes, and the acceptance's keying had never been told
+    (KK4ODA-1, 2026-11-07, ADR-0103). ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
     ``-T`` alias in ``MYCALL``, never ``CWID``) and pings with ``host-ping``."""
 
     def __init__(self, run: Run, station: Station, kind: str) -> None:
@@ -364,6 +367,8 @@ class Host:
         # when the PENDING arrived on the wall clock, which is the one the adapter judges the end
         # of a window by: the air clock moves in whole seconds
         self.pending_wall: float | None = None
+        # told PTT ON since the PENDING: the acceptance's keying comes before CONNECTED
+        self.keyed_since_pending = False
         self.connected = False
         self.problems: list[str] = []
         self.lock = threading.Lock()
@@ -438,6 +443,9 @@ class Host:
                     if self.pending_at is None:
                         self.pending_at = self.run.air_s()
                         self.pending_wall = time.monotonic()
+                        self.keyed_since_pending = False
+                elif line == "PTT ON":
+                    self.keyed_since_pending = True
                 elif line == "CANCELPENDING":
                     self.pending_at = None
                     self.pending_wall = None
@@ -445,6 +453,11 @@ class Host:
                     if self.deaf and self.kind == "trimode":
                         self.problems.append(
                             f"{self.station.who}: CONNECTED while deaf at {self.run.air_s():.1f} s"
+                        )
+                    if self.pending_at is not None and not self.keyed_since_pending:
+                        self.problems.append(
+                            f"{self.station.who}: CONNECTED at {self.run.air_s():.1f} s with no "
+                            "PTT ON since the PENDING"
                         )
                     self.pending_at = None
                     self.pending_wall = None

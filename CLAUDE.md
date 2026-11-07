@@ -2662,6 +2662,21 @@ Trimode now launches `vara-stub\vara-stub.exe`, not `noop.exe`; Trimode's VARA l
 `PTT` lines, so time them from the daemon's `aetherd.log` against the order of the untimed host trace
 (`stderr.log`; test A's is `stderr-testA.log`, October's logs `*.before-20261107`).
 
+**ADR-0103 (2026-11-07, after the bench; the author's go; host adapter only, no wire change).**
+A called session whose `PENDING` the program heard now has its `CONNECTED` wait for the
+acceptance's `PTT ON` (`acceptance_key` in `host/server.rs`): the program hears `PENDING`,
+`PTT ON`, `CONNECTED`, `PTT OFF` — the order it already hears for its own calls — whether it keys
+the radio or not, and an acceptance that never keys lets the `CONNECTED` go after
+`ACCEPTANCE_KEY_WAIT` (4 s) with a warning. ADR-0096 §2.3's untold keying is now only a call
+whose `PENDING` the program never heard (`LISTEN` off), and the closing identifier of a call that
+came to nothing. The ADR-0051/0100 holds still apply on top (`held_for_listen` says `PENDING`
+again). The log also says when a program opens or closes a data connection (`data port:
+connection n …`, `DataEnd`), to see whether Trimode closes its data port after `FQ`. The harness's
+host stand-ins fault a `CONNECTED` after a `PENDING` with no `PTT ON` between; note that its
+`PENDING_SETTLE` and the key wait are wall-clock while the harness runs 2–5× faster than the
+air, so a held `CONNECTED` shows there 4–8 air-seconds after the `PENDING`. Owed: the bench's
+test C again (connect, wait 15 min, connect) and a gateway session with `[host] trace = true`.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
