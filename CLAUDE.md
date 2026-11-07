@@ -2596,8 +2596,16 @@ disconnect with break"). Trimode logs *Starting Vara disconnect on confirmed sen
 client). ADR-0096's guess — one `BUFFER` check when its RMS Relay link closes — is disproved:
 at 13:54 `BUFFER 0` came 4 s before the Relay link closed and Trimode still did not hang up.
 Untested reading: a check of the buffer at once after FQ, which the adapter's `BUFFER` (bytes
-not yet acknowledged, counted after compression — 9 for FQ's 3) cannot pass; the bench (15 dB,
-2026-10-07) did hang up. In Winlink Express's log an indented line is one it sent, an
+not yet acknowledged) cannot pass. The October bench (Trimode's logs of 2026-10-07) never tested
+it: there the *client* sent `FQ` and hung up itself 2 s later — whoever sends `FQ` hangs up, and
+Trimode sends it when the client has nothing to send (collecting mail). Trimode's fallback
+*disconnect timer* is 6 min. The test owed: a client with an empty outbox and mail waiting,
+strong and weak. *No PTT from Vara … hung* (Trimode's ABORT 10 s later) came on 2 of 7 connects
+(bench 23:13, 2026-11-07 15:01), both when Trimode had seen the modem key earlier in the same
+run, 24 and 13 min before; never on the first connect after it started the modem; the host
+trace at a connect is the same in all. Guess, untested: it times the last finished transmission
+and the adapter says `CONNECTED` before its acceptance keys — reproduce on the bench (connect,
+wait 15 min, connect) before any change. In Winlink Express's log an indented line is one it sent, an
 unindented one it received. Trimode's ABORT at 15:02:06 was its own *No PTT from Vara.
 Connection appears to be hung* (logged 1 s after `CONNECTED`, though it had keyed), the only
 one of the day, 30 s after the operator changed its channel to 7083.5 kHz over Google Remote

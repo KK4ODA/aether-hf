@@ -118,8 +118,11 @@ Trimode restarted would have been serving the newest.
   CMS link closes, which `FQ`, still 10 s from its acknowledgement then, failed. The next
   session with `[host] trace = true` at the gateway (`winlink-gateway.md` §3.1) shows every line
   both ways; nothing here changes until it has. On the bench of 2026-10-07 a whole Trimode
-  session, the disconnect included, took about 35 s at 15 dB: there the gateway did hang up
-  promptly.
+  session, the disconnect included, took about 35 s at 15 dB — but there the *client* sent
+  `FQ` and hung up (corrected 2026-11-07 from Trimode's logs of that bench: the `FQ` is one it
+  received), so the bench never exercised Trimode's own hang-up. Its fallback, the
+  *disconnect timer*, is six minutes. The trace of 2026-11-07 disproved the reading above:
+  `BUFFER 0` came 4 s before the Relay link closed and Trimode still sent no `DISCONNECT`.
 * **Three bytes took 14 s from the gateway to the client**: `FQ` missed the slot being decided
   by 0.1 s and went in the next one, a floor header and a rung-5 frame. The slot's answer is
   decided as soon as what it says is final (ADR-0069 render-ahead); waiting for late payload is
