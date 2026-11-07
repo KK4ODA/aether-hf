@@ -2543,6 +2543,28 @@ percentile (a bin's noise between the signals), needs 12 before it reads, draws 
 the edge only when the next 150 Hz stays down (a notch is not an edge). A third fault in it
 gets a review, not a patch.
 
+**The gateway sessions of 2026-11-06 (beta.136 → beta.137; ADR-0100, ADR-0101).** Two Winlink
+sessions from the mobile (KK4ODA, Winlink Express 1.8.6.0, TS-480 keyed by RTS on a DigiRig's
+COM9, which is also its CAT port) to the gateway (KK4ODA-1, RMS Trimode 1.4.4.2, FTDX10 on CAT,
+40 m), both sides uploaded plus Trimode's main and VARA logs. The second came up on the air and
+carried nothing: a call taken late in Trimode's listening window had `PENDING` said at once and
+the `CONNECTED` held for a `LISTEN ON` that a Trimode holding its scan for a pending call never
+sends (it logs its scan's requests "while … Pending=True" and sends neither). Now a `CONNECTED`
+held behind a `PENDING` the program heard waits `PENDING_SETTLE` (1.5 s) at most (ADR-0100); the
+harness's Trimode holds its scan on `PENDING` and a `PENDING` left 20 s is a fault. **Trimode
+cycles `LISTEN` with its scanning off too** — on one channel, always. Both sessions ran at
+500 Hz though both stations are set to 2300: each remembered the other as 500 Hz, and an answer,
+which goes in the call's bandwidth, renewed it. An answer no longer teaches a bandwidth (ADR-0101);
+a belief already held is corrected by one probe. Left open, the author's calls: a "moved for this
+call" capability bit, and whether a host program's own `BW` should stop `move_for_call`. The first
+session's slow ending is still Trimode not hanging up after `FQ` (`Starting the disconnect timer`
+twice, no `DISCONNECT` sent; Winlink Express gives up after 30 s, ADR-0096 §4): owed a gateway
+session with `[host] trace = true`, since Trimode's logs record neither `BUFFER` nor `PTT`. The
+author then chose to let the host programs own the radio at both ends (`[ptt] kind = "host"`,
+the rules check left to the operator): Trimode had tried COM6 and got *Access denied* while Aether
+held it, and Winlink Express offers no FLRig, Hamlib or OmniRig. Trimode reports its channel to
+the Winlink system from its own settings (3591.5 kHz) whatever the radio is on (7101 kHz then).
+
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
 one — `%LOCALAPPDATA%` written from a session physically lands in
