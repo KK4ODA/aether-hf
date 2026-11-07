@@ -115,9 +115,14 @@ design system — the type scale, spacing, radii, the 30/24 px control heights �
 every tab is built from: `.card` with its `.card-title` inside the box, `.tiles`, `.badge`,
 `.chip`, the `?` that opens an explanation (`details.help-pop`), the folding card and the sticky
 save bar. The constellation, spectrum and waterfall are one card built by `ui/scopes.js`, used
-by the Diagnostics tab and by the undocked window (`signal.html`, `signal.js`). A light variant
-exists for whoever asks for it: set `data-theme="light"` on `<html>`. The window's title bar is
-asked to be dark in `tauri.conf.json` (`theme`). Numbers are set in the system UI face with
+by the Diagnostics tab and by the undocked window (`signal.html`, `signal.js`). The header's
+**Light** button turns it into its opposite for a screen in daylight or sunlight:
+`ui/theme.js`, a plain script in the head of both pages so a light panel never opens dark,
+sets `data-theme="light"` on `<html>`, keeps the choice in the browser's store (`aether.theme`,
+which the undocked window follows) and asks the shell to match the title bar
+(`core:window:allow-set-theme`). The light tokens are high-contrast on purpose, and a lit lamp
+is filled with its colour there. The windows open dark (`theme` in `tauri.conf.json`); the
+updater window stays dark. Numbers are set in the system UI face with
 tabular figures (its Display cut for the large readouts); monospace is kept for what is read
 character by character — callsigns, the log, the configuration and paths. No fonts are bundled
 or fetched.

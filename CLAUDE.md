@@ -188,8 +188,13 @@ other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives 
   OFF (SLOW ramps slowly enough to pass the gate). Recordings made from the Session tab's
   Record button land in `%APPDATA%\aether-hf\recordings\` on the author's machine.
 * **The panel's appearance** (`app/ui/style.css`) is a token system, dark by design and
-  independent of the OS theme (light is an opt-in `data-theme="light"`); semantic status
-  colours carry meaning only. **Since the 2026-10-10 redesign** it is a radio instrument in
+  independent of the OS theme; semantic status colours carry meaning only. **Light**
+  (2026-11-07, the author: dark is hard to read in sunlight) is the header's button:
+  `app/ui/theme.js`, a plain script in the head of `index.html` and `signal.html`, sets
+  `data-theme="light"`, keeps `aether.theme` in `localStorage` (the undocked window follows by
+  the `storage` event), fires `aether-theme` (the panel redraws its charts) and asks the shell
+  for a matching title bar; the light tokens are high-contrast for glare and its lit lamps are
+  filled blocks. **Since the 2026-10-10 redesign** it is a radio instrument in
   graphite: colour only for state (green RX/OK, red TX/error, amber busy/caution, blue session
   up), the primary action a light neutral key (`--accent` is no hue), plots drawn in `--trace`
   with state colours on top, sentence case everywhere (no `text-transform: uppercase`, no

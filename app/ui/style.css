@@ -3,8 +3,10 @@
  * The panel is the front panel of a radio instrument, not a web dashboard. It is graphite,
  * like the cabinet of a transceiver and the bench it sits on, and dark by design: it is
  * looked at in a shack at night as often as at a desk, and an instrument that turns white
- * because Windows did is the wrong instrument. A light variant exists for the operator who
- * asks for it (`<html data-theme="light">`) and for nobody else.
+ * because Windows did is the wrong instrument. The header's Light button turns it into its
+ * opposite for a screen in daylight or sunlight (`<html data-theme="light">`, set by
+ * `theme.js`): near-black on white at the most contrast the screen has, the lit lamps filled
+ * with their colour, and never because the operating system asked.
  *
  * Colour is spent on state and on nothing else. Green is a frame arriving, red is the
  * transmitter keyed or something wrong, amber is a busy channel or a caution, blue is a
@@ -127,35 +129,40 @@
   --idle: var(--status-idle);
 }
 
+/* The light panel, for a screen in daylight or sunlight. Glare washes out a mid grey long
+ * before it touches black on white, so the text is near black, the secondary text still
+ * reads at arm's length (about 12:1 and 7:1 on white), the hairlines are dark enough to
+ * keep the boxes apart, and the state colours are the deep ones that hold their meaning on
+ * a white ground. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #e9eaeb;
-  --bg-2: #f1f2f3;
-  --surface: #f7f7f8;
+  --bg: #e2e4e6;
+  --bg-2: #eceef0;
+  --surface: #f8f9f9;
   --surface-2: #ffffff;
-  --surface-3: #e4e6e8;
-  --border: #d3d6d9;
-  --border-strong: #b6bbc0;
-  --well: #fbfbfc;
-  --well-edge: #c9cdd1;
-  --text: #1c1f22;
-  --text-2: #50575e;
-  --text-3: #7d848b;
-  --accent: #1c1f22;
-  --accent-ink: #f7f7f8;
-  --accent-dim: rgba(28, 31, 34, 0.08);
-  --focus: #4b5a69;
-  --status-link: #1f6fbf;
-  --status-tx: #c2342b;
-  --status-rx: #23874a;
-  --status-busy: #a8700d;
-  --status-warning: #a8700d;
-  --status-error: #c2342b;
-  --status-idle: #a7adb3;
+  --surface-3: #d9dce0;
+  --border: #b3b8bd;
+  --border-strong: #848b92;
+  --well: #ffffff;
+  --well-edge: #848b92;
+  --text: #0a0c0e;
+  --text-2: #2e343a;
+  --text-3: #4f565d;
+  --accent: #0a0c0e;
+  --accent-ink: #ffffff;
+  --accent-dim: rgba(10, 12, 14, 0.1);
+  --focus: #1f4f8a;
+  --status-link: #0f5cb3;
+  --status-tx: #b8231b;
+  --status-rx: #0f7a36;
+  --status-busy: #8f5600;
+  --status-warning: #8f5600;
+  --status-error: #b8231b;
+  --status-idle: #9aa1a8;
   --on-status: #ffffff;
-  --plot-grid: #e3e6e9;
-  --trace: #3a4651;
-  --shadow-pop: 0 10px 28px rgba(20, 24, 28, 0.18);
+  --plot-grid: #d2d6da;
+  --trace: #1d2730;
+  --shadow-pop: 0 10px 28px rgba(20, 24, 28, 0.22);
 }
 
 * {
@@ -284,6 +291,10 @@ header.bar {
   border-radius: var(--r-md);
   box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 255, 255, 0.03);
   overflow: hidden;
+}
+
+:root[data-theme="light"] .strip {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
 .strip > * {
@@ -437,6 +448,21 @@ header.bar {
 
 #lamp-rx.on {
   --lit: var(--status-rx);
+}
+
+/* In the light panel a lit lamp is filled with its colour: in sunlight an 8 px dot and its
+ * glow are lost, a block of red, green or amber is not. */
+:root[data-theme="light"] .lamp.on:not(#lamp-link),
+:root[data-theme="light"] #lamp-link:not(.on) {
+  background: var(--lit, var(--status-error));
+  color: var(--on-status);
+  border-radius: var(--r-sm);
+}
+
+:root[data-theme="light"] .lamp.on:not(#lamp-link)::before,
+:root[data-theme="light"] #lamp-link:not(.on)::before {
+  background: var(--on-status);
+  box-shadow: none;
 }
 
 /* The modem lamp is the panel's own connection, not the radio link: settled when it is up,

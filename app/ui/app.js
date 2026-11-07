@@ -2419,6 +2419,24 @@ async function fitWindowToCharts() {
   }
 }
 
+/// The header's Light button: the panel's colours for a screen in daylight or sunlight.
+/// `theme.js` applies and keeps the choice, and the undocked window follows it; the charts
+/// read their colours when they draw, so they are drawn again.
+function wireTheme() {
+  const button = $("btn-theme");
+  const show = () =>
+    button.setAttribute("aria-pressed", String(window.aetherTheme?.get() === "light"));
+  button.addEventListener("click", () => {
+    window.aetherTheme?.set(window.aetherTheme.get() === "light" ? "dark" : "light");
+  });
+  window.addEventListener("aether-theme", () => {
+    show();
+    drawChart();
+    drawStatusChart();
+  });
+  show();
+}
+
 function setView(view) {
   if (!VIEWS.includes(view)) view = "full";
   currentView = view;
@@ -5990,6 +6008,7 @@ function wire() {
   for (const button of document.querySelectorAll("#view-switch [data-view]")) {
     button.addEventListener("click", () => setView(button.dataset.view));
   }
+  wireTheme();
   let view = "full";
   try {
     // before the three views, Compact was the smallest: Mini now
