@@ -584,7 +584,7 @@ impl<P: Ptt> Station<P> {
         if self.engine.state() != State::Idle {
             return Err("a session is running".into());
         }
-        if self.engine.probing() {
+        if self.probing() {
             return Err("a probe is already out".into());
         }
         if let Some(call) = &plan.as_call

@@ -323,7 +323,10 @@ Type the other station's callsign, with its SSID if it uses one, then:
   station it has gone, then sends your Morse ID if you identify. Use it when you cannot wait for
   Disconnect.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
-  you and how well, both ways.
+  you and how well, both ways. If the first probe gets no answer, Aether sends a second; the line
+  under the buttons says *Probing KK4XYZ… 1/2*, then *2/2*. Only after both go unanswered does it
+  say *no answer*. A gateway run by RMS Trimode ignores a probe for half a second every few
+  seconds, so one probe can be missed when the other station hears you fine.
 - **Beacon**: puts your callsign on the air once, on the tone floor, addressed to nobody, so
   anyone listening can report hearing you. The list beside it repeats it every 10, 15, 20, 30 or
   60 minutes while you are at the station. It waits for a clear channel and for any session to
@@ -646,7 +649,7 @@ For APRS and packet programs, and VarAC's broadcasts, turn on **KISS programs** 
 | **Tuning** | Channel | The carrier offset of the last frame, from your dial. Positive means the other station is above your dial. A few hertz is nothing; a hundred is a dial to check. In a session the receiver follows a station that is off frequency, so a rig that drifts as it warms stays heard; the log says so, and the receiver goes back to your dial when the session ends. |
 | **Signal above noise** | Channel | The busy detector's reading in Aether's channel (500 or 2300 Hz wide): the level of its latest 25 ms of audio over its learned noise floor. The floor is the noise's middle level, so noise alone reads a few decibels either side of 0 dB, and a negative value is noise under the floor. Frames the modem finds, decoded or not, never count as noise. The floor follows the radio's gain: when its AGC turns everything down for a strong signal, the floor goes down with it and back up with it. |
 | **Receive level** | Channel, Setup step 3 | The sound card's whole input over the last 3 seconds: the radio's whole passband, every signal in it included. Aim for *Good*. It measures more than Aether's channel, so it reads higher than the floor under *Signal above noise*: on noise alone a 500 Hz channel holds about 7 dB less than a 2.4 kHz passband. |
-| **Queued** | Channel | Bytes still waiting to be sent. |
+| **Queued** | Channel | Bytes still waiting to be sent or acknowledged, counted as you or your program gave them, before compression. |
 | **Mode confidence** | Diagnostics | How clearly the last frame's mode was read. Below 1.3 is a guess. |
 | **Busy lamp** | Header | The channel carries a signal: the level over the threshold, a narrowband signal's shape, or a frame that decoded. |
 

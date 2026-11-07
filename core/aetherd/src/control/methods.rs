@@ -1928,7 +1928,10 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "session": engine.session(),
         "mode": engine.current_mode(),
         "transmitting": station.transmitting(),
-        "probing": engine.probing(),
+        "probing": station.probing(),
+        // which of the operator's probes is out, of how many: [1, 2], then [2, 2] when the first
+        // went unanswered; null with none out
+        "probe_try": station.probe_try().map(|(n, of)| json!([n, of])),
         // a disconnect was asked for and the DISC has not gone yet: the sender finishing
         // what is queued, the receiver waiting for a burst to end (ADR-0023)
         "closing": engine.disconnect_requested(),
@@ -1943,7 +1946,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "ptt": station.ptt_description(),
         "ptt_fault": station.ptt_fault(),
         "can_tune": station.can_tune(),
-        "queued_bytes": engine.tx_pending_bytes(),
+        "queued_bytes": station.queued_bytes(),
         "version": env!("CARGO_PKG_VERSION"),
         "link": link_json(station),
         "metrics": metrics(station),
@@ -2096,7 +2099,7 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
     let last = station.last_frame();
     json!({
         "mode": station.engine().current_mode(),
-        "queued_bytes": station.engine().tx_pending_bytes(),
+        "queued_bytes": station.queued_bytes(),
         "noise_floor_db": level(busy.floor_db),
         "level_db": level(busy.level_db),
         // the largest level-over-floor since the last reading: the decision is made forty

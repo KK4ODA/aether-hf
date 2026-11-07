@@ -764,6 +764,36 @@ struct SentMark {
     end: usize,
 }
 
+/// One flush of the application's bytes into the link: how many of its own bytes went in, and
+/// where the compressed stream they became ends. What is still to send is counted in the
+/// application's bytes from these ([`Station::queued_bytes`]), not the link's: a host program
+/// that wrote `FQ` and a return, three bytes, was told `BUFFER 9` — the deflate stream's flush
+/// (2026-11-07).
+#[derive(Debug, Clone, Copy)]
+struct PayloadMark {
+    bytes: usize,
+    link_len: usize,
+    link_end: usize,
+}
+
+/// How many probes go out before a probe is reported unanswered: a probe is one frame with no
+/// retry of its own, and a station whose host program cycles `LISTEN` (RMS Trimode, every
+/// ~3.6 s, half a second off, scanning or not) refuses one that lands in the gap — KK4ODA's
+/// probe of KK4ODA-1 on 2026-11-07. A second, a probe's length later, lands elsewhere in the
+/// cycle.
+pub const PROBE_TRIES: u32 = 2;
+
+/// The operator's probe, while it is out or about to be sent again.
+#[derive(Debug, Clone)]
+struct ProbeTry {
+    remote: String,
+    as_call: Option<String>,
+    /// Which probe this is, from 1.
+    attempt: u32,
+    /// The last went unanswered and the next goes on the next pass.
+    due: bool,
+}
+
 /// What became of a message sent with a reference ([`Station::send_tracked`]): the other
 /// station has all of it, or the session ended first. The panel's check mark on a sent line
 /// comes from this.
@@ -1164,6 +1194,11 @@ pub struct Station<P: Ptt> {
     link_sent: usize,
     /// Messages sent with a reference, not yet all acknowledged, oldest first.
     sent_marks: VecDeque<SentMark>,
+    /// The application's bytes in the link stream this session, not yet all acknowledged,
+    /// oldest first.
+    payload_marks: VecDeque<PayloadMark>,
+    /// The operator's probe and its tries ([`PROBE_TRIES`]).
+    probe_try: Option<ProbeTry>,
     /// Deliveries resolved since the daemon last took them.
     deliveries: Vec<Delivery>,
     /// The last deliveries resolved, for `status`.
@@ -1368,6 +1403,8 @@ impl<P: Ptt> Station<P> {
             session_notes: None,
             link_sent: 0,
             sent_marks: VecDeque::new(),
+            payload_marks: VecDeque::new(),
+            probe_try: None,
             deliveries: Vec::new(),
             recent_deliveries: VecDeque::new(),
             finished: Vec::new(),
@@ -1572,10 +1609,50 @@ impl<P: Ptt> Station<P> {
         self.busy.busy(self.now())
     }
 
-    /// Bytes the application has queued that are not yet with the link layer.
+    /// The application's own bytes still to send: queued, or handed to the link and not yet
+    /// acknowledged by the other station. Counted before compression, so a host program's
+    /// `BUFFER`, the panel's Queued reading and the close warning speak of the bytes the
+    /// program or the operator gave; with compression off it is the link's count. A flush the
+    /// other station holds part of counts that share of its bytes, rounded up: the count is 0
+    /// only once all of it is acknowledged.
     #[must_use]
     pub fn queued_bytes(&self) -> usize {
-        self.outbound.len() + self.engine.tx_pending_bytes()
+        let acked = self.acknowledged_position();
+        let in_link: usize = self
+            .payload_marks
+            .iter()
+            .map(|mark| {
+                let start = mark.link_end - mark.link_len;
+                if acked >= mark.link_end {
+                    0
+                } else if acked <= start || mark.link_len == 0 {
+                    mark.bytes
+                } else {
+                    (mark.bytes * (mark.link_end - acked)).div_ceil(mark.link_len)
+                }
+            })
+            .sum();
+        self.outbound.len() + in_link
+    }
+
+    /// Where the acknowledged part of this session's link stream ends: the stream handed to the
+    /// engine less what it holds unacknowledged. A frame acknowledged past a hole counts as
+    /// acknowledged here, as the link's own count does.
+    fn acknowledged_position(&self) -> usize {
+        self.link_sent
+            .saturating_sub(self.engine.tx_pending_bytes())
+    }
+
+    /// Forget the flushes the other station holds all of.
+    fn drop_acknowledged_payload(&mut self) {
+        let acked = self.acknowledged_position();
+        while self
+            .payload_marks
+            .front()
+            .is_some_and(|mark| mark.link_end <= acked)
+        {
+            self.payload_marks.pop_front();
+        }
     }
 
     /// How many delivered bytes are waiting to be taken.
@@ -1978,6 +2055,11 @@ impl<P: Ptt> Station<P> {
         self.stats.bytes_before_compression = self.compressor.bytes_in;
         self.stats.bytes_after_compression = self.compressor.bytes_out;
         self.link_sent += wire.len();
+        self.payload_marks.push_back(PayloadMark {
+            bytes: pending.len(),
+            link_len: wire.len(),
+            link_end: self.link_sent,
+        });
         self.engine.send(&wire);
     }
 
@@ -2390,7 +2472,7 @@ impl<P: Ptt> Station<P> {
         if self.test_running() {
             return Err("a Test session is running".into());
         }
-        if self.engine.probing() {
+        if self.probing() {
             return Err("a probe is out".into());
         }
         if self.engine.state() == State::Connecting {
@@ -2525,9 +2607,79 @@ impl<P: Ptt> Station<P> {
         if self.config.answer_only {
             return Err("this station is answer-only: it answers probes and sends none");
         }
+        if self.probe_try.is_some() {
+            return Err("a probe is already out");
+        }
         self.engine.probe(remote, as_call)?;
+        self.probe_try = Some(ProbeTry {
+            remote: remote.trim().to_ascii_uppercase(),
+            as_call: as_call.map(str::to_owned),
+            attempt: 1,
+            due: false,
+        });
         self.pump();
         Ok(())
+    }
+
+    /// Whether a probe is out or about to go again: the engine's, or the operator's between
+    /// its tries.
+    #[must_use]
+    pub fn probing(&self) -> bool {
+        self.engine.probing() || self.probe_try.as_ref().is_some_and(|t| t.due)
+    }
+
+    /// The operator's probe out now, as which try of how many.
+    #[must_use]
+    pub fn probe_try(&self) -> Option<(u32, u32)> {
+        self.probe_try
+            .as_ref()
+            .map(|t| (t.attempt + u32::from(t.due), PROBE_TRIES))
+    }
+
+    /// What the log says of an engine event: of a probe's outcome, an answer or no answer from
+    /// the last try ends the operator's probe, and no answer from an earlier one says another
+    /// goes; any other event as it came.
+    fn probe_outcome(&mut self, name: &str, detail: String) -> String {
+        if name != "probe" {
+            return detail;
+        }
+        let Some(probe) = self.probe_try.as_mut() else {
+            return detail;
+        };
+        if detail.ends_with(": no answer") && probe.attempt < PROBE_TRIES {
+            probe.due = true;
+            return format!(
+                "{detail}, probing again ({}/{PROBE_TRIES})",
+                probe.attempt + 1
+            );
+        }
+        self.probe_try = None;
+        detail
+    }
+
+    /// Send the operator's probe again when the last went unanswered: called once per audio
+    /// block.
+    fn advance_probe(&mut self) {
+        let Some(probe) = self.probe_try.as_mut() else {
+            return;
+        };
+        if !probe.due {
+            return;
+        }
+        probe.due = false;
+        probe.attempt += 1;
+        let (remote, as_call) = (probe.remote.clone(), probe.as_call.clone());
+        match self.engine.probe(&remote, as_call.as_deref()) {
+            Ok(()) => self.pump(),
+            Err(reason) => {
+                // a call came in meanwhile, or the operator started one
+                self.probe_try = None;
+                self.note(
+                    "probe",
+                    &format!("{remote}: no answer; not probed again ({reason})"),
+                );
+            }
+        }
     }
 
     /// Key the transmitter with no audio for a few seconds, so an operator can see the rig
@@ -3066,6 +3218,7 @@ impl<P: Ptt> Station<P> {
         self.advance_centre(now);
         self.advance_recording_tail(now);
         self.advance_test();
+        self.advance_probe();
         self.advance_beacons(now);
         self.advance_call_bandwidth(now);
         self.advance_bandwidth(now);
@@ -4123,6 +4276,7 @@ impl<P: Ptt> Station<P> {
             bytes_received: 0,
         });
         self.link_sent = 0;
+        self.payload_marks.clear();
         // the frames of a session are the call's or the answer's (§97.221(c)(1))
         self.session_direction = Some(if detail.ends_with("(master)") {
             Direction::Originate
@@ -4280,6 +4434,7 @@ impl<P: Ptt> Station<P> {
                     } else if name == "disconnected" {
                         self.session_ended(&detail);
                     }
+                    let detail = self.probe_outcome(name, detail);
                     self.note(name, &detail);
                     if name == "probe" && self.engine.last_probe().is_some() {
                         self.note_probe_heard();
@@ -4323,6 +4478,7 @@ impl<P: Ptt> Station<P> {
             notes.heard_there_db = Some(heard);
         }
         self.note_arrivals();
+        self.drop_acknowledged_payload();
         self.note_closing_identifier();
         self.account();
     }
@@ -5247,7 +5403,7 @@ impl<P: Ptt> Station<P> {
             return;
         }
         if self.engine.state() != State::Idle
-            || self.engine.probing()
+            || self.probing()
             || self.transmitting
             || !self.pending.is_empty()
             || self.closing_identifier_pending()
@@ -7870,6 +8026,97 @@ mod tests {
             air.a.stats.bytes_after_compression,
             message.len()
         );
+    }
+
+    #[test]
+    fn what_is_still_to_send_is_counted_in_the_programs_bytes() {
+        // RMS Trimode wrote FQ and a return, three bytes, and was told BUFFER 9: the count was
+        // the link's, after the deflate stream's flush (2026-11-07). It is the application's
+        // own bytes, and 0 once the other station has them all.
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(20.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.compressing(), "the session should compress");
+        air.a.send(b"FQ\r");
+        assert!(
+            air.a.engine().tx_pending_bytes() > 3,
+            "the link holds {} bytes for three: the test needs the flush's overhead",
+            air.a.engine().tx_pending_bytes()
+        );
+        assert_eq!(air.a.queued_bytes(), 3);
+        air.run(120.0, |_, b| b.received_len() >= 3);
+        assert_eq!(air.b.take_received(), b"FQ\r");
+        air.run(60.0, |a, _| a.queued_bytes() == 0);
+        assert_eq!(air.a.queued_bytes(), 0, "acknowledged and still counted");
+        // a longer message counts down in its own bytes, never above what was given
+        let message = vec![b'A'; 2000];
+        air.a.send(&message);
+        assert_eq!(air.a.queued_bytes(), 2000);
+        let mut seen = Vec::new();
+        air.run(300.0, |a, _| {
+            seen.push(a.queued_bytes());
+            a.queued_bytes() == 0
+        });
+        assert_eq!(air.a.queued_bytes(), 0, "not all acknowledged");
+        assert!(
+            seen.windows(2).all(|w| w[1] <= w[0]),
+            "the count went up: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn an_unanswered_probe_is_sent_once_more_before_it_is_reported() {
+        // a probe is one frame; a station whose host program cycles LISTEN refuses one that
+        // lands in the gap (KK4ODA's probe of KK4ODA-1, 2026-11-07), so a second goes
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        station.probe("kk4xyz", None).expect("idle");
+        assert_eq!(station.probe_try(), Some((1, PROBE_TRIES)));
+        assert_eq!(station.probe("KK4XYZ", None), Err("a probe is already out"));
+        let mut events = Vec::new();
+        let mut tries = Vec::new();
+        run_alone(&mut station, 120.0, |s| {
+            if let Some(t) = s.probe_try()
+                && tries.last() != Some(&t)
+            {
+                tries.push(t);
+            }
+            !s.probing() && s.probe_try().is_none()
+        });
+        events.extend(station.take_events());
+        assert_eq!(station.engine().stats.probes_sent, 2, "{events:?}");
+        assert_eq!(tries, vec![(1, 2), (2, 2)]);
+        let probes: Vec<&String> = events.iter().filter(|e| e.starts_with("probe:")).collect();
+        assert_eq!(
+            probes,
+            vec![
+                "probe:KK4XYZ: no answer, probing again (2/2)",
+                "probe:KK4XYZ: no answer"
+            ],
+            "{events:?}"
+        );
+        assert!(!station.probing());
+        // and a new probe starts at the first try again
+        station.probe("KK4XYZ", None).expect("idle");
+        assert_eq!(station.probe_try(), Some((1, PROBE_TRIES)));
+    }
+
+    #[test]
+    fn an_answered_probe_is_not_sent_again() {
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(30.0, |a, _| a.engine().last_probe().is_some());
+        assert!(air.a.engine().last_probe().is_some(), "no answer");
+        assert_eq!(air.a.probe_try(), None);
+        air.run(20.0, |_, _| false);
+        assert_eq!(air.a.engine().stats.probes_sent, 1);
     }
 
     #[test]

@@ -314,10 +314,27 @@ function renderTestProgress(t) {
   }
 }
 
+// How many probes the modem sends before it says a probe went unanswered (the daemon's
+// PROBE_TRIES): the first is "1 of 2" from the moment the button is pressed.
+const PROBE_TRIES = 2;
+// The tries the modem said it made for the probe out now.
+let probeTries = 1;
+
 function noteProbe(detail) {
   const line = $("probe-result");
-  const unanswered = detail.endsWith("no answer");
-  line.textContent = unanswered ? `${detail} — try again, or change band` : detail;
+  // "KK4XYZ: no answer, probing again (2/2)": the first went unanswered and a second is out
+  const again = /^(.*): no answer, probing again \((\d+)\/(\d+)\)$/.exec(detail);
+  if (again) {
+    probeTries = Number(again[2]);
+    line.textContent = `Probing ${again[1]}… ${again[2]}/${again[3]}`;
+    delete line.dataset.state;
+    return;
+  }
+  const unanswered = detail.includes("no answer");
+  const tries = probeTries > 1 ? ` to ${probeTries} probes` : "";
+  line.textContent = unanswered
+    ? `${detail.replace(/: no answer$/, `: no answer${tries}`)} — try again, or change band`
+    : detail;
   line.dataset.state = unanswered ? "warn" : "ok";
 }
 
@@ -444,7 +461,11 @@ function bannerFor(status) {
     return ["connected", `Connected to ${who || "?"}`];
   }
   if (test) return ["working", `Test session with ${test.remote}: ${TEST_STEP_NAMES[test.step] ?? test.step}…`];
-  if (status.probing) return ["working", probeTarget ? `Probing ${probeTarget}…` : "Probing…"];
+  if (status.probing) {
+    // which of the modem's probes is out: "1/2", then "2/2" when the first went unanswered
+    const tries = Array.isArray(status.probe_try) ? ` ${status.probe_try[0]}/${status.probe_try[1]}` : "";
+    return ["working", `${probeTarget ? `Probing ${probeTarget}…` : "Probing…"}${tries}`];
+  }
   if (status.beacon?.waiting) {
     return ["working", status.beacon.waiting_for_clear ? "Beacon waiting: the channel is busy" : "Sending a beacon…"];
   }
@@ -5913,9 +5934,10 @@ function wire() {
       $("remote").focus();
       return;
     }
-    $("probe-result").textContent = `Probing ${remote}…`;
+    $("probe-result").textContent = `Probing ${remote}… 1/${PROBE_TRIES}`;
     delete $("probe-result").dataset.state;
     probeTarget = remote;
+    probeTries = 1;
     const ok = await act(() => call("probe", { remote }), `probing ${remote}`);
     if (!ok) $("probe-result").textContent = "";
   });

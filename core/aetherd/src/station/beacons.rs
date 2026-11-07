@@ -119,7 +119,7 @@ impl<P: Ptt> Station<P> {
         // closing identifier is over, not in the deafness after this station's own
         let idle = self.engine.state() == State::Idle
             && !self.test_running()
-            && !self.engine.probing()
+            && !self.probing()
             && self.pending.is_empty()
             && !self.transmitting
             && now >= self.engine.hold_until();

@@ -655,7 +655,7 @@ impl<P: Ptt> Station<P> {
     /// [`Self::movable`] without the Test: what the Test itself asks before the move its own
     /// call makes ([`Self::move_for_call`]).
     fn movable_but_for_a_test(&self) -> Result<(), String> {
-        if self.engine.probing() {
+        if self.probing() {
             return Err("a probe is out".into());
         }
         match self.engine.state() {

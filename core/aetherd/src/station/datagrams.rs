@@ -289,7 +289,7 @@ impl<P: Ptt> Station<P> {
         if !self.pending.is_empty()
             || self.transmitting
             || self.engine.state() != State::Idle
-            || self.engine.probing()
+            || self.probing()
         {
             return;
         }

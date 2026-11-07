@@ -94,7 +94,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `TUNE ?` | → `TUNE <dB>`: the transmit level, in decibels below full scale (`20 log₁₀ audio.tx_level`) | VarAC asks after every connection, to keep a level per band. The scale VARA answers on is not published; decibels below full scale is the one a sine amplitude has an honest reading on |
 | `DRIVELEVEL <n>` | The transmit level a host would set | Recorded, not acted on: the scale is not published, and a wrong guess would change the operator's drive. Setting the drive is the operator's, in Setup |
 | `VERSION` | → `VERSION Aether HF <version>` | |
-| `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send |
+| `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send: the program's own bytes, before compression, not yet acknowledged by the other station |
 
 Anything else is answered `WRONG`. A client that got silence could not tell a missing feature
 from a hung modem, so nothing is ignored.

@@ -2616,7 +2616,18 @@ ADR-0058's move could come) and the gateway's rung-5 data failed until re-encode
 the welcome; the mobile's frames reached the gateway clean. Google Remote Desktop, with audio,
 was connected to the gateway throughout (the author); idle and at 500 Hz the losses were small,
 so it is a suspect with the 2300 Hz load, not proven: the next session without it says. The
-bandwidth redesign ("narrower of the two") waits for a clean 2300 Hz session.
+bandwidth redesign ("narrower of the two") waits for a clean 2300 Hz session. **Built the same
+day (the author's go):** `BUFFER`, `metrics`/`status.queued_bytes`, the panel's Queued and the
+close warning count the application's own bytes before compression, not yet acknowledged
+(`PayloadMark` per flush, `Station::queued_bytes`, rounded up so 0 means all acknowledged; with
+compression off the link's count as before) — it does not change *when* `BUFFER 0` comes, so it
+is not the disconnect's fix; and an operator's probe unanswered goes once more before it is
+reported (`PROBE_TRIES` 2, `ProbeTry`, `probe_outcome`/`advance_probe` in the daemon — the engine
+and its vectors unchanged; `status.probe_try` `[n, of]`; the log says `<call>: no answer, probing
+again (2/2)`; the panel *Probing KK4ODA-1… 1/2*, *2/2*, *no answer to 2 probes*). A Test's own
+probe still goes once. Owed to the author's Trimode bench (`C:\Dev\AetherBench\trimode\`,
+`[sim] snr_db`): one session strong, one weak — whether Trimode hangs up after `FQ` only when
+`BUFFER 0` comes within a few seconds of it.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
