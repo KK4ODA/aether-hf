@@ -2582,8 +2582,30 @@ stops), a refusal shows on `#signal-said` for 8 s; the small views drop the mark
 dot and say *On top*, so their header is one row down to ~440 px on Linux, and their least
 width is 500 (Windows' fonts are wider). Tested against a stand-in modem through Playwright's
 `routeWebSocket` (a dry run's silent loopback never settles the busy detector, so it refuses a
-tone). **beta.138 was not tagged on 2026-11-07 morning**: the author's field test that day ran
-beta.137, without ADR-0102.
+tone). beta.138 was tagged on 2026-11-07 between the day's sessions: 13:53Z ran beta.137 (no
+ADR-0102, so the mobile called at 500 Hz from memory), 15:01Z and 15:05Z ran beta.138 (the
+program's call went at 2300 Hz).
+
+**The sessions of 2026-11-07 (mobile ↔ gateway, 40 m, both sides with audio, `[host] trace` on;
+beta.139 adds the panel's Light button and a maximized small view going to Full).** Read, not
+yet acted on — the author's calls. (1) *The slow disconnect is Trimode's*: Trimode writes FQ
+(3 bytes), the adapter says `BUFFER 0` a second after it is delivered, and Trimode sends no
+`DISCONNECT`; Winlink Express hangs up 30 s after FQ ("Forced disconnect. B2 requested
+disconnect with break"). Trimode's 11-06 log says *Starting Vara disconnect on confirmed
+sent*, so it waits for something the adapter does not say: owed Trimode's logs of the day. In
+Winlink Express's log an indented line is one it sent, an unindented one it received. (2) *The
+unanswered probe*: heard at the gateway, refused because it landed in one of Trimode's
+half-second `LISTEN OFF` gaps (every ~3.6 s, scanning off too); a call is retried into a
+listening window, a probe goes once. (3) *KK4ODA-1's audio*: its FTDX10 USB codec lost 3.4 s of
+capture in a five-minute 2300 Hz session (89 skips; ~50 ms per five minutes idle or at 500 Hz;
+`machine_late_ms` 43 on 4 cores; the mobile, 22 cores, none), and its transmissions reached
+the mobile with dropouts inside the long tone frames (timing slips of ~20 ms with a 5–10 ms
+envelope notch, found by the best symbol timing along a 40 ms-symbol frame): the mobile never
+decoded three acceptances (the call failed after Winlink Express's 4 tries, 76 s, before
+ADR-0058's move could come) and the gateway's rung-5 data failed until re-encoded, 2.5 min to
+the welcome; the mobile's frames reached the gateway clean. Trimode also ABORTed its first
+session 4.5 s after the acceptance went out (cause owed to its logs). The bandwidth redesign
+("narrower of the two") waits for a clean 2300 Hz session.
 
 **Never run an installer or the packaged app from a Claude session on the author's
 machine.** The session's view of `AppData` and `HKCU` is the desktop app's virtualised
