@@ -83,6 +83,14 @@ const POLL: Duration = Duration::from_millis(50);
 /// first. Past it the host is told anyway — it must not wait for ever.
 const CLOSING_ID_WAIT: Duration = Duration::from_secs(150);
 
+/// How long a `CONNECTED` held for the end of a listening window waits once the program has
+/// heard the call's `PENDING` (ADR-0100). A program holding its scan for a pending call sends no
+/// `LISTEN` at all: KK4ODA-1's Trimode, 2026-11-06, logged its scan's `LISTEN=False` and
+/// `LISTEN=True` "while … Pending=True" and sent neither, and the `CONNECTED` held for a
+/// `LISTEN ON` waited two minutes for one. Its scan finishes the deaf step it is in (half a second)
+/// and holds listening, so the `CONNECTED` goes this long after the `PENDING`.
+const PENDING_SETTLE: Duration = Duration::from_millis(1500);
+
 /// A running VARA-compatible host interface. Stops when dropped.
 pub struct HostServer {
     /// The command port, after any port-zero assignment.
@@ -584,6 +592,9 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     // PENDING said for a call whose CONNECTED is held: should the session end before the
     // CONNECTED is said, the host hears CANCELPENDING, as from VARA
     let mut pending_said = false;
+    // when that PENDING was said: a program holding its scan for it sends no LISTEN, so the
+    // CONNECTED waits `PENDING_SETTLE` from here, not for a LISTEN ON (ADR-0100)
+    let mut pending_at: Option<Instant> = None;
     // A session is up, or its closing identifier still to go, that the program was not told
     // of: the panel's, or a call answered while the program was not listening. A program that
     // does not key the radio hears no PTT for it (ADR-0096).
@@ -662,19 +673,30 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
 
         // ── a connection held for the host's LISTEN to come back ───────
         // The command just read may have been the LISTEN on that lets a scanning host hear the
-        // CONNECTED it would otherwise ignore; emit it now that it is listening.
-        // PENDING is said again with it: the first may have reached a program already deaf.
-        if host.listening && pending_connected.is_some() && !scan.late(Instant::now()) {
+        // CONNECTED it would otherwise ignore; emit it now that it is listening. A program that
+        // heard the call's PENDING holds its scan and sends no LISTEN until the call is
+        // connected or cancelled, so after it the CONNECTED waits `PENDING_SETTLE`, no more
+        // (ADR-0100). PENDING is said again with it: the first may have reached a program
+        // already deaf.
+        let listening_again = host.listening && !scan.late(Instant::now());
+        let settled = pending_at.is_some_and(|at| at.elapsed() >= PENDING_SETTLE);
+        if pending_connected.is_some() && (listening_again || settled) {
             let data = pending_connected.take().unwrap_or_default();
             note(
                 notes,
                 false,
                 format!(
-                    "CONNECTED for the call from {} said: the program is listening",
-                    remote_of(&data)
+                    "CONNECTED for the call from {} said: {}",
+                    remote_of(&data),
+                    if listening_again {
+                        "the program is listening"
+                    } else {
+                        "the program holds its scan for the PENDING"
+                    }
                 ),
             );
             pending_said = false;
+            pending_at = None;
             if !report_state(
                 &data,
                 &host,
@@ -753,12 +775,15 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     // on hearing the call: heard while it listens, a scanning Trimode stops its
                     // scan ("Holding scanner for 120 seconds") and takes the CONNECTED
                     // whenever it comes. It had come with the CONNECTED, held past the end of
-                    // the listening window the call was answered in (ADR-0096).
+                    // the listening window the call was answered in (ADR-0096). A CONNECTED held
+                    // behind it waits `PENDING_SETTLE`, not for a LISTEN the holding program
+                    // will not send (ADR-0100).
                     if name == "connected" && called && host.listening && !pending_said {
                         if !say(&mut writer, &Notification::Pending.line()) {
                             return;
                         }
                         pending_said = true;
+                        pending_at = Some(Instant::now());
                     }
                     if name == "connected"
                         && called
@@ -801,6 +826,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                             }
                         }
                         pending_said = false;
+                        pending_at = None;
                         untold = untold && event.data["identifier_pending"].as_bool() == Some(true);
                     }
                     // The program's own session ended: it hears DISCONNECTED once the station's
@@ -846,6 +872,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     }
                     if name == "connected" {
                         pending_said = false;
+                        pending_at = None;
                         untold = connected_to.is_none();
                     }
                 }
@@ -1671,6 +1698,61 @@ mod tests {
         assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT ON");
         let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
         assert!(notes.iter().any(|n| n.contains("held")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_program_holding_its_scan_for_pending_hears_connected_without_listening_again() {
+        // KK4ODA-1, 2026-11-06 22:41:36: a call taken in the last quarter of Trimode's window.
+        // PENDING went at once and the CONNECTED was held for the next LISTEN ON; Trimode's
+        // LISTEN OFF crossed the PENDING, and holding its scan for the pending call ("Request
+        // LISTEN=True while … Pending=True") it sent no LISTEN ON. Nothing more was said for two
+        // minutes, until the caller gave up and the call was cancelled. The CONNECTED now goes
+        // `PENDING_SETTLE` after the PENDING, LISTEN or no (ADR-0100).
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        std::thread::sleep(Duration::from_millis(850));
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
+            "PENDING"
+        );
+        let pending = Instant::now();
+        // its scan's LISTEN OFF, sent as the PENDING arrived, and then nothing
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        // not at once: a VERSION asked now is answered first
+        client.send("VERSION");
+        let next = client.expect(|l| l.starts_with("VERSION") || l.starts_with("CONNECTED"));
+        assert!(next.starts_with("VERSION"), "{next}");
+        assert_eq!(
+            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
+            "PENDING",
+            "said again with the CONNECTED"
+        );
+        assert_eq!(
+            client.expect(|l| l.starts_with("CONNECTED")),
+            "CONNECTED KK4XYZ W4ODA 2300"
+        );
+        let waited = pending.elapsed();
+        assert!(
+            waited + Duration::from_millis(100) >= PENDING_SETTLE
+                && waited < Duration::from_secs(4),
+            "{waited:?}"
+        );
+        let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("holds its scan for the PENDING")),
+            "{notes:?}"
+        );
+        drop(modem);
     }
 
     #[test]

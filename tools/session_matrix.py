@@ -332,8 +332,13 @@ class Host:
     seen to speak them (``host-interfaces.md`` §7): the command port's lines and the data
     port's bytes, read on threads of their own, and — for ``trimode`` — RMS Trimode's
     scanning, ``LISTEN`` off for half a second in every three and a half of air, which is
-    what ADR-0051 was found by. A ``CONNECTED`` it is told while not listening is a fault, as
-    Trimode ignores one. ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
+    what ADR-0051 was found by. A ``CONNECTED`` it is told while deaf is a fault, as Trimode
+    ignores one. Told ``PENDING``, it holds its scan for the call as Trimode does ("Holding
+    scanner for 120 seconds"): it finishes the deaf step it is in without saying ``LISTEN ON``
+    and sends no ``LISTEN`` until ``CONNECTED`` or ``CANCELPENDING`` (KK4ODA-1, 2026-11-06,
+    ADR-0100); a ``PENDING`` left without either for 20 s is a fault. A ``PENDING`` that lands in
+    the last quarter of its window still meets the ``LISTEN OFF`` its scan had decided, as the
+    gateway's crossed it that night. ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
     ``-T`` alias in ``MYCALL``, never ``CWID``) and pings with ``host-ping``."""
 
     def __init__(self, run: Run, station: Station, kind: str) -> None:
@@ -351,6 +356,14 @@ class Host:
         self.received = 0
         self.calls_from = 0  # CONNECTEDs heard before a `host-call`
         self.listening = False
+        # Trimode's own scan state, which is not always what it last said: deaf for the half
+        # second after its LISTEN OFF, listening again after it even while a held scan keeps it
+        # from saying LISTEN ON
+        self.deaf = False
+        self.pending_at: float | None = None
+        # when the PENDING arrived on the wall clock, which is the one the adapter judges the end
+        # of a window by: the air clock moves in whole seconds
+        self.pending_wall: float | None = None
         self.connected = False
         self.problems: list[str] = []
         self.lock = threading.Lock()
@@ -421,12 +434,20 @@ class Host:
                 self.note("In:", line)
                 with self.lock:
                     self.lines.append(line)
-                if line.startswith("CONNECTED"):
-                    if not self.listening and self.kind == "trimode":
+                if line == "PENDING":
+                    if self.pending_at is None:
+                        self.pending_at = self.run.air_s()
+                        self.pending_wall = time.monotonic()
+                elif line == "CANCELPENDING":
+                    self.pending_at = None
+                    self.pending_wall = None
+                elif line.startswith("CONNECTED"):
+                    if self.deaf and self.kind == "trimode":
                         self.problems.append(
-                            f"{self.station.who}: CONNECTED while LISTEN OFF at "
-                            f"{self.run.air_s():.1f} s"
+                            f"{self.station.who}: CONNECTED while deaf at {self.run.air_s():.1f} s"
                         )
+                    self.pending_at = None
+                    self.pending_wall = None
                     self.connected = True
                 elif line.startswith("DISCONNECTED"):
                     self.connected = False
@@ -455,19 +476,47 @@ class Host:
             self.note("Data in:", f"{len(chunk)} bytes")
             self.received += len(chunk)
 
+    def _holding(self) -> bool:
+        """Trimode holds its scan for a pending call: up to 120 s, a fault after 20."""
+        if self.pending_at is None:
+            return False
+        held = self.run.air_s() - self.pending_at
+        if held > 20.0 and not any("PENDING" in p for p in self.problems):
+            self.problems.append(
+                f"{self.station.who}: PENDING at {self.pending_at:.1f} s and no CONNECTED "
+                "or CANCELPENDING in 20 s"
+            )
+        if held > 120.0:
+            self.pending_at = None
+            self.pending_wall = None
+            return False
+        return True
+
     def _scan(self) -> None:
-        """Trimode's scan: dwell 3 s, deaf 0.5 s, in air time; it stops while connected."""
+        """Trimode's scan: dwell 3 s, deaf 0.5 s, in air time; it stops while connected and
+        holds — no LISTEN said — while a call is pending."""
         while not self.closed:
             began = self.run.air_s()
+            began_wall = time.monotonic()
             while not self.closed and self.run.air_s() < began + 3.0:
                 time.sleep(POLL_S)
-            if self.closed or self.connected:
+            # the step was decided before a PENDING that came in the window's last quarter
+            pending_wall = self.pending_wall
+            ended_wall = time.monotonic()
+            crossed = (
+                self.pending_at is not None
+                and pending_wall is not None
+                and pending_wall >= began_wall + 0.75 * (ended_wall - began_wall)
+            )
+            if self.closed or self.connected or (self._holding() and not crossed):
                 continue
             self.send("LISTEN OFF")
+            self.deaf = True
             began = self.run.air_s()
             while not self.closed and self.run.air_s() < began + 0.5:
                 time.sleep(POLL_S)
-            if not self.closed:
+            self.deaf = False
+            if not self.closed and not self._holding():
                 self.send("LISTEN ON")
 
     def heard(self, prefix: str) -> int:
