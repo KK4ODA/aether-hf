@@ -374,6 +374,30 @@ impl<P: Ptt> Station<P> {
         kin.all(|hz| hz == first).then_some(first)
     }
 
+    /// A call that keeps the bandwidth its host program chose (ADR-0102), to a station
+    /// remembered at another: said in the log, so the operator knows why the call is not where
+    /// the memory would have put it, and that four unanswered tries move it.
+    pub(super) fn note_kept_bandwidth(&mut self, remote: &str) {
+        let ours = self.bandwidth_hz();
+        if let Some(theirs) = self.known_bandwidth(remote)
+            && theirs != ours
+        {
+            let remote = remote.trim().to_ascii_uppercase();
+            let after = if ours == 2300 {
+                format!("; at 500 Hz after {NARROW_AFTER_TRIES} unanswered tries")
+            } else {
+                String::new()
+            };
+            self.note(
+                "bandwidth",
+                &format!(
+                    "calling {remote} at {ours} Hz, as the host program asked, though it was \
+                     last heard running {theirs} Hz{after}"
+                ),
+            );
+        }
+    }
+
     /// Before a call: a 2 300 Hz station calling one it knows runs 500 Hz moves to 500 Hz, so
     /// the call is one the other answers whatever its version (ADR-0035). The move back is a
     /// call's: after the session, or the call's end, and a quiet spell.
@@ -587,8 +611,10 @@ impl<P: Ptt> Station<P> {
     /// A 2 300 Hz call that [`NARROW_AFTER_TRIES`] tries have not had answered, to a station
     /// not known to run 2 300 Hz, goes on at 500 Hz (ADR-0058): a 500 Hz station ignores a wider
     /// call, and a 2 300 Hz one answers a narrower call by moving to it. KO4WX called this
-    /// station at 2 300 Hz for minutes while it ran 500 Hz (2026-10-10). Not when a host program
-    /// chose the bandwidth, and only between tries.
+    /// station at 2 300 Hz for minutes while it ran 500 Hz (2026-10-10). Only between tries. A
+    /// host program's chosen bandwidth is the first one tried, not the only one (ADR-0102): it
+    /// had been left alone, and Winlink Express, which always says a `BW`, never had a call
+    /// to a 500 Hz station go on.
     pub(super) fn advance_call_bandwidth(&mut self, now: f64) {
         // just before the next try, when an answer to the last has had its time — a 2 300 Hz
         // acceptance arriving after the move would be read at 500 Hz — and with nothing
@@ -599,7 +625,6 @@ impl<P: Ptt> Station<P> {
             .is_some_and(|at| at - now <= MOVE_BEFORE_TRY_S);
         if self.engine.state() != State::Connecting
             || self.bandwidth_hz() != 2300
-            || self.bandwidth.host_hz.is_some()
             || self.engine.connect_tries() < NARROW_AFTER_TRIES
             || !due
             || self.receiving()

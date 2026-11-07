@@ -1238,7 +1238,13 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
         );
     };
     let as_call = params.get("callsign").and_then(Value::as_str);
-    match station.connect_as(remote, as_call) {
+    // the caller chose the bandwidth: call in it, not in the one remembered for the station
+    // called (ADR-0102) — the host adapter says so for a program that said BW
+    let keep_bandwidth = params
+        .get("keep_bandwidth")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match station.connect_keeping(remote, as_call, keep_bandwidth) {
         Ok(()) => Response::ok(id, json!({ "session": station.engine().session() })),
         Err(reason) => Response::failed(
             id,

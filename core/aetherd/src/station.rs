@@ -1795,6 +1795,23 @@ impl<P: Ptt> Station<P> {
     /// # Errors
     /// If a session is already up, or the callsign is not one of this station's.
     pub fn connect_as(&mut self, remote: &str, as_call: Option<&str>) -> Result<(), &'static str> {
+        self.connect_keeping(remote, as_call, false)
+    }
+
+    /// Call a station as one of this station's callsigns; with `keep_bandwidth`, in the
+    /// bandwidth the station runs now, not the one remembered for the station called. A host
+    /// program that said `BW2300` chose it (ADR-0102): KK4ODA's Winlink Express asked for
+    /// 2 300 Hz and the call went at 500 Hz, to a gateway remembered at 500 Hz that ran 2 300.
+    /// An unanswered call still goes on at 500 Hz after four tries (ADR-0058).
+    ///
+    /// # Errors
+    /// If a session is already up, or the callsign is not one of this station's.
+    pub fn connect_keeping(
+        &mut self,
+        remote: &str,
+        as_call: Option<&str>,
+        keep_bandwidth: bool,
+    ) -> Result<(), &'static str> {
         if self.config.answer_only {
             return Err("this station is answer-only: it takes calls and makes none");
         }
@@ -1806,7 +1823,11 @@ impl<P: Ptt> Station<P> {
                 .contains(&call.trim().to_ascii_uppercase())
         });
         if ours && self.engine.state() == State::Idle {
-            self.move_for_call(remote);
+            if keep_bandwidth {
+                self.note_kept_bandwidth(remote);
+            } else {
+                self.move_for_call(remote);
+            }
         }
         self.engine.connect(remote, as_call)?;
         self.pump();
@@ -10571,6 +10592,65 @@ mod tests {
         air.a.send(message);
         air.run(120.0, |_, b| b.received_len() >= message.len());
         assert_eq!(air.b.take_received(), message);
+    }
+
+    #[test]
+    fn a_host_programs_call_goes_in_the_bandwidth_it_chose() {
+        // ADR-0102, from KK4ODA's Winlink sessions of 2026-11-06: Winlink Express asked for
+        // 2 300 Hz, and the call went at 500 Hz because the station remembered the gateway at
+        // 500 Hz — though the gateway ran 2 300. A program's call keeps the bandwidth it chose,
+        // and says why in the log; the panel's call still moves (ADR-0035)
+        let mut air = Air::new(1.0, 0.0005);
+        air.a = caller_on(WIDE_2300);
+        air.a.learn_bandwidth("KK4XYZ", 500);
+        assert_eq!(air.a.host_bandwidth(Some(2300)), Ok(2300));
+        air.a.connect_keeping("KK4XYZ", None, true).expect("idle");
+        assert_eq!(air.a.bandwidth_hz(), 2300);
+        let events = air.a.take_events();
+        assert!(
+            events.iter().any(|e| e.starts_with(
+                "bandwidth:calling KK4XYZ at 2300 Hz, as the host program asked, though it was \
+                 last heard running 500 Hz; at 500 Hz after 4 unanswered tries"
+            )),
+            "{events:?}"
+        );
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "{:?}",
+            air.a.take_events()
+        );
+        assert_eq!(air.a.bandwidth_hz(), 2300);
+        assert_eq!(air.b.bandwidth_hz(), 2300, "answered at 2300 Hz");
+
+        // the panel's call, with the same memory, goes at 500 Hz as before
+        let mut panel = caller_on(WIDE_2300);
+        panel.learn_bandwidth("KK4XYZ", 500);
+        panel.connect("KK4XYZ").expect("idle");
+        assert_eq!(panel.bandwidth_hz(), 500);
+    }
+
+    #[test]
+    fn a_host_programs_wide_call_nobody_answers_still_goes_on_at_500_hz() {
+        // ADR-0102 keeps ADR-0058 for a program's call: the bandwidth it chose is the first
+        // tried, not the only one. Winlink Express always says a BW, so before this its calls
+        // to a 500 Hz station never went on at 500 Hz
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = caller_on(WIDE_2300);
+        assert_eq!(air.a.host_bandwidth(Some(2300)), Ok(2300));
+        air.a.connect_keeping("KK4XYZ", None, true).expect("idle");
+        air.run(400.0, |a, b| a.connected() && b.connected());
+        assert!(
+            air.a.connected() && air.b.connected(),
+            "{:?}",
+            air.a.take_events()
+        );
+        assert_eq!(air.a.bandwidth_hz(), 500);
+        assert_eq!(air.a.bandwidth_status()["why"], "calling");
+        assert!(air.a.engine().connect_tries() > super::bandwidth::NARROW_AFTER_TRIES);
     }
 
     #[test]

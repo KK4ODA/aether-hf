@@ -1151,6 +1151,7 @@ fn apply(
             }
             let satisfied = |running: u32| running == *hz || (*hz == 2750 && running == 2300);
             let ok = running.map_or(satisfied(host.bandwidth_hz), satisfied);
+            host.bandwidth_asked = Some(*hz);
             say(writer, if ok { "OK" } else { "WRONG" }).into()
         }
         HostAction::None | HostAction::Listen(_) => Applied::Done,
@@ -1167,6 +1168,10 @@ fn apply(
             let mut params = json!({ "remote": to });
             if host.answers_to(from) {
                 params["callsign"] = json!(from);
+            }
+            // a program that said BW chose the bandwidth its call goes in (ADR-0102)
+            if host.bandwidth_asked.is_some() {
+                params["keep_bandwidth"] = json!(true);
             }
             let response = handle.call(request("connect", params));
             match response {
@@ -1502,12 +1507,38 @@ mod tests {
                 && params["callsigns"] == json!(["W4ODA"])),
             "{seen:?}"
         );
+        // and a program that said BW2300 chose the bandwidth its call goes in (ADR-0102)
         assert!(
             seen.iter().any(|(method, params)| method == "connect"
                 && params["remote"] == "KK4XYZ"
-                && params["callsign"] == "W4ODA"),
+                && params["callsign"] == "W4ODA"
+                && params["keep_bandwidth"] == true),
             "{seen:?}"
         );
+    }
+
+    #[test]
+    fn a_program_that_said_no_bw_leaves_the_bandwidth_of_its_call_to_the_station() {
+        // ADR-0102: only a program's BW is a choice of bandwidth. One that said none calls as
+        // the panel does, in the bandwidth the station remembers for the station called
+        let (server, worker, stop, seen) = server();
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        // the OK is said before the call goes to the modem
+        std::thread::sleep(Duration::from_millis(200));
+        stop.store(true, Ordering::Relaxed);
+        worker.join().expect("worker");
+        let seen = seen.lock().expect("seen");
+        let (_, call) = seen
+            .iter()
+            .find(|(method, _)| method == "connect")
+            .expect("the call reached the modem");
+        assert!(call.get("keep_bandwidth").is_none(), "{call}");
+        drop(server);
     }
 
     #[test]

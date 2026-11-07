@@ -684,7 +684,8 @@ and run **Set drive** again.
 station, from an earlier session or a time it really ran 500 Hz. The Stations tab's *Hz* column
 shows what each station remembers. Probe the other station once: the answer says the bandwidth it
 really runs, and the next call goes at 2300 Hz. An answer to a call does not count, because it
-always goes in the call's bandwidth.
+always goes in the call's bandwidth. A call from a host program goes in the bandwidth the program
+asked for, whatever Aether remembers; the Log tab says so when the two differ.
 
 **Disconnect does not close the session at once.** It sends what is still queued first. On a
 slow path that can take a while, so it waits a minute at most, then closes anyway. The banner

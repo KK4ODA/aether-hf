@@ -152,6 +152,10 @@ pub struct HostState {
     /// The bandwidth the station runs, in hertz: the one `CONNECTED` reports. The server sets
     /// it from the modem's `capabilities`, and again whenever the station moves (ADR-0026).
     pub bandwidth_hz: u32,
+    /// The bandwidth the program last asked for with `BW<n>`, in hertz as it said it: once it
+    /// has said one, its calls go in the bandwidth the station runs, not the one the station
+    /// remembers for the station called (ADR-0102).
+    pub bandwidth_asked: Option<u32>,
     /// Settings the host asked for that this modem hears and does not act on.
     pub recorded: Recorded,
 }
@@ -187,6 +191,7 @@ impl Default for HostState {
             cw_id: false,
             buffer: 0,
             bandwidth_hz: BANDWIDTH_HZ,
+            bandwidth_asked: None,
         }
     }
 }

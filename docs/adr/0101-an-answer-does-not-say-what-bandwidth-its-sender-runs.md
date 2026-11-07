@@ -39,11 +39,13 @@ station runs.
   bandwidth it moved to, and the called station learns that. It matters when the gateway calls a
   client it wrongly believes narrow, which is rare. Telling the two apart needs the sender to say
   so — a "moved for this call" bit in the capability byte (bits 5–7 are free) — which is a wire
-  change and the author's call.
+  change and the author's call. Decided 2026-11-07: wait, and build it only if wrong memories show
+  up again (ADR-0102 §2).
 * **Also open, the author's call:** a host program's own bandwidth does not stop
   `move_for_call`. The mobile moved to 500 Hz to call with Winlink Express attached, and Winlink
   Express asks for 2 300 Hz: after the first session the mobile went back to 2 300 Hz because
-  *the host program asked for it*.
+  *the host program asked for it*. Decided 2026-11-07: a program's call goes in the bandwidth it
+  chose, and still goes on at 500 Hz after four unanswered tries (ADR-0102).
 * Test: `a_wide_station_answers_a_narrow_call_at_500_hz_and_goes_back_after` now checks that the
   narrow caller's report of the answer carries no bandwidth and that it has learnt none.
 * Manual: the troubleshooting entry for a session that runs at 500 Hz between two 2 300 Hz

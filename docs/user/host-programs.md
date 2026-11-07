@@ -92,7 +92,9 @@ PTT **off**.
   TNC it started when it closes, and with the launch on that was Aether's window (the truck's
   laptop, 2026-10-25).
 * The bandwidth is Winlink Express's session setting: Aether moves to it when it is asked, and
-  runs 2300 Hz for Winlink Express's widest, 2750.
+  runs 2300 Hz for Winlink Express's widest, 2750. Calls go out in it, even to a station Aether
+  last heard running 500 Hz. If four tries at 2300 Hz get no answer, Aether tries the rest at
+  500 Hz, and the session runs at 500 Hz if it is answered there.
 * Winlink Express keys the radio itself only when its *Radio Setup* names a PTT port: it then
   keys on the modem's `PTT ON`/`PTT OFF`, as VarAC does, and Aether's keying must be *host
   program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
