@@ -1142,8 +1142,32 @@ function withAlpha(colour, alpha) {
 
 /// A chart's height: what its box gives it — on the Status tab the charts take the room the
 /// window has to spare — and never less than a chart can be read at.
+// The least a Compact plot is drawn at: its two plots share what the window leaves, and under
+// this the page scrolls instead (style.css, the Compact rules). The full view's are 120 at least.
+const COMPACT_PLOT_MIN = 60;
+
 function chartHeight(id) {
-  return Math.max(120, Math.round($(id).clientHeight || 180));
+  const least = document.body.classList.contains("compact") ? COMPACT_PLOT_MIN : 120;
+  return Math.max(least, Math.round($(id).clientHeight || 180));
+}
+
+// A plot is drawn again whenever its box changes size, not only when the window does: in Compact
+// a banner coming up or a chip wrapping the header shortens the plots with the window as it was.
+// Drawing changes only the canvas's own pixels, never its box, so this cannot feed itself.
+let plotsResized = null;
+
+function watchPlotSizes() {
+  if (typeof ResizeObserver !== "function") return;
+  const redraw = new ResizeObserver(() => {
+    cancelAnimationFrame(plotsResized);
+    plotsResized = requestAnimationFrame(() => {
+      drawChart();
+      drawStatusChart();
+    });
+  });
+  for (const id of ["chart", "chart-speed", "chart-snr"]) {
+    if ($(id)) redraw.observe($(id));
+  }
 }
 
 /// The frame both charts draw in: the surface, the tokens, and the y scale. `right` is the
@@ -2316,9 +2340,17 @@ async function fitShellWindow(view) {
         }
       }
       sizeOnRestore = null;
-      // let the small layout settle before measuring what it needs
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      const height = Math.ceil(document.body.getBoundingClientRect().height) + 4;
+      // let the small layout settle before measuring what it needs: in Compact the page is the
+      // window's height and its plots take what is left, so it is measured with the plots at
+      // their usual height (`fitting`), not at whatever the window happens to be now
+      document.body.classList.add("fitting");
+      let height;
+      try {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        height = Math.ceil(document.body.getBoundingClientRect().height) + 4;
+      } finally {
+        document.body.classList.remove("fitting");
+      }
       await win.setMinSize(new LogicalSize(360, 120));
       await win.setSize(
         new LogicalSize(Math.min(sizeBeforeCompact.width, VIEW_WIDTH[view]), height),
@@ -6079,6 +6111,7 @@ function wire() {
   window.addEventListener("resize", rememberWindowSize);
   window.addEventListener("resize", followMaximize);
   followMaximize();
+  watchPlotSizes();
   // the stations' "3 min ago", the dial and the rules' verdict on it move on their own: a dial
   // turned on the radio shows its LEGAL / WARNING / TX BLOCKED within five seconds
   setInterval(() => {

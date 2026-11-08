@@ -96,7 +96,10 @@ To the right:
   if that is the one you chose in Full) and the channel's activity (what the radio hears, and
   when you transmitted), drawn with the time span and level scale you set with **Axes** in Full.
   Compact shows no **Axes** button, but the chart keeps its two level sliders and **Auto**; the
-  time span is changed in Full.
+  time span is changed in Full. The plots take whatever height the window has left: when a
+  banner comes up during a session, or the header needs a second row, they get shorter for as
+  long as it shows, and they never go below the window's edge. Make the window taller for
+  taller plots; it keeps that size while you stay in Compact.
   **Mini** is the state and the four readings alone, for a corner of the screen. **Full**
   brings the window back to its size. Maximizing the window in Compact or Mini switches it
   to Full; restored, it goes back to Full's size. Aether remembers the view, and the size of
