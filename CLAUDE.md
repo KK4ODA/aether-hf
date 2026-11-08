@@ -2667,9 +2667,11 @@ A called session whose `PENDING` the program heard now has its `CONNECTED` wait 
 acceptance's `PTT ON` (`acceptance_key` in `host/server.rs`): the program hears `PENDING`,
 `PTT ON`, `CONNECTED`, `PTT OFF` — the order it already hears for its own calls — whether it keys
 the radio or not, and an acceptance that never keys lets the `CONNECTED` go after
-`ACCEPTANCE_KEY_WAIT` (4 s) with a warning. ADR-0096 §2.3's untold keying is now only a call
-whose `PENDING` the program never heard (`LISTEN` off), and the closing identifier of a call that
-came to nothing. The ADR-0051/0100 holds still apply on top (`held_for_listen` says `PENDING`
+`ACCEPTANCE_KEY_WAIT` (4 s) with a warning. A call whose `PENDING` the program never heard
+(`LISTEN` off) gets no `PTT` while it stays off, and once it listens hears `PENDING`, the
+acceptance's keying told late, then `CONNECTED` (§5, 2026-11-08: the first build left that case
+untold, and the harness's Trimode caught it on a Windows CI runner; `Acceptance` follows the call
+whatever the program heard). The closing identifier of a call that came to nothing stays untold. The ADR-0051/0100 holds still apply on top (`held_for_listen` says `PENDING`
 again). The log also says when a program opens or closes a data connection (`data port:
 connection n …`, `DataEnd`), to see whether Trimode closes its data port after `FQ`. The harness's
 host stand-ins fault a `CONNECTED` after a `PENDING` with no `PTT ON` between; note that its

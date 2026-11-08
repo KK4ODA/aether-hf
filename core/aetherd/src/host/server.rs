@@ -99,6 +99,20 @@ const PENDING_SETTLE: Duration = Duration::from_millis(1500);
 /// One the rules or the keying gate refuse never keys, and the `CONNECTED` goes all the same.
 const ACCEPTANCE_KEY_WAIT: Duration = Duration::from_secs(4);
 
+/// A called session's acceptance, between the station taking the call and the program hearing
+/// `CONNECTED` (ADR-0103).
+#[derive(Debug, Clone, Copy)]
+struct Acceptance {
+    /// When the station took the call: the `CONNECTED` waits `ACCEPTANCE_KEY_WAIT` from here at
+    /// most for the acceptance to key.
+    taken: Instant,
+    /// The acceptance has keyed.
+    keyed: bool,
+    /// The program was told so as it happened: a program with `LISTEN` off is told nothing
+    /// while it is off, and is told the keying with the `PENDING` once it listens.
+    told: bool,
+}
+
 /// A running VARA-compatible host interface. Stops when dropped.
 pub struct HostServer {
     /// The command port, after any port-zero assignment.
@@ -674,10 +688,13 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     // does not key the radio hears no PTT for it (ADR-0096). A call it heard the PENDING of is
     // its own, CONNECTED or not yet.
     let mut untold = false;
-    // A called session's CONNECTED waits for its acceptance's keying to be told as PTT ON, at
-    // most `ACCEPTANCE_KEY_WAIT` from here: Trimode judges a link hung when it hears CONNECTED
-    // with no PTT for minutes, and the acceptance had been the one keying never told (ADR-0103).
-    let mut acceptance_key: Option<Instant> = None;
+    // A called session's acceptance, from its `connected` to its CONNECTED: the CONNECTED waits
+    // for it to key, at most `ACCEPTANCE_KEY_WAIT`, and comes after a PTT ON for it. Trimode
+    // judges a link hung when it hears CONNECTED with no PTT for minutes, and the acceptance had
+    // been the one keying never told (ADR-0103).
+    let mut acceptance: Option<Acceptance> = None;
+    // the station is keyed now, whether the program was told or not
+    let mut keyed_now = false;
     // the CONNECTED held now was held for the program to be listening, which the log says
     let mut held_for_listen = false;
     // the program was told PTT ON and has not been told PTT OFF
@@ -763,10 +780,13 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
         // acceptance never keys (ADR-0103).
         let listening_again = host.listening && !scan.late(Instant::now());
         let settled = pending_at.is_some_and(|at| at.elapsed() >= PENDING_SETTLE);
-        let unkeyed = acceptance_key.is_some_and(|at| at.elapsed() < ACCEPTANCE_KEY_WAIT);
+        let unkeyed = acceptance
+            .as_ref()
+            .is_some_and(|a| !a.keyed && a.taken.elapsed() < ACCEPTANCE_KEY_WAIT);
         if pending_connected.is_some() && (listening_again || settled) && !unkeyed {
             let data = pending_connected.take().unwrap_or_default();
-            if acceptance_key.take().is_some() {
+            let accepted = acceptance.take();
+            if accepted.as_ref().is_some_and(|a| !a.keyed) {
                 note(
                     notes,
                     true,
@@ -794,8 +814,34 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     ),
                 );
             }
-            // PENDING again only with a CONNECTED held for LISTEN, or if it was never said
-            let heard_pending = pending_said && !held;
+            // PENDING again with a CONNECTED held for LISTEN, or the first time if the program
+            // had LISTEN off when the call was taken: either way before the acceptance's keying
+            if (!pending_said || held) && !say(&mut writer, &Notification::Pending.line()) {
+                return;
+            }
+            // That keying, told now if the program had LISTEN off while it went: a program told
+            // CONNECTED with no PTT for minutes takes the link for hung, whichever moment the call
+            // landed in its scan (ADR-0103 §2.3). It has just said LISTEN ON and heard PENDING, so
+            // it holds its scan for the call and the PTT ON holds back no LISTEN of its scan's.
+            if let Some(a) = accepted
+                && a.keyed
+                && !a.told
+            {
+                if trace {
+                    eprintln!("host (the acceptance's keying, told now: LISTEN was off)");
+                }
+                if !say(&mut writer, &Notification::Ptt(true).line()) {
+                    return;
+                }
+                ptt_told = true;
+                // still keyed, its PTT OFF is told when it comes; over, it is told now
+                if !keyed_now {
+                    if !say(&mut writer, &Notification::Ptt(false).line()) {
+                        return;
+                    }
+                    ptt_told = false;
+                }
+            }
             pending_said = false;
             pending_at = None;
             if !report_state(
@@ -803,7 +849,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                 &host,
                 &mut connected_to,
                 &mut calling,
-                heard_pending,
+                true,
                 &mut writer,
                 &say,
             ) {
@@ -844,12 +890,14 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     // (ADR-0103).
                     let on = event.data["on"].as_bool().unwrap_or(false);
                     let host_keys = event.data["host_keys"].as_bool().unwrap_or(true);
+                    keyed_now = on;
                     let tell = host_keys || if on { !untold } else { ptt_told };
+                    if on && let Some(a) = acceptance.as_mut() {
+                        a.keyed = true;
+                        a.told = tell;
+                    }
                     if tell {
                         ptt_told = on;
-                        if on {
-                            acceptance_key = None;
-                        }
                         if !say(&mut writer, &Notification::Ptt(on).line()) {
                             return;
                         }
@@ -913,15 +961,18 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                             );
                             held_for_listen = true;
                         }
-                        // A program that heard the PENDING hears the acceptance's keying, and
-                        // the CONNECTED after its PTT ON (ADR-0103). One that did not — it had
-                        // LISTEN off — hears neither (ADR-0096).
-                        if pending_said && !ptt_told {
-                            if trace {
-                                eprintln!("host (CONNECTED waits for the acceptance's PTT ON)");
-                            }
-                            acceptance_key = Some(Instant::now());
+                        // The CONNECTED comes after the acceptance's PTT ON (ADR-0103). A
+                        // program that heard the PENDING is told the keying as it goes; one that
+                        // had LISTEN off hears no PTT while it is off (ADR-0096), and is told the
+                        // keying with the PENDING once it listens.
+                        if trace {
+                            eprintln!("host (CONNECTED waits for the acceptance's PTT ON)");
                         }
+                        acceptance = Some(Acceptance {
+                            taken: Instant::now(),
+                            keyed: keyed_now,
+                            told: keyed_now && ptt_told,
+                        });
                         pending_connected = Some(event.data.clone());
                         untold = !pending_said;
                         continue;
@@ -945,7 +996,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                         }
                         pending_said = false;
                         pending_at = None;
-                        acceptance_key = None;
+                        acceptance = None;
                         held_for_listen = false;
                         // the closing identifier of a call that came to nothing is not the
                         // program's: back to its scan, a PTT ON would hold its LISTEN OFF
@@ -1757,11 +1808,14 @@ mod tests {
         // the host goes deaf for its scan step
         client.send("LISTEN OFF");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
-        // the station forms the session for the host while it is not listening
+        // the station forms the session for the host while it is not listening, and keys its
+        // acceptance
         modem.publish(
             "state",
             json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
         );
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
         // nothing of it reaches the host yet: a VERSION asked now is answered before any CONNECTED
         std::thread::sleep(Duration::from_millis(200));
         client.send("VERSION");
@@ -1998,11 +2052,13 @@ mod tests {
     }
 
     #[test]
-    fn a_program_with_listen_off_hears_no_keying_for_the_call() {
-        // the race ADR-0096 left: the call taken while the program listened, LISTEN off by
-        // the time the station says so. It heard no PENDING, so the acceptance is still not its
-        // business — a PTT ON would hold its scan's next command — and the CONNECTED waits for
-        // LISTEN, not for the key
+    fn a_program_with_listen_off_hears_the_acceptance_keyed_once_it_listens() {
+        // the race ADR-0096 left: the call taken while the program listened, LISTEN off by the
+        // time the station says so. While it is off it hears nothing of the call — a PTT ON would
+        // hold its scan's next command — and once it listens it hears PENDING, the acceptance's
+        // keying, then CONNECTED: told CONNECTED with no PTT for minutes, Trimode takes the link
+        // for hung, and the harness's Trimode caught a call landing in a deaf blip on a Windows
+        // runner (ADR-0103 §2.3)
         let (modem, server) = Modem::start(|_, _| json!({}));
         let mut client = Client::connect(&server);
         client.send("MYCALL W4ODA");
@@ -2024,14 +2080,46 @@ mod tests {
         assert!(next.starts_with("VERSION"), "{next}");
         client.send("LISTEN ON");
         assert_eq!(client.expect(|l| l == "OK"), "OK");
-        assert_eq!(
-            client.expect(|l| l.starts_with("PTT") || l.starts_with("CONNECTED")),
-            "CONNECTED KK4XYZ W4ODA 2300"
-        );
-        // its PTT OFF is not said either; the next keying, in the program's session, is
+        let said = |client: &mut Client| {
+            client.expect(|l| l == "PENDING" || l.starts_with("PTT") || l.starts_with("CONNECTED"))
+        };
+        assert_eq!(said(&mut client), "PENDING");
+        // still keyed: its PTT ON now, and its PTT OFF when it comes
+        assert_eq!(said(&mut client), "PTT ON");
+        assert_eq!(said(&mut client), "CONNECTED KK4XYZ W4ODA 2300");
         modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT OFF");
+        drop(modem);
+    }
+
+    #[test]
+    fn an_acceptance_over_before_the_program_listens_is_told_whole() {
+        // the same race with the acceptance over by the time the program listens again: it
+        // hears the whole keying, ON and OFF, between the PENDING and the CONNECTED
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
         modem.publish("ptt", json!({"on": true, "host_keys": false}));
-        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT ON");
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        std::thread::sleep(Duration::from_millis(200));
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        let said = |client: &mut Client| {
+            client.expect(|l| l == "PENDING" || l.starts_with("PTT") || l.starts_with("CONNECTED"))
+        };
+        assert_eq!(said(&mut client), "PENDING");
+        assert_eq!(said(&mut client), "PTT ON");
+        assert_eq!(said(&mut client), "PTT OFF");
+        assert_eq!(said(&mut client), "CONNECTED KK4XYZ W4ODA 2300");
         drop(modem);
     }
 

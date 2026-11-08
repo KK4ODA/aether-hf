@@ -1,7 +1,7 @@
 # ADR-0103: A called program hears its acceptance keyed before CONNECTED
 
-**Status:** accepted, 2026-11-07, the author's go. Amends ADR-0096 §2.3 (which keyings a program
-that keys nothing hears). Host adapter only (`core/aetherd/src/host/server.rs`): **no wire
+**Status:** accepted, 2026-11-07, the author's go; §2.3 amended 2026-11-08 (§5). Amends ADR-0096
+§2.3 (which keyings a program that keys nothing hears). Host adapter only (`core/aetherd/src/host/server.rs`): **no wire
 change, no model change, no configuration key.** It also logs the data port's connections
 (§2.4), which changes no behaviour.
 
@@ -56,8 +56,10 @@ Why it was not told:
    turnaround (at most 1.5 s), the answer gap (at most 2 s), and the keying.
 3. **What a program that keys nothing hears.** ADR-0096 §2.3's "a call answered while its
    `CONNECTED` waits for the program to listen" now means a call whose `PENDING` it never heard:
-   its `LISTEN` was off when the station took the call. That call still gets no `PTT`, and its
-   `CONNECTED` waits for `LISTEN` as before. A call it heard the `PENDING` of is its own business
+   its `LISTEN` was off when the station took the call. While it is off, that call gets no `PTT`,
+   and its `CONNECTED` waits for `LISTEN` as before. Once the program listens it hears
+   `PENDING`, the acceptance's keying told late (`PTT ON`, and `PTT OFF` too if the keying is
+   over), then `CONNECTED` (§5). A call it heard the `PENDING` of is its own business
    from the `PENDING` on. If such a call comes to nothing (`CANCELPENDING`), the closing
    identifier is not told: the program is back to scanning, and a `PTT ON` would hold its next
    `LISTEN`. A program that keys the radio hears every keying, as before. Only the order changes
@@ -133,3 +135,30 @@ client's reply (57–58 s against 61 s), as two runs of one build do. The scenar
 `80m-trimode-gateway-client-vanishes-500` seed runs past the baseline's range (737–771 s) on both
 builds. Its second call goes unanswered for over a minute on that NVIS path, and that is the
 draw, not the adapter.
+
+## 5. Amendment, 2026-11-08: the call taken in a deaf blip
+
+As first built, §2.3 left the call whose `PENDING` the program never heard without any `PTT`: its
+`PENDING` and `CONNECTED` went together at the program's next `LISTEN ON`, and the acceptance's
+keying, which went while the program's `LISTEN` was off, was never told. That is the same fact
+missing at `CONNECTED` that §1 found, on about one call in seven a scanning Trimode answers (half a
+second deaf in every 3.6). CI found it on a Windows runner, where the harness's Trimode stand-in
+failed `40m-trimode-gateway-2300` and `40m-gateway-busy-when-called-2300` with *CONNECTED with no
+PTT ON since the PENDING*, on a commit that changed only the panel.
+
+Now the acceptance is followed whatever the program heard (`Acceptance` in `host/server.rs`:
+when the call was taken, whether it keyed, whether the program was told). A `CONNECTED` held for
+`LISTEN` waits for the acceptance to key, as the others do, at most `ACCEPTANCE_KEY_WAIT`. When it
+goes it is preceded by `PENDING`, then, if the keying was not told as it went, `PTT ON`, and
+`PTT OFF` straight after it if the keying is over; still keyed, its `PTT OFF` is told when it
+comes. That `PTT ON` holds back nothing of ADR-0096's: the program has just said `LISTEN ON` and
+heard `PENDING`, so it holds its scan for the call and sends no `LISTEN` while it believes the
+transmitter keyed. It is a real keying, reported late, not one invented to feed the watchdog.
+
+Tests: `a_program_with_listen_off_hears_the_acceptance_keyed_once_it_listens` (in place of
+`a_program_with_listen_off_hears_no_keying_for_the_call`, which held the first build's §2.3) and
+`an_acceptance_over_before_the_program_listens_is_told_whole`;
+`a_connected_waits_for_a_scanning_host_to_be_listening_again` now keys the acceptance, as the
+station does. Harness: both scenarios over six draws each pass, 12 of 12; no call in them landed in
+a deaf blip on this machine (every hold was for the end of a window), so the unit tests are what
+hold the late tell, and the Windows runners' quick set is where the race shows.
