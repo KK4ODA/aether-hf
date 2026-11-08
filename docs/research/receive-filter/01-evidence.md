@@ -124,3 +124,53 @@ floor 50 dB down) it reads a 300–2700 Hz passband as 211–3176 Hz, and a pass
 5. **Clipping** (§6.5 of the brief): every one of the mobile's Saturday sessions clipped, 1.3–1.7 %
    of its samples at full scale. Item 7 of Gate 0 measures what that costs and what the estimate
    makes of it.
+
+## 6. The corpus (Gate 0 item 3)
+
+`tools/rxfilter_corpus.py make DIR` builds 130 clips of a receiver with nobody on the channel:
+the band's noise (−30 dBFS in 3 kHz) through one of thirteen receive responses, over the audio
+chain's own white floor 50 dB under the noise (the FTDX10) or 15 dB under it (the mobile on
+Saturday), under one of five conditions: steady; an AGC dipping for a strong signal the audio does
+not carry (the busy corpus's *mid* preset, a carrier keyed 1.5 s in every 5); QSB (±6 dB over 8 s);
+ten FT8 stations at +3 to +15 dB; and audio driven to −8 dBFS RMS, clipping as Saturday's did.
+The responses are eighth-order band-passes: 2.7, 2.4, 2.1 and 1.8 kHz filters, a 500 Hz filter,
+the 2.4 kHz filter moved down 300, 600 and 1100 Hz (Saturday's), moved up 300 and 600 Hz, a low
+cut at 600 Hz, a 3 dB/kHz tilt above 1 kHz, and a 30 dB notch 60 Hz wide at 1800 Hz. Each clip's
+labels give the response's −6 dB points and how far down it is at the edges of the 2300 Hz signal
+(360 and 2640 Hz) and the 500 Hz one (1260 and 1740 Hz). Clips run 30 s, the FT8 ones 150 s and
+the AGC ones 120 s: the busy detector calls those bands busy 86 % and 75 % of the time, and the
+estimate looks only in the quiet. `judge DIR` runs `aetherd --passband-trace` over each and sets
+its last reading beside the truth.
+
+**Today's warning at 2300 Hz** (the width under 1880 Hz), against the deeper of the two losses at
+the signal's edges:
+
+| True loss at an edge | steady | QSB | hot | FT8 | AGC | all |
+|---|---|---|---|---|---|---|
+| 20 dB or more | 3/12 | 2/12 | 2/12 | 2/12 | 1/12 | **10/60** |
+| 6–20 dB | 0/4 | 0/4 | 0/4 | 0/4 | 0/4 | **0/20** |
+| 3–6 dB | 0/2 | 0/2 | 0/2 | 0/2 | 0/2 | 0/10 |
+| under 3 dB | 1/8 | 0/8 | 1/8 | 0/8 | 0/8 | **2/40** |
+
+* It warns for the 500 Hz filter (seven clips of ten) and for Saturday's shift once in ten. It
+  never warns for a low edge cut: the 600 Hz low cut, the 1.8 kHz filter and both upward shifts
+  lose 35–64 dB at 360 Hz and read 2.9–3.6 kHz wide.
+* Its two false warnings are the notch over the shallow floor (steady and hot): the notch, 30 dB
+  deep, goes under a threshold drawn 7.5 dB down and is taken for the edge.
+* Where it reads, its edges lie outside the true −6 dB points. The high edge reads a median
+  589 Hz high over the deep floor (141 to 934) and 196 Hz over the shallow one: the halfway rule
+  draws the edge 25 dB down the skirt on the first, 7.5 dB on the second.
+* Under the AGC over the shallow floor it reads 0–3996 Hz whatever the response: its looks are
+  the AGC's dips, where the band's noise sits under the chain's floor and no filter shows.
+
+## 7. The count (Gate 0 item 5)
+
+About 200 lines of code: `passband_edges`, `PassbandMonitor` and their constants in
+`spectrum.rs` (about 160), `Station::sample_passband` (40), `applyPassband` in the panel (20).
+Twelve constants: eight in `spectrum.rs` (`PASSBAND_DROP_DB`, `EDGE_RUN`, `FLOOR_QUANTILE`,
+`EDGE_HOLD_HZ`, `REFERENCE_HALF_HZ`, `MIN_OBSERVATIONS`, `HISTORY`, `NOISE_QUANTILE`), three in
+`station.rs` (`AUDIO_CENTER_HZ`, `PASSBAND_SAMPLE_S`, `PASSBAND_MIN_LEVEL_DBFS`) and the panel's
+400 Hz. Eight tests: five in `spectrum.rs` (the width, flat noise, the notch, the FT8 band, the
+wait for looks) and three in `station.rs` and `passband_trace.rs` that hold the looks away from
+frames and keying. None tests a passband that is moved, or a low edge.
+

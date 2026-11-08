@@ -122,10 +122,13 @@ the noise level's swing; the real look selection does not bear that out, and it 
 3. **A labelled corpus** (`tools/rxfilter_corpus.py`): the field recordings in hand with what
    each radio was set to where it is known, and synthetic cases from the channel server's noise
    through filters that are narrow, shifted either way, notched and sloped, under AGC pumping,
-   QSB, FT8, a session's traffic and clipping.
-4. **Today's estimate over the corpus**: how often it is wrong, which way, and why.
+   QSB, FT8, a session's traffic and clipping. *Built 2026-11-08: 130 synthetic clips
+   (`01-evidence.md` §6); a session's traffic is the field recordings' (§2).*
+4. **Today's estimate over the corpus**: how often it is wrong, which way, and why. *Done:
+   it warns for 10 of 60 cuts of 20 dB or more and none of 20 cuts of 6–20 dB, and twice in 40
+   clips with no cut (`01-evidence.md` §6).*
 5. **The count**: today's constants (eleven in the daemon and one in the panel), the lines of
-   code, the tests.
+   code, the tests. *Done: about 200 lines, twelve constants, eight tests (§7).*
 6. **What a cut costs** (§6.2): the harness with the outer part of the signal cut by 3, 6, 10 and
    20 dB, each side and both, at each bandwidth, against the same draws uncut. The depth where the
    cost starts to show is the warning's threshold in Gate 2.
