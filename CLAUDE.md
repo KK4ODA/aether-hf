@@ -2700,6 +2700,24 @@ after the slot keyed), read 23:20:37, forced 23:21:07, closed 23:21:14.5, identi
 close its data port to end a session: it keeps it for its whole run, and after `FQ` nothing from it
 reaches the modem until the client's forced disconnect, 30 s later.
 
+**The receive-filter estimate's third fault, and its review (2026-11-08; the author: "start the
+review").** The mobile's TS-480 had its IF SHIFT turned fully left on Saturday night: its receive
+audio fell from about 1.5 kHz and was 20–30 dB down from 2 kHz, where the 2300 Hz signal spans
+360–2640 Hz. The estimate read 1957–1980 Hz, 80 Hz over the panel's warning line (occupied less
+400 Hz), so nothing was said; the author found the knob by the waterfall the next day (centred,
+the mobile's quiet audio is flat to 2.5 kHz and 9 dB down at 2.8). Why it missed: each bin's 10th
+percentile over the looks is the receiver's response only while the noise level is steady, and
+the mobile's in-band level swung 21–35 dB between quiet looks (audio at −4 to −12 dBFS and
+clipping, its AGC pumping), against 3–12 dB on the gateway's FTDX10; it read the mobile's filter
+wrong both ways (1746 Hz where it was fine, 2.1–2.3 kHz where it was cut). And the warning tests
+the width, not whether the passband covers the signal's span, and its words ("widen the filter")
+are wrong for a shifted passband. The brief is `docs/research/receive-filter/00-brief.md` (the
+job, the gates, five questions for the author); `01-evidence.md` is a Python mirror of today's
+code over the 19 recordings in `field/inbox/`, which Gate 0's `aetherd --passband-trace` is to
+replace. In the uploads the mobile is `KK4ODA` (sessions), `WD5EMA` (P2P) or `KK4ODA-2`; the home
+station is `KK4ODA-1`, and `KK4ODA` for the P2P test (its `diagnostics.json` at 01:26Z, 3141 Hz, is
+the FTDX10's, not the mobile's).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
