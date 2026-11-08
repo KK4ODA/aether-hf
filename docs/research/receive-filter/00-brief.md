@@ -144,7 +144,11 @@ the noise level's swing; the real look selection does not bear that out, and it 
 
 How noise power spectra are estimated under level swings and intermittent signals (minimum
 statistics, quantile methods, normalising each look), how passband edges are measured in audio
-test practice, and what other amateur modems tell the operator about the radio's filter.
+test practice, and what other amateur modems tell the operator about the radio's filter. *Done
+2026-11-08, with Gate 0's two open questions: a cut costs because Aether's receivers take the
+band's noise as flat across their band (one noise figure for every OFDM carrier, one level for
+every tone), not because of the chain's floor, and the other station's frames show a cut in one
+frame (`tools/bench_cut.py`, `tools/passband_witness.py`). Two questions for the author (§7).*
 
 ### Gate 2: candidates and criteria, registered before the runs (`03-candidates.md`)
 

@@ -2735,6 +2735,19 @@ beyond the measure's ~14 % step, 20 dB costs (the bottom edge more, and as much 
 as a shallow one — open), Saturday's receiver costs the 2300 Hz Test 37–43 % and the 500 Hz one
 nothing. The mobile clipped only on Saturday (20 dB hotter than its other sessions); the panel's
 clipping line sits in the Channel card, which Compact hides.
+**Gate 1 (same day, `02-survey.md`):** a cut costs because the receivers take the band's noise as
+flat across their band — the OFDM receiver charges every data carrier one noise per symbol over
+its `|h|²` (`sigma2_sym / |h|²` in `rx.py`/`rx.rs`), so a carrier the radio's filter cut, noise and
+all, is all but discarded (ADR-0043's factor only raises noise), and the tone receiver uses one noise
+level for all its tones. `tools/bench_cut.py` (each rung through a cut, decoded by the model;
+`--model DIR` runs another tree): 10–20 dB at the very edge costs nothing, Saturday's cut takes the
+fast tone rungs and OFDM 13 and up, and with the noise read per pilot carrier (a scratch copy, not in
+the tree) rung 13 goes 0 → 20 of 20, uncut unchanged. `tools/passband_witness.py WAV SIDECAR`
+reads the other station's frames (OFDM channel estimate per carrier, tone energies per sent tone,
+each against its own median): Saturday's cut shows in one fast-tone frame, agreeing with the noise
+profile. Nothing published (WSJT-X, fldigi, ardopc, FreeDATA, JS8, Mercury, Pat, VARA's site)
+measures or warns of a cut passband. The author is asked whether the receiver change goes first,
+as separate work, and where warnings should show (Compact).
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
