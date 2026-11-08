@@ -235,6 +235,42 @@ def test_the_agc_steps_down_on_a_peak_holds_then_ramps_back() -> None:
     assert -12.0 < agc.gain_db < -10.0
 
 
+def receiver_server(radio_b: dict) -> tuple[cs.Server, Fake, Fake]:
+    """A server whose station ``b`` has the receive chain ``radio_b``."""
+    scenario = {
+        "seed": 3,
+        "path": {"profile": "awgn", "snr_db": 60.0},
+        "stations": {"a": {"tx_level": 0.25}, "b": {"tx_level": 0.25, "radio": radio_b}},
+    }
+    a, b = Fake(), Fake()
+    return cs.Server(scenario, {"a": a.station, "b": b.station}), a, b
+
+
+def test_a_receivers_passband_cuts_what_lies_outside_it_over_its_chains_floor() -> None:
+    # the receive-filter review (2026-11-08): the mobile's IF shift ended its passband near
+    # 1.6 kHz. A tone above the corner arrives 28 dB down (eighth order at 1.5 times the
+    # corner), one below it whole, and the quiet between is the audio chain's own floor
+    srv, a, b = receiver_server({"rx_filter_hz": [30, 1600], "rx_floor_db": 0.0})
+    run(srv, a, b, 2.0, {5: [("a", tone(0.5, 1000.0))], 50: [("a", tone(0.5, 2400.0))]})
+    at_b = envelope(b.heard)
+    low, high = at_b[40:80].mean(), at_b[130:170].mean()
+    cut = 20 * np.log10(high / low)
+    assert -31.0 < cut < -25.0, f"2.4 kHz arrived {cut:.1f} dB under 1 kHz"
+    # the floor sits at the band's noise in 3 kHz (rx_floor_db 0), white over 24 kHz: 9 dB
+    # more over the whole band, and well over the band's own noise once that is cut
+    noise_3k = srv.paths[("a", "b")].noise_dbfs_3k
+    quiet = 20 * np.log10(np.sqrt(np.mean(np.concatenate(b.heard)[int(0.95 * RATE) :][:4800] ** 2)))
+    assert abs(quiet - (noise_3k + 9.0)) < 1.5, f"quiet {quiet:.1f} dBFS, noise {noise_3k:.1f}"
+
+
+def test_a_codec_driven_hot_clips_at_full_scale() -> None:
+    srv, a, b = receiver_server({"rx_gain_db": 20.0})
+    run(srv, a, b, 1.0, {5: [("a", tone(0.5))]})
+    heard = np.concatenate(b.heard)
+    assert np.max(np.abs(heard)) == 1.0
+    assert np.mean(np.abs(heard) >= 1.0) > 0.1, "a tone at 2.5 times full scale clips"
+
+
 def test_a_third_station_is_heard_at_its_own_path_over_one_noise_floor() -> None:
     # a gateway b and two clients: a on the main path at +20 dB, c on its own at +8 dB; a
     # receiver has one floor, so b hears c 12 dB under a and the noise is not counted twice

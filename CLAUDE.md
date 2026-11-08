@@ -2723,6 +2723,18 @@ the harness, the decoded frames may be a second witness, CAT stays out, and over
 audio is in scope); `01-evidence.md` is Gate 0's first evidence. In the uploads the mobile is
 `KK4ODA` (sessions), `WD5EMA` (P2P) or `KK4ODA-2`; the home station is `KK4ODA-1`, and `KK4ODA` for
 the P2P test (its `diagnostics.json` at 01:26Z, 3141 Hz, is the FTDX10's, not the mobile's).
+**Gate 0 (same day, `01-evidence.md` §6–10):** a sidecar keeps the estimate (`passband.readings`
+in the trace's columns, `passband.start`/`end` the noise profile); `tools/rxfilter_corpus.py
+make|judge` (130 synthetic clips: thirteen responses × steady/AGC/QSB/FT8/hot × a deep or shallow
+chain floor; today's estimate warns for 10 of 60 cuts of 20 dB or more, none of 20 smaller, falsely
+for a notch over a shallow floor, and reads the full 4 kHz under an AGC over a shallow floor); the
+channel server's `[stations.<who>.radio]` gained `rx_filter_hz` (eighth order, before the AGC),
+`rx_floor_db` (the chain's floor under the band noise) and `rx_gain_db` (hot, clipping), and
+`tools/rxfilter_cost.py OUT` runs a Test per cut, paired draws: 3–10 dB at either edge costs nothing
+beyond the measure's ~14 % step, 20 dB costs (the bottom edge more, and as much over a deep floor
+as a shallow one — open), Saturday's receiver costs the 2300 Hz Test 37–43 % and the 500 Hz one
+nothing. The mobile clipped only on Saturday (20 dB hotter than its other sessions); the panel's
+clipping line sits in the Channel card, which Compact hides.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

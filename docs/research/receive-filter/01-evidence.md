@@ -174,3 +174,98 @@ Twelve constants: eight in `spectrum.rs` (`PASSBAND_DROP_DB`, `EDGE_RUN`, `FLOOR
 wait for looks) and three in `station.rs` and `passband_trace.rs` that hold the looks away from
 frames and keying. None tests a passband that is moved, or a low edge.
 
+## 8. What a cut costs (Gate 0 item 6, the author's answer 2)
+
+`tools/rxfilter_cost.py OUT` writes one Test scenario per configuration and runs three draws of
+each through the harness, paired by seed. The called station receives the Test's message and file;
+its radio is cut (`rx_filter_hz`, new in `tools/channel_server.py`: an eighth-order band-pass
+before its AGC, placed so the response is the stated depth down at the signal's edge), over its
+audio chain's floor (`rx_floor_db`, 15 dB under the band's noise as the mobile's, or 50 as the
+FTDX10's), or driven hot (`rx_gain_db`, clipping at full scale). The paths are strong Good ones,
+15 dB at 2300 Hz and 12 dB at 500 Hz, so the Test's ladder climbs to where the outer carriers
+count. Every run passes but two (both the 20 dB low cut at 500 Hz) and none radiated over the
+other. The ratios are each run's Test rate against the uncut run on the same draw, median of three:
+
+| Cut | 2300 Hz message | file | 500 Hz message | file |
+|---|---|---|---|---|
+| none | 1.00 | 1.00 | 1.00 | 1.00 |
+| top 3 dB | 1.00 | 1.00 | 1.00 | 1.00 |
+| top 6 dB | 1.00 | 0.86 | 1.00 | 1.00 |
+| top 10 dB | 1.00 | 0.87 | 0.96 | 0.99 |
+| top 20 dB | 0.86 | 0.98 | 0.87 | 0.86 |
+| top 20 dB, deep floor | 0.86 | 0.93 | 0.90 | 1.01 |
+| bottom 3 dB | 0.86 | 0.92 | 1.00 | 1.00 |
+| bottom 6 dB | 0.86 | 0.98 | 0.96 | 0.99 |
+| bottom 10 dB | 0.86 | 1.00 | 0.94 | 0.88 |
+| bottom 20 dB | 0.67 | 0.82 | 0.30 | 0.18 (one Test lost) |
+| bottom 20 dB, deep floor | 0.67 | 0.81 | 0.30 | 0.32 (one Test lost) |
+| **Saturday's receiver** | **0.57** | **0.63** | **1.00** | **1.00** |
+
+*Saturday's receiver* is the mobile's on 2026-11-08: a passband ending near 1.6 kHz (an
+eighth-order low-pass at 1600 Hz), the shallow floor and the codec 8 dB hot. On the harness it
+costs the 2300 Hz Test 37–43 % and the 500 Hz one nothing, as the operator found on the air
+(the 2300 Hz sessions paused, the 500 Hz ones ran smoothly).
+
+How to read the rest:
+
+* **The measure's own step is about 14 %.** The Test's message is small and its rate takes a few
+  values (1358, 1247, 1133 bit/s at 2300 Hz); one rung more or less on one draw moves the median a
+  step. A ratio of 0.86 alone is a step, not a cost. The cut changes each session's course, so
+  every configuration is another draw of the same three seeds.
+* **Cuts of 3–10 dB at an edge cost nothing beyond that step**, at either bandwidth, either edge.
+* **A 20 dB cut costs**: 2–33 % at 2300 Hz, more at the bottom edge than the top; at 500 Hz 0–14 %
+  at the top and 68–82 % at the bottom, with one Test in three lost. At 500 Hz an eighth-order
+  filter 20 dB down at an edge has its corner past the centre (1305 or 1680 Hz), so it takes much
+  of the channel, not only its edge.
+* **The chain's floor hardly changes it**: the 20 dB cuts cost the same over the deep floor as
+  over the shallow one. The expectation that a cut costs only where it pushes the signal under the
+  chain's floor (the band's noise is cut with the signal) does not hold: something in the receiver
+  or the link pays for the cut itself. Which, and why the bottom edge costs more than the top, is
+  open (Gate 1).
+* **A warning line** follows: somewhere between 10 and 20 dB down at either edge of the signal.
+  The FTDX10's own tilt is 5–9 dB down at 2.6–2.8 kHz, and a line at 10 dB leaves it alone.
+  Where exactly is Gate 2's to register.
+
+## 9. Clipping (Gate 0 item 7, the author's answer 5)
+
+**In the field.** The mobile's five Saturday sessions clipped in 79–98 % of their seconds, 1.3–1.7 %
+of their samples at full scale, at −7 to −8 dBFS RMS (−4 to −5 dBFS in the loudest second). Its
+four sessions of 2026-11-06 and 11-07 sat at −24 to −29 dBFS and never touched full scale, as did
+its quiet minute on 2026-11-08 afternoon (−26 dBFS) and every one of the gateway's nine
+recordings (−26 to −35 dBFS). So the receive level rose about 20 dB between 2026-11-07 15:06Z and
+2026-11-08 00:54Z, about when the IF shift was turned, and came back down when it was centred.
+
+**What the panel said.** The Status tab's *Receive level* tile says "clipping: turn the receive
+level down" once more than 0.1 % of samples clip (`applyRxLevel`). Saturday's 1.3–1.7 % passed
+that line in every session. The tile is in the Channel card, which **Compact hides**
+(`body.compact #channel-card`), and the operator ran the mobile in Compact.
+
+**What it costs** (the same harness, the codec driven `rx_gain_db` over the scenario's own level,
+the signal at −15 dBFS RMS before it):
+
+| Drive | RMS | 2300 Hz message | file | 500 Hz message | file |
+|---|---|---|---|---|---|
+| +6 dB | about −9 dBFS | 1.00 | 0.93 | 1.00 | 1.00 |
+| +10 dB | about −5 dBFS | 1.00 | 0.86 | 1.00 | 0.94 |
+| +14 dB | about −1 dBFS | 0.52 | 0.70 | 0.83 | 0.94 |
+
+Saturday's −7 to −8 dBFS lies between the first two rows: within the measure's step on its own,
+and a share of the 37–43 % that *Saturday's receiver* cost with its cut. Clipping costs plainly
+from about −1 dBFS RMS. The warning that exists fires at 0.1 % of samples, well before that.
+
+## 10. Gate 0, in short
+
+1. **The estimate measures the right thing and draws the wrong conclusions from it.** It sees a
+   cut in the noise; its edge rule ("halfway to the floor") puts the edge 7–25 dB down the skirt,
+   so it reads every passband wide, and its test is the width, so a moved passband or a cut low
+   edge never warns. Over the corpus it warns for 10 of 60 cuts of 20 dB or more and none of 20
+   smaller ones, and falsely for a notch over a shallow floor.
+2. **What matters is the signal's span**: 10 dB or less down at either edge costs nothing
+   measurable on the harness; 20 dB costs, the bottom edge more than the top; Saturday's
+   receiver cost the 2300 Hz Test 37–43 %.
+3. **Its looks fail under an AGC over a shallow floor** (the band's noise dips under the chain's,
+   and the quietest looks show no filter), and take a minute or two to gather on a busy band.
+4. **Clipping has a warning, in the wrong place**: hidden by Compact.
+5. **Open for Gate 1**: why a cut costs over a deep floor at all, and why the bottom edge costs
+   more than the top; and what the decoded frames' channel estimate would have shown.
+

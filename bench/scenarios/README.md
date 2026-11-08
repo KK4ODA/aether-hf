@@ -32,6 +32,11 @@ agc = "off"                 # off, fast, auto or slow: the receiver's AGC on the
 agc_threshold_db = 12.0     # where it acts, above the noise the station hears
 agc_hang_ms = 100           # how long a gain cut holds before it recovers
 agc_decay_db_s = 40.0       # how fast it recovers
+rx_filter_hz = [300, 2700]  # the receiver's passband, eighth order, before the AGC (a low
+                            # of 30 or less is a low-pass: a passband moved down by IF shift)
+rx_floor_db = 50.0          # the audio chain's own floor, this far under the band's noise in
+                            # 3 kHz, after the AGC (none unless given)
+rx_gain_db = 0.0            # the codec driven this much hot, clipping at full scale
 
 cw_id = false               # [radio] cw_id; a US callsign identifies whatever it says
                             # (ADR-0075), and an older build reads cw_id_interval_s

@@ -29,7 +29,15 @@ The radios are modelled at both ends, from what the field recordings showed (ADR
   rig's T/R recovery, a codec unmuting);
 * while a station transmits, its receive audio is silence, as a transceiver's is;
 * ``agc`` — ``off``, ``fast``, ``auto`` or ``slow``: the receiver's AGC (:class:`Agc`), with
-  ``agc_threshold_db`` above the noise it hears (12) and the hang and decay overridable.
+  ``agc_threshold_db`` above the noise it hears (12) and the hang and decay overridable;
+* ``rx_filter_hz = [low, high]`` — the receiver's passband: an eighth-order band-pass on what
+  the station hears, signal and band noise alike, before its AGC (a ``low`` of 30 Hz or less
+  is a low-pass alone, as a passband an IF shift moved down reaches the bottom of the audio);
+  ``rx_floor_db`` — the audio chain's own white floor, that far under the band's noise in
+  3 kHz, after the AGC: what a cut pushes the signal toward (the receive-filter review: the
+  FTDX10's lies about 50 dB down, the mobile's TS-480 about 13); ``rx_gain_db`` — the codec
+  driven that much hot, clipping at full scale (the mobile on 2026-11-08, 1.3–1.7 % of its
+  samples at full scale).
 
 And the computer: ``[stations.<who>.machine]`` makes the station's run loop stall, as a slow or
 busy PC's does (KE4QCM's fell 0.3–27 s behind, 2026-10-09). A stall of ``S`` seconds is ``S``
@@ -78,6 +86,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
+from scipy.signal import butter, sosfilt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
@@ -306,6 +315,27 @@ def signal_dbfs(scenario: dict, who: str) -> float:
     return 20.0 * math.log10(level / math.sqrt(2.0))
 
 
+def receiver(st: Station, radio: dict, noise_dbfs_3k: float | None, seed: int, who: str) -> None:
+    """Set a station's receive chain from its ``radio`` table: its passband, its audio
+    chain's floor and its codec's drive (the module's notes)."""
+    band = radio.get("rx_filter_hz")
+    if band is not None:
+        low, high = float(band[0]), float(band[1])
+        if low <= 30.0:
+            st.rx_sos = butter(8, high, btype="lowpass", fs=AUDIO_RATE, output="sos")
+        else:
+            st.rx_sos = butter(8, [low, high], btype="bandpass", fs=AUDIO_RATE, output="sos")
+        st.rx_zi = np.zeros((st.rx_sos.shape[0], 2))
+    if "rx_floor_db" in radio:
+        floor_3k = (noise_dbfs_3k if noise_dbfs_3k is not None else -60.0) - float(
+            radio["rx_floor_db"]
+        )
+        # white over the whole 24 kHz: its power in 3 kHz is an eighth of it
+        st.rx_floor = 10.0 ** (floor_3k / 20.0) * math.sqrt(AUDIO_RATE / 2.0 / 3000.0)
+        st.rx_floor_rng = np.random.default_rng(seed * 1000 + 7 + ord(who[0]))
+    st.rx_gain = 10.0 ** (float(radio.get("rx_gain_db", 0.0)) / 20.0)
+
+
 class Agc:
     """A receiver's AGC as the FTDX10 recordings showed it (``busy.rs``): the gain steps down
     within a millisecond when the envelope passes the threshold, holds ``hang_ms``, then ramps
@@ -364,6 +394,14 @@ class Station:
     last_keyed: int = -(10**12)
     intervals: list[list[float]] = field(default_factory=list)
     agc: Agc | None = None
+    # the receiver's passband, the audio chain's floor and the codec's drive (``rx_filter_hz``,
+    # ``rx_floor_db``, ``rx_gain_db``): a band-pass and its state, the floor's RMS and its
+    # draws, and the gain before the codec's full scale
+    rx_sos: np.ndarray | None = None
+    rx_zi: np.ndarray | None = None
+    rx_floor: float = 0.0
+    rx_floor_rng: np.random.Generator | None = None
+    rx_gain: float = 1.0
     # the computer (``machine``): blocks sent and not yet answered by a READY, the air sample
     # a stall lasts until, the blocks heard during it, and what was dropped from them
     owed: int = 1  # the first READY comes before the first block
@@ -630,6 +668,9 @@ class Server:
                 float(radio.get("agc_hang_ms", hang)),
                 float(radio.get("agc_decay_db_s", decay)),
             )
+        for who, st in stations.items():
+            radio = scenario.get("stations", {}).get(who, {}).get("radio", {})
+            receiver(st, radio, self.paths[(main_peer(who), who)].noise_dbfs_3k, seed, who)
         self.latency = round(DEVICE_LATENCY_S * AUDIO_RATE)
         for st in stations.values():
             st.air = np.zeros(self.latency, dtype=np.float32)
@@ -738,9 +779,15 @@ class Server:
             out[deaf] = 0.0
             if self.t >= self.outage_until:
                 self._note_deaf_hits(st, rx, main, signal, keyed, vox, deaf)
+            if st.rx_sos is not None:
+                out, st.rx_zi = sosfilt(st.rx_sos, out, zi=st.rx_zi)
             if st.agc is not None:
                 out = st.agc.process(out)
-            heard[rx] = out
+            if st.rx_floor_rng is not None:
+                out = out + st.rx_floor_rng.standard_normal(len(out)) * st.rx_floor
+            if st.rx_gain != 1.0:
+                out = np.clip(out * st.rx_gain, -1.0, 1.0)
+            heard[rx] = out.astype(np.float32)
         # two or more transmitters keyed at once
         both = np.sum(np.stack(list(keyed.values())), axis=0) >= 2
         if self.t < self.outage_until:

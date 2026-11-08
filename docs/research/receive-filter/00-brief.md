@@ -131,9 +131,14 @@ the noise level's swing; the real look selection does not bear that out, and it 
    code, the tests. *Done: about 200 lines, twelve constants, eight tests (§7).*
 6. **What a cut costs** (§6.2): the harness with the outer part of the signal cut by 3, 6, 10 and
    20 dB, each side and both, at each bandwidth, against the same draws uncut. The depth where the
-   cost starts to show is the warning's threshold in Gate 2.
+   cost starts to show is the warning's threshold in Gate 2. *Done (`tools/rxfilter_cost.py`, the
+   channel server's `rx_filter_hz`, `rx_floor_db`, `rx_gain_db`; `01-evidence.md` §8): 3–10 dB
+   costs nothing beyond the measure's step, 20 dB costs 2–33 % at 2300 Hz and up to 82 % at
+   500 Hz, and Saturday's receiver costs the 2300 Hz Test 37–43 % and the 500 Hz one nothing.*
 7. **Clipping** (§6.5): how often and how hard the field recordings in hand clip, what Setup step
-   3 said of each station's level, and what clipping costs on the harness.
+   3 said of each station's level, and what clipping costs on the harness. *Done (§9): only
+   Saturday's sessions clipped, 20 dB hotter than the mobile's others; the panel's clipping
+   line is in the card Compact hides; clipping costs plainly from about −1 dBFS RMS.*
 
 ### Gate 1: a short survey (`02-survey.md`)
 
