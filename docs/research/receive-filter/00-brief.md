@@ -95,10 +95,14 @@ From a Python mirror of today's code run over the 19 recordings in `field/inbox/
 * **In:** what is looked at and when (`sample_passband`), the noise profile, how edges are drawn,
   what is compared with what (span against width), what `metrics` reports, the panel's words and
   where they show, the manual's text, and what a recording keeps of it.
+* **In, by the author's answer (§6.5): overdriven receive audio.** Telling the operator, during
+  sessions as well as in Setup, when the receive audio is driven hot enough to clip. Setup step
+  3's level check is an input to that work, and it may change.
+* **In, as a second witness (§6.3):** the other station's decoded frames, whose pilots measure the
+  passband across the signal.
 * **Out, inputs only:** the busy detector (its own rule: the next fault is a review), which
-  decides what is quiet; the receive level check of Setup step 3; the radio's AGC.
-* **Open for the author (§6):** whether the other station's decoded frames may serve as a probe
-  of the passband, and whether reading the filter over CAT is worth another look.
+  decides what is quiet; the radio's AGC.
+* **Out (§6.4):** reading the radio's filter over CAT.
 
 ## 5. Gates
 
@@ -116,6 +120,11 @@ From a Python mirror of today's code run over the 19 recordings in `field/inbox/
 4. **Today's estimate over the corpus**: how often it is wrong, which way, and why.
 5. **The count**: today's constants (eleven in the daemon and one in the panel), the lines of
    code, the tests.
+6. **What a cut costs** (§6.2): the harness with the outer part of the signal cut by 3, 6, 10 and
+   20 dB, each side and both, at each bandwidth, against the same draws uncut. The depth where the
+   cost starts to show is the warning's threshold in Gate 2.
+7. **Clipping** (§6.5): how often and how hard the field recordings in hand clip, what Setup step
+   3 said of each station's level, and what clipping costs on the harness.
 
 ### Gate 1: a short survey (`02-survey.md`)
 
@@ -128,9 +137,10 @@ test practice, and what other amateur modems tell the operator about the radio's
 Candidates to weigh, at least: a profile that survives level swings (each look divided by its
 own level before the percentile, or a mean over the looks the busy detector trusts most), edges
 read against the passband's own level rather than the modem's centre, the span test with the
-side named, and the decoded frames' channel estimate as a second witness. Criteria will ask for
-detection of a cut at either side of the span, no warning on the corpus's working stations, words
-that name the side, and fewer constants than today.
+side named, the decoded frames' channel estimate as a second witness, and a clipping warning
+that holds in a session. Criteria will ask for detection of a cut at either side of the span at the
+depth where the harness shows it costs throughput (§6.2), no warning on the corpus's working
+stations, words that name the side, and fewer constants than today.
 
 ### Gates 3–5
 
@@ -151,3 +161,15 @@ with what is removed; the port, the manual, and the deletion of what it replaces
 5. **The input level.** The mobile's audio was at −4 to −12 dBFS and clipping on Saturday. That
    belongs to Setup step 3's level check, not here, but the estimate must not be fooled by it.
    Agreed?
+
+### The author's answers (2026-11-08)
+
+1. **Other work keeps shipping** as betas while the review runs.
+2. **Measure the threshold.** On the harness, cut the outer part of the signal by 3, 6, 10 and
+   20 dB at each bandwidth, measure what each costs, and warn where the cost starts to show.
+   This joins Gate 0.
+3. **Yes, the frames are a witness.** Candidates may use the decoded frames' channel estimate
+   beside the noise; the criteria judge whether it earns its place.
+4. **CAT stays out.** The audio is the one witness every radio has.
+5. **Overdriven receive audio is in scope**: the review also looks at warning the operator about
+   clipping receive audio during sessions, not only in Setup (§4).
