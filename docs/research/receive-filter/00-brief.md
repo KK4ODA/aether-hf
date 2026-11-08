@@ -32,9 +32,9 @@ the noise between signals.
 | 2 | 2026-11-05 (`7ac47c6`, beta.131) | "about 850 Hz wide" on 7.074 MHz | a 3 kHz filter: the average of the looks sloped down from a middle full of FT8 | each bin's 10th percentile over the last 120 looks; the edge 6 dB under the middle or halfway to the floor, whichever is lower; an edge must stay down for 150 Hz |
 | 3 | 2026-11-08 | 1957–1980 Hz wide, so no warning (it shows below 2280 − 400 = 1880 Hz) | the mobile's TS-480 with its IF SHIFT turned fully left: the receive audio fell from about 1.5 kHz, 10 dB down by 1.7 kHz and 20–30 dB down from 2 kHz, where the 2300 Hz signal spans 360–2640 Hz | none: this review |
 
-Each fix was right about the case in front of it and made the next case possible: the 10th
-percentile that cured the FT8 band is what the third fault rests on (§3.2 and
-`01-evidence.md`).
+Each fix was right about the case in front of it and made the next case possible: the second
+fix drew the edge "halfway to the floor", and on Saturday that put it 15 dB down the skirt,
+over the warning line (§3 and `01-evidence.md`).
 
 ### 1.3 What the third fault cost
 
@@ -67,27 +67,29 @@ What this changes from the job the estimate was built for:
 
 ## 3. What is known before Gate 0
 
-From a Python mirror of today's code run over the 19 recordings in `field/inbox/` (2026-11-06 …
-11-08, the gateway's FTDX10 and the mobile's TS-480); `01-evidence.md` has the tables.
+From `aetherd --passband-trace` (Gate 0 item 1, built first) over the 19 recordings in
+`field/inbox/` (2026-11-06 … 11-08, the gateway's FTDX10 and the mobile's TS-480);
+`01-evidence.md` has the tables. A first look with a Python mirror blamed the 10th percentile and
+the noise level's swing; the real look selection does not bear that out, and it is withdrawn.
 
-1. **The mirror reproduces the live readings.** For the mobile's 01:01Z session it reads 1957 Hz
-   after 20 looks and 2062–2098 Hz at the end; the live daemon said 1957–1980 Hz.
-2. **The 10th percentile is not the receiver's response when the noise level swings.** On the
-   gateway the in-band level of the quiet looks varies 3–12 dB (the 10th to 90th percentile),
-   and the 10th-percentile profile and the mean agree on the edges within 75 Hz. On the mobile it
-   varied 21–35 dB in seven recordings of ten (the mobile's audio was at −4 to −12 dBFS and
-   clipping on Saturday; its AGC pumped). There, the 10th percentile turned a 25 dB step into a long slope,
-   and the edge it drew was wrong both ways: 1746 and 2449 Hz where the filter was fine (mean
-   edges 2801 and 2906 Hz, 2026-11-06 and 11-07), 2062–2297 Hz where it was cut at about 1.6 kHz
-   (11-08). The original claim that the estimate "can only ever read narrower than the truth,
-   never wider" (`91ba8fb`) does not hold.
-3. **The threshold's depth wanders.** "6 dB under the middle or halfway to the floor, whichever
-   is lower" put the threshold 6–9 dB under the middle on the mobile's Saturday sessions and 25–28
-   dB under it on the gateway: the same rule, a different test on each radio.
-4. **The low edge is never found.** Every reading runs to 0–23 Hz at the bottom: the radios
-   pass hum and low noise there, and nothing drops 6 dB under 1500 Hz on the way down. A low cut
-   set too high would show only in the width.
-5. **Where it shows.** The note sits at the top of the Status tab. It said nothing on Saturday,
+1. **The trace reproduces the live readings**: the 00:54Z session ends at 1980 Hz, the reading
+   the mobile's daemon uploaded at 01:00.
+2. **The estimate saw the cut.** On the mobile's clean looks the noise was flat to 1.4 kHz, 16 dB
+   down at 1.8 kHz and 23 dB down from 2 kHz.
+3. **The rule for the edge's depth put it in the wrong place.** "6 dB under the middle or halfway
+   to the floor, whichever is lower" drew the edge 15 dB down the skirt, at 1.93–2.06 kHz, over
+   the warning line (1880 Hz); at 6 dB down it falls near 1.65 kHz. The depth follows the audio
+   chain's own floor: 6.5–16 dB on the mobile, 25–28 dB on the FTDX10. On clean noise through an
+   eighth-order filter it reads 300–2700 Hz as 211–3176 Hz. The original claim that the estimate
+   "can only ever read narrower than the truth, never wider" (`91ba8fb`) does not hold.
+4. **The test is the width.** Even with the edge at 6 dB down, the panel would have said "too
+   narrow, widen the filter" for a passband that was moved, not narrow.
+5. **The reference at 1500 Hz** sat 1–7 dB under the band below it on Saturday.
+6. **The low edge is never found.** Every reading runs to 0–23 Hz at the bottom.
+7. **Two sessions are unexplained**: their looks' level swung 28–32 dB and their profiles slope
+   26–29 dB with no clear edge. Every Saturday session clipped alike (1.3–1.7 % of samples at
+   full scale), so clipping alone does not explain them.
+8. **Where it shows.** The note sits at the top of the Status tab. It said nothing on Saturday,
    but had it spoken, the operator was in a session and may not have been on that tab.
 
 ## 4. Scope
@@ -110,7 +112,7 @@ From a Python mirror of today's code run over the 19 recordings in `field/inbox/
 
 1. **The real code over a recording**: `aetherd --passband-trace WAV [--expect SIDECAR]`, every
    look and every reading as CSV, as `--busy-trace` does for the busy detector, so the evidence
-   stops resting on a mirror.
+   stops resting on a mirror. *Built 2026-11-08 (`passband_trace.rs`); §3 is its first result.*
 2. **Recordings keep the estimate**: a sidecar's `passband` with the readings (both edges, not
    just the width) on a beat, so the next field case can be read after the fact.
 3. **A labelled corpus** (`tools/rxfilter_corpus.py`): the field recordings in hand with what

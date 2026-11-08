@@ -909,13 +909,13 @@ const THROUGHPUT_WINDOW_S: f64 = 30.0;
 /// The audio the modem occupies is centred here; the radio's receive filter must pass a band
 /// of the occupied width around it, and the passband monitor measures the width at this
 /// centre.
-const AUDIO_CENTER_HZ: f64 = 1500.0;
+pub(crate) const AUDIO_CENTER_HZ: f64 = 1500.0;
 /// A spectrum is taken for the passband monitor no more often than this, in seconds of
 /// station time: a couple of times a second, not every block.
-const PASSBAND_SAMPLE_S: f64 = 0.5;
+pub(crate) const PASSBAND_SAMPLE_S: f64 = 0.5;
 /// Below this block level there is no real noise to read a passband from — a muted card, a
 /// disconnected antenna — so the passband is not sampled then. −70 dBFS, the silence floor.
-const PASSBAND_MIN_LEVEL_DBFS: f64 = -70.0;
+pub(crate) const PASSBAND_MIN_LEVEL_DBFS: f64 = -70.0;
 
 /// The most constellation points kept from a frame, for the display.
 const CONSTELLATION_POINTS: usize = 1024;

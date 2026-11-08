@@ -154,6 +154,36 @@ const NOISE_QUANTILE: f64 = 0.1;
 /// when nothing drops — a filter wider than the modem, or silence.
 #[must_use]
 pub fn passband_width_hz(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option<f64> {
+    passband_edges(bins_db, bin_hz, center_hz).map(|edges| edges.width_hz())
+}
+
+/// Where [`passband_width_hz`] puts the passband's edges, and the levels it drew them from:
+/// what a trace of the estimate reports (`aetherd --passband-trace`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PassbandEdges {
+    /// The low edge, hertz: 0 when nothing drops on the way down.
+    pub low_hz: f64,
+    /// The high edge, hertz: the top of the measured range when nothing drops on the way up.
+    pub high_hz: f64,
+    /// The in-band reference level around the centre, dBFS.
+    pub reference_db: f32,
+    /// The level an edge is drawn under, dBFS.
+    pub threshold_db: f32,
+    /// The floor the threshold was drawn toward, dBFS.
+    pub floor_db: f32,
+}
+
+impl PassbandEdges {
+    /// The span between the edges, hertz.
+    #[must_use]
+    pub fn width_hz(&self) -> f64 {
+        (self.high_hz - self.low_hz).max(0.0)
+    }
+}
+
+/// The passband's edges in a noise profile, as [`passband_width_hz`] draws them.
+#[must_use]
+pub fn passband_edges(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option<PassbandEdges> {
     if bins_db.is_empty() || bin_hz <= 0.0 {
         return None;
     }
@@ -227,7 +257,13 @@ pub fn passband_width_hz(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option
     };
     let high = edge(1);
     let low = edge(-1);
-    Some((high.saturating_sub(low)) as f64 * bin_hz)
+    Some(PassbandEdges {
+        low_hz: low as f64 * bin_hz,
+        high_hz: high.max(low) as f64 * bin_hz,
+        reference_db: reference,
+        threshold_db: threshold,
+        floor_db: floor,
+    })
 }
 
 /// Tracks the receiver's passband from the noise it delivers, so a radio filter set narrower
@@ -295,6 +331,22 @@ impl PassbandMonitor {
             return None;
         }
         passband_width_hz(&self.profile(), self.bin_hz, center_hz)
+    }
+
+    /// Where the passband's edges are around `center_hz`, once the width can be read
+    /// ([`Self::width_hz`]).
+    #[must_use]
+    pub fn edges(&self, center_hz: f64) -> Option<PassbandEdges> {
+        if self.history.len() < MIN_OBSERVATIONS {
+            return None;
+        }
+        passband_edges(&self.profile(), self.bin_hz, center_hz)
+    }
+
+    /// How many quiet spectra are kept now.
+    #[must_use]
+    pub fn looks(&self) -> usize {
+        self.history.len()
     }
 
     /// How many spectra have been folded in, for a test that must tell a monitor kept away

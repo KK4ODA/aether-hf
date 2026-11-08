@@ -157,6 +157,8 @@ struct Args {
     bandwidth: Option<u32>,
     /// How a busy trace's floor answers the radio's gain.
     busy_variant: Option<String>,
+    /// A recording to run through the receive-filter estimate, look by look.
+    passband_trace: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Option<Args>, String> {
@@ -220,6 +222,11 @@ fn parse_args() -> Result<Option<Args>, String> {
             "--busy-trace" => {
                 args.busy_trace = Some(PathBuf::from(
                     argv.next().ok_or("--busy-trace needs a WAV file")?,
+                ));
+            }
+            "--passband-trace" => {
+                args.passband_trace = Some(PathBuf::from(
+                    argv.next().ok_or("--passband-trace needs a WAV file")?,
                 ));
             }
             "--busy-variant" => {
@@ -288,7 +295,11 @@ aetherd — the Aether HF station daemon
                       block as CSV: its power, why it was or was not taken as noise, the
                       floor, the busy state, the radio's gain, and the audio's power in and
                       out of the channel (with --expect, muted where the station transmitted)
-      --bandwidth N   the bandwidth a busy trace runs at when no sidecar says (500 or 2300)
+      --passband-trace WAV  run a recording through the receive-filter estimate and print
+                      every look it folds in as CSV: the look's level, the edges after it, the
+                      levels they were drawn from (with --expect, the looks a live station
+                      would have taken, by the sidecar's keying, frames and busy state)
+      --bandwidth N   the bandwidth a trace runs at when no sidecar says (500 or 2300)
       --busy-variant plain  trace with the floor in dBFS, as before ADR-0078
       --channel HOST:PORT  take the audio from a scenario harness's channel server, in
                       lockstep, keying nothing (tools/session_matrix.py)
@@ -312,18 +323,41 @@ fn busy_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// `--passband-trace`: the receive-filter estimate over a recording, look by look, as CSV on
+/// stdout.
+fn passband_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
+    let expectation = args
+        .expect
+        .as_deref()
+        .map(aetherd::replay::Expectation::from_sidecar)
+        .transpose()?;
+    let readings = aetherd::passband_trace::trace(wav, expectation.as_ref(), args.bandwidth)?;
+    print!("{}", aetherd::passband_trace::to_csv(&readings));
+    Ok(())
+}
+
+/// A recording to work through instead of running the modem (`--busy-trace`,
+/// `--passband-trace`, `--replay`): `None` when none was asked for.
+fn offline(args: &Args) -> Option<Result<(), String>> {
+    if let Some(wav) = &args.busy_trace {
+        return Some(busy_trace(wav, args));
+    }
+    if let Some(wav) = &args.passband_trace {
+        return Some(passband_trace(wav, args));
+    }
+    let wav = args.replay.as_ref()?;
+    let block_s = args
+        .block_ms
+        .map_or(aetherd::replay::BLOCK_S, |ms| ms / 1000.0);
+    Some(replay(wav, args.expect.as_deref(), block_s))
+}
+
 fn run() -> Result<Exit, String> {
     let Some(args) = parse_args()? else {
         return Ok(Exit::Done);
     };
-    if let Some(wav) = &args.busy_trace {
-        return busy_trace(wav, &args).map(|()| Exit::Done);
-    }
-    if let Some(wav) = &args.replay {
-        let block_s = args
-            .block_ms
-            .map_or(aetherd::replay::BLOCK_S, |ms| ms / 1000.0);
-        return replay(wav, args.expect.as_deref(), block_s).map(|()| Exit::Done);
+    if let Some(done) = offline(&args) {
+        return done.map(|()| Exit::Done);
     }
     let path = args
         .config

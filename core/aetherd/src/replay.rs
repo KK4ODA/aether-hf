@@ -60,19 +60,26 @@ pub struct Announcement {
     pub start_s: f64,
     /// Where it ends.
     pub end_s: f64,
+    /// Whether the station heeded it: a tone frame, or an ordinary one acquired past the
+    /// trusted confidence. Only a heeded one held the station receiving. An announcement
+    /// recorded before the word was kept counts as heeded.
+    pub heeded: bool,
 }
 
 impl Announcement {
-    /// Read a `preamble` event's detail, `ago <s> frame_s <s> …`, announced at `t_s`.
+    /// Read a `preamble` event's detail, `ago <s> frame_s <s> … heeded <0|1>`, announced at
+    /// `t_s`.
     fn parse(t_s: f64, detail: &str) -> Option<Self> {
         let mut words = detail.split_whitespace();
         let mut ago = None;
         let mut frame_s = None;
+        let mut heeded = true;
         while let Some(word) = words.next() {
             let value = || words.clone().next().and_then(|v| v.parse::<f64>().ok());
             match word {
                 "ago" => ago = value(),
                 "frame_s" => frame_s = value(),
+                "heeded" => heeded = value().is_none_or(|v| v != 0.0),
                 _ => {}
             }
         }
@@ -82,6 +89,7 @@ impl Announcement {
             t_s,
             start_s,
             end_s,
+            heeded,
         })
     }
 }

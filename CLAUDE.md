@@ -2702,21 +2702,27 @@ reaches the modem until the client's forced disconnect, 30 s later.
 
 **The receive-filter estimate's third fault, and its review (2026-11-08; the author: "start the
 review").** The mobile's TS-480 had its IF SHIFT turned fully left on Saturday night: its receive
-audio fell from about 1.5 kHz and was 20–30 dB down from 2 kHz, where the 2300 Hz signal spans
-360–2640 Hz. The estimate read 1957–1980 Hz, 80 Hz over the panel's warning line (occupied less
-400 Hz), so nothing was said; the author found the knob by the waterfall the next day (centred,
-the mobile's quiet audio is flat to 2.5 kHz and 9 dB down at 2.8). Why it missed: each bin's 10th
-percentile over the looks is the receiver's response only while the noise level is steady, and
-the mobile's in-band level swung 21–35 dB between quiet looks (audio at −4 to −12 dBFS and
-clipping, its AGC pumping), against 3–12 dB on the gateway's FTDX10; it read the mobile's filter
-wrong both ways (1746 Hz where it was fine, 2.1–2.3 kHz where it was cut). And the warning tests
-the width, not whether the passband covers the signal's span, and its words ("widen the filter")
-are wrong for a shifted passband. The brief is `docs/research/receive-filter/00-brief.md` (the
-job, the gates, five questions for the author); `01-evidence.md` is a Python mirror of today's
-code over the 19 recordings in `field/inbox/`, which Gate 0's `aetherd --passband-trace` is to
-replace. In the uploads the mobile is `KK4ODA` (sessions), `WD5EMA` (P2P) or `KK4ODA-2`; the home
-station is `KK4ODA-1`, and `KK4ODA` for the P2P test (its `diagnostics.json` at 01:26Z, 3141 Hz, is
-the FTDX10's, not the mobile's).
+audio was flat to 1.4 kHz, 16 dB down at 1.8 and 23 dB down from 2 kHz, where the 2300 Hz signal
+spans 360–2640 Hz. The estimate read 1934–2273 Hz (live 1957–1980), over the panel's warning line
+(occupied less 400 Hz, 1880 Hz), so nothing was said; the author found the knob by the waterfall
+the next day (centred, the mobile is flat to 2.6 kHz and 11 dB down at 2.8). Why it missed:
+`aetherd --passband-trace WAV --expect SIDECAR` (`passband_trace.rs`: the daemon's own monitor
+over a recording, looks chosen by `sample_passband`'s rule from the busy detector run on the same
+audio and the sidecar's keying, announcements and frames; one CSV line a look, with both edges —
+`spectrum::passband_edges`, `PassbandMonitor::edges`) shows the estimate saw the cut and drew the
+edge "halfway to the floor", 15 dB down the skirt, near 2 kHz; at 6 dB it falls near 1.65 kHz.
+That rule came with the FT8 fix; it reads clean 300–2700 Hz noise as 211–3176 Hz. And the warning
+tests the width, not whether the passband covers the signal's span, and says "widen the filter"
+for a passband that was moved. A Python mirror of the first look blamed the 10th percentile and a
+21–35 dB swing of the noise level; its looks let in the other station's frames, and the real
+looks swing 3–10 dB in 17 recordings of 19 — that explanation is withdrawn. Two Saturday sessions
+remain unexplained (28–32 dB swing, a 26–29 dB slope); every Saturday session clipped (1.3–1.7 %
+of samples at full scale). The brief is `docs/research/receive-filter/00-brief.md` (the job, the
+gates, the author's answers: other work keeps shipping, the warning's threshold is measured on
+the harness, the decoded frames may be a second witness, CAT stays out, and overdriven receive
+audio is in scope); `01-evidence.md` is Gate 0's first evidence. In the uploads the mobile is
+`KK4ODA` (sessions), `WD5EMA` (P2P) or `KK4ODA-2`; the home station is `KK4ODA-1`, and `KK4ODA` for
+the P2P test (its `diagnostics.json` at 01:26Z, 3141 Hz, is the FTDX10's, not the mobile's).
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

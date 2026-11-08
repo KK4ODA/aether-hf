@@ -195,7 +195,7 @@ pub fn trace(
 }
 
 /// Whether a live station was deaf at `t`: keyed, or hearing its own tail.
-fn deaf_at(muted: &[crate::replay::Muted], t: f64) -> bool {
+pub(crate) fn deaf_at(muted: &[crate::replay::Muted], t: f64) -> bool {
     muted
         .iter()
         .any(|m| t >= m.from_s && t < m.until_s + DEAF_AFTER_S)
