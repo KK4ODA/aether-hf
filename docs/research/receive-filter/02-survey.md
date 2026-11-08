@@ -185,6 +185,14 @@ median, so the sender's level and the path's loss drop out; the median over fram
    and Compact hides the clipping line. Is a warning that shows in every view, Compact included,
    what you want (the session banner's place, or the header)?
 
+### The author's answers (2026-11-08)
+
+1. **The receiver change goes first**, as separate work with its own ADR, before this review's
+   Gate 3, so the warning's line is measured on the receiver that will ship. The review waits at
+   Gate 2 meanwhile.
+2. **A banner in every view**, Compact included, like the session and mismatch banners, until
+   the cause is fixed or the operator dismisses it.
+
 ## Sources
 
 | Source | Reading |

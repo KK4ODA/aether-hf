@@ -2746,8 +2746,9 @@ the tree) rung 13 goes 0 → 20 of 20, uncut unchanged. `tools/passband_witness.
 reads the other station's frames (OFDM channel estimate per carrier, tone energies per sent tone,
 each against its own median): Saturday's cut shows in one fast-tone frame, agreeing with the noise
 profile. Nothing published (WSJT-X, fldigi, ardopc, FreeDATA, JS8, Mercury, Pat, VARA's site)
-measures or warns of a cut passband. The author is asked whether the receiver change goes first,
-as separate work, and where warnings should show (Compact).
+measures or warns of a cut passband. **The author's answers:** the receiver change goes first, as
+separate work with its own ADR, before the review's Gate 3 (the review waits at Gate 2); and the
+warnings show as a banner in every view, Compact included.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
