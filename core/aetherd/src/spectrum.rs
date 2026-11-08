@@ -47,6 +47,34 @@ pub struct Spectrum {
     pub bins_db: Vec<f32>,
 }
 
+impl Spectrum {
+    /// The level around `center_hz`, dBFS: the median of the bins within the reference band
+    /// [`passband_edges`] reads its in-band level from, so one look's own level is on the same
+    /// footing as the profile's.
+    #[must_use]
+    pub fn level_around(&self, center_hz: f64) -> f32 {
+        reference_level(&self.bins_db, self.bin_hz, center_hz).unwrap_or(f32::NAN)
+    }
+}
+
+/// The median of the bins within ±[`REFERENCE_HALF_HZ`] of `center_hz`: the in-band reference.
+fn reference_level(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option<f32> {
+    if bins_db.is_empty() || bin_hz <= 0.0 {
+        return None;
+    }
+    let bin_of = |hz: f64| (hz / bin_hz).round() as usize;
+    let center = bin_of(center_hz);
+    if center >= bins_db.len() {
+        return None;
+    }
+    let half = bin_of(REFERENCE_HALF_HZ).max(1);
+    let lo = center.saturating_sub(half);
+    let hi = (center + half).min(bins_db.len() - 1);
+    let mut middle: Vec<f32> = bins_db[lo..=hi].to_vec();
+    middle.sort_by(f32::total_cmp);
+    Some(middle[middle.len() / 2])
+}
+
 impl SpectrumAnalyser {
     /// Build one for audio at `sample_rate`.
     #[must_use]
@@ -189,17 +217,9 @@ pub fn passband_edges(bins_db: &[f32], bin_hz: f64, center_hz: f64) -> Option<Pa
     }
     let bin_of = |hz: f64| (hz / bin_hz).round() as usize;
     let center = bin_of(center_hz);
-    if center >= bins_db.len() {
-        return None;
-    }
     // in-band reference: the median over ±REFERENCE_HALF_HZ of the centre, so one loud bin
     // (a birdie, a carrier) does not lift it
-    let half = bin_of(REFERENCE_HALF_HZ).max(1);
-    let lo = center.saturating_sub(half);
-    let hi = (center + half).min(bins_db.len() - 1);
-    let mut middle: Vec<f32> = bins_db[lo..=hi].to_vec();
-    middle.sort_by(f32::total_cmp);
-    let reference = middle[middle.len() / 2];
+    let reference = reference_level(bins_db, bin_hz, center_hz)?;
     if !reference.is_finite() {
         return None;
     }
@@ -341,6 +361,13 @@ impl PassbandMonitor {
             return None;
         }
         passband_edges(&self.profile(), self.bin_hz, center_hz)
+    }
+
+    /// The noise profile the edges are drawn from, with its bin width: `None` before the first
+    /// look. A recording keeps it at its start and end.
+    #[must_use]
+    pub fn noise_profile(&self) -> Option<(f64, Vec<f32>)> {
+        (!self.history.is_empty()).then(|| (self.bin_hz, self.profile()))
     }
 
     /// How many quiet spectra are kept now.

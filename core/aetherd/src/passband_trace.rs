@@ -29,9 +29,6 @@ const FEED_S: f64 = 0.02;
 /// How long after a decoded or trusted frame is reported the station still counts itself as
 /// receiving, as `Station::report` sets it.
 const RECEIVING_AFTER_FRAME_S: f64 = 0.5;
-/// Half the band around the centre a look's own level is read over, hertz: the reference band
-/// of `passband_edges`.
-const LOOK_HALF_HZ: f64 = 180.0;
 
 /// One look the monitor folded in, and the estimate after it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,8 +39,7 @@ pub struct Reading {
     pub taken_s: f64,
     /// Looks kept after it.
     pub looks: usize,
-    /// The look's own level around the centre, dBFS: the median of its bins within
-    /// ±[`LOOK_HALF_HZ`].
+    /// The look's own level around the centre, dBFS ([`Spectrum::level_around`]).
     pub look_db: f32,
     /// The estimate after it: `None` until enough looks are kept.
     pub edges: Option<PassbandEdges>,
@@ -230,7 +226,7 @@ impl Looks {
                     t_s: now,
                     taken_s: taken,
                     looks: self.monitor.looks(),
-                    look_db: level_around(&spectrum, AUDIO_CENTER_HZ),
+                    look_db: spectrum.level_around(AUDIO_CENTER_HZ),
                     edges: self.monitor.edges(AUDIO_CENTER_HZ),
                 });
             }
@@ -243,17 +239,6 @@ impl Looks {
             self.next_look = now + PASSBAND_SAMPLE_S;
         }
     }
-}
-
-/// A look's level around `center_hz`: the median of its bins within ±[`LOOK_HALF_HZ`], dBFS.
-fn level_around(spectrum: &Spectrum, center_hz: f64) -> f32 {
-    let bin = |hz: f64| (hz / spectrum.bin_hz).round() as usize;
-    let last = spectrum.bins_db.len().saturating_sub(1);
-    let lo = bin(center_hz - LOOK_HALF_HZ).min(last);
-    let hi = bin(center_hz + LOOK_HALF_HZ).min(last);
-    let mut around: Vec<f32> = spectrum.bins_db[lo..=hi].to_vec();
-    around.sort_by(f32::total_cmp);
-    around.get(around.len() / 2).copied().unwrap_or(f32::NAN)
 }
 
 /// The trace as CSV, one line a look.

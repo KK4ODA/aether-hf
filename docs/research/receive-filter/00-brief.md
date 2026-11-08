@@ -114,7 +114,11 @@ the noise level's swing; the real look selection does not bear that out, and it 
    look and every reading as CSV, as `--busy-trace` does for the busy detector, so the evidence
    stops resting on a mirror. *Built 2026-11-08 (`passband_trace.rs`); §3 is its first result.*
 2. **Recordings keep the estimate**: a sidecar's `passband` with the readings (both edges, not
-   just the width) on a beat, so the next field case can be read after the fact.
+   just the width) on a beat, so the next field case can be read after the fact. *Built
+   2026-11-08: `passband.readings` holds one line a look folded in (`[t_s, taken_s, looks,
+   look_db, low_hz, high_hz, reference_db, threshold_db, floor_db]`, the trace's columns), and
+   `passband.start`/`end` the noise profile then (`{bin_hz, looks, db}`), which a trace of the
+   recording starts without.*
 3. **A labelled corpus** (`tools/rxfilter_corpus.py`): the field recordings in hand with what
    each radio was set to where it is known, and synthetic cases from the channel server's noise
    through filters that are narrow, shifted either way, notched and sloped, under AGC pumping,

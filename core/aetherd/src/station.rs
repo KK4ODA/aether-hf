@@ -2956,6 +2956,8 @@ impl<P: Ptt> Station<P> {
         }
         // where the busy detector stood, so a trace of the audio can carry on from it
         recording.busy_state(self.busy.state(self.now()));
+        // and the receive-filter estimate's profile, which a trace of the audio starts without
+        recording.passband_profile(false, self.passband.noise_profile(), self.passband.looks());
         let path = recording.path().to_path_buf();
         self.recording = Some(recording);
         // its S-meter, dial and settings are asked for from the next pass, its marks from 1
@@ -2966,7 +2968,8 @@ impl<P: Ptt> Station<P> {
 
     /// Stop the recording, if one is running, and say what it holds.
     pub fn stop_recording(&mut self) -> Option<crate::record::Summary> {
-        let recording = self.recording.take()?;
+        let mut recording = self.recording.take()?;
+        recording.passband_profile(true, self.passband.noise_profile(), self.passband.looks());
         let counters = crate::control::methods::counters(self);
         match recording.finish(&counters) {
             Ok(summary) => {
@@ -5196,8 +5199,17 @@ impl<P: Ptt> Station<P> {
             .front()
             .is_some_and(|&(taken, _)| now - taken >= attack)
         {
-            if let Some((_, spectrum)) = self.passband_pending.pop_front() {
+            if let Some((taken, spectrum)) = self.passband_pending.pop_front() {
                 self.passband.observe(&spectrum);
+                if let Some(recording) = &mut self.recording {
+                    recording.passband_reading(
+                        now,
+                        taken,
+                        self.passband.looks(),
+                        spectrum.level_around(AUDIO_CENTER_HZ),
+                        self.passband.edges(AUDIO_CENTER_HZ),
+                    );
+                }
             }
         }
         // the window has to lie wholly in the quiet, and a block can straddle the end of the
@@ -6588,6 +6600,72 @@ mod tests {
     }
 
     /// A station that will transmit on demand: no channel gate, no keying to fail.
+    #[test]
+    fn a_recording_keeps_the_receive_filter_estimate_look_by_look() {
+        // the receive-filter review (2026-11-08): what the estimate took in and where it drew
+        // the edges goes into the sidecar, with its noise profile at both ends, so a field
+        // case can be read after the fact as `aetherd --passband-trace` reads a recording
+        let dir = std::env::temp_dir().join(format!("aether-passband-rec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                record_dir: Some(dir.clone()),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        let block = station.config.params.audio_rate / 50;
+        let mut state = 7u32;
+        let mut noise = move || -> Vec<f32> {
+            (0..block)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (f64::from(state >> 8) / f64::from(1u32 << 24) - 0.5) as f32 * 0.02
+                })
+                .collect()
+        };
+        // five seconds before the recording, ten in it
+        for _ in 0..250 {
+            station.capture(&noise()).expect("capture");
+        }
+        let looks_before = station.passband.looks();
+        assert!(looks_before > 0, "no look in five seconds of quiet noise");
+        station
+            .start_recording(Some("passband"), None)
+            .expect("start the recording");
+        for _ in 0..500 {
+            station.capture(&noise()).expect("capture");
+        }
+        let looks_after = station.passband.looks();
+        let summary = station.stop_recording().expect("a recording");
+        let sidecar: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
+                .expect("json");
+        let passband = &sidecar["passband"];
+        assert_eq!(passband["start"]["looks"], looks_before);
+        assert_eq!(passband["end"]["looks"], looks_after);
+        let readings = passband["readings"].as_array().expect("readings");
+        assert_eq!(
+            readings.len(),
+            looks_after - looks_before,
+            "one reading a look folded in while recording"
+        );
+        let last = readings.last().expect("a reading");
+        assert!(
+            last[4].is_number() && last[5].is_number(),
+            "no edges after {looks_after} looks: {last}"
+        );
+        assert!(
+            last[0].as_f64() > last[1].as_f64(),
+            "folded in before it was taken: {last}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn idle_station() -> Station<NullPtt> {
         Station::new(
             StationConfig {
