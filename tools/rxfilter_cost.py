@@ -2,7 +2,7 @@
 Gate 0 items 6 and 7).
 
     python tools/rxfilter_cost.py OUT_DIR [--seeds 3] [--jobs 4] [--only NAME-PART]
-                                          [--daemon PATH] [--summary-only]
+                                          [--daemon PATH] [--summary-only] [--keep-audio]
 
 Writes one Test scenario per configuration into ``OUT_DIR/scenarios``, runs them through
 ``tools/session_matrix.py`` (``--seeds`` draws each, paired by seed across configurations) and
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import subprocess
 import sys
@@ -39,10 +40,39 @@ WIDE_HZ = (30.0, 3600.0)
 """The side of the passband left alone: a low-pass alone at the bottom, well clear at the top."""
 
 
+def edge_loss(low: float, high: float, edge_hz: float) -> float:
+    """How far under its peak the channel server's receive filter is at ``edge_hz``
+    (``channel_server.receiver``: a low-pass alone at or under 30 Hz, a band-pass otherwise)."""
+    from scipy.signal import butter, sosfreqz
+
+    if low <= 30.0:
+        sos = butter(ORDER, high, btype="lowpass", fs=48_000, output="sos")
+    else:
+        sos = butter(ORDER, [low, high], btype="bandpass", fs=48_000, output="sos")
+    hz = [edge_hz, *range(100, 4001, 5)]
+    _, h = sosfreqz(sos, worN=hz, fs=48_000)
+    db = [20.0 * math.log10(max(abs(v), 1e-12)) for v in h]
+    return max(db[1:]) - db[0]
+
+
 def corner_for(edge_hz: float, depth_db: float, side: str) -> float:
-    """The corner of an eighth-order Butterworth that is ``depth_db`` down at ``edge_hz``."""
+    """The corner that puts the receive filter ``depth_db`` under its peak at ``edge_hz``. The
+    top: an eighth-order low-pass alone, by its formula. The bottom: the band-pass up to
+    ``WIDE_HZ[1]`` the channel server builds, by bisection. A band-pass's lower skirt is steeper
+    than its low-pass prototype's; placed by the prototype's formula (Gate 0), the bottom cuts
+    came out deeper than named: 6.8, 11.9, 24.4 dB for 6, 10, 20 at 2300 Hz, and 10.2, 19.8,
+    42.1 at 500 Hz (the receive-filter review's Gate 3, ``04-results.md``)."""
     ratio = (10.0 ** (depth_db / 10.0) - 1.0) ** (1.0 / (2 * ORDER))
-    return edge_hz / ratio if side == "high" else edge_hz * ratio
+    if side == "high":
+        return edge_hz / ratio
+    lo, hi = edge_hz, edge_hz * ratio * 1.05
+    for _ in range(50):
+        mid = 0.5 * (lo + hi)
+        if edge_loss(mid, WIDE_HZ[1], edge_hz) < depth_db:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 
 def configurations() -> list[dict]:
@@ -182,6 +212,11 @@ def main() -> None:
     ap.add_argument("--only", help="run only configurations whose name contains this")
     ap.add_argument("--daemon", type=Path)
     ap.add_argument("--summary-only", action="store_true")
+    ap.add_argument(
+        "--keep-audio",
+        action="store_true",
+        help="keep every run's recordings, for the receive-filter candidates' traces (Gate 3)",
+    )
     args = ap.parse_args()
     results = args.out / "results.csv"
     if not args.summary_only:
@@ -206,8 +241,9 @@ def main() -> None:
             str(args.out / "runs"),
             "--csv",
             str(results),
-            "--drop-passing-audio",
         ]
+        if not args.keep_audio:
+            command.append("--drop-passing-audio")
         if args.daemon:
             command += ["--daemon", str(args.daemon)]
         subprocess.run(command, check=False)

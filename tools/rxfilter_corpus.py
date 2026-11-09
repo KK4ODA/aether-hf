@@ -26,6 +26,14 @@ the review knows of each (K2, K4).
     python tools/rxfilter_corpus.py field INBOX [--variant r0,r1,r2,r3] [--daemon PATH]
         [--csv FILE] [--jobs N]
 
+``harness`` runs the same over both stations' recordings of every run of the cut grid
+(``tools/rxfilter_cost.py OUT --keep-audio``): the called station's radio is the one cut (its
+side and depth in the run's name), the caller's is not (K1, K2, K6 on the harness), and it sets
+the first frame a witness could read the cut edge from beside the first warning (K8).
+
+    python tools/rxfilter_corpus.py harness RUNS_DIR [--variant r3+keep] [--daemon PATH]
+        [--csv FILE] [--jobs N]
+
 ``judge`` runs ``aetherd --passband-trace --passband-variant V`` over every clip at both
 bandwidths (no sidecar: the whole clip is listened to) and judges every reading against the
 truth: a side 20 dB or more down must be named, a side 10 dB or less down must not be, a side
@@ -46,6 +54,7 @@ import multiprocessing
 import os
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,6 +77,8 @@ OCCUPIED_HZ = {2300: 2280.0, 500: 480.0}
 """The occupied width the panel's warning compares the estimate with (``occupied_hz``)."""
 WARNING_SLACK_HZ = 400.0
 """The panel warns when the estimate is under the occupied width less this (``applyPassband``)."""
+HEADROOM = 10 ** (-1.0 / 20.0)
+"""The highest peak a clip outside the hot condition reaches: −1 dBFS, turned down to it."""
 FLOORS_DB = {"deep": 50.0, "shallow": 15.0}
 """How far the audio chain's own floor lies under the band's noise, in 3 kHz each: the FTDX10's
 about 50 dB, the mobile's TS-480 on 2026-11-08 about 13 dB."""
@@ -313,6 +324,10 @@ def build_part(clip: Clip) -> tuple[np.ndarray, dict]:
     audio = band + chain
     if clip.condition == "hot":
         audio *= 10 ** (HOT_NOISE_RMS_DBFS / 20.0) / math.sqrt(np.mean(audio**2))
+    elif np.max(np.abs(audio)) > HEADROOM:
+        # Gate 3: the FT8 band's ten stations summed reached full scale (1.3 % of the
+        # samples in one clip), and clipping is the hot condition's alone
+        audio *= HEADROOM / np.max(np.abs(audio))
     labels = {
         "name": clip.name,
         "response": clip.response.__dict__,
@@ -347,6 +362,10 @@ WITHIN_S = {"steady": 15.0, "ft8": 60.0}
 """How soon the warning must come, by condition (K5); the others are reported, not judged."""
 CLEARS_WITHIN_S = 60.0
 """How soon after a cut is taken away its warning must clear (K5)."""
+CLIP_SHARE = 0.001
+"""C1's line, as the daemon's ``passband::CLIP_SHARE``."""
+CLIP_WITHIN_S = 10.0
+"""How soon C1 must say so (K6)."""
 
 
 def sides(labels: dict, bandwidth: int) -> tuple[set[str], set[str]]:
@@ -382,6 +401,19 @@ def wrong_side(verdict: str, forbid: set[str]) -> bool:
     return bool(named & forbid)
 
 
+def variant_args(variant: str) -> list[str]:
+    """``r3`` is a candidate with C1's veto, as registered; ``r3+keep`` the same taking looks
+    while the audio clips."""
+    name, _, keep = variant.partition("+")
+    return ["--passband-variant", name] + (["--no-clip-veto"] if keep == "keep" else [])
+
+
+def c1(readings: list[dict]) -> tuple[float | str, int]:
+    """When C1 first said the audio clips, and how many readings said so."""
+    clipping = [r for r in readings if float(r["clipping_pct"]) > 100 * CLIP_SHARE]
+    return (float(clipping[0]["t_s"]) if clipping else "", len(clipping))
+
+
 def trace(daemon: Path, wav: Path, bandwidth: int, variant: str) -> list[dict]:
     """Every reading of ``aetherd --passband-trace`` over a clip."""
     out = subprocess.run(
@@ -391,8 +423,7 @@ def trace(daemon: Path, wav: Path, bandwidth: int, variant: str) -> list[dict]:
             str(wav),
             "--bandwidth",
             str(bandwidth),
-            "--passband-variant",
-            variant,
+            *variant_args(variant),
         ],
         capture_output=True,
         text=True,
@@ -445,6 +476,7 @@ def judge_one(job: tuple[Path, Path, int, str]) -> dict:
         then_need, then_forbid = sides(labels["then"], bandwidth)
         row["then"] = labels["then"]["name"]
         row["settles_s"] = settled(readings, join, lambda v: right(v, then_need, then_forbid))
+    row["c1_first_s"], row["c1_readings"] = c1(readings)
     warned = [r for r in first_part if r["verdict"] in WARNINGS]
     ok = [r for r in first_part if r["verdict"] in WARNINGS and right(r["verdict"], need, forbid)]
     row.update(
@@ -493,6 +525,10 @@ def summary(rows: list[dict], variants: list[str]) -> None:
         warned_after = [r for r in cuts_after if r.get("settles_s") not in (None, "")]
         hot = [r for r in mine if r["hot"]]
         hot_warns = [r for r in hot if r["first_warning_s"] != ""]
+        c1_hot = [r for r in hot if r["c1_first_s"] != "" and r["c1_first_s"] <= CLIP_WITHIN_S]
+        c1_other = [
+            r for r in rows if r["variant"] == variant and not r["hot"] and r["c1_first_s"] != ""
+        ]
         print(
             f"\n{variant}: K1 {len(detected)} of {len(cut)} cuts named right by the end;"
             f" K2 {len(false)} of {len(silent)} uncut clips warned;"
@@ -500,7 +536,9 @@ def summary(rows: list[dict], variants: list[str]) -> None:
             f" K5 {len(timed) - len(late)} of {len(timed)} in time,"
             f" {len(cleared)} of {len(clears)} joined clips cleared within"
             f" {CLEARS_WITHIN_S:.0f} s, {len(warned_after)} of {len(cuts_after)} warned of a"
-            f" cut made; hot clips warning {len(hot_warns)} of {len(hot)}"
+            f" cut made; hot clips warning {len(hot_warns)} of {len(hot)};"
+            f" K6 C1 on {len(c1_hot)} of {len(hot)} hot clips in time, on"
+            f" {len(c1_other)} others"
         )
         for r in sorted(cut, key=lambda r: r["clip"]):
             if r not in detected:
@@ -579,6 +617,14 @@ FIELD: dict[str, str] = {
 a cut side that must be named before the recording ends (K4), or the witness's drop at an edge
 the reading must place within 3 dB (K4)."""
 WITNESS_WITHIN_DB = 3.0
+SATURDAY = (
+    "20261108-005459_",
+    "20261108-010123_",
+    "20261108-010450_",
+    "20261108-011008_",
+    "20261108-012431_",
+)
+"""The mobile's five sessions of Saturday night, every one clipped (K6)."""
 
 
 def trace_field(daemon: Path, wav: Path, variant: str) -> list[dict]:
@@ -590,8 +636,7 @@ def trace_field(daemon: Path, wav: Path, variant: str) -> list[dict]:
             str(wav),
             "--expect",
             str(wav.with_suffix(".json")),
-            "--passband-variant",
-            variant,
+            *variant_args(variant),
         ],
         capture_output=True,
         text=True,
@@ -603,6 +648,7 @@ def trace_field(daemon: Path, wav: Path, variant: str) -> list[dict]:
 def field_one(job: tuple[Path, Path, str, str]) -> dict:
     daemon, wav, variant, expect = job
     readings = trace_field(daemon, wav, variant)
+    c1_first, c1_readings = c1(readings)
     warned = [r for r in readings if r["verdict"] in WARNINGS]
     last = readings[-1] if readings else {}
     row = {
@@ -618,6 +664,8 @@ def field_one(job: tuple[Path, Path, str, str]) -> dict:
         "high_drop": last.get("high_drop_db", ""),
         "kept": last.get("kept", 0),
         "unknown": sum(r["verdict"] == "unknown" for r in readings),
+        "c1_first_s": c1_first,
+        "c1_readings": c1_readings,
     }
     highs = [float(r["high_drop_db"]) for r in readings if r["high_drop_db"]]
     row["median_high_drop"] = round(float(np.median(highs)), 2) if highs else ""
@@ -651,9 +699,14 @@ def field(inbox: Path, daemon: Path, table: Path | None, variants: list[str], jo
         mine = [r for r in rows if r["variant"] == variant]
         working = [r for r in mine if r["expect"] == WORKING]
         cut = [r for r in mine if r["expect"] != WORKING]
+        saturday = [r for r in mine if r["recording"].startswith(SATURDAY)]
+        c1_ok = [r for r in saturday if r["c1_first_s"] != "" and r["c1_first_s"] <= CLIP_WITHIN_S]
+        c1_other = [r for r in mine if r not in saturday and r["c1_first_s"] != ""]
         print(
             f"\n{variant}: K2 {sum(not r['passes'] for r in working)} of {len(working)} working"
-            f" recordings warned; K4 {sum(r['passes'] for r in cut)} of {len(cut)}"
+            f" recordings warned; K4 {sum(r['passes'] for r in cut)} of {len(cut)};"
+            f" K6 C1 on {len(c1_ok)} of {len(saturday)} of Saturday's in time, on"
+            f" {len(c1_other)} others"
         )
         for r in mine:
             print(
@@ -661,7 +714,166 @@ def field(inbox: Path, daemon: Path, table: Path | None, variants: list[str], jo
                 f" {r['warnings']:3d}/{r['readings']:<4d} warned {r['warned_sides'] or '-':12s}"
                 f" first {r['first_warning_s']!s:8s} ended {r['final']:8s}"
                 f" {r['low_drop']}/{r['high_drop']} dB (median top {r['median_high_drop']}),"
-                f" {r['kept']} kept, {r['unknown']} unknown"
+                f" {r['kept']} kept, {r['unknown']} unknown, C1 first {r['c1_first_s']}"
+            )
+    if table is not None:
+        with table.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+
+# ── the harness's recordings ──────────────────────────────────────────
+
+
+def filter_losses(
+    low: float, high: float, low_edge: float, high_edge: float
+) -> tuple[float, float]:
+    """How far the channel server's receive filter is down at each edge, against its peak."""
+    from scipy.signal import butter, sosfreqz
+
+    if low <= 30.0:
+        sos = butter(8, high, btype="lowpass", fs=AUDIO_RATE, output="sos")
+    else:
+        sos = butter(8, [low, high], btype="bandpass", fs=AUDIO_RATE, output="sos")
+    hz = np.concatenate([[low_edge, high_edge], np.linspace(100.0, 4000.0, 3901)])
+    _, h = sosfreqz(sos, worN=hz, fs=AUDIO_RATE)
+    db = 20 * np.log10(np.maximum(np.abs(h), 1e-12))
+    peak = float(db[2:].max())
+    return peak - float(db[0]), peak - float(db[1])
+
+
+def run_truth(run: Path) -> dict | None:
+    """What the cut grid set for the called station's radio (``stations.b.radio``): each edge's
+    loss through the filter the channel server builds from it (``channel_server.receiver``: a
+    low-pass alone under 30 Hz, a band-pass otherwise, whose lower skirt is steeper than a
+    low-pass prototype's), against its peak, and whether the codec was driven hot. ``None`` for
+    a run that is not the grid's."""
+    path = run / "scenario.toml"
+    if not run.name.startswith("rxcost-") or not path.exists():
+        return None
+    scenario = tomllib.loads(path.read_text(encoding="utf-8"))
+    bandwidth = int(scenario.get("bandwidth", 2300))
+    radio = scenario.get("stations", {}).get("b", {}).get("radio", {})
+    low_edge, high_edge = SIGNAL_EDGES_HZ[bandwidth]
+    band = radio.get("rx_filter_hz")
+    if band is None:
+        loss_low = loss_high = 0.0
+    else:
+        loss_low, loss_high = filter_losses(float(band[0]), float(band[1]), low_edge, high_edge)
+    return {
+        "bandwidth": bandwidth,
+        "loss_low": round(loss_low, 1),
+        "loss_high": round(loss_high, 1),
+        "hot": int(float(radio.get("rx_gain_db", 0.0)) > 0.0),
+    }
+
+
+def harness_one(job: tuple[Path, Path, str, dict]) -> dict:
+    daemon, wav, variant, truth_ = job
+    readings = trace_field(daemon, wav, variant)
+    bandwidth = truth_["bandwidth"]
+    losses = {
+        f"loss_low_{bandwidth}": truth_["loss_low"],
+        f"loss_high_{bandwidth}": truth_["loss_high"],
+    }
+    need, forbid = sides(losses, bandwidth)
+    warned = [r for r in readings if r["verdict"] in WARNINGS]
+    ok = [r for r in warned if right(r["verdict"], need, forbid)]
+    c1_first, c1_readings = c1(readings)
+    sidecar = json.loads(wav.with_suffix(".json").read_text(encoding="utf-8"))
+    frames = sorted(sidecar.get("frames") or [], key=lambda f: f.get("t_s", 0.0))
+    # a witness reads the edges only from frames that span them: OFDM data, or the fast tones
+    # at 2300 Hz (rungs 2-5); slow tones and every 500 Hz tone frame span 1300-1700 Hz only
+    edges = [
+        f
+        for f in frames
+        if f.get("decoded")
+        and f.get("kind") == "data"
+        and int(f.get("mode", 0)) >= (2 if bandwidth == 2300 else 5)
+    ]
+    last = readings[-1] if readings else {}
+    return {
+        "run": truth_["run"],
+        "station": truth_["station"],
+        "variant": variant,
+        "bandwidth": bandwidth,
+        "need": "+".join(sorted(need)),
+        "silent": int(forbid == {"top", "bottom"}),
+        "hot": truth_["hot"],
+        "loss_low": truth_["loss_low"],
+        "loss_high": truth_["loss_high"],
+        "readings": len(readings),
+        "warnings": len(warned),
+        "wrong_side": sum(wrong_side(r["verdict"], forbid) for r in readings),
+        "first_warning_s": float(warned[0]["t_s"]) if warned else "",
+        "first_right_s": float(ok[0]["t_s"]) if need and ok else "",
+        "right_at_end": int(bool(readings) and right(last.get("verdict", ""), need, forbid)),
+        "final": last.get("verdict", ""),
+        "low_drop": last.get("low_drop_db", ""),
+        "high_drop": last.get("high_drop_db", ""),
+        "c1_first_s": c1_first,
+        "c1_readings": c1_readings,
+        "first_frame_s": frames[0]["t_s"] if frames else "",
+        "first_edge_frame_s": edges[0]["t_s"] if edges else "",
+    }
+
+
+def harness(runs: Path, daemon: Path, table: Path | None, variants: list[str], jobs: int) -> None:
+    work = []
+    for run in sorted(p for p in runs.iterdir() if p.is_dir()):
+        called = run_truth(run)
+        if called is None:
+            continue
+        for station in ("a", "b"):
+            for wav in sorted((run / station / "recordings").glob("*.wav")):
+                # the caller's radio is left alone
+                truth_ = dict(called, run=run.name, station=station)
+                if station == "a":
+                    truth_.update(loss_low=0.0, loss_high=0.0, hot=0)
+                for variant in variants:
+                    work.append((daemon, wav, variant, truth_))
+    with multiprocessing.Pool(jobs) as pool:
+        rows = list(pool.imap_unordered(harness_one, work))
+    rows.sort(key=lambda r: (r["variant"], r["run"], r["station"]))
+    for variant in variants:
+        mine = [r for r in rows if r["variant"] == variant]
+        cut = [r for r in mine if r["need"] and not r["hot"]]
+        named = [r for r in cut if r["first_right_s"] != "" and r["right_at_end"]]
+        silent = [r for r in mine if r["silent"] and not r["hot"]]
+        false = [r for r in silent if r["warnings"]]
+        wrong = [r for r in mine if r["wrong_side"]]
+        hot = [r for r in mine if r["hot"]]
+        c1_hot = [r for r in hot if r["c1_first_s"] != "" and r["c1_first_s"] <= CLIP_WITHIN_S]
+        c1_other = [r for r in mine if not r["hot"] and r["c1_first_s"] != ""]
+        sooner = [
+            r
+            for r in named
+            if r["first_edge_frame_s"] != "" and r["first_edge_frame_s"] < r["first_right_s"]
+        ]
+        print(
+            f"\n{variant}: cuts named {len(named)} of {len(cut)}; K2 {len(false)} of"
+            f" {len(silent)} uncut or ≤10 dB recordings warned; {len(wrong)} naming a side not"
+            f" cut; K6 C1 on {len(c1_hot)} of {len(hot)} hot in time, on {len(c1_other)} others;"
+            f" K8 a frame spanning the cut decoded before the warning in {len(sooner)} of"
+            f" {len(named)}"
+        )
+        for r in hot:
+            print(
+                f"    hot {r['run']} {r['station']}: C1 from {r['c1_first_s']} s, ended"
+                f" {r['final']} {r['low_drop']}/{r['high_drop']} dB"
+            )
+        for r in mine:
+            if (r in cut and r not in named) or r in false or r["wrong_side"]:
+                print(
+                    f"    {r['run']} {r['station']}: need {r['need'] or '-'} warned"
+                    f" {r['warnings']}/{r['readings']} ended {r['final']}"
+                    f" {r['low_drop']}/{r['high_drop']} dB"
+                )
+        for r in named:
+            print(
+                f"    {r['run']} {r['station']}: named at {r['first_right_s']} s, first frame"
+                f" {r['first_frame_s']}, first spanning the edges {r['first_edge_frame_s']}"
             )
     if table is not None:
         with table.open("w", newline="", encoding="utf-8") as f:
@@ -692,7 +904,16 @@ def main() -> None:
     fld.add_argument("--csv", type=Path)
     fld.add_argument("--variant", default=",".join(VARIANTS))
     fld.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
+    har = sub.add_parser("harness", help="the candidates over the cut grid's recordings")
+    har.add_argument("runs", type=Path)
+    har.add_argument("--daemon", type=Path, default=DEFAULT_DAEMON)
+    har.add_argument("--csv", type=Path)
+    har.add_argument("--variant", default="r3+keep")
+    har.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     args = ap.parse_args()
+    if args.command == "harness":
+        harness(args.runs, args.daemon, args.csv, args.variant.split(","), args.jobs)
+        return
     if args.command == "field":
         field(args.inbox, args.daemon, args.csv, args.variant.split(","), args.jobs)
         return
