@@ -10,6 +10,10 @@
 //! air's longest) and for half a second after a frame that decoded or was trusted. It reports
 //! every look the monitor folds in, with the edges as they stood after it (the receive-filter
 //! review, `docs/research/receive-filter/`).
+//!
+//! With a [`Variant`] other than today's it also runs one of the review's candidates
+//! (`crate::passband`) beside the monitor, on the same looks — R3 on a look every half second
+//! whenever the station listens, quiet or not — and reports what the candidate says after each.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -17,6 +21,7 @@ use std::path::Path;
 use aether_phy::{AudioToBaseband, WIDE_2300, WaveformParams};
 
 use crate::busy::{BusyConfig, BusyDetector};
+use crate::passband::{Candidate, Judgement, SPECTRUM_TOP_HZ, Span, Variant};
 use crate::record::read_wav;
 use crate::replay::Expectation;
 use crate::spectrum::{PassbandEdges, PassbandMonitor, Spectrum, SpectrumAnalyser};
@@ -43,6 +48,8 @@ pub struct Reading {
     pub look_db: f32,
     /// The estimate after it: `None` until enough looks are kept.
     pub edges: Option<PassbandEdges>,
+    /// What the candidate traced says after it.
+    pub judgement: Judgement,
 }
 
 /// The waveform of a bandwidth.
@@ -54,7 +61,7 @@ fn params_for(bandwidth_hz: u32) -> Result<WaveformParams, String> {
     }
 }
 
-/// Run a recording through the receive-filter estimate.
+/// Run a recording through the receive-filter estimate, and the candidate `variant` beside it.
 ///
 /// `expectation` is the recording's sidecar when there is one: the keyed spans are deaf, the
 /// frames and announcements hold the station receiving and are explained to the busy detector,
@@ -67,6 +74,7 @@ pub fn trace(
     wav: &Path,
     expectation: Option<&Expectation>,
     bandwidth_hz: Option<u32>,
+    variant: Variant,
 ) -> Result<Vec<Reading>, String> {
     let bandwidth = bandwidth_hz
         .or_else(|| expectation.map(|e| e.bandwidth_hz))
@@ -89,7 +97,8 @@ pub fn trace(
         ..BusyConfig::default()
     });
     let mut heard = Heard::new(expectation, params);
-    let mut looks = Looks::new(rate);
+    let span = Span::around(params.centre_hz, params.occupied_bandwidth_hz());
+    let mut looks = Looks::new(rate, Candidate::new(variant, span));
     let muted = expectation.map(|e| e.muted.clone()).unwrap_or_default();
     let mut state = expectation.and_then(|e| e.busy_state.as_ref());
 
@@ -115,14 +124,15 @@ pub fn trace(
             busy.push(&baseband, now);
         }
         heard.until(now, &mut busy);
-        // Station::sample_passband, look for look
-        let quiet = busy.settled()
+        // Station::sample_passband, look for look; R3 needs no level, its floor test refusing
+        // a silent input
+        let listening = !keyed && now >= heard.receiving_until && !deaf;
+        let quiet = listening
+            && busy.settled()
             && !busy.busy(now)
-            && !keyed
-            && now >= heard.receiving_until
-            && !deaf
             && busy.level_db > PASSBAND_MIN_LEVEL_DBFS;
         looks.step(now, quiet, busy.attack_s(), &mut readings);
+        looks.listen(now, listening, &mut readings);
     }
     Ok(readings)
 }
@@ -186,24 +196,73 @@ impl<'a> Heard<'a> {
     }
 }
 
-/// The looks, taken and folded in by `Station::sample_passband`'s rule.
+/// The looks, taken and folded in by `Station::sample_passband`'s rule, and the candidate's.
 struct Looks {
     analyser: SpectrumAnalyser,
     monitor: PassbandMonitor,
+    candidate: Candidate,
     quiet_since: f64,
     next_look: f64,
     /// Looks taken, waiting for the quiet to hold the busy detector's attack time.
     pending: std::collections::VecDeque<(f64, Spectrum)>,
+    /// Since when the station has listened, quiet or not (R3).
+    listening_since: f64,
+    next_any: f64,
 }
 
 impl Looks {
-    fn new(rate: f64) -> Self {
+    fn new(rate: f64, candidate: Candidate) -> Self {
         Self {
             analyser: SpectrumAnalyser::new(rate),
             monitor: PassbandMonitor::new(),
+            candidate,
             quiet_since: f64::NEG_INFINITY,
             next_look: 0.0,
             pending: std::collections::VecDeque::new(),
+            listening_since: f64::NEG_INFINITY,
+            next_any: 0.0,
+        }
+    }
+
+    /// The spectrum the candidate needs: today's, or up to [`SPECTRUM_TOP_HZ`] for one that
+    /// reads the chain's floor. Today's monitor is handed the same bins up to its own top.
+    fn compute(&self) -> Option<Spectrum> {
+        if self.candidate.variant().reads_floor() {
+            self.analyser.compute_to(SPECTRUM_TOP_HZ)
+        } else {
+            self.analyser.compute()
+        }
+    }
+
+    /// The reading after a look.
+    fn reading(&self, now: f64, taken: f64, spectrum: &Spectrum) -> Reading {
+        Reading {
+            t_s: now,
+            taken_s: taken,
+            looks: self.monitor.looks(),
+            look_db: spectrum.level_around(AUDIO_CENTER_HZ),
+            edges: self.monitor.edges(AUDIO_CENTER_HZ),
+            judgement: self.candidate.judgement(),
+        }
+    }
+
+    /// R3's looks: one every [`PASSBAND_SAMPLE_S`] while the station listens, once a whole
+    /// window of it has been heard, folded in at once.
+    fn listen(&mut self, now: f64, listening: bool, readings: &mut Vec<Reading>) {
+        if self.candidate.variant() != Variant::R3 {
+            return;
+        }
+        if !listening {
+            self.listening_since = now;
+            return;
+        }
+        if now >= self.next_any
+            && now - self.listening_since >= self.analyser.window_s()
+            && let Some(spectrum) = self.compute()
+        {
+            self.candidate.fold_any(&spectrum);
+            readings.push(self.reading(now, now, &spectrum));
+            self.next_any = now + PASSBAND_SAMPLE_S;
         }
     }
 
@@ -221,19 +280,20 @@ impl Looks {
             .is_some_and(|&(taken, _)| now - taken >= attack)
         {
             if let Some((taken, spectrum)) = self.pending.pop_front() {
-                self.monitor.observe(&spectrum);
-                readings.push(Reading {
-                    t_s: now,
-                    taken_s: taken,
-                    looks: self.monitor.looks(),
-                    look_db: spectrum.level_around(AUDIO_CENTER_HZ),
-                    edges: self.monitor.edges(AUDIO_CENTER_HZ),
-                });
+                self.monitor.observe(&crate::passband::truncated(
+                    &spectrum,
+                    crate::spectrum::TOP_HZ,
+                ));
+                self.candidate.fold_quiet(&spectrum);
+                // R3 reports its own looks
+                if self.candidate.variant() != Variant::R3 {
+                    readings.push(self.reading(now, taken, &spectrum));
+                }
             }
         }
         if now >= self.next_look
             && now - self.quiet_since >= self.analyser.window_s()
-            && let Some(spectrum) = self.analyser.compute()
+            && let Some(spectrum) = self.compute()
         {
             self.pending.push_back((now, spectrum));
             self.next_look = now + PASSBAND_SAMPLE_S;
@@ -245,7 +305,8 @@ impl Looks {
 #[must_use]
 pub fn to_csv(readings: &[Reading]) -> String {
     let mut out = String::from(
-        "t_s,taken_s,looks,look_db,low_hz,high_hz,width_hz,reference_db,threshold_db,floor_db\n",
+        "t_s,taken_s,looks,look_db,low_hz,high_hz,width_hz,reference_db,threshold_db,floor_db,\
+         verdict,low_drop_db,high_drop_db,over_floor_db,kept\n",
     );
     for r in readings {
         let edges = r.edges.map_or_else(
@@ -262,11 +323,22 @@ pub fn to_csv(readings: &[Reading]) -> String {
                 )
             },
         );
+        let db = |v: Option<f32>| v.map_or_else(String::new, |v| format!("{v:.2}"));
+        let j = &r.judgement;
         // writing to a String cannot fail
         let _ = writeln!(
             out,
-            "{:.3},{:.3},{},{:.2},{}",
-            r.t_s, r.taken_s, r.looks, r.look_db, edges
+            "{:.3},{:.3},{},{:.2},{},{},{},{},{},{}",
+            r.t_s,
+            r.taken_s,
+            r.looks,
+            r.look_db,
+            edges,
+            j.verdict.word(),
+            db(j.low_drop_db),
+            db(j.high_drop_db),
+            db(j.over_floor_db),
+            j.kept
         );
     }
     out
@@ -369,7 +441,7 @@ mod tests {
         }
         let summary = recording.finish(&serde_json::json!({})).expect("finish");
         let expectation = Expectation::from_sidecar(&summary.sidecar).expect("sidecar");
-        let readings = trace(&summary.wav, Some(&expectation), None).expect("trace");
+        let readings = trace(&summary.wav, Some(&expectation), None, Variant::R0).expect("trace");
         let _ = std::fs::remove_dir_all(&dir);
         readings
     }
@@ -437,6 +509,13 @@ mod tests {
             threshold_db: -46.0,
             floor_db: -90.0,
         };
+        let waiting = Judgement {
+            verdict: crate::passband::Verdict::Waiting,
+            low_drop_db: None,
+            high_drop_db: None,
+            over_floor_db: None,
+            kept: 1,
+        };
         let csv = to_csv(&[
             Reading {
                 t_s: 1.0,
@@ -444,6 +523,7 @@ mod tests {
                 looks: 1,
                 look_db: -40.0,
                 edges: None,
+                judgement: waiting,
             },
             Reading {
                 t_s: 9.0,
@@ -451,14 +531,21 @@ mod tests {
                 looks: 12,
                 look_db: -40.5,
                 edges: Some(edges),
+                judgement: Judgement {
+                    verdict: crate::passband::Verdict::Top,
+                    low_drop_db: Some(0.4),
+                    high_drop_db: Some(23.0),
+                    over_floor_db: Some(48.0),
+                    kept: 12,
+                },
             },
         ]);
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 3);
-        assert_eq!(lines[1], "1.000,0.500,1,-40.00,,,,,,");
+        assert_eq!(lines[1], "1.000,0.500,1,-40.00,,,,,,,waiting,,,,1");
         assert_eq!(
             lines[2],
-            "9.000,8.500,12,-40.50,300,2700,2400,-40.00,-46.00,-90.00"
+            "9.000,8.500,12,-40.50,300,2700,2400,-40.00,-46.00,-90.00,top,0.40,23.00,48.00,12"
         );
     }
 }

@@ -118,6 +118,14 @@ impl SpectrumAnalyser {
     /// Transform what is held. `None` until a whole window has been heard.
     #[must_use]
     pub fn compute(&self) -> Option<Spectrum> {
+        self.compute_to(TOP_HZ)
+    }
+
+    /// [`Self::compute`] up to `top_hz` rather than [`TOP_HZ`]: the receive-filter review's
+    /// candidates read the audio chain's own floor between 6 and 10 kHz, where no radio passes
+    /// audio (`crate::passband`).
+    #[must_use]
+    pub fn compute_to(&self, top_hz: f64) -> Option<Spectrum> {
         if !self.ready() {
             return None;
         }
@@ -129,7 +137,7 @@ impl SpectrumAnalyser {
             .collect();
         self.fft.process(&mut buffer);
         let bin_hz = self.sample_rate / WINDOW as f64;
-        let top = ((TOP_HZ / bin_hz) as usize).min(WINDOW / 2);
+        let top = ((top_hz / bin_hz) as usize).min(WINDOW / 2);
         // Scaled so a full-scale sine reads 0 dBFS: the window's coherent gain is its mean
         // (one half for Hann), and a real sine puts half its amplitude in each of two bins.
         let gain = self.window.iter().sum::<f64>() / 2.0;
