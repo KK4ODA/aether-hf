@@ -113,18 +113,20 @@ pub fn trace(
         let folded = filter.step(now, listening, analyser.window_s(), || {
             analyser.compute_to(SPECTRUM_TOP_HZ)
         });
+        // a line a look folded in, or one on the beat between them
+        if folded.is_empty() && now < next_beat {
+            continue;
+        }
+        next_beat = now + LOOK_EVERY_S;
         let reading = filter.reading();
         let share = clipping.share();
-        if !folded.is_empty() {
-            next_beat = now + LOOK_EVERY_S;
-        } else if now >= next_beat {
+        if folded.is_empty() {
             readings.push(Reading {
                 t_s: now,
                 taken_s: None,
                 reading,
                 clipping: share,
             });
-            next_beat = now + LOOK_EVERY_S;
         }
         readings.extend(folded.into_iter().map(|taken| Reading {
             t_s: now,

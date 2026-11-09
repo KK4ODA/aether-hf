@@ -359,3 +359,39 @@ looks kept by one at most and no reading's verdict (below).
 Every number is Gate 3's: R3 as built reads the corpus and the field as the prototype did. The
 cuts are named at 11.46 s on a steady band and on the FT8 band; Saturday's three 2300 Hz
 sessions read 27.7–29.3 dB down at the top, the two 500 Hz ones 7.5 and 6.6 dB at 1740 Hz.
+
+**The cut grid on the built daemon (K9)**: all 32 configurations × 3 draws, 96 runs, the reading
+live in both daemons. 96 of 96 pass, with no collision and no radiated overlap. The Test rates
+against each draw's uncut run (median of three): at 500 Hz every cut of 10 dB or less reads
+0.96–1.00 and a 20 dB bottom cut 0.98–1.03; at the 2300 Hz top 10 dB or less reads 0.97–1.00.
+The 2300 Hz bottom's message reads 0.70–0.86 at every depth, 3 dB included, and its file
+0.85–1.00: the message moves in whole steps on this grid, so the bottom edge's small cuts are not
+told apart from its draws here. Saturday's receiver costs the 2300 Hz Test 37 % of its message and
+23 % of its file, and the 500 Hz one nothing.
+
+**The reading over the grid's recordings** (`rxfilter_corpus.py harness`, both stations of every
+run):
+
+| | Gate 3 (prototype, its own grid) | Gate 5 (as built, this grid) |
+|---|---|---|
+| cuts of 20 dB or more named right | 21 of 24 | 20 of 24 |
+| uncut or ≤ 10 dB recordings warned | 0 of 138 | 0 of 138 |
+| a side not cut named | 0 | 0 |
+| C1 on hot runs / on others | 24 of 24 / 0 | 24 of 24 / 0 |
+
+The four misses all say *can't check*, never a wrong side: the three 500 Hz top 20 dB cuts over
+the shallow floor, as at Gate 3, and one draw of the 500 Hz bottom 20 dB cut over the deep floor
+(`-s2602`). Each is the mechanism §6.2 described: the called station's recording of a 500 Hz
+session keeps 10 or 11 looks clear of frames, and the looks under its answer to the probe, whose
+keying the sidecar does not list, count as weak. The new miss is the same draw on another course
+(this grid ran a different daemon, and a harness run is not repeatable across builds). C1 named
+all 24 hot runs, 20 of them within 10 s of the recording's start and four at 18–22 s, as the first
+strong frames of those runs came later; no other run clipped.
+
+**The cost (K9)**: `aetherd --passband-trace` over the field's six-minute session (011008, 362 s)
+takes 0.18 s of CPU and over the quiet minute (163057, 97 s) 0.07 s, best of three: 0.05 and
+0.08 % of real time on this machine, for the whole of it (reading the WAV, a transform twice a
+second, which the old estimate also took on quiet audio, and the reading). The trace had computed
+a reading on every 20 ms block (0.6–0.8 %); it now computes one only when it writes a line, as the
+station does when it records a look or answers `metrics`, and prints the same lines byte for byte.
+Ten times slower on the mini PC is still under K9's 2 %.
