@@ -702,8 +702,7 @@ for addresses that survive any one post office closing.
   accept lists, how a rebuilt post office catches up with the pickups and queued mail gateways
   report, and how often a restore is tested.
 * **The pilot's providers:** which VPS companies, and which relay while port 25 is closed.
-* **The project:** its own repository; registering `radiopost.org` before someone else does; a
-  trademark search on the name (Appendix B).
+* **The project:** its own repository, and a trademark search on the name (Appendix B).
 
 ---
 
@@ -737,13 +736,13 @@ for addresses that survive any one post office closing.
 
 | Domain | Status | Use here |
 |---|---|---|
-| `radiopost.org` | Not registered | The project's post office, the pilot. Register it soon. |
+| `radiopost.org` | Registered by the project on 2026-11-09 (renews 2027-11-09) | The project's post office, the pilot. |
 | `radiopost.com` | Registered since 2019-02-02, by someone else; expires 2028-02-02 | Not available. |
 | `radiopost.radio` | Unknown: the .radio registry did not answer | `.radio` is a community domain run for the radio world, radio amateurs included, with eligibility rules; whether an amateur may register a project name rather than a call sign has to be asked of a registrar that sells `.radio`. |
 | `hampost.org` | Not registered | An example only: the Texas group's post office. |
 | `wavelink.org` | Registered | Not used. |
 
-Anyone may have registered the free ones since. `example.com` is reserved for examples (RFC
+Anyone may have registered `hampost.org` since. `example.com` is reserved for examples (RFC
 2606). The callsigns N0CALL to N4CALL are placeholders.
 
 **The name.** A web search on 2026-11-09 found no amateur radio software called RadioPost (an iOS
