@@ -28,6 +28,8 @@ in Aether's repository only until the system has a repository and a name of its 
 * **It keeps working when the Internet fails.** Waiting mail is copied ahead to the gateways a
   user usually calls. Outgoing mail waits in a gateway's queue. Gateways forward mail to each other
   by radio.
+* **A post office runs on a rented VPS.** Nightly backups, a backup mail server at a second company
+  and DNS kept elsewhere let it survive losing its data centre (§8.4, §8.5).
 * **One protocol over any modem**: Aether, VARA, ARDOP, AX.25 packet, or plain TCP.
 * **Open**: a published protocol with test vectors, and open-source client, gateway program and
   post office service.
@@ -77,7 +79,7 @@ served by several post offices (a later option, §12).
 |---|---|---|---|---|
 | **What it is** | A radio station that carries sessions between radio users and post offices | A mail server that holds mailboxes and talks to ordinary email | The name after the @ | The program a radio user runs |
 | **What it keeps** | Post office keys, outgoing mail waiting for the Internet, copies placed ahead for its regular users | Mailboxes, accounts, accept lists | DNS records | The user's mail and private key |
-| **What it needs** | A radio, a modem, a small computer; the Internet most of the time | A rented server with a fixed address, a domain, DNS records | A registration | A radio and modem, or the Internet |
+| **What it needs** | A radio, a modem, a small computer; the Internet most of the time | A rented virtual server (VPS) with a static IP address, a domain, DNS records | A registration | A radio and modem, or the Internet |
 | **Who runs it** | Any licensed amateur | A club, an ARES group, a county, or one person | Whoever runs the post office | Each user |
 
 ### The example cast
@@ -86,7 +88,7 @@ The same people and places appear in every figure.
 
 | | Name | Details |
 |---|---|---|
-| Post office | **po.hfpost.org** | Serves `hfpost.org`. Run by a Georgia radio group on a rented server. |
+| Post office | **po.hfpost.org** | Serves `hfpost.org`. Run by a Georgia radio group on a rented VPS. |
 | Post office | **po.radiopost.org** | Serves `radiopost.org`. Run by a Texas radio group. |
 | Gateway | **KK4ODA-1** | Home station near Atlanta. HF on 80 and 40 m, Aether. |
 | Gateway | **N2CALL-5** | The county EOC in Atlanta. 2 m packet with Direwolf for local users, and HF for forwarding. |
@@ -106,7 +108,7 @@ which were free when checked.
 *Figure 2.* A post office is an off-the-shelf mail server plus one new service. A gateway is a
 radio, a modem and one new program. The two new pieces talk to each other over HTTPS.
 
-**The post office** runs two programs on one rented server:
+**The post office** runs two programs on one rented virtual server, a VPS (§8.4):
 
 * **The mail server (Stalwart).** It does everything ordinary email needs: receiving and sending
   (SMTP), the signatures other providers check (DKIM, SPF, DMARC), mailbox access for mail apps
@@ -174,7 +176,7 @@ can then check the user with no Internet.
   and that the credential has not expired or been revoked.
 * **Gateways fetch post office keys when they are online and keep them.** A gateway that has never
   seen a post office's key cannot check that post office's users while it is offline. Gateways
-  therefore keep the keys of every post office they know about (§8.5).
+  therefore keep the keys of every post office they know about (§8.7).
 * **Credentials last about 90 days.** The client renews its credential whenever it reaches its
   post office, by Internet or through any gateway with the Internet. A lost device is revoked at
   the post office. Gateways fetch the revocation list when online. An offline gateway might accept
@@ -283,8 +285,8 @@ office, which rebuilds a normal email and sends it.
   amateur radio; please reply in plain text, under 20 kB; no business content.
 * **Bounces** come back to the post office and become a short notice at the user's next pickup.
 * **Delivery is the hard part.** Large providers distrust new mail servers and refuse mail from
-  home Internet connections. A post office needs a rented server with a fixed address and reverse
-  DNS, or a shared outgoing relay run together by several post offices.
+  home Internet connections. A post office needs a rented VPS with a static IP address and reverse
+  DNS, and either a provider that lets it send on port 25 or a mail relay to send through (§8.4).
 
 ### 5.3 Between radio users
 
@@ -428,15 +430,21 @@ and the most assembly. Recommendation: Stalwart.
 
 ```
 hfpost.org.                    MX   10 po.hfpost.org.
+hfpost.org.                    MX   20 mx2.hfpost.org.
 hfpost.org.                    TXT  "v=spf1 mx -all"
 po2026._domainkey.hfpost.org.  TXT  "v=DKIM1; k=rsa; p=MIIBIjANBgkq…"
 _dmarc.hfpost.org.             TXT  "v=DMARC1; p=quarantine; rua=mailto:dmarc@hfpost.org"
 _radiomail.hfpost.org.         TXT  "v=1; k=ed25519; p=Hk3sW…9Q="
 ```
 
-The first four are what every mail domain needs. DKIM uses RSA because many receivers still do not
-check Ed25519 DKIM signatures. The last record is new: the post office's radio mail key. The
-server's address also needs reverse DNS pointing to `po.hfpost.org`.
+The MX, SPF, DKIM and DMARC records are what every mail domain needs. The second MX record names
+the backup mail server (§8.5). If outgoing mail goes through a relay (§8.4), the SPF record names
+the relay too. DKIM uses RSA because many receivers still do not check Ed25519 DKIM signatures. The
+last record is new: the post office's radio mail key. Each server's address also needs reverse DNS
+pointing to its name, `po.hfpost.org` and `mx2.hfpost.org`.
+
+The DNS itself is kept at the domain registrar or a separate DNS provider, never on the post
+office's own server, so it keeps answering when that server is down (§8.5).
 
 ### 8.3 The gateway API
 
@@ -451,15 +459,114 @@ This is HTTPS between gateways and post offices. Through it a gateway:
 Many gateways sit behind home routers, so the detailed design must choose between the gateway
 keeping a connection open to each post office it serves, and the gateway polling.
 
-### 8.4 What a post office costs to run
+### 8.4 The server: a rented VPS
 
-* A rented server with a fixed IPv4 address and reverse DNS. These typically cost a few dollars a
-  month.
-* A domain, typically $10–20 a year.
-* Someone's time: setting it up, watching that mail is delivered, and answering abuse reports.
-  Delivery and abuse are the real work.
+A post office runs on a **VPS** (virtual private server): a small Linux machine rented from a
+hosting company, with a **static public IP address**, one that never changes. The smallest plans,
+around $5 a month, are enough for a club.
 
-### 8.5 How gateways learn post offices
+**Why not a computer at home:**
+
+* **Other mail servers have to find it.** The MX record tells every sender where to deliver
+  `@hfpost.org` mail. If the address changes, mail goes nowhere until DNS catches up.
+* **Reverse DNS.** Receiving servers look up the sending server's address and expect it to lead
+  back to its name (`po.hfpost.org`). Only the owner of the address block can set that. A hosting
+  company lets you; a home Internet provider almost never does.
+* **Reputation.** Large providers distrust or refuse mail from home Internet addresses, and many
+  home providers block outgoing mail (port 25).
+* **Always on.** Mail arrives at any hour, and gateways call at any hour.
+
+**A gateway needs none of this.** It sits at home behind an ordinary router with an address that
+changes, because it only makes outgoing connections to post offices.
+
+**Choosing a provider.** What matters is whether it lets the post office *send* on port 25.
+Receiving is never blocked, but many providers block sending on new accounts. As checked on
+2026-11-09 (sources in Appendix D):
+
+| Provider | Sending on port 25 | Notes |
+|---|---|---|
+| **Hetzner Cloud** | Blocked at first. After a month and the first paid invoice you can ask; decided case by case. | Among the cheapest. Europe and the US (Virginia, Oregon). You set reverse DNS yourself. |
+| **Vultr** | Blocked on new servers. A support ticket describing the use and the spam protections; not guaranteed. | Many locations, several in the US. You set reverse DNS yourself. |
+| **Linode (Akamai)** | Reports conflict: some say blocked on new accounts, others open. It has opened it on request. | Ask support before buying. |
+| **OVHcloud** | One source says open by default (not confirmed). | Europe, the US and Canada. |
+| **DigitalOcean** | Blocks 25, 465 and 587 by default, and its own page advises against running a mail server. | Not suitable. |
+| **AWS, Google Cloud, Azure** | Restricted or blocked by default (from memory, not checked); AWS lifts it on request. | Costly and complicated for this job. |
+
+These policies change. Ask the provider's support before buying.
+
+**Sending while port 25 is closed.** Receiving works on any of these. Until port 25 is opened, or
+instead of opening it, the post office hands its outgoing mail to a **mail relay** service on port
+587, which Hetzner and Vultr do not block (Amazon SES, Mailgun, SMTP2GO and others). Stalwart can
+send through a relay. The relay then goes into the SPF record (§8.2).
+
+**A quick test** after renting: run `nc -vz gmail-smtp-in.l.google.com 25` on the server. If it
+connects, sending on port 25 is open.
+
+**For the hfpost.org pilot:** Hetzner or Vultr, sending through a relay at first, and directly once
+port 25 is opened.
+
+### 8.5 Keeping a post office up
+
+![Figure 10. A post office that survives losing its data centre](fig/fig10-redundancy.svg)
+
+*Figure 10.* The main post office and a backup mail server at two companies, with DNS at the
+registrar and nightly backups at a third company. If company A's data centre goes down, mail waits
+at the backup server and in the gateways until po.hfpost.org is rebuilt.
+
+**A single VPS is not redundant.** It runs on one physical machine in one data centre. If the
+machine fails, the provider usually restarts the server on another one within minutes to hours. If
+the whole data centre goes down, the server is down until the site comes back, and in a disaster
+its data can be lost: in March 2021 a fire destroyed one of OVH's data centres in Strasbourg, and
+customers without backups elsewhere lost their servers.
+
+**The design limits the damage.** There is no central server, so one post office down affects only
+its own users. And the features built for an Internet outage also cover a post office that is
+down:
+
+| While po.hfpost.org is down | What happens |
+|---|---|
+| Mail already copied to usual gateways | Still delivered by radio (§6.1). |
+| Users sending by radio | Gateways check them without the post office and queue their mail (§3.3, §6.2). |
+| Mail from the Internet to hfpost.org | Sending servers keep retrying, usually for 4–5 days (RFC 5321). It arrives late, not lost. With a backup mail server, it is accepted at once. |
+| Reading with a phone or laptop mail app, new accounts, credential renewals | Unavailable until it is back. |
+| The mailboxes themselves | Lost only if the disk is lost and there are no backups elsewhere. |
+
+**What a post office should do, simplest first:**
+
+1. **Off-site backups.** Every night, copy the mailboxes, accounts and keys to storage at a
+   different company. A provider's own snapshots usually sit in the same data centre and do not
+   count. With them, a dead server is rebuilt on a new VPS, anywhere, in an hour or two.
+2. **DNS somewhere else.** Keep the DNS at the registrar or a separate DNS provider, never on the
+   post office's server, with short times-to-live. Pointing `po.hfpost.org` at a rebuilt server
+   then takes minutes.
+3. **A backup mail server** (a backup MX, `mx2.hfpost.org`) at a different company in a different
+   region: a second small VPS that only accepts mail for hfpost.org and holds it until the main
+   server is back. It needs a copy of the accept lists. Without them it would accept mail the main
+   server refuses, and the refusals would later go out as bounces to forged senders
+   (*backscatter*).
+4. **A standby post office**: a second complete post office with live copies of the mailboxes that
+   takes over by itself. Stalwart can run as a cluster across sites (which edition this needs is to
+   be checked). This is the most work, and it is close to the later option of several post offices
+   per domain (§12).
+
+**Recommended for a club: 1 to 3.** That is two small VPSs at two companies, nightly backups at a
+third, and DNS kept independently. A second company also covers a risk beyond the data centre: a
+provider suspending the account. Mail servers attract abuse complaints, and a suspended account
+takes every server in it offline.
+
+### 8.6 What a post office costs to run
+
+These are typical prices; check current ones.
+
+* **The main VPS:** around $5 a month.
+* **The backup mail server:** another small VPS at a second company, around $5 a month.
+* **Off-site backup storage:** a dollar or two a month for a club's mail.
+* **A mail relay**, while port 25 is closed: usually little at a club's volume.
+* **A domain:** $10–20 a year.
+* **Someone's time:** setting it up, watching that mail is delivered, testing a restore from the
+  backup now and then, and answering abuse reports. Delivery and abuse are the real work.
+
+### 8.7 How gateways learn post offices
 
 A gateway learns a post office's key the first time one of its users calls while the gateway has
 the Internet. To check users of post offices it has never met while offline, a gateway also keeps
@@ -558,7 +665,8 @@ meaning" complaint that VARA-based Winlink keeps meeting.
 1. **The client and station-to-station sessions over Aether**: two clients, no server. This proves
    the protocol, the message format and the client.
 2. **One post office and gateways with the Internet**: Stalwart and the service, and ordinary
-   email both ways. A pilot: hfpost.org with KK4ODA-1.
+   email both ways. A pilot: hfpost.org with KK4ODA-1, on a VPS with nightly off-site backups, a
+   backup mail server at a second company and DNS kept at the registrar (§8.4, §8.5).
 3. **The first Internet-down features**: copies placed ahead, and outgoing mail queued at
    gateways.
 4. **Forwarding by radio** between gateways.
@@ -586,7 +694,11 @@ for addresses that survive any one post office closing.
   duplicates.
 * **Limits:** message sizes, quotas, and how long gateways keep copies.
 * **Stalwart:** MTA hooks or milter; which version; what AGPL means for an operator who changes
-  nothing.
+  nothing; whether clustering needs the enterprise edition.
+* **Keeping a post office up:** what the nightly backup holds, how the backup mail server gets the
+  accept lists, how a rebuilt post office catches up with the pickups and queued mail gateways
+  report, and how often a restore is tested.
+* **The pilot's providers:** which VPS companies, and which relay while port 25 is closed.
 * **The project:** its own repository and its name.
 
 ---
@@ -596,16 +708,23 @@ for addresses that survive any one post office closing.
 | Word | Meaning |
 |---|---|
 | Accept list | The senders a user takes Internet mail from. |
+| Backscatter | Bounces sent to forged sender addresses; a mail server that accepts first and refuses later causes it. |
+| Backup mail server (backup MX) | A second mail server, named by a lower-priority MX record, that holds a domain's mail while the main one is down. |
 | Copy placed ahead | Waiting mail copied to a user's usual gateways in case the Internet fails. |
 | Credential | A post office's signed statement tying an address, an operator's callsign and a device key. |
 | DKIM, SPF, DMARC | The checks mail providers use to trust that mail comes from the domain it claims. |
 | Gateway | A radio station that carries sessions between radio users and post offices. |
 | JMAP, IMAP | Ways for a program to read a mailbox over the Internet. |
+| Mail relay | A service that sends mail on a server's behalf, reached on port 587. |
 | MTA hook, milter | Ways for a mail server to ask another program about a message during SMTP. |
+| MX record | The DNS record that tells senders which server takes a domain's mail. |
 | Post office | A mail server holding mailboxes, plus the radio post office service. |
 | Radio route | How a post office's users can be reached by radio when its gateways are cut off. |
+| Reverse DNS | The record that turns a server's IP address back into its name; set by whoever owns the address. |
 | Session | One radio contact between a client and a gateway, or between two gateways. |
+| Static IP address | A public Internet address that never changes. |
 | Usual gateway | A gateway a user names as one they normally call. |
+| VPS | A virtual private server: a small Linux machine rented from a hosting company. |
 
 ## Appendix B. The example names
 
@@ -616,9 +735,22 @@ callsigns N0CALL to N4CALL are placeholders.
 
 ## Appendix C. Standards referred to
 
-SMTP (RFC 5321), the Internet message format (RFC 5322), DKIM (RFC 6376), SPF (RFC 7208), DMARC
-(RFC 7489), JMAP (RFC 8620, RFC 8621), Sieve (RFC 5228), Ed25519 (RFC 8032), example domains (RFC
-2606), and the US amateur rules, 47 CFR Part 97.
+SMTP (RFC 5321; §4.5.4.1 says how long a sender keeps retrying), the Internet message format (RFC
+5322), DKIM (RFC 6376), SPF (RFC 7208), DMARC (RFC 7489), JMAP (RFC 8620, RFC 8621), Sieve (RFC
+5228), Ed25519 (RFC 8032), example domains (RFC 2606), and the US amateur rules, 47 CFR Part 97.
 
 The figures are drawn by `fig/make_figures.py` (Python, standard library only); edit it and run it
 again to change them.
+
+## Appendix D. Sources for the provider table (§8.4)
+
+Checked on 2026-11-09. The first three are the providers' own pages; the rest are third-party and
+disagree with each other in places.
+
+* Hetzner: [Cloud servers FAQ](https://docs.hetzner.com/cloud/servers/faq/) (ports 25 and 465).
+* Vultr: [Why is SMTP blocked](https://docs.vultr.com/support/products/compute/why-is-smtp-blocked).
+* DigitalOcean: [Why is SMTP blocked](https://docs.digitalocean.com/support/why-is-smtp-blocked/).
+* Mailflow Authority: [Best VPS for an email server](https://mailflowauthority.com/self-hosted-smtp/best-vps-email-server)
+  and [DigitalOcean vs Hetzner vs Vultr for email](https://mailflowauthority.com/self-hosted-smtp/digitalocean-vs-hetzner-vs-vultr-email).
+* CaptainDNS: [Port 25 blocked: diagnosis and solutions](https://www.captaindns.com/en/blog/port-25-blocked-diagnosis-solutions).
+* NANOG list: [SMTP-friendly VPS providers](https://seclists.org/nanog/2023/Sep/288) (2023).

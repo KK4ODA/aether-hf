@@ -569,7 +569,7 @@ def fig_inside() -> None:
     # post office container
     f.rect(200, 72, 330, 556, "#f7fdf9", ROLES["po"][1], rx=14, sw=2)
     f.text(220, 100, "Post office: po.hfpost.org", size=15.5, weight=700, color=ROLES["po"][1])
-    f.text(220, 120, "A rented server with a fixed address", size=12.5, color=MUTED)
+    f.text(220, 120, "A rented VPS with a static IP address", size=12.5, color=MUTED)
     f.box(
         220,
         138,
@@ -1561,6 +1561,161 @@ def fig_modems() -> None:
     f.save("fig9-modems.svg")
 
 
+# ------------------------------------------------------------------------------------------------
+# Figure 10: a post office that survives losing its data centre
+# ------------------------------------------------------------------------------------------------
+
+
+def fig_redundancy() -> None:
+    f = Fig(
+        1000,
+        676,
+        "Figure 10. A post office that survives losing its data centre",
+        "Two small servers at two companies, with DNS and backups kept elsewhere. "
+        "Gateways keep working meanwhile.",
+    )
+    f.box(
+        20,
+        76,
+        680,
+        64,
+        "mail",
+        title="Ordinary email: the Internet's mail servers",
+        rows=["Gmail, Outlook, any provider, and other radio mail post offices"],
+        icon="globe",
+    )
+    f.box(
+        730,
+        76,
+        250,
+        112,
+        "neutral",
+        tag="DNS, kept at the registrar",
+        mono_rows=["MX 10  po.hfpost.org", "MX 20  mx2.hfpost.org", "", "on neither server"],
+        size=13,
+    )
+
+    # three companies
+    for x, w, head in [
+        (20, 360, "Company A, data centre 1"),
+        (450, 250, "Company B, another region"),
+        (730, 250, "Company C, storage"),
+    ]:
+        f.rect(x, 218, w, 172, "#f8fafc", FAINT, rx=12, sw=1.3, dash="6 5")
+        f.text(x + 16, 242, head, size=13, weight=700, color=MUTED)
+    f.box(
+        40,
+        258,
+        320,
+        112,
+        "po",
+        tag="Main post office",
+        title="po.hfpost.org",
+        rows=["Stalwart + radio post office service", "Mailboxes, accounts, keys"],
+        icon="envelope",
+        size=12.5,
+    )
+    f.box(
+        470,
+        258,
+        210,
+        112,
+        "po",
+        tag="Backup mail server",
+        title="mx2.hfpost.org",
+        rows=["Accepts and holds mail", "Copy of accept lists"],
+        icon="envelope",
+        size=12.5,
+    )
+    f.box(
+        750,
+        258,
+        210,
+        112,
+        "neutral",
+        tag="Backup storage",
+        title="Nightly copy",
+        rows=["Mailboxes, accounts", "and keys"],
+        icon="server",
+        size=12.5,
+    )
+
+    # ordinary email in and out
+    f.link([(100, 142), (100, 256)], "smtp", label="in: MX 10", at=0.5, dx=8, anchor="start")
+    f.link(
+        [(290, 256), (290, 142)],
+        "smtp",
+        label=["out: direct, or by a", "relay on port 587"],
+        at=0.5,
+        dx=8,
+        dy=6,
+        anchor="start",
+        size=12,
+    )
+    f.link(
+        [(575, 142), (575, 256)],
+        "smtp",
+        label=["MX 20: only while", "po.hfpost.org is down"],
+        at=0.5,
+        dx=8,
+        dy=6,
+        anchor="start",
+        size=12,
+    )
+    # between the two servers
+    f.link([(362, 296), (468, 296)], "internet", label="accept lists", dy=-8, size=12)
+    f.link([(468, 340), (362, 340)], "smtp", label="held mail", dy=-8, size=12)
+    # nightly backup, routed under the servers
+    f.link(
+        [(300, 372), (300, 420), (855, 420), (855, 372)],
+        "internet",
+        label="nightly backup",
+        at=0.5,
+        dy=-8,
+        size=12,
+    )
+    # gateways
+    f.box(
+        20,
+        470,
+        360,
+        150,
+        "gateway",
+        tag="Gateways",
+        title="KK4ODA-1, N2CALL-5, N1CALL-10",
+        rows=[
+            "Check users with no post office",
+            "Hold copies placed ahead",
+            "Queue outgoing mail",
+        ],
+        icon="antenna",
+        size=12.5,
+        title_size=14.5,
+    )
+    f.link([(110, 372), (110, 468)], "internet", both=True, label="HTTPS", dx=8, anchor="start")
+
+    f.panel(450, 460, 530, 160, "If company A's data centre goes down")
+    f.lines(
+        466,
+        506,
+        [
+            "1. Senders' servers fall back to MX 20; mail waits at mx2.",
+            "2. Radio users still get copies held at gateways, and",
+            "    what they send waits in the gateways' queues.",
+            "3. po.hfpost.org is rebuilt from the backup, at any",
+            "    company, and one DNS record is changed.",
+            "4. mx2 and the gateways hand over what they hold.",
+        ],
+        size=12.5,
+        color=INK,
+    )
+    f.legend(
+        662,
+        [("internet", "Over the Internet (HTTPS, backups)"), ("smtp", "Ordinary email (SMTP)")],
+    )
+    f.save("fig10-redundancy.svg")
+
+
 def main() -> None:
     fig_overview()
     fig_inside()
@@ -1571,6 +1726,7 @@ def main() -> None:
     fig_outage()
     fig_forwarding()
     fig_modems()
+    fig_redundancy()
 
 
 if __name__ == "__main__":
