@@ -365,7 +365,7 @@ live in both daemons. 96 of 96 pass, with no collision and no radiated overlap. 
 against each draw's uncut run (median of three): at 500 Hz every cut of 10 dB or less reads
 0.96–1.00 and a 20 dB bottom cut 0.98–1.03; at the 2300 Hz top 10 dB or less reads 0.97–1.00.
 The 2300 Hz bottom's message reads 0.70–0.86 at every depth, 3 dB included, and its file
-0.85–1.00: the message moves in whole steps on this grid, so the bottom edge's small cuts are not
+0.89–1.00 at 10 dB or less (0.81–0.85 at 20): the message moves in whole steps on this grid, so the bottom edge's small cuts are not
 told apart from its draws here. Saturday's receiver costs the 2300 Hz Test 37 % of its message and
 23 % of its file, and the 500 Hz one nothing.
 
