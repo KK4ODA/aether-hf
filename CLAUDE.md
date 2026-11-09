@@ -2843,11 +2843,22 @@ reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the
 author asked whether to fork Aether for it. The answer: no fork. Aether stays one modem that doesn't
 care which application runs on it, and RadioPost is another program beside the VARA port and the
 KISS port, because a gateway operator moving from Winlink will run both on one radio.
-**ADR-0106 (proposed, not built)** is what that needs. A program *claims* callsigns, starting with
-answering off. The first claim on a callsign holds it, and a claim ends with its connection. A call
-is answered only while its callsign's holder listens, and a session belongs to that holder (`owner`
-on state events). The host adapter's `MYCALL`/`LISTEN` become a claim. Debug mode uploads only the
-sessions the host interface owns.
+**ADR-0106 (built the same day)** is what that needs. A program *claims* callsigns
+(`station/claims.rs`; the control API's `claim`, starting with answering off). The first claim on
+a callsign holds it, and a claim ends with its connection: `ControlHandle::open` gives each
+WebSocket client and each host program a `Connection`, every request is stamped with it (never read
+from the client), and dropping it sends the modem a `closed` command. A call is answered only while
+its callsign's holder listens, and a session belongs to that holder: `owner` on state events and in
+`status`, `may_act_on_session` for `send`/`disconnect`/`abort` (`not_owner`). A program calls only
+as its own callsigns (`connect_for`, `claimed`). The host adapter's `MYCALL`/`LISTEN` are its
+program's claim (`LISTEN` sent with `ControlHandle::tell`, not waited for: a thread blocked a slow
+pass would hold back the `PTT ON` a host-keyed program keys on). While a host program is attached it speaks for the station: the station's own
+callsigns it does not hold are not answered, as when `MYCALL` replaced them. `status.own_callsigns`
+is what `callsigns.set` edits, and `callsigns` is the union. Debug mode uploads only the sessions
+the host interface owns. A test modem in `host/server.rs` stamps `owner` on state events that do not
+say it, so `"owner": null` is the panel's session. `two_daemons.rs`
+`a_host_program_and_a_control_api_program_share_one_station` runs both kinds of program on one
+daemon.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

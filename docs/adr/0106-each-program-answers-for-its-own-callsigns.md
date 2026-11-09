@@ -1,10 +1,12 @@
 # ADR-0106: Each program answers for its own callsigns and owns the sessions under them
 
-**Status:** proposed, 2026-11-09, not built. It would change the daemon (`station/host.rs`, a new
-`station/claims.rs`), the control API (`claim`, `listen`, `owner` on state events,
-`status.claims`), the control server (each connection gets an identity), the host adapter (`MYCALL`
-becomes a claim, and a session is the program's when its claim owns it), the panel's apps chip,
-and the manual. **No wire change, no model change, no configuration key.**
+**Status:** accepted and built, 2026-11-09 (the author's "build ADR-0106"); §2.5 gained a rule in
+the building (§6). The daemon (`station/claims.rs`, `station/host.rs`), the control API (`claim`,
+`listen`, `owner` on state events and in `status`, `status.claims`, `status.own_callsigns`,
+errors `claimed` and `not_owner`), the control channel (`control/protocol.rs`: `Connection`,
+`ConnectionId`), the host adapter (`MYCALL` and `LISTEN` are its program's claim, and a session is
+the program's when its claim owns it), the panel's apps chip and session banner, and the manual.
+**No wire change, no model change, no configuration key.**
 
 ## 1. Context
 
@@ -99,10 +101,9 @@ What owning means:
    its program `PENDING`, `CONNECTED`, the payload and `DISCONNECTED` only for sessions its claim
    owns. That replaces the `!called && !calling` test.
 2. **Acted on.** From a connection that holds a claim, `send`, `disconnect` and `abort` act only on
-   a session that claim owns, and are refused `not_owner` otherwise. A claimant's `send` with no
-   session of its own up is refused `not_connected`, since RPMI's `send` names a link. The
-   station's own `send` keeps holding bytes for the next session, as today. The panel holds no
-   claim and may end any session: the operator is the control operator (§97.105).
+   a session that claim owns, and are refused `not_owner` otherwise. A `send` with no session up
+   is refused `not_connected`, as it always was. The panel holds no claim and may act on any
+   session, sending on it included, as before: the operator is the control operator (§97.105).
 3. **Busy to the others.** A program that does not own the session up hears the station busy: the
    host adapter's `BUSY ON` for the whole session, as it is now for a session the panel started.
    ADR-0096 §2.3's sessions "the program was not told of" now include other programs' sessions,
@@ -140,6 +141,13 @@ What owning means:
 * `MYCALL` replaces the claim. `LISTEN ON`/`OFF` set its `listening`, as do `LISTEN CQ` and
   `CHAT ON`. The reply to `MYCALL` stays `OK`, said at once as now; a callsign refused because
   another program holds it is said in the log and on the panel.
+* **While a program is attached on the host interface, it speaks for the station:** the station's
+  own callsigns it does not hold are not answered. Before claims, `MYCALL` replaced the station's
+  callsigns, so a gateway whose Setup says KK4ODA and whose Trimode says `MYCALL KK4ODA-1` did not
+  answer KK4ODA while Trimode was attached. Without this rule the claim would hand KK4ODA back to
+  the station, which would then answer it unattended, with no program behind the session.
+  Programs on the control API do not silence the station's own callsigns: a RadioPost gateway
+  claims callsigns of its own.
 * `PENDING` (ADR-0096 §2.1), the acceptance's keying (ADR-0103) and the holds of ADR-0051 and
   ADR-0100 apply to the calls the program's claim owns, and only to those.
 
@@ -205,3 +213,41 @@ What owning means:
 * **`MYCALL` refused in part:** whether to answer the program `OK` or `WRONG`. No bench program has
   been seen to handle `WRONG` to `MYCALL`; try Trimode, Winlink Express and VarAC first.
 * **Debug mode for sessions other programs own** (§3).
+
+## 6. Built
+
+* **A connection's identity.** `ControlHandle::open(kind)` gives a `Connection` a number of its
+  own; every request sent through it is stamped with it (`Request.connection`, never read from
+  the client), and dropping it sends the modem a `closed` command, which ends its claim. The
+  WebSocket server opens one per client, the host adapter one per program that attaches. A
+  `POST` has none.
+* **The station.** `station/claims.rs` holds the station's own callsigns, the claims and the
+  owner of the call or session under way (kept after it ends, for the events that report the
+  end). The engine answers to the union, the station's own first. `Station::unanswered` asks
+  `answers_for` the callsign called. `connect_for` places a program's call as one of its
+  callsigns; `may_act_on_session` decides `send`, `disconnect` and `abort`. A claim's `listen`
+  is said in the log at once and then at most once a minute, per claim, as the host's `LISTEN`
+  was (a scanning Trimode turns it every 3.6 s).
+* **The host adapter** claims the station's own callsigns at attach (from `status.own_callsigns`),
+  sends `claim` for `MYCALL` and `listen` for each change of its `LISTEN`, and judges a session
+  its program's by the event's `owner`. `listen` is *told*, not asked (`ControlHandle::tell`: sent
+  in order, its answer not waited for). `LISTEN` had been an atomic flag read every pass. A
+  scanning Trimode turns it every 3.5 s, and the program's thread, waiting a slow pass for the
+  answer, would hold back the `PTT ON` that a program keying the radio (`[ptt] kind = "host"`,
+  the gateway's setup since 2026-11-06) keys on. The run loop does not log a host program's `listen`
+  requests: the station's own lines say what they come to.
+* **Tests.** `protocol.rs`: a connection speaks for itself and its close reaches the modem.
+  `methods.rs`: two programs claim, one is refused the other's callsign by name, a program calls
+  only as its own, `abort`/`disconnect`/`send` are `not_owner` on another's session, the panel
+  may, a closed connection's claim goes, a `POST` cannot claim. `station.rs`: two holders called
+  in turn over the simulated air, a host program that names other callsigns speaks for the
+  station, the scanning host's lines, the program's CWID for its own callsigns only, debug mode
+  recording the host program's sessions. `host/server.rs`: a call for another program's callsign
+  reaches the program as a busy channel and nothing else; its LISTEN is its claim's and goes
+  with its connection. `two_daemons.rs`: a host program on KK4XYZ-1 and a WebSocket program on
+  KK4XYZ-10 on one daemon, called in turn by another daemon — each session told to its holder
+  alone, the host program refused the other's `DISCONNECT`, the WebSocket program refused
+  `abort` on the host program's session, and the WebSocket program's claim gone with its
+  connection.
+* **Not built here:** a harness host emulator with a control-API claimant beside it (§3) — the
+  RPMI adapter will be the first real one, and its scenarios come with it.

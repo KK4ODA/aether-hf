@@ -824,6 +824,16 @@ fn answer_commands(
     restarting: &std::sync::atomic::AtomicBool,
 ) {
     for command in control.drain() {
+        // A connection closed: what it claimed goes with it (ADR-0106) — a program that
+        // crashed stops being answered for. Nothing to answer: nobody waits.
+        if command.closed {
+            if let Some(connection) = command.request.connection {
+                station.connection_closed(connection);
+                note_sessions(station, Some(control), daemon);
+                publish_station(station, control, daemon);
+            }
+            continue;
+        }
         // `shutdown` is the daemon's to answer, not the station's: it runs the same path a
         // stop signal does, so a supervisor that cannot send a signal — the desktop shell
         // on Windows — still gets the transmitter released properly. `restart: true` is the
@@ -843,7 +853,16 @@ fn answer_commands(
         };
         // What a client asked for, and whether it got it, is most of what a bug report
         // needs. Reads are not logged: a panel polls, and the ring would hold nothing else.
-        if is_mutating(&command.request.method) {
+        // Nor is a host program's LISTEN: a scanning Trimode turns it off and on every three
+        // and a half seconds, and the station says what answering comes to, at most once a
+        // minute (`Station::say_answering`).
+        let from_host = command
+            .request
+            .connection
+            .is_some_and(|c| c.kind == aetherd::control::protocol::ConnectionKind::Host);
+        if is_mutating(&command.request.method)
+            && !(from_host && command.request.method == "listen")
+        {
             daemon.log.record(
                 if response.ok {
                     Level::Info
@@ -1473,7 +1492,6 @@ fn host_presence(daemon: &DaemonState) -> aetherd::station::HostPresence {
     let flags = &daemon.host_flags;
     aetherd::station::HostPresence {
         attached: flags.attached.load(std::sync::atomic::Ordering::SeqCst),
-        listening: flags.listening.load(std::sync::atomic::Ordering::SeqCst),
         chat: flags.chat.load(std::sync::atomic::Ordering::SeqCst),
         cw_id: flags.cw_id.load(std::sync::atomic::Ordering::SeqCst),
     }
@@ -1620,6 +1638,9 @@ fn publish_station(
                 // caller asked for, so a host cannot know it without being told
                 "callsign": station.engine().my_call,
                 "remote": station.engine().remote_call,
+                // whose call or session it is: a program's claim (its connection's id), or
+                // null for the station's own (ADR-0106) — how a program knows its own
+                "owner": station.owner().map(|owner| owner.id),
                 "identifier_pending": station.closing_identifier_pending(),
             }),
         ));

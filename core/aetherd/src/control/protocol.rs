@@ -26,7 +26,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -50,6 +50,42 @@ pub struct Request {
     /// Method arguments.
     #[serde(default)]
     pub params: serde_json::Value,
+    /// The connection the request came on, stamped by the [`ControlHandle`] it was sent
+    /// through — never read from the client, so no client can speak for another's claim
+    /// (ADR-0106). `None` for a one-shot `POST` and for the daemon's own requests.
+    #[serde(skip)]
+    pub connection: Option<ConnectionId>,
+}
+
+/// Which connection a request came on (ADR-0106): the number the control channel gave it,
+/// and whether it is the VARA-compatible host interface's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionId {
+    /// Unique for the life of the daemon.
+    pub id: u64,
+    /// What kind of client holds it.
+    pub kind: ConnectionKind,
+}
+
+/// The kinds of client that hold a connection to the modem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConnectionKind {
+    /// A WebSocket client of the control API: the panel, a `RadioPost` adapter.
+    Control,
+    /// A program on the VARA-compatible host interface, one connection for each program
+    /// that attaches.
+    Host,
+}
+
+impl ConnectionKind {
+    /// Its name in `status.claims`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Host => "host",
+        }
+    }
 }
 
 /// A reply to one request.
@@ -148,6 +184,10 @@ pub struct Command {
     pub request: Request,
     /// Where the reply goes.
     pub reply: mpsc::Sender<Response>,
+    /// Not a request: the connection the request names has closed, and what it held — its
+    /// claim on callsigns (ADR-0106) — goes with it. Set only by [`Connection`]'s drop, so no
+    /// client can send it.
+    pub closed: bool,
 }
 
 /// The modem end of the channel: commands in, events out.
@@ -164,6 +204,55 @@ pub struct ControlHandle {
     commands: mpsc::Sender<Command>,
     subscribers: Subscribers,
     unwritten: Arc<AtomicUsize>,
+    /// The connection this handle speaks for, stamped on every request it sends; `None` for
+    /// the daemon's own handle and a one-shot `POST`.
+    connection: Option<ConnectionId>,
+    /// The last connection number given out.
+    numbers: Arc<AtomicU64>,
+}
+
+/// One client's connection to the modem (ADR-0106): requests sent through
+/// [`handle`](Self::handle) carry its identity, and dropping it tells the modem the
+/// connection is gone, so whatever it claimed is let go — a program that crashed stops being
+/// answered for.
+#[derive(Debug)]
+pub struct Connection {
+    handle: ControlHandle,
+}
+
+impl Connection {
+    /// The handle that speaks for this connection.
+    #[must_use]
+    pub fn handle(&self) -> &ControlHandle {
+        &self.handle
+    }
+
+    /// Its identity.
+    #[must_use]
+    pub fn id(&self) -> ConnectionId {
+        // a Connection is only made by `ControlHandle::open`, which always sets it
+        self.handle.connection.unwrap_or(ConnectionId {
+            id: 0,
+            kind: ConnectionKind::Control,
+        })
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // nobody waits for an answer: the reply's receiver goes with this
+        let (reply, _) = mpsc::channel();
+        let _ = self.handle.commands.send(Command {
+            request: Request {
+                id: None,
+                method: String::new(),
+                params: serde_json::Value::Null,
+                connection: self.handle.connection,
+            },
+            reply,
+            closed: true,
+        });
+    }
 }
 
 /// A request counted as unwritten for as long as this lives: from the moment a connection
@@ -196,6 +285,8 @@ pub fn channel() -> (ControlHandle, ControlChannel) {
             commands: sender,
             subscribers: std::sync::Arc::clone(&subscribers),
             unwritten: Arc::clone(&unwritten),
+            connection: None,
+            numbers: Arc::new(AtomicU64::new(0)),
         },
         ControlChannel {
             commands: receiver,
@@ -206,18 +297,53 @@ pub fn channel() -> (ControlHandle, ControlChannel) {
 }
 
 impl ControlHandle {
-    /// Send a request and wait for its reply.
+    /// A connection of the given kind, with a number of its own: what a WebSocket client or a
+    /// program on the host interface speaks through, so the modem can tell its requests from
+    /// another's (ADR-0106).
+    #[must_use]
+    pub fn open(&self, kind: ConnectionKind) -> Connection {
+        let id = self.numbers.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut handle = self.clone();
+        handle.connection = Some(ConnectionId { id, kind });
+        Connection { handle }
+    }
+
+    /// Send a request and wait for its reply. The request is stamped with this handle's
+    /// connection, whatever it said.
     ///
     /// # Errors
     /// If the modem has stopped.
-    pub fn call(&self, request: Request) -> Result<Response, ApiError> {
+    pub fn call(&self, mut request: Request) -> Result<Response, ApiError> {
+        request.connection = self.connection;
         let (reply, replies) = mpsc::channel();
         self.commands
-            .send(Command { request, reply })
+            .send(Command {
+                request,
+                reply,
+                closed: false,
+            })
             .map_err(|_| ApiError::new("modem_stopped", "The modem has stopped.", false))?;
         replies
             .recv()
             .map_err(|_| ApiError::new("modem_stopped", "The modem has stopped.", false))
+    }
+
+    /// Send a request without waiting for its reply, which goes nowhere. Requests from one
+    /// handle reach the modem in the order sent, so what is asked next still comes after it.
+    /// For a client whose thread must not stand still: the host adapter's `LISTEN` turns every
+    /// 3.5 s under a scanning Trimode, and a thread waiting a slow pass for the answer would
+    /// hold back the `PTT ON` a program that keys the radio keys on. Whether the modem took it.
+    #[must_use]
+    pub fn tell(&self, mut request: Request) -> bool {
+        request.connection = self.connection;
+        let (reply, _) = mpsc::channel();
+        self.commands
+            .send(Command {
+                request,
+                reply,
+                closed: false,
+            })
+            .is_ok()
     }
 
     /// [`call`](Self::call), and hand the reply — or the failure, as a reply — to `deliver`,
@@ -304,6 +430,7 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params: json!({}),
+            connection: None,
         }
     }
 
@@ -314,6 +441,68 @@ mod tests {
         assert_eq!(parsed.id.as_deref(), Some("7"));
         assert_eq!(parsed.method, "connect");
         assert_eq!(parsed.params["remote"], "KK4XYZ");
+    }
+
+    #[test]
+    fn a_connection_speaks_for_itself_and_its_close_reaches_the_modem() {
+        // ADR-0106: what a program claims is held by its connection. The connection a request
+        // came on is stamped by the handle it went through — a client that writes one into
+        // its request is not believed — and dropping the connection tells the modem.
+        let (handle, channel) = channel();
+        let forged: Request = serde_json::from_str(
+            r#"{"method":"listen","params":{"enabled":true},"connection":{"id":1,"kind":"Host"}}"#,
+        )
+        .expect("parse");
+        assert_eq!(forged.connection, None, "a client cannot name a connection");
+
+        let first = handle.open(ConnectionKind::Control);
+        let second = handle.open(ConnectionKind::Host);
+        assert_ne!(first.id().id, second.id().id);
+        assert_eq!(second.id().kind, ConnectionKind::Host);
+        let asking = std::thread::spawn({
+            let handle = first.handle().clone();
+            move || handle.call(forged)
+        });
+        let command = loop {
+            if let Some(command) = channel.drain().pop() {
+                break command;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert!(!command.closed);
+        assert_eq!(command.request.connection, Some(first.id()));
+        let _ = command
+            .reply
+            .send(Response::ok(None, serde_json::json!({})));
+        asking.join().expect("join").expect("answered");
+        // told, not asked: it arrives stamped, in order, and nobody waits for the answer
+        assert!(first.handle().tell(request("listen")));
+        assert!(first.handle().tell(request("connect")));
+        let told = channel.drain();
+        assert_eq!(
+            told.iter()
+                .map(|c| c.request.method.as_str())
+                .collect::<Vec<_>>(),
+            ["listen", "connect"]
+        );
+        assert!(
+            told.iter()
+                .all(|c| c.request.connection == Some(first.id()) && !c.closed)
+        );
+        for command in told {
+            let _ = command
+                .reply
+                .send(Response::ok(None, serde_json::json!({})));
+        }
+        // the daemon's own handle speaks for no connection
+        assert_eq!(handle.connection, None);
+
+        let gone = second.id();
+        drop(second);
+        let closed = channel.drain();
+        assert_eq!(closed.len(), 1);
+        assert!(closed[0].closed);
+        assert_eq!(closed[0].request.connection, Some(gone));
     }
 
     #[test]

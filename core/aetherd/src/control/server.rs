@@ -335,6 +335,7 @@ fn serve_rest(
         id: None,
         method: name,
         params,
+        connection: None,
     };
     // written before the request stops counting as unwritten: a daemon this request stops —
     // `shutdown` — waits for the write before it exits (`ControlChannel::settle`)
@@ -421,6 +422,9 @@ fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, runnin
     let mut socket =
         tungstenite::WebSocket::from_raw_socket(cloned, tungstenite::protocol::Role::Server, None);
 
+    // this client's identity: what it claims goes when the connection does (ADR-0106)
+    let connection = handle.open(crate::control::protocol::ConnectionKind::Control);
+    let handle = connection.handle();
     let events = handle.subscribe();
     while running.load(Ordering::Relaxed) {
         match socket.read() {
@@ -746,6 +750,7 @@ mod tests {
                 id: None,
                 method: "status".into(),
                 params: json!({}),
+                connection: None,
             })
             .expect_err("it should fail");
         assert_eq!(error.code, "modem_stopped");

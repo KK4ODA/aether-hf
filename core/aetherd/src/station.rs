@@ -23,6 +23,7 @@
 mod bandwidth;
 mod beacons;
 mod centre;
+mod claims;
 mod datagrams;
 mod fieldtest;
 mod gaps;
@@ -35,6 +36,7 @@ pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
 };
 pub use beacons::{BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S};
+pub use claims::{CLAIMED, Claim, Claimed, NOT_HELD};
 pub use datagrams::{
     DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
     ReceivedDatagram,
@@ -1270,8 +1272,12 @@ pub struct Station<P: Ptt> {
     /// Where the receiver's sample count starts in the station's: the receiver is built again
     /// when the station moves to another bandwidth, and counts from there.
     rx_origin: usize,
-    /// What the host program attached now said about this station: whether to answer calls.
+    /// What the host program attached now said about this station: `CHAT`, `CWID`, and whether
+    /// the daemon is stopping (which answers nothing).
     host: host::Host,
+    /// The station's callsigns and the programs' claims on them; whose session is whose
+    /// (ADR-0106).
+    claims: claims::Claims,
     /// Counters, for display.
     pub stats: StationStats,
 }
@@ -1429,6 +1435,7 @@ impl<P: Ptt> Station<P> {
             gaps: gaps::LearnedGaps::default(),
             rx_origin: 0,
             host: host::Host::default(),
+            claims: claims::Claims::new(&config.callsign),
             stats: StationStats::default(),
             config,
         };
@@ -1887,40 +1894,25 @@ impl<P: Ptt> Station<P> {
             }
         }
         self.engine.connect(remote, as_call)?;
+        // the station's own call; a program's (`connect_for`) says so after (ADR-0106)
+        self.call_is_the_stations();
         self.pump();
         Ok(())
     }
 
-    /// Change the callsigns this station answers to; the first is the one it calls as.
+    /// Change the station's own callsigns; the first is the one it calls as.
     ///
-    /// The configuration file names the station, and that is what it answers to until a
-    /// host program says otherwise: the operator's callsign lives in the host in practice
-    /// (Winlink Express, Pat and `VarAC` each send `MYCALL`, and none of them can be told the
-    /// modem has a callsign of its own). Given while a session is up, the change waits for
-    /// the session to end — the callsign is in every frame's addressing — and the result says
-    /// so.
+    /// The configuration file names the station, and the panel may add to it. A program's
+    /// callsigns are its claim's, beside these (ADR-0106): Winlink Express, Pat and `VarAC`
+    /// each send `MYCALL`, which the host adapter makes the program's claim. Given while a
+    /// session is up, the change waits for the session to end — the callsign is in every
+    /// frame's addressing — and the result says so.
     ///
     /// # Errors
     /// If the list is empty or a callsign is one the air interface cannot carry.
     pub fn set_callsigns(&mut self, calls: &[String]) -> Result<bool, &'static str> {
-        if self.engine.state() == State::Idle {
-            self.engine.set_callsigns(calls)?;
-            self.pending_callsigns = None;
-            // the identifier sends the callsign: its length, and whether there is one, follow it
-            self.refresh_identifier_length();
-            self.note_required_identifier();
-            return Ok(true);
-        }
-        // validated now, so a host is not told OK for a list the engine will refuse later
-        let mut probe = GrantedEngine::new(
-            &self.engine.my_call,
-            self.engine.timing().clone(),
-            self.config.link.clone(),
-            0,
-        );
-        probe.set_callsigns(calls)?;
-        self.pending_callsigns = Some(probe.callsigns);
-        Ok(false)
+        // the station's own list: what the programs claimed stands beside it (ADR-0106)
+        self.set_own_callsigns(calls)
     }
 
     /// The callsign this station runs under right now, and every one it answers to.
@@ -2308,11 +2300,11 @@ impl<P: Ptt> Station<P> {
     #[must_use]
     pub fn identifier_for(&self, call: &str) -> Option<CwId> {
         self.config.cw_id.or_else(|| {
-            (crate::cwid::required_for(call).is_some() || self.host_asks_identifier()).then(|| {
-                CwId {
-                    wpm: self.config.cw_id_wpm,
-                    ..CwId::default()
-                }
+            (crate::cwid::required_for(call).is_some()
+                || (self.host_asks_identifier() && self.held_by_host(call)))
+            .then(|| CwId {
+                wpm: self.config.cw_id_wpm,
+                ..CwId::default()
             })
         })
     }
@@ -4254,6 +4246,9 @@ impl<P: Ptt> Station<P> {
     /// A session came up: its coders, its account, its notes for the history, and the
     /// engine's stream counted from nothing again.
     fn session_began(&mut self, detail: &str) {
+        // whose session it is: a called one is its callsign's holder's, a call keeps the owner
+        // its `connect` gave it (ADR-0106)
+        self.note_owner(!detail.ends_with("(master)"));
         // the contact its setup began is this session now, identified at its end (ADR-0075)
         self.identifier.setup_at = None;
         let agreed = negotiated(
@@ -4285,7 +4280,8 @@ impl<P: Ptt> Station<P> {
             caller: detail.ends_with("(master)"),
             frequency_hz: self.frequency.value,
             acked_at_start: self.engine.stats.bytes_acked,
-            host: self.host_attached(),
+            // a session the host program owns (ADR-0106), which debug mode sends (ADR-0050)
+            host: self.owned_by_host(),
             ..SessionNotes::default()
         });
         self.moved.clear();
@@ -4435,7 +4431,7 @@ impl<P: Ptt> Station<P> {
                     // started when it comes up and closed when it ends — unless a Test
                     // session is recording itself, probe to disconnect
                     let record_this = self.config.record_auto
-                        || (self.config.record_host_sessions && self.host_attached());
+                        || (self.config.record_host_sessions && self.owned_by_host());
                     if (record_this || session_recorded) && !self.test_running() {
                         if name == "connected" && record_this {
                             // a note given for the next recording wins; otherwise the
@@ -6186,8 +6182,25 @@ fn asked_by(payload: Option<&[u8]>, ours: &[String]) -> Option<(Asked, String)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::protocol::{ConnectionId, ConnectionKind};
     use crate::passband::Verdict;
     use crate::ptt::NullPtt;
+
+    /// The program on the host interface, as the tests' stations know it (ADR-0106).
+    const HOST_PROGRAM: ConnectionId = ConnectionId {
+        id: 1,
+        kind: ConnectionKind::Host,
+    };
+
+    /// What the host adapter does for a program: claim its callsigns (`MYCALL`, or the
+    /// station's own at its attach), and say whether it listens (`LISTEN`).
+    fn claim_for_host<P: Ptt>(station: &mut Station<P>, calls: &[&str], listening: bool) {
+        let calls: Vec<String> = calls.iter().map(|&call| call.to_owned()).collect();
+        station.claim(HOST_PROGRAM, None, &calls).expect("valid");
+        station
+            .listen_for(HOST_PROGRAM, listening)
+            .expect("claimed");
+    }
 
     /// The safety property behind starting anyway: a station whose keying interface would
     /// not open runs, but puts nothing on the air. `playback` keys before it copies a single
@@ -7880,7 +7893,6 @@ mod tests {
         air.b.config.record_host_sessions = true;
         let program = HostPresence {
             attached: true,
-            listening: true,
             chat: false,
             cw_id: false,
         };
@@ -7891,6 +7903,12 @@ mod tests {
             } else {
                 HostPresence::default()
             });
+            // the program holds the callsign called and listens; gone, it holds nothing
+            if attached {
+                claim_for_host(&mut air.b, &["KK4XYZ"], true);
+            } else {
+                air.b.connection_closed(HOST_PROGRAM);
+            }
             air.a.connect("KK4XYZ").expect("idle");
             air.a.send(message);
             air.run(90.0, |a, _| a.engine().stats.bytes_acked >= message.len());
@@ -11104,20 +11122,30 @@ mod tests {
     fn a_host_programs_callsign_and_morse_id_go_with_it() {
         // what a program's MYCALL and CWID ON set is the program's: while it is attached the
         // station answers as it says and identifies when it asks (ADR-0075 §2.7), and when it
-        // goes the station is its own again
+        // goes the station is its own again (ADR-0106: the claim goes with its connection)
         let mut station = idle_station();
         assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
         let program = HostPresence {
             attached: true,
-            listening: true,
             chat: false,
             cw_id: true,
         };
         station.set_host(program);
-        assert_eq!(station.set_callsigns(&["G4ABC".to_owned()]), Ok(true));
-        assert_eq!(station.callsigns(), ["G4ABC".to_owned()]);
+        claim_for_host(&mut station, &["G4ABC"], true);
+        assert_eq!(
+            station.callsigns(),
+            ["W4ODA".to_owned(), "G4ABC".to_owned()]
+        );
         assert_eq!(station.identifier_check("G4ABC")["enabled"], true);
         assert_eq!(station.identifier_check("G4ABC")["setting"], false);
+        // CWID ON is the program's, for the callsigns it holds: not the station's own (a non-US
+        // one, which identifies only when asked)
+        station
+            .set_callsigns(&["W4ODA".to_owned(), "G4XYZ".to_owned()])
+            .expect("valid");
+        assert_eq!(station.identifier_check("G4XYZ")["enabled"], false);
+        assert_eq!(station.identifier_check("G4ABC")["enabled"], true);
+        station.set_callsigns(&["W4ODA".to_owned()]).expect("valid");
         // CWID OFF from the program leaves the station's own rule
         station.set_host(HostPresence {
             cw_id: false,
@@ -11126,14 +11154,20 @@ mod tests {
         assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
         station.set_host(program);
         station.set_host(HostPresence::default());
+        station.connection_closed(HOST_PROGRAM);
         assert_eq!(station.callsigns(), ["W4ODA".to_owned()]);
         assert_eq!(station.identifier_check("G4ABC")["enabled"], false);
         // a MYCALL said during a call is held for its end; a program that leaves before then
         // takes it with it
         station.set_host(program);
         station.connect("KK4ABC").expect("idle");
-        assert_eq!(station.set_callsigns(&["G4ABC".to_owned()]), Ok(false));
+        claim_for_host(&mut station, &["G4ABC"], true);
+        assert_eq!(
+            station.pending_callsigns,
+            Some(vec!["W4ODA".to_owned(), "G4ABC".to_owned()])
+        );
         station.set_host(HostPresence::default());
+        station.connection_closed(HOST_PROGRAM);
         assert_eq!(station.pending_callsigns, Some(vec!["W4ODA".to_owned()]));
     }
 
@@ -11145,7 +11179,6 @@ mod tests {
         assert_eq!(station.bandwidth_hz(), 2300);
         station.set_host(HostPresence {
             attached: true,
-            listening: true,
             chat: true,
             cw_id: false,
         });
@@ -11197,14 +11230,14 @@ mod tests {
     #[test]
     fn a_station_whose_host_has_not_said_listen_on_answers_no_call() {
         // VARA's LISTEN OFF, its default: incoming connections disabled until the program
-        // attached says LISTEN ON (or CHAT ON, which includes it)
+        // attached says LISTEN ON (or CHAT ON, which includes it). The program holds the
+        // station's callsign from its attach (ADR-0106)
         let mut air = Air::new(1.0, 0.0005);
-        air.b.set_host(HostPresence {
-            attached: true,
-            listening: false,
-            chat: false,
-            cw_id: false,
-        });
+        assert!(
+            air.b.answering(),
+            "a station with no program attached answers"
+        );
+        claim_for_host(&mut air.b, &["KK4XYZ"], false);
         assert!(!air.b.answering());
         air.a.connect("KK4XYZ").expect("idle");
         air.run(40.0, |_, b| b.stats.calls_unanswered >= 2);
@@ -11217,17 +11250,116 @@ mod tests {
             .collect();
         // said once for the caller's tries, not once a try
         assert_eq!(said.len(), 1, "{events:?}");
-        // the program says LISTEN ON: the next try is answered
-        air.b.set_host(HostPresence {
-            attached: true,
-            listening: true,
-            chat: false,
-            cw_id: false,
-        });
+        assert!(
+            said[0].ends_with("not answered: the host program has not said LISTEN ON"),
+            "{said:?}"
+        );
+        // the program says LISTEN ON: the next try is answered, and the session is its own
+        air.b.listen_for(HOST_PROGRAM, true).expect("claimed");
         air.run(90.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
-        // and a station with no program attached answers, as it always did
-        assert!(HostPresence::default().answering());
+        assert_eq!(air.b.owner(), Some(HOST_PROGRAM));
+    }
+
+    #[test]
+    fn a_host_program_that_names_other_callsigns_speaks_for_the_station() {
+        // ADR-0106: a gateway whose Setup callsign is KK4XYZ and whose Trimode says MYCALL
+        // KK4XYZ-1. Before claims, MYCALL replaced the station's callsigns and KK4XYZ was not
+        // answered while Trimode was attached; the claim lets KK4XYZ go back to the station,
+        // which must still not answer it unattended. With the program gone, it answers again.
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ-1"], true);
+        assert_eq!(
+            air.b.callsigns(),
+            ["KK4XYZ".to_owned(), "KK4XYZ-1".to_owned()]
+        );
+        assert!(!air.b.answering());
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |_, b| b.stats.calls_unanswered >= 1);
+        assert!(!air.b.connected());
+        let events = air.b.take_events();
+        assert!(
+            events.iter().any(|e| e.ends_with(
+                "not answered: the host program attached answers only for the callsigns its \
+                 MYCALL names"
+            )),
+            "{events:?}"
+        );
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+        // its own callsign is answered, and the session is its own
+        air.a.connect("KK4XYZ-1").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert_eq!(air.b.owner(), Some(HOST_PROGRAM));
+        air.a.abort();
+        air.b.abort();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        // the program goes: the station answers its own callsign again
+        air.b.connection_closed(HOST_PROGRAM);
+        assert!(air.b.answering());
+    }
+
+    #[test]
+    fn each_program_answers_for_its_own_callsigns_and_owns_their_sessions() {
+        // ADR-0106: Trimode on the host port holds KK4XYZ, a RadioPost gateway on the control
+        // API holds KK4XYZ-10. Each call is answered only while its holder listens, and the
+        // session is its holder's; a callsign one program holds is refused to the other.
+        let mut air = Air::new(1.0, 0.0005);
+        let gateway = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        claim_for_host(&mut air.b, &["KK4XYZ"], false);
+        let taken = air
+            .b
+            .claim(
+                gateway,
+                Some("RadioPost gateway"),
+                &["KK4XYZ-10".to_owned(), "KK4XYZ".to_owned()],
+            )
+            .expect("valid");
+        assert_eq!(taken.callsigns, ["KK4XYZ-10".to_owned()]);
+        assert_eq!(
+            taken.refused,
+            [("KK4XYZ".to_owned(), "the host program".to_owned())]
+        );
+        assert!(!taken.listening, "a claim starts with answering off");
+        assert_eq!(
+            air.b.callsigns(),
+            ["KK4XYZ".to_owned(), "KK4XYZ-10".to_owned()]
+        );
+        // Trimode does not listen, RadioPost does: a call to KK4XYZ is not answered, a call
+        // to KK4XYZ-10 is, and the session is RadioPost's
+        air.b.listen_for(gateway, true).expect("claimed");
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |_, b| b.stats.calls_unanswered >= 1);
+        assert!(!air.b.connected());
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+        air.a.connect("KK4XYZ-10").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(air.b.connected());
+        assert_eq!(air.b.owner(), Some(gateway));
+        assert_eq!(air.b.engine().my_call, "KK4XYZ-10");
+        // the other program may not act on it; the panel, holding no claim, may
+        assert!(!air.b.may_act_on_session(Some(HOST_PROGRAM)));
+        assert!(air.b.may_act_on_session(Some(gateway)));
+        assert!(air.b.may_act_on_session(None));
+        air.a.disconnect();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        // the gateway goes: KK4XYZ-10 is no one's now, and not answered
+        air.b.connection_closed(gateway);
+        assert_eq!(air.b.callsigns(), ["KK4XYZ".to_owned()]);
+        // a program calls only as its own callsigns
+        assert_eq!(
+            air.b
+                .connect_for(Some(HOST_PROGRAM), "W4ODA", Some("KK4XYZ-10"), false),
+            Err(NOT_HELD)
+        );
     }
 
     #[test]
@@ -11252,12 +11384,7 @@ mod tests {
             "{events:?}"
         );
         // a host program saying LISTEN ON does not undo a stop
-        air.b.set_host(HostPresence {
-            attached: true,
-            listening: true,
-            chat: false,
-            cw_id: false,
-        });
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
         assert!(!air.b.answering());
     }
 
@@ -11268,13 +11395,15 @@ mod tests {
         let mut station = idle_station();
         let mut out = vec![0.0f32; 4096];
         let mut seed = 0;
-        while station.now() < 125.0 {
-            station.set_host(HostPresence {
-                attached: true,
-                listening: station.now() % 3.5 < 3.0,
-                chat: false,
-                cw_id: false,
-            });
+        claim_for_host(&mut station, &["W4ODA"], false);
+        let _ = station.take_events();
+        let mut listening = false;
+        while station.now() < 130.0 {
+            let on = station.now() % 3.5 < 3.0;
+            if on != listening {
+                listening = on;
+                station.listen_for(HOST_PROGRAM, on).expect("claimed");
+            }
             station.playback(&mut out).expect("playback");
             station.capture(&quiet_block(seed)).expect("capture");
             seed += 1;
@@ -11284,12 +11413,10 @@ mod tests {
             .into_iter()
             .filter(|e| e.starts_with("listen:"))
             .collect();
-        // the first turn at once, then a line a minute that counts the turns between
+        // the first turn at once, then a line at the first turn a minute after the last, which
+        // counts the turns between
         assert_eq!(said.len(), 3, "{said:?}");
-        assert_eq!(
-            said[0],
-            "listen:not answering calls: the host program has not said LISTEN ON"
-        );
+        assert_eq!(said[0], "listen:answering calls to W4ODA");
         for line in &said[1..] {
             assert!(
                 line.contains("times since the last line: the program scans"),

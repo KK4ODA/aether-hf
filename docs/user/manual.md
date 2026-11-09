@@ -108,8 +108,12 @@ To the right:
   lamps are filled with their colour so they show in glare. Press it again for the dark
   panel. The undocked signal window and the updates window follow, and Aether remembers the
   choice for the next start. The waterfall keeps its own colours.
-- A chip shows **programs attached** (a host program or KISS programs), and another shows the
-  **bandwidth** when the station is running one that is not its own setting.
+- A chip shows the **programs using the station**: a host program, a program on the control
+  API that answers for callsigns of its own (a RadioPost gateway, for example), and KISS
+  programs. A program that is not listening shows *not answering*: calls to its callsigns go
+  unanswered until it listens. The chip's tooltip names the callsigns each program answers for.
+  Another chip shows the **bandwidth** when the station is running one that is not its own
+  setting.
 
 ### Banners
 
@@ -117,7 +121,7 @@ A banner across every tab tells you about something that needs attention:
 
 | Banner | What it means | What to do |
 |---|---|---|
-| Session banner | Calling, connected, disconnecting, a probe, a Test, a beacon waiting, or how the last session ended | Nothing; it is there so you can see it from any tab |
+| Session banner | Calling, connected, disconnecting, a probe, a Test, a beacon waiting, or how the last session ended. A program's call or session says *for* the program | Nothing; it is there so you can see it from any tab |
 | Setup needed | The rules, the control or the license class is not set, so nothing transmits | **Open Setup**, step 1 |
 | Unsaved changes | Setup has edits the modem is not using yet | **Review in Setup** and save, or **Discard changes** |
 | Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID | Follow its buttons: Setup step 4, Check for Updates, Answer as it too, Call it, or Dismiss |
@@ -626,8 +630,10 @@ A Winlink gateway â€” RMS Trimode at the gateway, Winlink Express in the field â
 by step in [Winlink through an Aether gateway](winlink-gateway.md).
 
 While **Host programs** is on, the program sets the callsign and the bandwidth: Setup shows
-**Host** in their places. What the program sets lasts while it is attached; when it leaves,
-Aether goes back to its own callsign and bandwidth. A program's `CWID ON` turns the Morse ID on
+**Host** in their places. The program's `MYCALL` names the callsigns it answers for. While it is
+attached, Aether answers no other callsign of its own: the program speaks for the station. What
+the program sets lasts while it is attached; when it leaves, Aether goes back to its own callsign
+and bandwidth. A program's `CWID ON` turns the Morse ID on
 for its sessions. The first transmission after a program attaches is checked on its own: if the
 receive audio does not change while the radio is keyed, the Log says the radio may not be
 transmitting, so a program set to key a port nothing is wired to is found at once.
@@ -640,6 +646,15 @@ radio is keyed.
 One program at a time uses the host port. If a program connects again, for example after it
 restarted its modem, the new connection replaces the old one. The Log tab says so (*host:* lines),
 and says when a program attaches or leaves.
+
+**Two programs on one station.** A program on the host port and a program on the control API
+(a RadioPost gateway beside RMS Trimode, for example) can share one radio. Each answers for its
+own callsigns: give them different ones, such as KK4ODA-1 for Trimode and KK4ODA-10 for
+RadioPost. A call is answered only while the program holding its callsign is listening, and the
+session is that program's alone: the other program is not told of it and sees the channel busy
+until it ends. The station still runs one session at a time. Two programs cannot hold the same
+callsign: the first to claim it keeps it, and the Log says which program was refused it
+(*claims:* lines).
 
 RMS Trimode starts its modem itself and, to restart it, closes what it started. When Trimode
 starts Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no

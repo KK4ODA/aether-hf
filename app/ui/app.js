@@ -148,7 +148,11 @@ function onEvent(frame) {
       if (data.name === "connected") {
         resetReceived();
         markSession(data.remote || data.detail);
-        showBanner("connected", `Connected to ${data.remote || data.detail}`);
+        // a program's session says whose it is (ADR-0106); its claim is in the last status
+        showBanner(
+          "connected",
+          `Connected to ${data.remote || data.detail}${ownerSuffix({ owner: data.owner, claims: lastStatus?.claims })}`,
+        );
         chime("up");
         focusComposer();
       } else if (data.name === "disconnected") {
@@ -437,8 +441,10 @@ let probeTarget = "";
 function bannerFor(status) {
   const who = status.remote || "";
   const test = status.test;
+  // a program's call or session, said with the program's name (ADR-0106)
+  const forProgram = ownerSuffix(status);
   if (status.state === "connecting") {
-    return ["calling", test ? `Test session: calling ${who}…` : `Calling ${who}…`];
+    return ["calling", test ? `Test session: calling ${who}…` : `Calling ${who}…${forProgram}`];
   }
   if (status.state === "disconnecting") {
     return ["closing", `Disconnecting from ${who}: waiting for the answer…`];
@@ -453,7 +459,7 @@ function bannerFor(status) {
   }
   if (status.state === "connected") {
     if (test) return ["connected", `Test session with ${who}: ${TEST_STEP_NAMES[test.step] ?? test.step}`];
-    return ["connected", `Connected to ${who || "?"}`];
+    return ["connected", `Connected to ${who || "?"}${forProgram}`];
   }
   if (test) return ["working", `Test session with ${test.remote}: ${TEST_STEP_NAMES[test.step] ?? test.step}…`];
   if (status.probing) {
@@ -466,6 +472,19 @@ function bannerFor(status) {
   }
   if (status.transmitting) return ["working", "Transmitting…"];
   return null;
+}
+
+// " for RadioPost gateway": the program whose call or session is under way, from its claim
+// (ADR-0106); nothing for the station's own.
+function ownerSuffix(status) {
+  if (status.owner == null) return "";
+  const claim = (status.claims ?? []).find((c) => c.id === status.owner);
+  return claim ? ` for ${programName(claim)}` : " for a program";
+}
+
+// A program's name as the panel says it: the host interface's is "host program".
+function programName(claim) {
+  return claim.kind === "host" ? "host program" : claim.app || "a program";
 }
 
 // Keep the banner true to the status the panel just read: a reload lands on a session
@@ -4764,19 +4783,27 @@ function applyKiss(kiss, host, datagrams) {
     ? `${k.frames_in ?? 0} in · ${k.frames_out ?? 0} out · ${waiting} waiting`
     : "turn on KISS programs in Setup";
 
-  // the header: which programs are using this station now — and a host program that has not
-  // said LISTEN ON, which keeps the station from answering calls, as VARA's default does
+  // the header: which programs are using this station now, each with the callsigns it answers
+  // for (ADR-0106) — and one that is not listening, which keeps those calls unanswered, as
+  // VARA's LISTEN OFF does
+  const claims = lastStatus?.claims ?? [];
   const using = [];
-  const deaf = host?.connected && lastStatus?.answering === false;
-  if (host?.connected) using.push(deaf ? "host program · not answering" : "host program");
+  const said = [];
+  for (const claim of claims) {
+    const name = programName(claim);
+    using.push(claim.listening ? name : `${name} · not answering`);
+    const calls = (claim.callsigns ?? []).join(", ") || "no callsign";
+    said.push(`${name} answers for ${calls}${claim.listening ? "" : ", and is not listening: calls to them are not answered"}`);
+  }
+  // a host program from before its claim reaches the status
+  if (host?.connected && !claims.some((c) => c.kind === "host")) using.push("host program");
   if (count > 0) using.push(`${count} KISS`);
   const chip = $("apps-chip");
   chip.hidden = using.length === 0;
   chip.textContent = using.join(" · ");
   const who = clients.map((c) => `${c.app} (${c.peer})`);
   chip.title = [
-    host?.connected ? "A host program is attached on the VARA-compatible interface" : "",
-    deaf ? "It has not said LISTEN ON, so calls to this station are not answered" : "",
+    ...said,
     who.length ? `KISS: ${who.join(", ")}` : "",
   ].filter(Boolean).join(". ") || "Programs using this station now";
 }
@@ -5066,7 +5093,8 @@ function wireMismatch() {
   $("btn-mismatch-answer").addEventListener("click", async () => {
     const called = $("mismatch-banner").dataset.called;
     if (!called) return;
-    const callsigns = [...(lastStatus?.callsigns ?? []), called];
+    // the station's own list: what programs claimed is theirs, not the station's (ADR-0106)
+    const callsigns = [...(lastStatus?.own_callsigns ?? lastStatus?.callsigns ?? []), called];
     const ok = await act(
       () => call("callsigns.set", { callsigns }),
       `answering as ${callsigns.join(", ")} until the modem restarts`,

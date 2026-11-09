@@ -128,8 +128,13 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   and the bandwidth (step 4) read **Host**: the program sets them. With *Keying* **Host**
   (step 2), the rules' fields read **Host** too. What is underneath is kept for when no program
   is attached.
-* **The callsign.** The program's `MYCALL` is what the station answers to and identifies as while
-  the program is attached. When the program closes, Aether goes back to the callsign in Setup.
+* **The callsign.** The program's `MYCALL` names the callsigns it answers to and identifies as
+  while it is attached, and Aether answers no other callsign of its own meanwhile: the program
+  speaks for the station. When the program closes, Aether goes back to the callsign in Setup.
+  Another program on the control API may hold callsigns of its own beside it (a RadioPost
+  gateway, for example: ADR-0106). A callsign that program holds is not the host program's: its
+  calls, and its sessions, are the other program's, and the host program sees only a busy
+  channel while they run.
 * **The bandwidth.** A program's `BW500`, `BW2300` or `BW2750` (run as 2300) moves the station
   while the program is attached — between sessions, never during one — and it comes back to
   Setup's when the program closes. A 2300 Hz station also answers a 500 Hz call at 500 Hz, as VARA's *Accept
@@ -147,9 +152,10 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   bandwidth (a 2300 Hz station still answers 500 Hz calls), the program's `BW` command when a
   program chose 500 Hz, or asking the other station to call at 500 Hz. The Stations tab shows each
   station's bandwidth, in amber when it is not this station's.
-* **Answering calls.** With a program attached, Aether answers calls only once the program has
-  said `LISTEN ON` (VarAC and Winlink Express do when they start), as VARA does. The header says
-  *host program · not answering* until then, and the log names every call left unanswered.
+* **Answering calls.** With a program attached, Aether answers calls to its callsigns only once
+  the program has said `LISTEN ON` (VarAC and Winlink Express do when they start), as VARA does.
+  The header says *host program · not answering* until then, and the log names every call left
+  unanswered.
 * **The Morse ID at the end** (ADR-0075, as VARA does). Each station's Morse ID is the last
   thing it sends for a session. A US callsign always sends it; `CWID OFF` from the program is
   answered `OK` and changes nothing. Any other callsign sends it if Setup step 4's *Morse ID* is

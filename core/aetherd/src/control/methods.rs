@@ -72,6 +72,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "abort"
             | "send"
             | "listen"
+            | "claim"
             | "callsigns.set"
             | "beacon"
             | "beacon.every"
@@ -1113,7 +1114,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "capabilities" => Response::ok(id, capabilities(station.params())),
         "spectrum" => Response::ok(id, spectrum(station)),
         "constellation" => Response::ok(id, constellation(station)),
-        "connect" => connect(station, params, id),
+        "connect" => connect(station, request),
         "probe" => probe(station, params, id),
         "frequency.set" => tune_to(station, params, id),
         "counters.reset" => {
@@ -1125,6 +1126,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "test.status" => Response::ok(id, station.test_status()),
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
         "callsigns.set" => set_callsigns(station, params, id),
+        "claim" => claim(station, request),
         "regulatory.check" => Response::ok(id, regulatory_check(station, params)),
         // the identifier for a callsign, by the station's one rule (ADR-0075)
         "identifier.check" => {
@@ -1177,6 +1179,11 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "drive.set" => drive_set(station, params, id),
         "audio.level" => Response::ok(id, level_json(&station.audio_level())),
         "record.start" | "record.stop" | "record.notes" | "record.mark" => record(station, request),
+        // a program acts only on its own call or session; the panel, holding no claim, on any
+        // (ADR-0106)
+        "disconnect" | "abort" | "send" if !station.may_act_on_session(request.connection) => {
+            not_owner(id, &request.method)
+        }
         "disconnect" => {
             // orderly: what is queued is sent and acknowledged first
             station.disconnect();
@@ -1188,7 +1195,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         }
         "send" => send(station, params, id),
         "datagram.send" => datagram_send(station, params, id),
-        "listen" => listen(params, id),
+        "listen" => listen(station, request),
         "devices.list" => devices(id),
         other => Response::failed(
             id,
@@ -1201,32 +1208,120 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
     }
 }
 
-/// `listen`: whether the station answers calls.
-fn listen(params: &Value, id: Option<String>) -> Response {
-    match params.get("enabled").and_then(Value::as_bool) {
-        None => Response::failed(
+/// `listen`: whether calls to the callsigns this connection claimed are answered (ADR-0106).
+/// Without a claim, `true` is what the station does anyway; `false` is refused, since the
+/// station's own callsigns are always answered.
+fn listen<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let Some(on) = request.params.get("enabled").and_then(Value::as_bool) else {
+        return Response::failed(
             id,
             ApiError::new(
                 "bad_params",
                 "Listening is on or off: {\"enabled\": true}.",
                 false,
             ),
-        ),
-        // A station always answers a call; there is nothing to switch off yet, and
-        // saying so is better than accepting a setting that does nothing.
-        Some(true) => Response::ok(id, json!({ "enabled": true })),
-        Some(false) => Response::failed(
+        );
+    };
+    let claimed = request
+        .connection
+        .is_some_and(|connection| station.claim_of(connection).is_some());
+    match request.connection {
+        Some(connection) if claimed => {
+            let _ = station.listen_for(connection, on);
+            Response::ok(id, json!({ "enabled": on }))
+        }
+        _ if on => Response::ok(id, json!({ "enabled": true })),
+        _ => Response::failed(
             id,
             ApiError::new(
                 "unsupported",
-                "This version always answers a call. Stop the daemon to stop listening.",
+                "The station's own callsigns are always answered. A program that answers for \
+                 callsigns of its own claims them first (claim), and then turns listening on \
+                 and off for them.",
                 false,
             ),
         ),
     }
 }
 
-fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+/// `claim {callsigns, app?}`: the callsigns this connection's program answers for, replacing
+/// what it claimed before; an empty list lets them all go (ADR-0106). A callsign another
+/// program holds is refused and named, and the rest are taken. A claim starts with listening
+/// off, and ends with the connection — so a one-shot `POST` cannot hold one.
+fn claim<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let Some(connection) = request.connection else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "unsupported",
+                "A claim lasts as long as the connection that made it: claim callsigns over a \
+                 WebSocket connection, not a one-shot POST.",
+                false,
+            ),
+        );
+    };
+    let calls: Option<Vec<String>> = request
+        .params
+        .get("callsigns")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        });
+    let Some(calls) = calls else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "A list of callsigns is required, empty to let them go: \
+                 {\"callsigns\": [\"KK4XYZ-10\"]}.",
+                false,
+            ),
+        );
+    };
+    let app = request.params.get("app").and_then(Value::as_str);
+    match station.claim(connection, app, &calls) {
+        Ok(claimed) => Response::ok(
+            id,
+            json!({
+                "id": connection.id,
+                "callsigns": claimed.callsigns,
+                "refused": claimed.refused.iter().map(|(callsign, holder)| json!({
+                    "callsign": callsign,
+                    "holder": holder,
+                })).collect::<Vec<_>>(),
+                "listening": claimed.listening,
+            }),
+        ),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new("bad_params", format!("Cannot claim: {reason}."), false),
+        ),
+    }
+}
+
+/// A program asked to act on a call or session that is not its own (ADR-0106).
+fn not_owner(id: Option<String>, method: &str) -> Response {
+    Response::failed(
+        id,
+        ApiError::new(
+            "not_owner",
+            format!(
+                "Cannot {method}: the call or session under way is another program's, or the \
+                 station's own."
+            ),
+            false,
+        ),
+    )
+}
+
+fn connect<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let params = &request.params;
     let Some(remote) = params.get("remote").and_then(Value::as_str) else {
         return Response::failed(
             id,
@@ -1244,12 +1339,15 @@ fn connect<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
         .get("keep_bandwidth")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    match station.connect_keeping(remote, as_call, keep_bandwidth) {
+    // a program calls as its own callsigns, and the call is its own (ADR-0106)
+    match station.connect_for(request.connection, remote, as_call, keep_bandwidth) {
         Ok(()) => Response::ok(id, json!({ "session": station.engine().session() })),
         Err(reason) => Response::failed(
             id,
             ApiError::new(
-                if reason.starts_with("not one of") {
+                if reason == crate::station::CLAIMED {
+                    "claimed"
+                } else if reason.starts_with("not one of") || reason == crate::station::NOT_HELD {
                     "bad_params"
                 } else if answer_only(reason) {
                     "refused"
@@ -1924,6 +2022,14 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         },
         "callsign": engine.my_call,
         "callsigns": engine.callsigns,
+        // the station's own, which the panel edits; the programs' claims stand beside them
+        // (ADR-0106)
+        "own_callsigns": station.own_callsigns(),
+        "claims": station.claims_json(),
+        // whose call or session is under way: a claim's id, or null for the station's own
+        "owner": (station.state() != aether_link::State::Idle)
+            .then(|| station.owner().map(|owner| owner.id))
+            .flatten(),
         "remote": engine.remote_call,
         "session": engine.session(),
         "mode": engine.current_mode(),
@@ -1979,8 +2085,8 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "recordings_dir": station.record_dir().map(|p| p.display().to_string()),
         // the bandwidth it runs, its own, a host program's request, and why (ADR-0026)
         "bandwidth": station.bandwidth_status(),
-        // whether calls are answered: always, unless a host program attached has not said
-        // LISTEN ON
+        // whether calls to the station's first callsign are answered: always, unless a
+        // program holds it and is not listening (ADR-0106)
         "answering": station.answering(),
     })
 }
@@ -2347,6 +2453,7 @@ mod tests {
                 id: Some("1".into()),
                 method: method.to_owned(),
                 params,
+                connection: None,
             },
         )
     }
@@ -2705,6 +2812,7 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params,
+            connection: None,
         };
         assert!(is_mutating("beacon.every"));
         let response = dispatch_with(
@@ -2747,6 +2855,7 @@ mod tests {
             id: Some("1".into()),
             method: "share.prepare".to_owned(),
             params,
+            connection: None,
         };
         let response = dispatch_with(
             &mut station,
@@ -2819,6 +2928,7 @@ mod tests {
             id: Some("1".into()),
             method: "share.upload".to_owned(),
             params,
+            connection: None,
         };
         let good = json!({
             "name": "aether-W4ODA-x.zip",
@@ -2857,6 +2967,7 @@ mod tests {
                     id: Some("2".into()),
                     method: "status".to_owned(),
                     params: json!({}),
+                    connection: None,
                 },
             )
             .result
@@ -2973,6 +3084,7 @@ mod tests {
                 id: Some("1".into()),
                 method: "status".to_owned(),
                 params: json!({}),
+                connection: None,
             },
         )
         .result
@@ -3004,6 +3116,7 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params: json!({}),
+            connection: None,
         };
         let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
         let result = response.result.expect("result");
@@ -3054,6 +3167,7 @@ mod tests {
             id: Some("1".into()),
             method: "send".to_owned(),
             params,
+            connection: None,
         };
         let data = super::encode(b"hello\n");
         for bad in [
@@ -3074,6 +3188,7 @@ mod tests {
                 id: Some("2".into()),
                 method: "status".to_owned(),
                 params: json!({}),
+                connection: None,
             },
         );
         let sent = &status.result.expect("status")["sent"];
@@ -3089,6 +3204,7 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params,
+            connection: None,
         };
         let session = |remote: &str, ended_ms: u64| crate::sessions::Session {
             remote: remote.to_owned(),
@@ -3218,6 +3334,7 @@ mod tests {
                 id: Some("1".into()),
                 method: "devices.list".into(),
                 params: json!({}),
+                connection: None,
             },
         );
         assert!(answer.ok, "{answer:?}");
@@ -3247,6 +3364,151 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one station, two programs, the whole story in order
+    fn a_program_claims_its_callsigns_and_acts_only_on_its_own_sessions() {
+        // ADR-0106: a RadioPost gateway on the control API and RMS Trimode on the host port,
+        // one station. Each claims its callsigns, starts not listening, calls only as its own,
+        // and touches only its own call or session; the panel, holding no claim, any.
+        use crate::control::protocol::{ConnectionId, ConnectionKind};
+        let mut station = station();
+        let gateway = ConnectionId {
+            id: 3,
+            kind: ConnectionKind::Control,
+        };
+        let trimode = ConnectionId {
+            id: 4,
+            kind: ConnectionKind::Host,
+        };
+        let ask = |station: &mut Station<NullPtt>,
+                   method: &str,
+                   params: Value,
+                   connection: Option<ConnectionId>| {
+            dispatch(
+                station,
+                &Request {
+                    id: Some("1".into()),
+                    method: method.to_owned(),
+                    params,
+                    connection,
+                },
+            )
+        };
+        let code = |response: Response| response.error.map(|error| error.code);
+
+        // a one-shot POST holds nothing: a claim lasts as long as its connection
+        let response = ask(
+            &mut station,
+            "claim",
+            json!({"callsigns": ["W4ODA-10"]}),
+            None,
+        );
+        assert_eq!(code(response).as_deref(), Some("unsupported"));
+        // with no claim, the station's own callsigns are always answered
+        let response = ask(
+            &mut station,
+            "listen",
+            json!({"enabled": false}),
+            Some(gateway),
+        );
+        assert_eq!(code(response).as_deref(), Some("unsupported"));
+
+        let response = ask(
+            &mut station,
+            "claim",
+            json!({"callsigns": ["w4oda-10"], "app": "RadioPost gateway"}),
+            Some(gateway),
+        );
+        let result = response.result.expect("claimed");
+        assert_eq!(result["callsigns"], json!(["W4ODA-10"]));
+        assert_eq!(result["listening"], false, "a claim starts not listening");
+        assert_eq!(result["id"], 3);
+        let status = ask(&mut station, "status", json!({}), None)
+            .result
+            .expect("status");
+        assert_eq!(status["own_callsigns"], json!(["W4ODA"]));
+        assert_eq!(status["callsigns"], json!(["W4ODA", "W4ODA-10"]));
+        assert_eq!(status["claims"][0]["app"], "RadioPost gateway");
+        assert_eq!(status["claims"][0]["kind"], "control");
+        assert_eq!(
+            status["answering"], true,
+            "the station's own callsign is answered"
+        );
+        assert!(
+            ask(
+                &mut station,
+                "listen",
+                json!({"enabled": true}),
+                Some(gateway)
+            )
+            .ok,
+            "a claim's listening is its own to turn on"
+        );
+        let status = ask(&mut station, "status", json!({}), None)
+            .result
+            .expect("status");
+        assert_eq!(status["claims"][0]["listening"], true);
+
+        // Trimode takes the station's own callsign; the gateway's is refused it, by name
+        let result = ask(
+            &mut station,
+            "claim",
+            json!({"callsigns": ["W4ODA", "W4ODA-10"]}),
+            Some(trimode),
+        )
+        .result
+        .expect("claimed");
+        assert_eq!(result["callsigns"], json!(["W4ODA"]));
+        assert_eq!(
+            result["refused"],
+            json!([{"callsign": "W4ODA-10", "holder": "RadioPost gateway"}])
+        );
+        // and holding it, not listening, it keeps the station from answering it
+        let status = ask(&mut station, "status", json!({}), None)
+            .result
+            .expect("status");
+        assert_eq!(status["answering"], false);
+        // a program calls only as its own callsigns
+        let response = ask(
+            &mut station,
+            "connect",
+            json!({"remote": "KK4XYZ", "callsign": "W4ODA-10"}),
+            Some(trimode),
+        );
+        assert_eq!(code(response).as_deref(), Some("claimed"));
+
+        // the gateway's call is its own: Trimode may not end it or send on it
+        assert!(
+            ask(
+                &mut station,
+                "connect",
+                json!({"remote": "KK4XYZ"}),
+                Some(gateway)
+            )
+            .ok
+        );
+        assert_eq!(station.engine().my_call, "W4ODA-10");
+        let status = ask(&mut station, "status", json!({}), None)
+            .result
+            .expect("status");
+        assert_eq!(status["owner"], 3);
+        for method in ["abort", "disconnect", "send"] {
+            let response = ask(&mut station, method, json!({"data": "AA=="}), Some(trimode));
+            assert_eq!(code(response).as_deref(), Some("not_owner"), "{method}");
+        }
+        // the panel, holding no claim, may
+        assert!(ask(&mut station, "abort", json!({}), None).ok);
+        assert_eq!(station.state(), aether_link::State::Idle);
+
+        // a connection that closes lets its claim go
+        station.connection_closed(gateway);
+        let status = ask(&mut station, "status", json!({}), None)
+            .result
+            .expect("status");
+        assert_eq!(status["claims"].as_array().map(Vec::len), Some(1));
+        assert_eq!(status["callsigns"], json!(["W4ODA"]));
+    }
+
+    #[test]
     fn a_station_keyed_by_its_host_starts_nothing_with_no_host_attached() {
         // with nobody to key the radio, the audio would go to a radio nobody keys (ADR-0025)
         let mut station = station();
@@ -3256,6 +3518,7 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params,
+            connection: None,
         };
         for (method, params) in [
             ("connect", json!({"remote": "KK4XYZ"})),
@@ -3345,6 +3608,7 @@ mod tests {
             id: Some("1".into()),
             method: method.to_owned(),
             params: json!({}),
+            connection: None,
         };
         for method in ["config.get", "diagnostics"] {
             let response = dispatch_with(&mut station, Some(&mut daemon), &request(method));
@@ -3380,6 +3644,7 @@ mod tests {
                 id: Some("1".into()),
                 method: "diagnostics".to_owned(),
                 params: json!({}),
+                connection: None,
             },
         );
         assert!(response.ok);

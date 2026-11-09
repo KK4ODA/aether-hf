@@ -28,7 +28,7 @@ use serde_json::json;
 use crate::{
     control::{
         methods::to_base64,
-        protocol::{ControlHandle, Request},
+        protocol::{ConnectionKind, ControlHandle, Request},
     },
     host::vara::{DEFAULT_COMMAND_PORT, HostAction, HostState, Notification},
 };
@@ -598,13 +598,14 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                             false,
                             format!("the program from {peer} left"),
                         );
-                        // what this host said about the KISS port and about answering calls
-                        // goes with it; the station takes back its bandwidth too, on the run
-                        // loop's next pass (ADR-0026)
+                        // what this host said about the KISS port goes with it; the station
+                        // takes back its bandwidth too, on the run loop's next pass (ADR-0026).
+                        // Its claim on callsigns went as `serve_commands` returned, with its
+                        // connection — before `attached` goes false, so a program that replaces
+                        // it claims after the old claim is gone (ADR-0106)
                         let flags = &shared.flags;
                         flags.chat.store(false, Ordering::SeqCst);
                         flags.ignore_dcd.store(false, Ordering::SeqCst);
-                        flags.listening.store(false, Ordering::SeqCst);
                         flags.cw_id.store(false, Ordering::SeqCst);
                         flags.attached.store(false, Ordering::SeqCst);
                     });
@@ -637,6 +638,12 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     let Ok(reader_stream) = stream.try_clone() else {
         return;
     };
+    // This program's own connection to the modem: its requests carry it, the callsigns it
+    // claims are held by it, and the sessions they bring up are its own — told it by the
+    // `owner` of the state events. When it goes, its claim goes with it (ADR-0106).
+    let program = handle.open(ConnectionKind::Host);
+    let mine = program.id().id;
+    let handle = program.handle();
     let mut reader = BufReader::new(reader_stream);
     let mut writer = stream;
     let mut host = HostState::default();
@@ -717,11 +724,20 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     }
     // A modem whose sound card would not open runs on silence and can neither hear nor
     // transmit; VARA tells its host MISSING SOUNDCARD, and a gateway's host acts on it
-    let audio_fault = handle
+    let status = handle
         .call(request("status", json!({})))
         .ok()
         .and_then(|reply| reply.result)
-        .is_some_and(|status| !status["audio_fault"].is_null());
+        .unwrap_or(serde_json::Value::Null);
+    let audio_fault = !status["audio_fault"].is_null();
+    // A program attached decides whether the station's own callsigns are answered — not
+    // until it says LISTEN ON, VARA's default — until its MYCALL names others (ADR-0106)
+    if let Some(own) = status["own_callsigns"]
+        .as_array()
+        .filter(|own| !own.is_empty())
+    {
+        let _ = handle.call(request("claim", json!({ "callsigns": own })));
+    }
     if audio_fault && !say(&mut writer, &Notification::MissingSoundcard.line()) {
         return;
     }
@@ -743,14 +759,18 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                 let was_listening = host.listening;
                 let outcome = host.command(&text);
                 scan.listen(was_listening, host.listening, Instant::now());
-                // `CHAT ON` and `IGNOREKISSDCD ON` govern the KISS port while this host is here,
-                // and `LISTEN` whether the station answers calls
+                // `CHAT ON` and `IGNOREKISSDCD ON` govern the KISS port while this host is here
                 flags.chat.store(host.recorded.chat, Ordering::SeqCst);
                 flags
                     .ignore_dcd
                     .store(host.recorded.ignore_kiss_dcd, Ordering::SeqCst);
-                flags.listening.store(host.listening, Ordering::SeqCst);
                 flags.cw_id.store(host.cw_id, Ordering::SeqCst);
+                // and `LISTEN` whether calls to the callsigns it holds are answered — told, not
+                // asked: this thread must not stand a slow pass still while the modem keys, or a
+                // program that keys the radio hears its PTT ON late (ADR-0106)
+                if host.listening != was_listening {
+                    let _ = handle.tell(request("listen", json!({ "enabled": host.listening })));
+                }
                 for reply in &outcome.replies {
                     if !say(&mut writer, reply) {
                         return;
@@ -847,6 +867,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
             if !report_state(
                 &data,
                 &host,
+                mine,
                 &mut connected_to,
                 &mut calling,
                 true,
@@ -921,6 +942,9 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     // placed is never held, LISTEN or no.
                     let detail = event.data["detail"].as_str().unwrap_or("");
                     let called = detail.split_whitespace().nth(1) == Some("(slave)");
+                    // a call to a callsign another program holds, or the station's own, is not
+                    // this program's: it hears it as a busy channel (ADR-0106)
+                    let owned = event.data["owner"].as_u64() == Some(mine);
                     // PENDING at once, before the station keys its acceptance, as VARA says it
                     // on hearing the call: heard while it listens, a scanning Trimode stops its
                     // scan ("Holding scanner for 120 seconds") and takes the CONNECTED
@@ -928,7 +952,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     // the listening window the call was answered in (ADR-0096). A CONNECTED held
                     // behind it waits `PENDING_SETTLE`, not for a LISTEN the holding program
                     // will not send (ADR-0100).
-                    if name == "connected" && called {
+                    if name == "connected" && called && owned {
                         // a DISCONNECTED still held for the last session's identifier first
                         if disconnect_held.take().is_some()
                             && !say(&mut writer, &Notification::Disconnected.line())
@@ -1038,6 +1062,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                     if !report_state(
                         &event.data,
                         &host,
+                        mine,
                         &mut connected_to,
                         &mut calling,
                         false,
@@ -1190,12 +1215,14 @@ fn remote_of(data: &serde_json::Value) -> &str {
 
 /// Turn a state event into the lines the published interface uses.
 ///
-/// `connected_to` is the session the host was told of with `CONNECTED`; `calling`, a call it
-/// placed that has not come up; `pending_said`, that the host has heard the `PENDING` of this
-/// one already.
+/// `mine` is the program's connection, which owns its sessions (ADR-0106); `connected_to` is
+/// the session the host was told of with `CONNECTED`; `calling`, a call it placed that has not
+/// come up; `pending_said`, that the host has heard the `PENDING` of this one already.
+#[allow(clippy::too_many_arguments)]
 fn report_state(
     data: &serde_json::Value,
     host: &HostState,
+    mine: u64,
     connected_to: &mut Option<String>,
     calling: &mut bool,
     pending_said: bool,
@@ -1214,12 +1241,12 @@ fn report_state(
             let mut words = detail.split_whitespace();
             let remote = words.next().unwrap_or("").to_owned();
             let called = words.next() == Some("(slave)");
-            // A session the panel started — a call, or a Test from the Session tab — is not
-            // this program's: it placed no call and none came to it. Told of one, VarAC opened
-            // it as its own, and its idle timer ended the operator's Test (ND1J, 2026-09-26).
+            // A session that is not this program's — the panel's call or Test, or a call to a
+            // callsign another program holds — is not told it (ADR-0106). Told of the panel's
+            // Test, VarAC opened it as its own, and its idle timer ended it (ND1J, 2026-09-26).
             // The program keeps keying the radio for it (PTT ON/OFF) and hears the channel
             // busy, and nothing else.
-            if !called && !*calling {
+            if data["owner"].as_u64() != Some(mine) {
                 return true;
             }
             *connected_to = Some(remote.clone());
@@ -1330,9 +1357,12 @@ fn apply(
         }
         HostAction::None | HostAction::Listen(_) => Applied::Done,
         HostAction::Callsigns(calls) => {
-            // the reply already said OK, which is the truth: the modem takes the list, and
-            // when a session is up it takes effect as that session ends
-            let _ = handle.call(request("callsigns.set", json!({ "callsigns": calls })));
+            // MYCALL is the program's claim (ADR-0106): the callsigns it answers for and calls
+            // as, replacing the station's own it held from its attach. The reply already said
+            // OK, as VARA does; a callsign another program holds is refused by the modem, which
+            // says so in its log, and the rest are taken. Given during a session, the engine
+            // takes the list as that session ends.
+            let _ = handle.call(request("claim", json!({ "callsigns": calls })));
             Applied::Done
         }
         HostAction::Connect { from, to } => {
@@ -1430,6 +1460,7 @@ fn request(method: &str, params: serde_json::Value) -> Request {
         id: None,
         method: method.to_owned(),
         params,
+        connection: None,
     }
 }
 
@@ -1499,10 +1530,13 @@ mod tests {
         let log = Arc::clone(&seen);
         let worker = std::thread::spawn(move || {
             let mut seen_connect = false;
+            // the program's connection, which owns the call it places (ADR-0106)
+            let mut program = None;
             while !flag.load(Ordering::Relaxed) {
                 for command in control.drain() {
                     if command.request.method == "connect" {
                         seen_connect = true;
+                        program = command.request.connection.map(|c| c.id);
                     }
                     if let Ok(mut log) = log.lock() {
                         log.push((
@@ -1524,7 +1558,8 @@ mod tests {
                     seen_connect = false;
                     control.publish(&Event::new(
                         "state",
-                        json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
+                        json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA",
+                               "owner": program}),
                     ));
                     // the peer's answer, then a third station's beacon, then one of the
                     // peer's frames that did not decode: one SN line among the three
@@ -1677,8 +1712,9 @@ mod tests {
         // which of them the session runs under.
         let seen = seen.lock().expect("seen");
         assert!(
-            seen.iter().any(|(method, params)| method == "callsigns.set"
-                && params["callsigns"] == json!(["W4ODA"])),
+            seen.iter().any(
+                |(method, params)| method == "claim" && params["callsigns"] == json!(["W4ODA"])
+            ),
             "{seen:?}"
         );
         // and a program that said BW2300 chose the bandwidth its call goes in (ADR-0102)
@@ -1725,18 +1761,23 @@ mod tests {
         let flag = Arc::clone(&stop);
         let worker = std::thread::spawn(move || {
             let mut announced = false;
+            // the program's connection, which holds the callsign called (ADR-0106)
+            let mut program = None;
             while !flag.load(Ordering::Relaxed) {
                 for command in control.drain() {
+                    if let Some(connection) = command.request.connection {
+                        program = Some(connection.id);
+                    }
                     let _ = command
                         .reply
                         .send(Response::ok(command.request.id.clone(), json!({})));
                 }
-                if !announced && control.subscriber_count() > 0 {
+                if !announced && control.subscriber_count() > 0 && program.is_some() {
                     announced = true;
                     // somebody called us: the modem reports the peer and our role
                     control.publish(&Event::new(
                         "state",
-                        json!({"name": "connected", "detail": "KK4XYZ (slave)"}),
+                        json!({"name": "connected", "detail": "KK4XYZ (slave)", "owner": program}),
                     ));
                     // and keys its acceptance
                     control.publish(&Event::new("ptt", json!({"on": true, "host_keys": false})));
@@ -2213,6 +2254,70 @@ mod tests {
     }
 
     #[test]
+    fn a_call_for_another_programs_callsign_is_not_this_programs() {
+        // ADR-0106: RMS Trimode and a RadioPost gateway on one station. A call to the
+        // gateway's callsign is answered for the gateway, and the session is the gateway's:
+        // Trimode, listening, hears no PENDING and no CONNECTED, none of its payload and no
+        // PTT for it — only a channel that is busy until it ends.
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let mut data = TcpStream::connect(server.data_address).expect("data port");
+        data.set_read_timeout(Some(Duration::from_millis(400)))
+            .expect("timeout");
+        let gateway = 99;
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA-10",
+                   "owner": gateway}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        modem.publish("ptt", json!({"on": false, "host_keys": false}));
+        modem.publish("data", json!({"data": to_base64(b"for the gateway")}));
+        modem.publish(
+            "metrics",
+            json!({"queued_bytes": 0, "channel_busy": false, "mode": 4,
+                   "link": {"remote": "KK4XYZ", "seconds": 1.0}}),
+        );
+        assert_eq!(client.expect(|l| l.starts_with("BUSY")), "BUSY ON");
+        client.send("VERSION");
+        let next = client.expect(|l| {
+            l == "PENDING"
+                || l.starts_with("CONNECTED")
+                || l.starts_with("PTT")
+                || l.starts_with("VERSION")
+        });
+        assert!(next.starts_with("VERSION"), "the program was told: {next}");
+        let mut heard = [0u8; 64];
+        assert!(
+            std::io::Read::read(&mut data, &mut heard).is_err(),
+            "the gateway's payload reached the program"
+        );
+        // the gateway's session ends: nothing to say to the program
+        modem.publish(
+            "state",
+            json!({"name": "disconnected", "detail": "closed", "state": "Idle",
+                   "callsign": "W4ODA-10", "remote": "KK4XYZ", "identifier_pending": false,
+                   "owner": gateway}),
+        );
+        assert!(!told_disconnected_before_version(&mut client));
+        // and a call to its own callsign is its own again
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": false}));
+        assert_eq!(client.expect(|l| l == "PENDING"), "PENDING");
+        assert_eq!(
+            client.expect(|l| l.starts_with("CONNECTED")),
+            "CONNECTED KK4XYZ W4ODA 2300"
+        );
+    }
+
+    #[test]
     fn a_program_that_does_not_key_hears_no_ptt_for_a_session_it_was_not_told_of() {
         // the panel's Test while Trimode scans: Trimode keys nothing, and a PTT ON from the
         // modem would hold back its scan's commands for as long as the transmitter is keyed
@@ -2222,7 +2327,8 @@ mod tests {
         assert_eq!(client.expect(|l| l == "OK"), "OK");
         modem.publish(
             "state",
-            json!({"name": "connected", "detail": "ND1J (master)", "callsign": "W4ODA"}),
+            json!({"name": "connected", "detail": "ND1J (master)", "callsign": "W4ODA",
+                   "owner": null}),
         );
         modem.publish("ptt", json!({"on": true, "host_keys": false}));
         modem.publish("ptt", json!({"on": false, "host_keys": false}));
@@ -2230,7 +2336,8 @@ mod tests {
         modem.publish(
             "state",
             json!({"name": "disconnected", "detail": "closed", "state": "Idle",
-                   "callsign": "W4ODA", "remote": "ND1J", "identifier_pending": true}),
+                   "callsign": "W4ODA", "remote": "ND1J", "identifier_pending": true,
+                   "owner": null}),
         );
         modem.publish("ptt", json!({"on": true, "host_keys": false}));
         modem.publish("ptt", json!({"on": false, "host_keys": false}));
@@ -2255,8 +2362,11 @@ mod tests {
         seen: Seen,
         stop: Arc<AtomicBool>,
         worker: Option<std::thread::JoinHandle<()>>,
-        /// What the host said that the run loop reads: attached, `LISTEN`, `CHAT`.
+        /// What the host said that the run loop reads: attached, `CHAT`.
         flags: crate::kiss::HostFlags,
+        /// The connection of the program attached last, which owns what a script's state
+        /// events do not say is someone else's (ADR-0106).
+        program: Arc<Mutex<Option<u64>>>,
     }
 
     impl Modem {
@@ -2267,13 +2377,30 @@ mod tests {
             let control = Arc::new(Mutex::new(control));
             let stop = Arc::new(AtomicBool::new(false));
             let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+            let program: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
             let worker = {
-                let (control, stop, seen) =
-                    (Arc::clone(&control), Arc::clone(&stop), Arc::clone(&seen));
+                let (control, stop, seen, program) = (
+                    Arc::clone(&control),
+                    Arc::clone(&stop),
+                    Arc::clone(&seen),
+                    Arc::clone(&program),
+                );
                 std::thread::spawn(move || {
                     while !stop.load(Ordering::Relaxed) {
                         if let Ok(control) = control.lock() {
                             for command in control.drain() {
+                                // a connection that closed: recorded as such, nothing to answer
+                                if command.closed {
+                                    if let Ok(mut seen) = seen.lock() {
+                                        seen.push(("closed".to_owned(), json!(null)));
+                                    }
+                                    continue;
+                                }
+                                if let (Some(connection), Ok(mut program)) =
+                                    (command.request.connection, program.lock())
+                                {
+                                    *program = Some(connection.id);
+                                }
                                 let method = command.request.method.clone();
                                 if let Ok(mut seen) = seen.lock() {
                                     seen.push((method.clone(), command.request.params.clone()));
@@ -2315,16 +2442,36 @@ mod tests {
                 stop,
                 worker: Some(worker),
                 flags,
+                program,
             };
             (modem, server)
         }
 
-        /// An event, as the run loop publishes one.
-        fn publish(&self, name: &str, data: serde_json::Value) {
+        /// An event, as the run loop publishes one. A state event that does not say whose it
+        /// is is the program's (ADR-0106); one that says `"owner": null` is the station's own.
+        fn publish(&self, name: &str, mut data: serde_json::Value) {
+            if name == "state"
+                && let Some(fields) = data.as_object_mut()
+                && !fields.contains_key("owner")
+            {
+                let program = *self.program.lock().expect("program");
+                fields.insert("owner".to_owned(), json!(program));
+            }
             self.control
                 .lock()
                 .expect("control")
                 .publish(&Event::new(name, data));
+        }
+
+        /// Whether the program's last `listen` turned listening on (ADR-0106).
+        fn listening(&self) -> bool {
+            self.seen
+                .lock()
+                .expect("seen")
+                .iter()
+                .rev()
+                .find(|(method, _)| method == "listen" || method == "closed")
+                .is_some_and(|(method, params)| method == "listen" && params["enabled"] == true)
         }
 
         /// The methods the adapter asked for, in order.
@@ -2513,12 +2660,14 @@ mod tests {
                         seen.push(data.to_owned());
                     }
                     let connect = command.request.method == "connect";
+                    let program = command.request.connection.map(|c| c.id);
                     let _ = command.reply.send(Response::ok(None, json!({})));
                     if connect {
-                        // the call the program placed comes up
+                        // the call the program placed comes up, its own (ADR-0106)
                         control.publish(&Event::new(
                             "state",
-                            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
+                            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA",
+                                   "owner": program}),
                         ));
                     }
                 }
@@ -2594,8 +2743,9 @@ mod tests {
         // the old connection is closed under the program that left it
         let mut rest = Vec::new();
         let _ = first.reader.read_to_end(&mut rest);
-        // and what it said goes with it: the newcomer has not said LISTEN ON
-        assert!(!modem.flags.listening.load(Ordering::SeqCst));
+        // and what it said goes with it: the old connection's claim is let go, and the
+        // newcomer has not said LISTEN ON
+        assert!(!modem.listening());
         second.send("MYCALL W4ODA");
         assert_eq!(second.expect(|l| l == "OK" || l == "WRONG"), "OK");
         assert!(modem.flags.attached.load(Ordering::SeqCst));
@@ -2856,8 +3006,11 @@ mod tests {
     #[test]
     fn what_a_host_says_about_answering_calls_reaches_the_station_and_goes_with_it() {
         // VARA's LISTEN is off until the program says otherwise; CHAT ON includes LISTEN ON
-        let (modem, server) = Modem::start(|_, _| json!({}));
-        let listening = || modem.flags.listening.load(Ordering::SeqCst);
+        let (modem, server) = Modem::start(|method, _| match method {
+            "status" => json!({"own_callsigns": ["W4ODA"]}),
+            _ => json!({}),
+        });
+        let listening = || modem.listening();
         let attached = || modem.flags.attached.load(Ordering::SeqCst);
         let mut client = Client::connect(&server);
         client.send("VERSION");
@@ -2878,6 +3031,19 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!attached() && !listening());
+        // ADR-0106: the program claimed the station's own callsign at its attach, its LISTEN
+        // was that claim's, and its connection's close let the claim go
+        let seen = modem.seen.lock().expect("seen");
+        assert!(
+            seen.iter().any(
+                |(method, params)| method == "claim" && params["callsigns"] == json!(["W4ODA"])
+            ),
+            "{seen:?}"
+        );
+        assert_eq!(
+            seen.last().map(|(method, _)| method.as_str()),
+            Some("closed")
+        );
     }
 
     #[test]
@@ -2895,7 +3061,8 @@ mod tests {
         // the panel's session comes up, carries payload both ways, and the channel is keyed
         modem.publish(
             "state",
-            json!({"name": "connected", "detail": "ND1J (master)", "callsign": "W4ODA"}),
+            json!({"name": "connected", "detail": "ND1J (master)", "callsign": "W4ODA",
+                   "owner": null}),
         );
         modem.publish("data", json!({"data": to_base64(b"the panel's traffic")}));
         modem.publish(

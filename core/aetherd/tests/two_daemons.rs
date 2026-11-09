@@ -644,6 +644,157 @@ fn a_host_moves_its_station_to_500_hz_and_a_wide_station_answers_the_call() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A program on a daemon's control API over WebSocket: requests answered, events read past.
+struct Program {
+    socket: tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
+    asked: u64,
+}
+
+impl Program {
+    fn connect(daemon: &Daemon) -> Self {
+        let (mut socket, _) = tungstenite::connect(format!("ws://127.0.0.1:{}/v1", daemon.control))
+            .expect("websocket");
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("timeout");
+        }
+        Self { socket, asked: 0 }
+    }
+
+    /// The next message `want` accepts, within a minute.
+    fn next(&mut self, what: &str, want: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            assert!(Instant::now() < deadline, "never heard {what}");
+            match self.socket.read() {
+                Ok(tungstenite::Message::Text(text)) => {
+                    let message: Value = serde_json::from_str(&text).expect("json");
+                    if want(&message) {
+                        return message;
+                    }
+                }
+                Ok(_) | Err(tungstenite::Error::Io(_)) => {}
+                Err(error) => panic!("websocket: {error}"),
+            }
+        }
+    }
+
+    fn call(&mut self, method: &str, params: &Value) -> Value {
+        self.asked += 1;
+        let id = self.asked.to_string();
+        let request = json!({"id": id, "method": method, "params": params});
+        self.socket
+            .send(tungstenite::Message::Text(request.to_string().into()))
+            .expect("send");
+        self.next(method, |message| message["id"] == id)
+    }
+}
+
+#[test]
+fn a_host_program_and_a_control_api_program_share_one_station() {
+    // ADR-0106 end to end: daemon B carries an RMS Trimode-like program on its host port
+    // (MYCALL KK4XYZ-1) and a RadioPost-like program on its control API (claims KK4XYZ-10).
+    // A call to each is answered for its holder alone: the other program is told nothing of
+    // it, and the host program sees a busy channel.
+    let dir = std::env::temp_dir().join(format!("aether-claims-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let mut a = Daemon::start(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"");
+    let channel = a.sim_address();
+    let host = "\n[host]\nenabled = true\nbind = \"127.0.0.1:0\"";
+    let b = Daemon::start_with(
+        &dir,
+        "b",
+        "KK4XYZ",
+        &format!("connect = \"{channel}\""),
+        host,
+    );
+    let mut trimode = Host::attach(&b);
+    let answer = |client: &mut Host| client.next(|l| l == "OK" || l == "WRONG");
+    trimode.send("MYCALL KK4XYZ-1");
+    assert_eq!(answer(&mut trimode), "OK");
+    trimode.send("LISTEN ON");
+    assert_eq!(answer(&mut trimode), "OK");
+
+    let mut gateway = Program::connect(&b);
+    let claimed = gateway.call(
+        "claim",
+        &json!({"callsigns": ["KK4XYZ-10", "KK4XYZ-1"], "app": "RadioPost gateway"}),
+    );
+    assert_eq!(claimed["ok"], true, "{claimed}");
+    let claim = claimed["result"]["id"].as_u64().expect("the claim's id");
+    assert_eq!(claimed["result"]["callsigns"], json!(["KK4XYZ-10"]));
+    assert_eq!(claimed["result"]["refused"][0]["callsign"], "KK4XYZ-1");
+    assert_eq!(
+        gateway.call("listen", &json!({"enabled": true}))["ok"],
+        true
+    );
+    let claims = b.status()["claims"].clone();
+    assert_eq!(claims.as_array().map(Vec::len), Some(2), "{claims}");
+
+    // the gateway's callsign: its session, and nothing of it to the host program
+    assert_eq!(
+        a.call("connect", &json!({"remote": "KK4XYZ-10"}))["ok"],
+        true
+    );
+    let up = gateway.next("its session", |m| {
+        m["event"] == "state" && m["data"]["name"] == "connected"
+    });
+    assert_eq!(up["data"]["owner"], claim, "{up}");
+    assert_eq!(up["data"]["callsign"], "KK4XYZ-10");
+    a.wait_for_state(&b, "connected", "the call to KK4XYZ-10 was not answered");
+    assert_eq!(b.status()["owner"], claim);
+    assert_eq!(trimode.next(|l| l.starts_with("BUSY")), "BUSY ON");
+    trimode.send("VERSION");
+    let next =
+        trimode.next(|l| l == "PENDING" || l.starts_with("CONNECTED") || l.starts_with("VERSION"));
+    assert!(
+        next.starts_with("VERSION"),
+        "the host program was told: {next}"
+    );
+    // the host program cannot end it; the program that owns it can
+    trimode.send("DISCONNECT");
+    assert_eq!(answer(&mut trimode), "OK");
+    assert_eq!(b.status()["state"], "connected");
+    assert_eq!(gateway.call("disconnect", &json!({}))["ok"], true);
+    a.wait_for_state(&b, "idle", "the gateway's session never closed");
+
+    // the host program's callsign: its session, and the gateway's events say whose
+    assert_eq!(
+        a.call("connect", &json!({"remote": "KK4XYZ-1"}))["ok"],
+        true
+    );
+    assert_eq!(trimode.next(|l| l == "PENDING"), "PENDING");
+    assert_eq!(
+        trimode.next(|l| l.starts_with("CONNECTED")),
+        "CONNECTED W4ODA KK4XYZ-1 2300"
+    );
+    let up = gateway.next("the host program's session", |m| {
+        m["event"] == "state" && m["data"]["name"] == "connected"
+    });
+    assert_ne!(up["data"]["owner"], claim, "{up}");
+    let refused = gateway.call("abort", &json!({}));
+    assert_eq!(refused["error"]["code"], "not_owner", "{refused}");
+    trimode.send("DISCONNECT");
+    assert_eq!(answer(&mut trimode), "OK");
+    assert_eq!(trimode.next(|l| l == "DISCONNECTED"), "DISCONNECTED");
+    a.wait_for_state(&b, "idle", "the host program's session never closed");
+
+    // the gateway goes: its claim goes with its connection
+    drop(gateway);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while b.status()["claims"].as_array().map_or(0, Vec::len) != 1 {
+        assert!(Instant::now() < deadline, "{}", b.status()["claims"]);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(b.status()["callsigns"], json!(["KK4XYZ", "KK4XYZ-1"]));
+    drop(trimode);
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The bandwidth `daemon`'s stations-heard list gives `callsign`, once it gives one.
 fn heard_bandwidth(daemon: &Daemon, callsign: &str) -> Option<u64> {
     let list = daemon.call("heard.list", &json!({}))["result"]["stations"].clone();

@@ -15,5 +15,8 @@ pub mod profiles;
 pub mod protocol;
 pub mod server;
 
-pub use protocol::{ApiError, ControlChannel, ControlHandle, Event, Request, Response, channel};
+pub use protocol::{
+    ApiError, Connection, ConnectionId, ConnectionKind, ControlChannel, ControlHandle, Event,
+    Request, Response, channel,
+};
 pub use server::{ControlConfig, ControlServer};
