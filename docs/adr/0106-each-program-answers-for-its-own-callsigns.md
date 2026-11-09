@@ -10,8 +10,9 @@ and the manual. **No wire change, no model change, no configuration key.**
 
 RadioPost ([KK4ODA/RadioPost](https://github.com/KK4ODA/RadioPost)) is a federated email system
 with its own client and gateway. Aether is its first modem. RadioPost reaches a modem through its
-modem interface, RPMI (RadioPost RP-4, version 0.1.1), and RP-4 §9.1 maps RPMI onto this control
-API. Two things RPMI needs are missing.
+modem interface, RPMI (RadioPost RP-4), and RP-4 §9.1 maps RPMI onto this control API. RP-4
+0.2.0 §1.1 sets out the rules for a shared modem (each host's callsigns, answering and links are
+its own; `caps.shared`). This ADR is what Aether needs to keep them. Two things are missing.
 
 **Answering off.** RP-4 §4 says a host's `listen` is off until the host turns it on. Here,
 `listen {enabled: false}` is refused `unsupported`: with no VARA host program attached, the station
