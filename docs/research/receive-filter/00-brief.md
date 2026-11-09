@@ -148,7 +148,10 @@ test practice, and what other amateur modems tell the operator about the radio's
 2026-11-08, with Gate 0's two open questions: a cut costs because Aether's receivers take the
 band's noise as flat across their band (one noise figure for every OFDM carrier, one level for
 every tone), not because of the chain's floor, and the other station's frames show a cut in one
-frame (`tools/bench_cut.py`, `tools/passband_witness.py`). Two questions for the author (§7).*
+frame (`tools/bench_cut.py`, `tools/passband_witness.py`). Two questions for the author (§7).
+The receiver change the author put first is ADR-0104: both receivers read the noise across the
+band, and most of what the cuts cost on the bench is given back (the 2300 Hz fast tone rungs under
+Saturday's cut are not). Gate 2 is measured on it.*
 
 ### Gate 2: candidates and criteria, registered before the runs (`03-candidates.md`)
 

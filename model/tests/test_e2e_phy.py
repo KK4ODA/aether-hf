@@ -293,7 +293,9 @@ def test_a_narrowband_interferer_costs_only_the_carriers_it_sits_on(seed: int) -
     """ADR-0043: 200 Hz of interference at the signal's power (an RTTY station, roughly) lies
     on five of 42 data carriers for the whole frame. Weighing each carrier by its own noise
     turns them into erasures and the frame decodes; with one variance for every carrier the
-    decoder believes them, and it does not."""
+    decoder believes them, and it does not. (The noise read pilot by pilot, the receive-filter
+    review's, catches an interferer on a pilot too, so the receiver without the weighing reads
+    the noise flat as well, as it did before either.)"""
     from aether_model.phy.rx import FrameReceiver
 
     modem = Modem(WIDE_2300)
@@ -312,6 +314,8 @@ def test_a_narrowband_interferer_costs_only_the_carriers_it_sits_on(seed: int) -
     for weighed in (False, True):
         rx = FrameReceiver(WIDE_2300)
         rx.per_carrier_noise = weighed
+        if not weighed:
+            rx.noise_shape = False
         frame = rx.receive(y, sync)
         decoded[weighed], _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
         reported[weighed] = frame.snr_3k_db
@@ -320,6 +324,84 @@ def test_a_narrowband_interferer_costs_only_the_carriers_it_sits_on(seed: int) -
     # and the SNR the rate controller is told leaves the interfered pilots out: the path's
     # 18 dB less what the fading costs, not the interferer's average over every carrier
     assert reported[True] > 14.0 > reported[False] + 5.0, reported
+
+
+def _through_a_receive_filter(
+    y: np.ndarray, params: WaveformParams, corner_hz: float, snr_db: float, seed: int
+) -> np.ndarray:
+    """``y`` through a radio's receive filter — an eighth-order low-pass at ``corner_hz`` of
+    audio, on signal and noise alike — and then the audio chain's own floor, 50 dB under the
+    band's noise: the mobile's IF shift of 2026-11-07 at 1600 Hz (ADR-0104)."""
+    f = np.fft.fftfreq(len(y), 1 / params.fs_baseband) + params.centre_hz
+    gain = np.sqrt(1 / (1 + (np.maximum(np.abs(f), 1e-3) / corner_hz) ** 16))
+    y = np.fft.ifft(np.fft.fft(y) * gain)
+    floor = 10 ** (-snr_db / 10) * 1e-5 * params.fs_baseband / 3000
+    rng = np.random.default_rng(seed + 1000)
+    return y + (rng.standard_normal(len(y)) + 1j * rng.standard_normal(len(y))) * np.sqrt(floor / 2)
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_a_frame_through_a_cut_passband_decodes_on_the_noise_read_per_carrier(seed: int) -> None:
+    """ADR-0104: a 2300 Hz frame at rung 13, 3 dB over its AWGN threshold, through a receive
+    filter whose passband ends near 1.6 kHz (the carriers above it 10–35 dB down, their noise
+    with them). Read flat, the noise charged the cut carriers the band's average over their
+    small ``|h|²`` and the decoder threw them away — the frame did not decode; read per pilot
+    it does."""
+    from aether_model.frame.modes import air_interface
+    from aether_model.link.rate import AWGN_THRESHOLD_DB
+
+    modem = Modem(WIDE_2300)
+    air = air_interface(WIDE_2300)
+    mode = air.ladder[13].mode
+    assert mode is not None
+    codec = modem.codec(mode, air.long)
+    snr = AWGN_THRESHOLD_DB[13] + 3.0
+    rng = np.random.default_rng(seed)
+    payload = bytes(rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8))
+    x = np.concatenate((np.zeros(1500, complex), modem.data_burst(payload, mode), np.zeros(3000)))
+    y = make_channel(
+        "awgn", snr_db=snr, fs=WIDE_2300.fs_baseband, seed=seed, signal_power=1.0
+    ).process(x)
+    y = modem.detector.condition(_through_a_receive_filter(y, WIDE_2300, 1600.0, snr, seed))
+    sync = modem.detector.detect(y, max_frames=1)[0]
+    decoded = {}
+    for shaped in (False, True):
+        rx = FrameReceiver(WIDE_2300)
+        rx.noise_shape = shaped
+        frame = rx.receive(y, sync)
+        decoded[shaped], _ = codec.decode(frame.symbols, frame.noise_var, rv=0)
+    assert decoded[True] == payload
+    assert decoded[False] != payload
+
+
+@pytest.mark.parametrize("params", [WIDE_2300, NARROW_500], ids=["2300", "500"])
+def test_where_nothing_shapes_the_band_the_noise_reads_flat(params: WaveformParams) -> None:
+    """ADR-0104: on AWGN the pilots' readings differ by their own scatter alone, and the shape
+    is pulled back to flat — exactly in most frames, within a decibel in every one — so the
+    receiver decodes as the flat one did."""
+    modem = Modem(params)
+    mode = modem.modes[6]
+    exact = 0
+    for seed in range(8):
+        rng = np.random.default_rng(seed)
+        payload = rng.integers(0, 256, modem.payload_bytes(mode), dtype=np.uint8).tobytes()
+        x = np.concatenate(
+            (np.zeros(1500, complex), modem.data_burst(payload, mode), np.zeros(3000))
+        )
+        y = make_channel(
+            "awgn", snr_db=8.0, fs=params.fs_baseband, seed=seed, signal_power=1.0
+        ).process(x)
+        y = modem.detector.condition(y)
+        sync = modem.detector.detect(y, max_frames=1)[0]
+        noise = {}
+        for shaped in (False, True):
+            rx = FrameReceiver(params)
+            rx.noise_shape = shaped
+            noise[shaped] = rx.receive(y, sync).noise_var
+        apart = np.abs(10 * np.log10(noise[True] / noise[False]))
+        assert apart.max() < 1.0, (seed, apart.max())
+        exact += bool(apart.max() < 1e-6)
+    assert exact >= 4, exact
 
 
 def _received_both_ways(

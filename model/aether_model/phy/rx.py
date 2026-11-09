@@ -38,6 +38,7 @@ from numpy.typing import NDArray
 
 from aether_model.frame.modes import LONG, SHORT, FrameLayout, air_interface
 from aether_model.phy.constellation import constellation
+from aether_model.phy.noise import shaped_levels
 from aether_model.phy.ofdm import OfdmDemodulator
 from aether_model.phy.preamble import (
     FrameType,
@@ -155,6 +156,12 @@ class FrameReceiver:
     carrier_noise_threshold: float = 2.0
     """A carrier's slicing error must be this many times the median carrier's before its noise
     is raised: under it, the scatter of a clean carrier's estimate over 12–32 symbols."""
+    noise_shape: bool = True
+    """Read the noise's shape across the carriers from the pilots (ADR-0104,
+    :mod:`aether_model.phy.noise`): each pilot carrier's residual power over the frame's data
+    symbols, shaped by :func:`~aether_model.phy.noise.shaped_levels`, interpolated across the
+    carriers in nepers and scaled to the per-symbol figure's mean. Off, one figure per symbol
+    for every carrier, as the band's noise would be if nothing shaped it."""
     track_motion: bool = True
     """Follow a channel that moves within the frame (ADR-0082). The comb pilots are averaged
     over three symbols, a third each, which on a steady channel takes two thirds of their noise
@@ -200,6 +207,21 @@ class FrameReceiver:
         err = np.mean(np.abs(eq - nearest) ** 2 / nv, axis=0)
         factor = err / max(float(np.median(err)), 1e-12)
         return np.where(factor >= self.carrier_noise_threshold, factor, 1.0)
+
+    def _noise_shape(self, resid: ComplexArray, bias: float) -> FloatArray:
+        """The noise across all the carriers relative to its mean over the pilots
+        (:attr:`noise_shape`): 1 everywhere when off, or where the pilots differ by no more
+        than their own estimates scatter."""
+        n = self.cmap.n_carriers
+        if not self.noise_shape or resid.size == 0:
+            return np.ones(n)
+        per_pilot = np.mean(np.abs(resid) ** 2, axis=0) * bias
+        level = np.log(np.maximum(per_pilot, 1e-30))
+        # a pilot's residual over n symbols, each sharing its neighbours' noise through the
+        # time filter, scatters by about 2/n in nepers squared (1.7–1.9/n measured on AWGN)
+        level = shaped_levels(level, 2.0 / len(resid), float(np.mean(level)))
+        shape = np.exp(np.interp(np.arange(n), self.pilot_c, level))
+        return np.asarray(shape / float(np.mean(np.exp(level))), dtype=np.float64)
 
     def _reported_noise(self, resid: ComplexArray, bias: float, sigma2: float) -> float:
         """The noise the frame's SNR is reported against: the pilots' residual power, less
@@ -406,7 +428,12 @@ class FrameReceiver:
         bw_ratio = self.p.occupied_bandwidth_hz / 3000.0
         # 5. equalize data carriers of payload symbols, time-major
         eq = raw[data_syms][:, self.data_c] / h[data_syms][:, self.data_c]
-        nv = sigma2_sym[:, None] / np.maximum(np.abs(h[data_syms][:, self.data_c]) ** 2, 1e-9)
+        shape = self._noise_shape(resid, bias)[self.data_c]
+        nv = (
+            sigma2_sym[:, None]
+            * shape[None, :]
+            / np.maximum(np.abs(h[data_syms][:, self.data_c]) ** 2, 1e-9)
+        )
         if self.per_carrier_noise:
             nv = nv * self._carrier_factors(eq, nv, sync, mode_idx)[None, :]
         return ReceivedFrame(

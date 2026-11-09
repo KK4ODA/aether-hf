@@ -54,6 +54,7 @@ from aether_model.frame.modes import (
     ToneKind,
     ToneNumerology,
 )
+from aether_model.phy.noise import shaped_levels
 
 ComplexArray = NDArray[np.complex128]
 FloatArray = NDArray[np.float64]
@@ -197,7 +198,56 @@ def noise_level(energies: FloatArray, layout: IntArray) -> float:
     return max(float(np.median(e[mask])) / math.log(2.0), 1e-30)
 
 
-def symbol_metrics(energies: FloatArray, layout: IntArray, noise: float) -> FloatArray:
+NOISE_SHAPE = True
+"""Read the noise tone by tone at the sync numerology (ADR-0104, :mod:`aether_model.phy.noise`,
+:func:`tone_noise`): the floor's kinds' data and every kind's sync blocks. Off, one level for
+every tone, :func:`noise_level`, as the band's noise would be if nothing shaped it — under a
+passband 20 dB down at the 500 Hz signal's edge no frame of the floor's decoded, a symbol sent on
+a cut tone taken for the uncut tones' noise. A fast or four-tone kind's data keeps one level:
+read tone by tone, on ITU NVIS (two rays 7 ms apart) a tone's own faded and smeared symbols
+counted as its noise, the readings followed each tone's gain, and those kinds decoded fewer
+frames than with one level (ADR-0104 §3)."""
+
+
+def tone_noise(energies: FloatArray, layout: IntArray) -> FloatArray:
+    """The noise energy per bin of each tone at the sync numerology (:data:`NOISE_SHAPE`): each
+    tone's median over the symbols it should hold only noise in — every symbol but those it is
+    the sync tone of or, in a data symbol, the strongest — over ln 2, shaped by
+    :func:`~aether_model.phy.noise.shaped_levels` about :func:`noise_level`. The strongest is
+    judged against each tone's own noise, read twice: against one level a tone the filter cut,
+    sent, is seldom the strongest, and its own signal would be counted as its noise. Where the
+    tones differ by no more than their own medians scatter, every tone gets :func:`noise_level`."""
+    flat = noise_level(energies, layout)
+    tones = energies.shape[1]
+    if not NOISE_SHAPE or tones < 3:
+        return np.full(tones, flat)
+    e = np.asarray(energies, dtype=np.float64)
+    known = layout >= 0
+    rows = np.arange(len(e))
+    live = e.max(axis=1) > 0
+    noise = np.full(tones, flat)
+    for _ in range(2):
+        top = np.where(known, layout, (e / noise).argmax(axis=1))
+        mask = np.ones_like(e, dtype=bool)
+        mask[rows, top] = False
+        mask[~live] = False
+        counts = mask.sum(axis=0)
+        if counts.min() < NOISE_MIN_SYMBOLS:
+            return np.full(tones, flat)
+        per = np.array([np.median(e[mask[:, t], t]) for t in range(tones)]) / math.log(2.0)
+        level = np.log(np.maximum(per, 1e-30))
+        # the median of n exponential draws scatters by 1/(n·ln²2) in nepers squared
+        scatter = float(np.mean(1.0 / counts)) / math.log(2.0) ** 2
+        noise = np.exp(shaped_levels(level, scatter, math.log(flat)))
+    return np.asarray(noise, dtype=np.float64)
+
+
+NOISE_MIN_SYMBOLS = 8
+"""The fewest noise-only symbols a tone's own noise is read from; under it, every tone gets the
+one level."""
+
+
+def symbol_metrics(energies: FloatArray, layout: IntArray, noise: float | FloatArray) -> FloatArray:
     """Log-likelihood of each tone in each data symbol (data symbols × tones), up to a
     per-symbol constant: ``log I0(2·sqrt(E·s)/σ)`` — the non-coherent detector's own metric,
     which trusts a strong tone by its amplitude rather than its energy — with ``s`` the
@@ -222,7 +272,11 @@ def block_levels(e: FloatArray, layout: IntArray) -> tuple[FloatArray, FloatArra
 
 
 def fast_metrics(
-    kind: ToneKind, energies: FloatArray, layout: IntArray, noise: float, data: FloatArray
+    kind: ToneKind,
+    energies: FloatArray,
+    layout: IntArray,
+    noise: float | FloatArray,
+    data: FloatArray,
 ) -> FloatArray:
     """:func:`symbol_metrics` for a fast kind (ADR-0014): the sync blocks' levels come from
     the slot energies at the sync numerology, the data symbols' energies at their own. A
@@ -394,6 +448,14 @@ def sync_noise(energies: FloatArray, layout: IntArray, kind: ToneKind) -> float:
     return noise_level(energies[known], layout[known])
 
 
+def sync_tone_noise(energies: FloatArray, layout: IntArray, kind: ToneKind) -> FloatArray:
+    """:func:`sync_noise` tone by tone (:func:`tone_noise`)."""
+    if kind.speed == 1:
+        return tone_noise(energies, layout)
+    known = layout >= 0
+    return tone_noise(energies[known], layout[known])
+
+
 def _block_hits(e: FloatArray, kind: ToneKind, rv: int, middle: int = 0) -> list[int]:
     """Per sync block, the symbols whose own tone is the strongest of the slot's energies
     ``e`` (a frame's, at the sync numerology); a silent symbol is no hit. ``middle`` is the
@@ -531,13 +593,17 @@ def demodulate(
     layout = kind.layout(rv, middle)
     energies = tone_energies(x, start, cfo_hz, kind.symbols, kind.num)
     noise = sync_noise(energies, layout, kind)
+    shaped = sync_tone_noise(energies, layout, kind)
     if kind.speed == 1:
-        metrics = symbol_metrics(energies, layout, noise)
+        metrics = symbol_metrics(energies, layout, shaped)
     else:
         data = data_energies(x, kind, start, cfo_hz)
-        metrics = fast_metrics(kind, energies, layout, noise, data)
+        metrics = fast_metrics(kind, energies, layout, shaped, data)
     llr = bit_llrs(metrics, kind.data.bits_per_symbol)
     idx = np.flatnonzero(layout >= 0)
+    # the SNR is read against the one level, as before ADR-0104: tone by tone, on ITU NVIS the
+    # readings follow the echo, the floor's frames read 1–2 dB higher, and the rate controller
+    # tried rungs the echo kills
     es = float(np.mean(energies[idx, layout[idx]])) / noise - 1.0
     return ToneFrame(
         kind, rv, llr, snr_from_es(es, kind.num), echo_share(energies, layout, kind, noise)

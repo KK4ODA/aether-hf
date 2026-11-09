@@ -27,6 +27,7 @@ pub mod constellation;
 pub mod fir;
 pub mod modem;
 pub mod modes;
+pub mod noise;
 pub mod ofdm;
 pub mod papr;
 pub mod passband;

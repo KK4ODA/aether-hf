@@ -2750,6 +2750,41 @@ measures or warns of a cut passband. **The author's answers:** the receiver chan
 separate work with its own ADR, before the review's Gate 3 (the review waits at Gate 2); and the
 warnings show as a banner in every view, Compact included.
 
+**ADR-0104, the receivers read the noise across the band (2026-11-08, the author's "do it first"; no
+wire change, no configuration key).** Both receivers took the band's noise as flat. Now
+`aether_model/phy/noise.py` / `aether-phy/src/noise.rs` `shaped_levels` takes one reading a pilot
+carrier or a tone (nepers), smooths it ¼ ½ ¼ and pulls it toward one level by `1 − scatter /
+var(level)`: flat where the readings differ by their own scatter, the filter's shape under a cut.
+OFDM (`FrameReceiver.noise_shape`, on): each pilot's residual power over the data symbols, scatter
+`2/n` (the time filter shares a third of the neighbours' noise), interpolated across the carriers
+and scaled to mean 1; each data carrier's noise is `σ²_sym·shape/|h|²`. Tones (`tone.NOISE_SHAPE`,
+on; the port has no switch), **at the sync numerology only** (the floor's kinds' data, every kind's
+sync blocks): `tone_noise`/`sync_tone_noise`, each tone's median over its noise-only symbols, the
+strongest judged against each tone's own noise, read twice, scatter `1/(n·ln²2)`, pulled toward
+`noise_level`; **the frame's SNR stays on the one level** (read tone by tone, NVIS floor frames read
+1–2 dB high and the rate controller tried rungs the echo kills: +5–6 % NVIS air on the harness with
+the same decodes); the detector, contradictions and echo share keep it too. **A fast or four-tone
+kind's data keeps one level**: read tone by tone, it lost on ITU NVIS (7 ms echo; tone4x100-51 81 →
+74, -75 9 → 3 of 120), where a tone's own smeared, faded symbols count as its noise — found by the
+harness (500 Hz NVIS sessions +5 %), not the bench, whose curves hold no NVIS path: **bench a
+receiver change on NVIS too**. `tools/bench_cut.py --receiver noise_shape=false` /
+`tone.NOISE_SHAPE=false` is the receiver before; `tools/bench_noise_shape.py --family ofdm|tone`
+checks uncut paths (`bench/baselines/noise_shape_cuts.csv`, `noise_shape_paths.csv`): Saturday's cut
+2300 Hz OFDM rungs 13/16 0 → 30 of 30, 19 0 → 25 (the fast tone rungs stay 6 and 0); 500 Hz 20 dB
+cuts tone rungs 0–22 → 18–30; uncut OFDM 1 682 → 1 681 of 2 460 (smoothed without the pull 1 671:
+rejected). The phy vectors carry OFDM and tone frames through a receive filter
+(`OFDM_FILTERED_CASES`, `tone_filtered`); the tone receive vectors' stand-in noise (seven fixed
+tones) reads a shape (soft bits moved, SNRs not). ADR-0043's interferer tests compare against a
+receiver with the shape off too. Harness (paired by draw against the build before): every scenario ×
+2, 122 → 121 passed, air ×1.003, Test rates ×1.000; the cut grid ×1.000, Saturday's 2300 Hz message
++7–16 % (the harness's Saturday keeps the mobile's 15 dB chain floor, which caps the gain); **500 Hz
+NVIS about +5 % on the three edge-of-budget scenarios** (two passes of 18 draws for each half: OFDM
+half +0.8 %, tone half +1.7 %, both +5 %, mostly `80m-agc-carrier-inside-500`): the receiver decodes
+rung 5 a little more there and the rate controller tries it more — owed to the controller's review;
+the author chose to ship both halves with it (2026-11-09). One harness build repeats only 2–3 of 18
+runs to the second: judge a few-percent difference on two passes of each build, and split a change
+to find its half. The receive-filter review resumes at Gate 2 on this receiver.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

@@ -27,6 +27,7 @@
 use crate::{
     constellation::{Complex, Constellation},
     modes::{AirInterface, FrameLayout, LONG, SHORT, air_interface},
+    noise::{interp, shaped_levels},
     ofdm::{DemodError, OfdmDemodulator},
     preamble::{FrameType, Preamble, follows_of, follows_turn},
     waveform::{Modulation, WIDE_2300, WaveformParams},
@@ -297,6 +298,12 @@ pub struct FrameReceiver {
     /// symbol to symbol stands clear of their noise, the neighbours' weight is the one that
     /// leaves the least error.
     pub track_motion: bool,
+    /// Read the noise's shape across the carriers from the pilots (ADR-0104,
+    /// [`crate::noise`]): each pilot carrier's residual power over the frame's data symbols,
+    /// shaped by [`shaped_levels`], interpolated across the carriers in nepers and scaled to
+    /// the per-symbol figure's mean. Off, one figure per symbol for every carrier, as the
+    /// band's noise would be if nothing shaped it.
+    pub noise_shape: bool,
 }
 
 impl Default for FrameReceiver {
@@ -319,7 +326,34 @@ impl FrameReceiver {
             per_carrier_noise: true,
             carrier_noise_threshold: 2.0,
             track_motion: true,
+            noise_shape: true,
         }
+    }
+
+    /// The noise across all the carriers relative to its mean over the pilots
+    /// ([`noise_shape`](Self::noise_shape)) from the pilots' residual powers `per_pilot` over
+    /// `symbols` data symbols: 1 everywhere when off, or where the pilots differ by no more
+    /// than their own estimates scatter.
+    fn noise_shape_of(
+        &self,
+        per_pilot: &[f64],
+        symbols: usize,
+        pilot_carriers: &[usize],
+        n_carriers: usize,
+    ) -> Vec<f64> {
+        if !self.noise_shape || symbols == 0 || per_pilot.is_empty() {
+            return vec![1.0; n_carriers];
+        }
+        let level: Vec<f64> = per_pilot.iter().map(|v| v.max(1e-30).ln()).collect();
+        let mean = level.iter().sum::<f64>() / level.len() as f64;
+        // a pilot's residual over n symbols, each sharing its neighbours' noise through the
+        // time filter, scatters by about 2/n in nepers squared (1.7–1.9/n measured on AWGN)
+        let level = shaped_levels(&level, 2.0 / symbols as f64, mean);
+        let xs: Vec<f64> = pilot_carriers.iter().map(|&p| p as f64).collect();
+        let scale = level.iter().map(|v| v.exp()).sum::<f64>() / level.len() as f64;
+        (0..n_carriers)
+            .map(|carrier| interp(carrier as f64, &xs, &level).exp() / scale)
+            .collect()
     }
 
     /// The noise the frame's SNR is reported against: the pilots' residual power, less the
@@ -676,13 +710,15 @@ impl FrameReceiver {
         let bandwidth_ratio = self.params.occupied_bandwidth_hz() / 3000.0;
 
         // 6. equalise the data carriers, time-major
+        let shape =
+            self.noise_shape_of(&per_pilot, data_symbols.len(), &pilot_carriers, n_carriers);
         let mut symbols = Vec::with_capacity(layout.qam_symbols());
         let mut noise_var = Vec::with_capacity(layout.qam_symbols());
         for (position, &symbol) in data_symbols.iter().enumerate() {
             for &carrier in &data_carriers {
                 let h = channel[symbol][carrier];
                 symbols.push(c::div(raw[symbol][carrier], h));
-                noise_var.push(sigma2_symbol[position] / c::norm_sq(h).max(1e-9));
+                noise_var.push(sigma2_symbol[position] * shape[carrier] / c::norm_sq(h).max(1e-9));
             }
         }
 
@@ -1023,8 +1059,11 @@ mod tests {
             let mut decoded = Vec::new();
             let mut reported = Vec::new();
             for weighed in [false, true] {
+                // without the weighing, the noise read flat too, as before either (the
+                // noise read pilot by pilot catches an interferer on a pilot as well, ADR-0104)
                 let rx = FrameReceiver {
                     per_carrier_noise: weighed,
+                    noise_shape: weighed,
                     ..FrameReceiver::default()
                 };
                 let frame = rx.receive(&buffer, &sync, None).expect("receive");

@@ -193,6 +193,15 @@ median, so the sender's level and the path's loss drop out; the median over fram
 2. **A banner in every view**, Compact included, like the session and mismatch banners, until
    the cause is fixed or the operator dismisses it.
 
+**Done (ADR-0104):** the OFDM receiver reads the noise per pilot carrier and the tone receiver per
+tone at the sync numerology (the floor's kinds' data and every kind's sync blocks), each keeping
+the shape only where it stands clear of the readings' own scatter. On `tools/bench_cut.py`,
+Saturday's cut now leaves 2300 Hz OFDM rungs 10, 13 and 16 at 30 of 30 and rung 19 at 25, and the
+500 Hz 20 dB cuts leave the tone rungs at 18–30 of 30 where they were at 0–22; on uncut paths
+nothing is lost (`tools/bench_noise_shape.py`). The fast and four-tone kinds' data keep one level:
+read tone by tone they lost on ITU NVIS, so the 2300 Hz fast rungs under Saturday's cut stay as
+they were (6 and 0 of 30).
+
 ## Sources
 
 | Source | Reading |

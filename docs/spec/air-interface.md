@@ -536,6 +536,14 @@ A conforming receiver is not required to use any particular algorithm, but must 
 * **Per-symbol noise variance**, so a symbol damaged by impulsive noise is discounted rather
   than trusted. This matters more on HF than the interpolation does: the FFT spreads a single
   hot sample across every carrier of its symbol.
+* **Noise read across the band, not assumed flat.** A radio's receive filter shapes the band's
+  noise as it shapes the signal, so a carrier or a tone in its skirt keeps its SNR; charged the
+  band's average noise, it reads as a weak one and is thrown away. The reference receiver reads
+  the noise per pilot carrier and per tone of the sync numerology, and keeps that shape only
+  where it stands clear of the readings' own scatter (ADR-0104): a passband ending near 1.6 kHz
+  had cost every 2300 Hz OFDM mode from 8-PSK ⅔ up, and one 20 dB down at the 500 Hz signal's
+  edge every tone kind. A fast or four-tone kind's data keeps one noise level: read tone by tone
+  on a long-echo path, a tone's own smeared symbols count as its noise.
 
 An impulse blanker ahead of the receive filter is strongly recommended and is essentially
 free; see `bench/README.md`.

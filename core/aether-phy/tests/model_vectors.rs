@@ -708,6 +708,69 @@ fn four_tone_frames_that_fade_within_a_block_are_read_as_the_model_reads_them() 
 }
 
 #[test]
+fn tone_frames_through_a_receive_filter_are_read_as_the_model_reads_them() {
+    // ADR-0104: a frame and its noise through a filter that takes the top tones 14 dB down, then
+    // a chain floor — each tone is read against its own noise, as the model reads it
+    let doc = vectors();
+    let tolerance = float(&doc, "tone_llr_tolerance");
+    let close = |got: f64, want: f64| (got - want).abs() <= tolerance * want.abs().max(1.0);
+    let cases = doc["tone_filtered"].as_array().expect("tone filtered");
+    assert!(
+        !cases.is_empty() && cases.iter().all(|c| c["noise_shaped"] == true),
+        "the vectors must read a shaped noise"
+    );
+    for case in cases {
+        let kind = tone_kind(case["kind"].as_str().expect("kind"));
+        let label = kind.name;
+        let payload = from_hex(case["payload"].as_str().expect("payload"));
+        let codec = tone::ToneCodec::new(kind).expect("codec");
+        let x = tone::burst(&codec, &payload, 0).expect("burst");
+        let (lead, n, cfo) = (
+            int(case, "lead"),
+            int(case, "n_samples"),
+            float(case, "cfo_hz"),
+        );
+        let mut clean = vec![(0.0f64, 0.0f64); n];
+        clean[lead..lead + x.len()].copy_from_slice(&x);
+        let level = float(case, "noise");
+        let draws = pseudo_noise(n, case["noise_seed"].as_u64().expect("seed"));
+        let noisy: Vec<(f64, f64)> = turned(&clean, cfo, 0.0)
+            .zip(draws)
+            .map(|((re, im), (nre, nim))| (re + level * nre, im + level * nim))
+            .collect();
+        let floor = float(case, "floor");
+        let draws = pseudo_noise(n, case["floor_seed"].as_u64().expect("seed"));
+        let y: Vec<(f64, f64)> = ofdm_rays(&noisy, &case["filter"])
+            .into_iter()
+            .zip(draws)
+            .map(|((re, im), (nre, nim))| (re + floor * nre, im + floor * nim))
+            .collect();
+        let frame = tone::demodulate(&y, kind, 0, lead, cfo).expect("in range");
+        let snr = float(case, "snr_db");
+        assert!(
+            close(frame.snr_db, snr),
+            "{label}: SNR {} vs {snr}",
+            frame.snr_db
+        );
+        let want = case["llr"].as_array().expect("llr");
+        assert_eq!(frame.llr.len(), want.len(), "{label}: soft bits");
+        for (index, (got, w)) in frame.llr.iter().zip(want).enumerate() {
+            let w = w.as_f64().expect("llr");
+            assert!(
+                close(*got, w),
+                "{label}: soft bit {index} is {got}, the model has {w}"
+            );
+        }
+        let (decoded, _) = codec.decode(&frame.llr, 0, None).expect("decode");
+        assert_eq!(
+            decoded.as_deref() == Some(payload.as_slice()),
+            case["decoded"].as_bool().expect("decoded"),
+            "{label}: decoded"
+        );
+    }
+}
+
+#[test]
 fn whole_frames_match_the_model() {
     // The strongest check of the physical layer: build the same frame the model builds and
     // compare it at the carrier level, which exercises the preamble, pilot placement, the
@@ -917,10 +980,20 @@ fn ofdm_receive_input(case: &Value) -> OfdmInput {
     let cfo = float(case, "cfo_hz");
     let level = float(case, "noise");
     let draws = pseudo_noise(clean.len(), case["noise_seed"].as_u64().expect("seed"));
-    let samples = turned(&ofdm_rays(&clean, &case["rays"]), cfo, 0.0)
+    let mut samples: Vec<(f64, f64)> = turned(&ofdm_rays(&clean, &case["rays"]), cfo, 0.0)
         .zip(draws)
         .map(|((re, im), (nre, nim))| (re + level * nre, im + level * nim))
         .collect();
+    if !case["filter"].is_null() {
+        // a receive filter on signal and noise alike, then the chain's floor (ADR-0104)
+        let floor = float(case, "floor");
+        let draws = pseudo_noise(samples.len(), case["floor_seed"].as_u64().expect("seed"));
+        samples = ofdm_rays(&samples, &case["filter"])
+            .into_iter()
+            .zip(draws)
+            .map(|((re, im), (nre, nim))| (re + floor * nre, im + floor * nim))
+            .collect();
+    }
     let sync = FrameSync {
         start: lead,
         cfo_hz: cfo - 0.8,
@@ -954,6 +1027,11 @@ fn ofdm_frames_are_received_as_the_model_receives_them() {
         cases.iter().any(|c| c["motion_weight"].is_null())
             && cases.iter().any(|c| !c["motion_weight"].is_null()),
         "the vectors must cover a steady channel and a moving one"
+    );
+    assert!(
+        cases.iter().any(|c| c["noise_shaped"] == true)
+            && cases.iter().any(|c| c["noise_shaped"] == false),
+        "the vectors must cover noise read flat and noise read across the carriers (ADR-0104)"
     );
     let close = |got: f64, want: f64| (got - want).abs() <= tol * (1.0 + want.abs());
     for case in cases {

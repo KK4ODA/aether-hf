@@ -29,7 +29,7 @@ use aether_fec::{
 };
 use rustfft::{Fft, FftPlanner, num_complex::Complex64};
 
-use crate::{codec::coprime_stride, constellation::Complex, tables::TONE};
+use crate::{codec::coprime_stride, constellation::Complex, noise::shaped_levels, tables::TONE};
 
 pub use crate::tables::ToneKind;
 
@@ -726,6 +726,80 @@ pub fn sync_noise(energies: &[f64], layout: &[Option<usize>], kind: &ToneKind) -
     noise_level(&rows, &roles)
 }
 
+/// The fewest noise-only symbols a tone's own noise is read from; under it, every tone gets
+/// the one level.
+pub const NOISE_MIN_SYMBOLS: usize = 8;
+
+/// The noise energy per bin of each tone of rows `tones` wide (ADR-0104, [`crate::noise`]), read
+/// at the sync numerology: the floor's kinds' data and every kind's sync blocks (a fast or
+/// four-tone kind's data keeps one level). Each tone's median over the symbols it should hold
+/// only noise in — every symbol but those it is the sync tone of or, in a data symbol, the
+/// strongest — over ln 2, shaped by
+/// [`shaped_levels`] about [`noise_level`]. The strongest is judged against each tone's own
+/// noise, read twice: against one level a tone the filter cut, sent, is seldom the strongest,
+/// and its own signal would be counted as its noise. Where the tones differ by no more than
+/// their own medians scatter, every tone gets [`noise_level`].
+#[must_use]
+pub fn tone_noise(energies: &[f64], layout: &[Option<usize>], tones: usize) -> Vec<f64> {
+    let flat = noise_level_of(energies, layout, tones);
+    if tones < 3 {
+        return vec![flat; tones];
+    }
+    let mut noise = vec![flat; tones];
+    for _ in 0..2 {
+        let mut columns: Vec<Vec<f64>> = vec![Vec::new(); tones];
+        for (s, role) in layout.iter().enumerate() {
+            let row = &energies[s * tones..(s + 1) * tones];
+            if silent(row) {
+                continue;
+            }
+            let skip = role.unwrap_or_else(|| {
+                let normalised: Vec<f64> = row.iter().zip(&noise).map(|(e, n)| e / n).collect();
+                argmax(&normalised)
+            });
+            for (k, &e) in row.iter().enumerate() {
+                if k != skip {
+                    columns[k].push(e);
+                }
+            }
+        }
+        if columns.iter().any(|c| c.len() < NOISE_MIN_SYMBOLS) {
+            return vec![flat; tones];
+        }
+        // the median of n exponential draws scatters by 1/(n·ln²2) in nepers squared
+        let ln2 = std::f64::consts::LN_2;
+        let scatter =
+            columns.iter().map(|c| 1.0 / c.len() as f64).sum::<f64>() / tones as f64 / (ln2 * ln2);
+        let level: Vec<f64> = columns
+            .iter_mut()
+            .map(|c| (median(c) / ln2).max(1e-30).ln())
+            .collect();
+        noise = shaped_levels(&level, scatter, flat.ln())
+            .iter()
+            .map(|v| v.exp())
+            .collect();
+    }
+    noise
+}
+
+/// [`sync_noise`] tone by tone ([`tone_noise`]).
+#[must_use]
+pub fn sync_tone_noise(energies: &[f64], layout: &[Option<usize>], kind: &ToneKind) -> Vec<f64> {
+    let tones = TONE.tones;
+    if kind.speed() == 1 {
+        return tone_noise(energies, layout, tones);
+    }
+    let mut rows = Vec::new();
+    let mut roles = Vec::new();
+    for (s, role) in layout.iter().enumerate() {
+        if role.is_some() {
+            rows.extend_from_slice(&energies[s * tones..(s + 1) * tones]);
+            roles.push(*role);
+        }
+    }
+    tone_noise(&rows, &roles, tones)
+}
+
 /// Whether a symbol's row holds no energy at all: a receiver hears exact silence only while
 /// it is muted — its own transmission — and there every tone ties, so it is no evidence of
 /// anything.
@@ -759,9 +833,13 @@ fn bessel_i0(x: f64) -> f64 {
 /// per-symbol constant: `log I0(2·sqrt(E·s)/σ)`, with `s` the symbol SNR the sync blocks
 /// measure, interpolated between the three blocks.
 #[must_use]
-pub fn symbol_metrics(energies: &[f64], layout: &[Option<usize>], noise: f64) -> Vec<f64> {
+pub fn symbol_metrics(energies: &[f64], layout: &[Option<usize>], noise: &[f64]) -> Vec<f64> {
     let tones = TONE.tones;
-    let e: Vec<f64> = energies.iter().map(|v| v / noise).collect();
+    let e: Vec<f64> = energies
+        .iter()
+        .enumerate()
+        .map(|(i, v)| v / noise[i % tones])
+        .collect();
     let (centres, levels) = block_levels(&e, layout);
     let mut out = Vec::new();
     for (s, role) in layout.iter().enumerate() {
@@ -862,14 +940,21 @@ pub fn fast_metrics(
     kind: &ToneKind,
     energies: &[f64],
     layout: &[Option<usize>],
-    noise: f64,
+    noise: &[f64],
     data: &[f64],
 ) -> Vec<f64> {
     let tones = kind.data_tones;
-    let e: Vec<f64> = energies.iter().map(|v| v / noise).collect();
+    let slot_tones = TONE.tones;
+    let e: Vec<f64> = energies
+        .iter()
+        .enumerate()
+        .map(|(i, v)| v / noise[i % slot_tones])
+        .collect();
     let (centres, levels) = block_levels(&e, layout);
     let speed = kind.speed();
     let data_layout = vec![None; data.len() / tones];
+    // the data keep one level: read tone by tone, a fading path's own symbols count as a tone's
+    // noise (ADR-0104 §3)
     let data_noise = noise_level_of(data, &data_layout, tones);
     let energy: Vec<f64> = data.iter().map(|v| v / data_noise).collect();
     let mut snr = Vec::with_capacity(data.len());
@@ -1296,11 +1381,12 @@ pub fn demodulate_with(
     let layout = kind.layout_with(usize::from(rv), usize::from(middle));
     let energies = tone_energies(samples, start, cfo_hz, kind.symbols())?;
     let noise = sync_noise(&energies, &layout, kind);
+    let shaped = sync_tone_noise(&energies, &layout, kind);
     let metrics = if kind.speed() == 1 {
-        symbol_metrics(&energies, &layout, noise)
+        symbol_metrics(&energies, &layout, &shaped)
     } else {
         let data = data_energies(samples, kind, start, cfo_hz)?;
-        fast_metrics(kind, &energies, &layout, noise, &data)
+        fast_metrics(kind, &energies, &layout, &shaped, &data)
     };
     let llr = bit_llrs(&metrics, kind.data_tones);
     let tones = TONE.tones;
@@ -1309,6 +1395,8 @@ pub fn demodulate_with(
         .enumerate()
         .filter_map(|(s, role)| role.map(|t| energies[s * tones + t]))
         .collect();
+    // the SNR is read against the one level (ADR-0104 §2): tone by tone, on ITU NVIS the
+    // readings follow the echo and the floor's frames read 1–2 dB high
     let es = held.iter().sum::<f64>() / held.len() as f64 / noise - 1.0;
     Some(ToneFrame {
         kind,

@@ -921,6 +921,71 @@ def test_silence_under_a_frame_is_left_out_of_its_noise() -> None:
     assert abs(half.snr_db - whole.snr_db) < 4.0, (half.snr_db, whole.snr_db)
 
 
+def _through_a_receive_filter(
+    y: np.ndarray, corner_hz: float, snr_db: float, seed: int
+) -> np.ndarray:
+    """``y`` (8 kHz around 1500 Hz) through a radio's receive filter — an eighth-order low-pass
+    at ``corner_hz`` of audio, on signal and noise alike — then the audio chain's floor 50 dB
+    under the band's noise (ADR-0104)."""
+    f = np.fft.fftfreq(len(y), 1 / 8000.0) + 1500.0
+    gain = np.sqrt(1 / (1 + (np.maximum(np.abs(f), 1e-3) / corner_hz) ** 16))
+    y = np.fft.ifft(np.fft.fft(y) * gain)
+    floor = 10 ** (-snr_db / 10) * 1e-5 * 8000 / 3000
+    rng = np.random.default_rng(seed + 1000)
+    return y + (rng.standard_normal(len(y)) + 1j * rng.standard_normal(len(y))) * np.sqrt(floor / 2)
+
+
+@pytest.mark.parametrize(
+    ("kind", "snr_db", "at_least"),
+    [(M.TONE_DATA[1], -14.0, 4), (M.TONE_NARROW[2], -8.0, 3)],
+    ids=["tone-36", "tone4x100-93"],
+)
+def test_a_tone_frame_through_a_cut_passband_decodes_on_the_noise_read_per_tone(
+    kind: M.ToneKind, snr_db: float, at_least: int
+) -> None:
+    """ADR-0104: a passband 20 dB down at the 500 Hz signal's top edge (an eighth-order skirt
+    from 1305 Hz) takes the upper tones and their noise down 10–18 dB. Against one noise level
+    a symbol sent on a cut tone was taken for the uncut tones' noise and the frame did not
+    decode. A floor kind read against each tone's own noise decodes every one; a four-tone
+    kind, whose data keeps one level, gets most of them back from its sync blocks' levels read
+    tone by tone."""
+    rng = np.random.default_rng(31)
+    decoded = {False: 0, True: 0}
+    for seed in range(4):
+        payload = _payload(rng, kind)
+        y = _received(kind, payload, snr_db=snr_db, lead=1500, cfo_hz=7.0, seed=seed)
+        y = _through_a_receive_filter(y, 1305.0, snr_db, seed)
+        for shaped in (False, True):
+            T.NOISE_SHAPE = shaped
+            try:
+                out, _ = T.demodulate(y, kind, 0, 1500, 7.0).decode()
+            finally:
+                T.NOISE_SHAPE = True
+            decoded[shaped] += out == payload
+    assert decoded[True] >= at_least, decoded
+    assert decoded[False] <= 1, decoded
+
+
+def test_where_nothing_shapes_the_band_every_tone_has_the_one_noise_level() -> None:
+    """ADR-0104: on AWGN the tones' own medians differ by their scatter alone, and every tone
+    is given :func:`~aether_model.phy.tone.noise_level` — exactly in most frames, within
+    1.5 dB in every one — so the receiver decodes as the one-level one did."""
+    exact = total = 0
+    for kind in (M.TONE_CONTROL, M.TONE_DATA[1], M.TONE_FAST[1], M.TONE_NARROW[2]):
+        rng = np.random.default_rng(5)
+        layout = kind.layout(0)
+        for seed in range(8):
+            y = _received(kind, _payload(rng, kind), snr_db=-10.0, lead=1500, cfo_hz=0.0, seed=seed)
+            e = T.tone_energies(y, 1500, 0.0, kind.symbols, kind.num)
+            apart = np.abs(
+                10 * np.log10(T.sync_tone_noise(e, layout, kind) / T.sync_noise(e, layout, kind))
+            )
+            assert apart.max() < 1.5, (kind.name, seed, apart.max())
+            exact += bool(apart.max() < 1e-6)
+            total += 1
+    assert exact >= total // 2, (exact, total)
+
+
 def test_the_echo_share_reads_an_echo_and_not_noise_or_doppler() -> None:
     """ADR-0087: on a two-ray path 7 ms apart the floor's 40 ms symbols hold their neighbours'
     tones at their edges; noise and a flutter path's Doppler spread put nothing there that the

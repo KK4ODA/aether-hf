@@ -555,6 +555,67 @@ def tone_echo_cases() -> list[dict[str, object]]:
     return out
 
 
+TONE_FILTERED_CASES = (
+    # (kind, filter delay in samples, filter phase): a null 250 Hz up for the floor's and the
+    # four-tone kinds (their tones within ±200 Hz), 500 Hz up for a fast kind's (±400 Hz)
+    (TONE_DATA[1], 10, -1.178),
+    (TONE_NARROW[2], 10, -1.178),
+    (TONE_FAST[1], 5, -1.178),
+)
+"""Tone frames through a receive filter, on signal and noise alike, then a chain floor
+(ADR-0104): two taps whose null sits just above the frame's top tone, so its tones and their
+noise fall about 14 dB from the bottom tone to the top — a shape the tones' own medians read
+well over their scatter."""
+
+
+def tone_filtered_cases() -> list[dict[str, object]]:
+    """A tone frame turned by ``cfo_hz`` with :func:`pseudo_noise` added, all of it through the
+    filter's rays (:func:`ofdm_rays`) and a chain floor of :func:`pseudo_noise` added,
+    demodulated at its known start and offset: the soft bits and the SNR to a tolerance,
+    whether the noise read tone by tone departs from one level, whether it decodes."""
+    out = []
+    rng = np.random.default_rng(104)
+    for i, (kind, delay, phase) in enumerate(TONE_FILTERED_CASES):
+        payload = rng.integers(0, 256, kind.payload_bytes, dtype=np.uint8).tobytes()
+        lead, cfo = 1400 + 97 * i, -9.5 + 7.25 * i
+        x = tone.burst(kind, payload, 0)
+        n = lead + len(x) + 2000
+        y = np.zeros(n, dtype=np.complex128)
+        y[lead : lead + len(x)] = x
+        y *= np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
+        y += 1.0 * pseudo_noise(n, 3000 + i)
+        shaping = [[0.5, 0.0, 0.0, 0], [0.5, 0.0, phase, delay]]
+        y = ofdm_rays(y, shaping) + 0.003 * pseudo_noise(n, 4000 + i)
+        frame = tone.demodulate(y, kind, 0, lead, cfo)
+        tone.NOISE_SHAPE = False
+        try:
+            flat = tone.demodulate(y, kind, 0, lead, cfo)
+        finally:
+            tone.NOISE_SHAPE = True
+        shaped = bool(np.max(np.abs(frame.llr - flat.llr)) > 1e-9)
+        assert shaped, kind.name
+        decoded, _ = frame.decode()
+        out.append(
+            {
+                "kind": kind.name,
+                "payload": payload.hex(),
+                "lead": lead,
+                "cfo_hz": cfo,
+                "n_samples": n,
+                "noise": 1.0,
+                "noise_seed": 3000 + i,
+                "filter": shaping,
+                "floor": 0.003,
+                "floor_seed": 4000 + i,
+                "noise_shaped": shaped,
+                "snr_db": frame.snr_db,
+                "decoded": decoded == payload,
+                "llr": [float(v) for v in frame.llr],
+            }
+        )
+    return out
+
+
 TONE_FADED_CASES = (
     (TONE_NARROW[2], {"kind": "rays", "rays": [[1.0, 0.0, 0.0], [0.9, 8.0, 0.0]]}),
     (
@@ -701,16 +762,47 @@ OFDM_RECEIVE_CASES = (
 """OFDM frames received at a known start (ADR-0082): a steady channel, where the comb pilots
 are averaged a third each as they always were, and two paths whose Doppler shifts beat at 9–12
 Hz — a channel that moves within the frame, followed with a lighter weight — on both airs."""
+OFDM_FILTERED_CASES = (
+    # (waveform, mode index, rv, follows, rays, noise, filter, floor)
+    (
+        WIDE_2300,
+        9,
+        0,
+        0,
+        [[1.0, 0.0, 0.0, 0]],
+        0.02,
+        [[0.5, 0.0, 0.0, 0], [0.5, 0.0, 0.0, 3]],
+        2e-4,
+    ),
+    (
+        NARROW_500,
+        7,
+        0,
+        0,
+        [[1.0, 0.0, 0.0, 0]],
+        0.02,
+        [[0.5, 0.0, 0.0, 0], [0.5, 0.0, 0.0, 12]],
+        2e-4,
+    ),
+)
+"""OFDM frames through a receive filter, on signal and noise alike, and then a chain floor
+(ADR-0104): two taps ``delay`` samples apart, which take the 2300 Hz signal's edges 13 dB down
+and the 500 Hz signal's 7 dB — a shape the pilots read well over their scatter, so the
+receiver's noise across the carriers is not flat."""
 
 
 def ofdm_receive_cases() -> list[dict[str, object]]:
     """An OFDM frame (peak-reduced, as the modem sends it) through :func:`ofdm_rays`, turned by
-    ``cfo_hz``, with :func:`pseudo_noise` added, received at its start with a preamble estimate
-    0.8 Hz off: the residual offset, the mode, RV and count, the motion weight, the SNR and
-    every equalised symbol and noise variance to a tolerance, and whether it decodes."""
+    ``cfo_hz``, with :func:`pseudo_noise` added — and for :data:`OFDM_FILTERED_CASES` all of it
+    through the receive filter's rays and a chain floor of :func:`pseudo_noise` added — received
+    at its start with a preamble estimate 0.8 Hz off: the residual offset, the mode, RV and
+    count, the motion weight, the SNR and every equalised symbol and noise variance to a
+    tolerance, whether the noise read across the carriers departs from flat (ADR-0104), and
+    whether it decodes."""
     out = []
     rng = np.random.default_rng(4242)
-    for i, (params, mode_index, rv, follows, rays, noise) in enumerate(OFDM_RECEIVE_CASES):
+    cases = [(*case, None, 0.0) for case in OFDM_RECEIVE_CASES] + list(OFDM_FILTERED_CASES)
+    for i, (params, mode_index, rv, follows, rays, noise, shaping, floor) in enumerate(cases):
         air = NARROW if params is NARROW_500 else WIDE
         control = mode_index is None
         mode = air.control_mode if control else air.modes[mode_index]
@@ -729,11 +821,23 @@ def ofdm_receive_cases() -> list[dict[str, object]]:
         y[lead : lead + len(x)] = x
         y = ofdm_rays(y, rays) * np.exp(2j * np.pi * cfo * np.arange(n) / 8000.0)
         y += noise * pseudo_noise(n, 1000 + i)
+        filtered: dict[str, object] = {}
+        if shaping is not None:
+            y = ofdm_rays(y, shaping) + floor * pseudo_noise(n, 2000 + i)
+            filtered = {"filter": shaping, "floor": floor, "floor_seed": 2000 + i}
         sync = FrameSync(lead, cfo - 0.8, header, 0.0, 1.0, 1.0)
         frame = FrameReceiver(params).receive(y, sync)
         decoded, _ = codec.decode(frame.symbols, frame.noise_var, rv=frame.rv)
+        flat_rx = FrameReceiver(params)
+        flat_rx.noise_shape = False
+        flat = flat_rx.receive(y, sync).noise_var
+        shaped = bool(np.max(np.abs(np.log(frame.noise_var / flat))) > 1e-9)
+        if shaping is not None:
+            assert shaped, (params.bandwidth, mode_index)
         out.append(
             {
+                **filtered,
+                "noise_shaped": shaped,
                 "bandwidth_hz": params.bandwidth.hz,
                 "mode": -1 if control else mode_index,
                 "rv": rv,
@@ -888,6 +992,7 @@ def main() -> int:
         "tone_frames": tone_frame_cases(),
         "tone_receive": tone_receive_cases(),
         "tone_faded": tone_faded_cases(),
+        "tone_filtered": tone_filtered_cases(),
         "tone_echo": tone_echo_cases(),
         "tone_counted_frames": tone_counted_frame_cases(),
         "tone_counted_receive": tone_counted_receive_cases(),
