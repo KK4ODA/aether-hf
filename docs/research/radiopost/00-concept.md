@@ -1,14 +1,17 @@
-# Radio mail: a federated mail system for amateur radio
+# RadioPost: a federated mail system for amateur radio
 
-*Concept document, 2026-11-09. A detailed design follows it. "Radio mail" is a working name.*
+*Concept document, 2026-11-09. A detailed design follows it.*
 
-This document describes a system that lets licensed amateurs send and receive ordinary email by
-radio, through gateways that anyone can run, with no central server. It covers the parts and how
-they fit, with examples and schematics. It leaves message formats, protocol fields and code for
-the detailed design (§13 lists what that document must settle).
+**RadioPost** lets licensed amateurs send and receive ordinary email by radio, through gateways
+that anyone can run, with no central server. It is *federated*: many post offices, each run by its
+own group, work together as one network because they follow the same published rules, as email
+providers do. This document covers the parts and how they fit, with examples and schematics. It
+leaves message formats, protocol fields and code for the detailed design (§13 lists what that
+document must settle).
 
-The system is separate from Aether. Aether is the first modem it runs over, and these notes live
-in Aether's repository only until the system has a repository and a name of its own.
+RadioPost is separate from Aether. Aether is the first modem it runs over, and these notes live in
+Aether's repository only until RadioPost has a repository of its own. The project's own post
+office, the pilot, is `radiopost.org` (§12).
 
 ---
 
@@ -18,13 +21,13 @@ in Aether's repository only until the system has a repository and a name of its 
   office* is a mail server that holds mailboxes and talks to ordinary email. A *domain* is the
   name after the @. Anyone can run a gateway, with no domain and no mail server. Groups run post
   offices.
-* **Addresses are ordinary email addresses**, like `facundo@hfpost.org`. A callsign says who is
+* **Addresses are ordinary email addresses**, like `facundo@radiopost.org`. A callsign says who is
   transmitting. It is not the address.
 * **Any gateway serves any user.** The gateway checks a short credential issued by the user's post
   office, with no Internet needed, and passes the session on to that post office.
 * **It works with ordinary email both ways.** Each post office is a normal mail server
   ([Stalwart](https://stalw.art)) plus one new service. Someone with a Gmail address simply writes
-  to `facundo@hfpost.org`.
+  to `facundo@radiopost.org`.
 * **It keeps working when the Internet fails.** Waiting mail is copied ahead to the gateways a
   user usually calls. Outgoing mail waits in a gateway's queue. Gateways forward mail to each other
   by radio.
@@ -39,7 +42,7 @@ in Aether's repository only until the system has a repository and a name of its 
 
 *Figure 1.* Two post offices, three gateways and three radio users. Facundo calls his home gateway
 in Atlanta. On the road in Texas he calls N1CALL-10, which passes his session to his own post
-office over the Internet. He never needs a gateway that "belongs" to hfpost.org.
+office over the Internet. He never needs a gateway that "belongs" to radiopost.org.
 
 ---
 
@@ -88,14 +91,14 @@ The same people and places appear in every figure.
 
 | | Name | Details |
 |---|---|---|
-| Post office | **po.hfpost.org** | Serves `hfpost.org`. Run by a Georgia radio group on a rented VPS. |
-| Post office | **po.radiopost.org** | Serves `radiopost.org`. Run by a Texas radio group. |
+| Post office | **po.radiopost.org** | Serves `radiopost.org`. Run by the RadioPost project on a rented VPS: the pilot. |
+| Post office | **po.hampost.org** | Serves `hampost.org`, an example. Run by a Texas radio group. |
 | Gateway | **KK4ODA-1** | Home station near Atlanta. HF on 80 and 40 m, Aether. |
 | Gateway | **N2CALL-5** | The county EOC in Atlanta. 2 m packet with Direwolf for local users, and HF for forwarding. |
 | Gateway | **N1CALL-10** | Austin, Texas. HF on 40 and 20 m, Aether. |
-| User | **Facundo, KK4ODA** | `facundo@hfpost.org`. A mobile HF station. |
-| User | **Ana, N0CALL** | `ana@radiopost.org`. A home HF station. |
-| Role mailbox | **Shelter 3** | `shelter3@hfpost.org`. Worked by licensed volunteers (N3CALL, N4CALL). |
+| User | **Facundo, KK4ODA** | `facundo@radiopost.org`. A mobile HF station. |
+| User | **Ana, N0CALL** | `ana@hampost.org`. A home HF station. |
+| Role mailbox | **Shelter 3** | `shelter3@radiopost.org`. Worked by licensed volunteers (N3CALL, N4CALL). |
 | Ordinary email | **Maria** | `maria@example.com`. Facundo's relative. Uses ordinary email only. |
 
 The callsigns other than KK4ODA are placeholders. The domains are examples only; Appendix B says
@@ -113,7 +116,7 @@ radio, a modem and one new program. The two new pieces talk to each other over H
 * **The mail server (Stalwart).** It does everything ordinary email needs: receiving and sending
   (SMTP), the signatures other providers check (DKIM, SPF, DMARC), mailbox access for mail apps
   (IMAP and JMAP), storage, spam filtering and per-user rules (Sieve).
-* **The radio post office service (new code).** It keeps accounts, keys and credentials, keeps
+* **The RadioPost service (new code).** It keeps accounts, keys and credentials, keeps
   each user's accept list, prepares mail for the air, answers gateways, places copies at users'
   usual gateways, and publishes the post office's radio routes. It talks to the mail server three
   ways. The mail server asks it at the SMTP door whether a sender may reach a mailbox (an *MTA
@@ -136,14 +139,14 @@ holds the mailbox, through DNS, exactly as for all email.
 
 There are three kinds of account:
 
-* **Personal**: owned by one licensed amateur, like `facundo@hfpost.org`.
+* **Personal**: owned by one licensed amateur, like `facundo@radiopost.org`.
 * **Role**: `shelter3@`, `eoc@`, `net-control@`. A licensed trustee owns it, and the trustee
   authorises the licensed operators who may use it. When the volunteers change, the address stays
   the same, which suits emergency work.
 * **Email only**: a member who is not licensed, such as agency staff. They use ordinary mail apps
   and never transmit. Their mail to radio users is third-party traffic (§11).
 
-A post office can also offer a callsign alias (`kk4oda@hfpost.org`) beside the chosen name. As
+A post office can also offer a callsign alias (`kk4oda@radiopost.org`) beside the chosen name. As
 with any email provider, moving to another post office changes the address, unless the user owns
 the domain.
 
@@ -167,7 +170,7 @@ can then check the user with no Internet.
 
 * **Each device has its own key pair** (Ed25519: a 32-byte public key and 64-byte signatures). The
   private key never leaves the device.
-* **Each post office has a key pair too.** It publishes the public half in DNS (a `_radiomail`
+* **Each post office has a key pair too.** It publishes the public half in DNS (a `_radiopost`
   record) and on its website.
 * **A credential** is a short statement signed by the post office: this address, this operator's
   callsign, this device key, valid until this date. It is about 150 bytes.
@@ -196,7 +199,7 @@ waits, the gateway asks his post office over the Internet.
 
 What each transmission says, in plain words:
 
-1. **Facundo's client:** "I am facundo@hfpost.org, operator KK4ODA. I have two messages to send,
+1. **Facundo's client:** "I am facundo@radiopost.org, operator KK4ODA. I have two messages to send,
    with these IDs and sizes. My last pickup was #418." The gateway asks his post office what is
    waiting after #418.
 2. **Gateway:** "Here is a challenge to sign. I will take both your messages. Waiting for you:
@@ -244,11 +247,11 @@ What each transmission says, in plain words:
 makes it small, places copies ahead, and offers it to Facundo at his next session.
 
 1. **The SMTP door.** While Maria's mail server is still connected, the mail server asks the
-   radio post office service whether Maria is on Facundo's accept list. If she is not, the mail is
+   RadioPost service whether Maria is on Facundo's accept list. If she is not, the mail is
    refused with a reply that explains why:
 
    ```
-   550 5.7.1 facundo@hfpost.org reads mail by amateur radio and takes it only
+   550 5.7.1 facundo@radiopost.org reads mail by amateur radio and takes it only
      from senders he has listed. Ask him to add you. Amateur radio carries no
      business content.
    ```
@@ -277,7 +280,7 @@ remove entries from the client or a web page.
 office, which rebuilds a normal email and sends it.
 
 * **The message leaves from the user's own post office**, whichever gateway carried it. Only
-  hfpost.org's server can produce the DKIM signature for hfpost.org that Maria's provider checks.
+  radiopost.org's server can produce the DKIM signature for radiopost.org that Maria's provider checks.
   A message sent from somewhere else would fail those checks and land in spam, or be refused.
 * **The post office rebuilds a normal email**: the `From:` address, the real `Message-ID`, and
   `In-Reply-To` and `References` restored from the IDs, so the reply sits in Maria's thread. It
@@ -333,14 +336,14 @@ queue. Afterwards, the post office drops the copy at N2CALL-5.
 * It keeps that mail in its queue and hands it to the post office when the Internet returns, or
   forwards it by radio (§6.3).
 * The client shows where each message is: *written*, *sent by radio*, *waiting at KK4ODA-1*, *at
-  hfpost.org*, *delivered to the recipient's provider*.
+  radiopost.org*, *delivered to the recipient's provider*.
 
 ### 6.3 Forwarding by radio
 
 ![Figure 8. Forwarding by radio when a whole area loses the Internet](fig/fig8-forwarding.svg)
 
 *Figure 8.* Atlanta has lost the Internet. Shelter 3's message to Ana goes out by 2 m and HF to a
-gateway in Austin. Ana's answer comes back the same way, using the radio route that hfpost.org
+gateway in Austin. Ana's answer comes back the same way, using the radio route that radiopost.org
 publishes.
 
 * **Radio routes.** Each post office publishes how its users can be reached by radio when its
@@ -415,7 +418,7 @@ Three of its features fit this design:
 * **MTA hooks** call an HTTP service at chosen SMTP stages, and the service answers accept, reject
   or modify. The accept-list check at RCPT TO is one such hook. Stalwart also speaks *milter*, the
   older interface that Postfix shares.
-* **JMAP** gives the radio post office service clean access to mailboxes.
+* **JMAP** gives the RadioPost service clean access to mailboxes.
 * **Sieve** gives each user rules for their own mail.
 
 To keep post offices free to change mail servers, the service should use standard interfaces where
@@ -426,22 +429,22 @@ matters more than simplicity.
 and simple to run, but has IMAP and no JMAP. Postfix with Dovecot is the most proven combination,
 and the most assembly. Recommendation: Stalwart.
 
-### 8.2 DNS for hfpost.org
+### 8.2 DNS for radiopost.org
 
 ```
-hfpost.org.                    MX   10 po.hfpost.org.
-hfpost.org.                    MX   20 mx2.hfpost.org.
-hfpost.org.                    TXT  "v=spf1 mx -all"
-po2026._domainkey.hfpost.org.  TXT  "v=DKIM1; k=rsa; p=MIIBIjANBgkq…"
-_dmarc.hfpost.org.             TXT  "v=DMARC1; p=quarantine; rua=mailto:dmarc@hfpost.org"
-_radiomail.hfpost.org.         TXT  "v=1; k=ed25519; p=Hk3sW…9Q="
+radiopost.org.                    MX   10 po.radiopost.org.
+radiopost.org.                    MX   20 mx2.radiopost.org.
+radiopost.org.                    TXT  "v=spf1 mx -all"
+po2026._domainkey.radiopost.org.  TXT  "v=DKIM1; k=rsa; p=MIIBIjANBgkq…"
+_dmarc.radiopost.org.             TXT  "v=DMARC1; p=quarantine; rua=mailto:dmarc@radiopost.org"
+_radiopost.radiopost.org.         TXT  "v=1; k=ed25519; p=Hk3sW…9Q="
 ```
 
 The MX, SPF, DKIM and DMARC records are what every mail domain needs. The second MX record names
 the backup mail server (§8.5). If outgoing mail goes through a relay (§8.4), the SPF record names
 the relay too. DKIM uses RSA because many receivers still do not check Ed25519 DKIM signatures. The
-last record is new: the post office's radio mail key. Each server's address also needs reverse DNS
-pointing to its name, `po.hfpost.org` and `mx2.hfpost.org`.
+last record is new: the post office's RadioPost key. Each server's address also needs reverse DNS
+pointing to its name, `po.radiopost.org` and `mx2.radiopost.org`.
 
 The DNS itself is kept at the domain registrar or a separate DNS provider, never on the post
 office's own server, so it keeps answering when that server is down (§8.5).
@@ -468,9 +471,9 @@ around $5 a month, are enough for a club.
 **Why not a computer at home:**
 
 * **Other mail servers have to find it.** The MX record tells every sender where to deliver
-  `@hfpost.org` mail. If the address changes, mail goes nowhere until DNS catches up.
+  `@radiopost.org` mail. If the address changes, mail goes nowhere until DNS catches up.
 * **Reverse DNS.** Receiving servers look up the sending server's address and expect it to lead
-  back to its name (`po.hfpost.org`). Only the owner of the address block can set that. A hosting
+  back to its name (`po.radiopost.org`). Only the owner of the address block can set that. A hosting
   company lets you; a home Internet provider almost never does.
 * **Reputation.** Large providers distrust or refuse mail from home Internet addresses, and many
   home providers block outgoing mail (port 25).
@@ -502,7 +505,7 @@ send through a relay. The relay then goes into the SPF record (§8.2).
 **A quick test** after renting: run `nc -vz gmail-smtp-in.l.google.com 25` on the server. If it
 connects, sending on port 25 is open.
 
-**For the hfpost.org pilot:** Hetzner or Vultr, sending through a relay at first, and directly once
+**For the radiopost.org pilot:** Hetzner or Vultr, sending through a relay at first, and directly once
 port 25 is opened.
 
 ### 8.5 Keeping a post office up
@@ -511,7 +514,7 @@ port 25 is opened.
 
 *Figure 10.* The main post office and a backup mail server at two companies, with DNS at the
 registrar and nightly backups at a third company. If company A's data centre goes down, mail waits
-at the backup server and in the gateways until po.hfpost.org is rebuilt.
+at the backup server and in the gateways until po.radiopost.org is rebuilt.
 
 **A single VPS is not redundant.** It runs on one physical machine in one data centre. If the
 machine fails, the provider usually restarts the server on another one within minutes to hours. If
@@ -523,11 +526,11 @@ customers without backups elsewhere lost their servers.
 its own users. And the features built for an Internet outage also cover a post office that is
 down:
 
-| While po.hfpost.org is down | What happens |
+| While po.radiopost.org is down | What happens |
 |---|---|
 | Mail already copied to usual gateways | Still delivered by radio (§6.1). |
 | Users sending by radio | Gateways check them without the post office and queue their mail (§3.3, §6.2). |
-| Mail from the Internet to hfpost.org | Sending servers keep retrying, usually for 4–5 days (RFC 5321). It arrives late, not lost. With a backup mail server, it is accepted at once. |
+| Mail from the Internet to radiopost.org | Sending servers keep retrying, usually for 4–5 days (RFC 5321). It arrives late, not lost. With a backup mail server, it is accepted at once. |
 | Reading with a phone or laptop mail app, new accounts, credential renewals | Unavailable until it is back. |
 | The mailboxes themselves | Lost only if the disk is lost and there are no backups elsewhere. |
 
@@ -537,10 +540,10 @@ down:
    different company. A provider's own snapshots usually sit in the same data centre and do not
    count. With them, a dead server is rebuilt on a new VPS, anywhere, in an hour or two.
 2. **DNS somewhere else.** Keep the DNS at the registrar or a separate DNS provider, never on the
-   post office's server, with short times-to-live. Pointing `po.hfpost.org` at a rebuilt server
+   post office's server, with short times-to-live. Pointing `po.radiopost.org` at a rebuilt server
    then takes minutes.
-3. **A backup mail server** (a backup MX, `mx2.hfpost.org`) at a different company in a different
-   region: a second small VPS that only accepts mail for hfpost.org and holds it until the main
+3. **A backup mail server** (a backup MX, `mx2.radiopost.org`) at a different company in a different
+   region: a second small VPS that only accepts mail for radiopost.org and holds it until the main
    server is back. It needs a copy of the accept lists. Without them it would accept mail the main
    server refuses, and the refusals would later go out as bounces to forged senders
    (*backscatter*).
@@ -665,7 +668,7 @@ meaning" complaint that VARA-based Winlink keeps meeting.
 1. **The client and station-to-station sessions over Aether**: two clients, no server. This proves
    the protocol, the message format and the client.
 2. **One post office and gateways with the Internet**: Stalwart and the service, and ordinary
-   email both ways. A pilot: hfpost.org with KK4ODA-1, on a VPS with nightly off-site backups, a
+   email both ways. A pilot: radiopost.org with KK4ODA-1, on a VPS with nightly off-site backups, a
    backup mail server at a second company and DNS kept at the registrar (§8.4, §8.5).
 3. **The first Internet-down features**: copies placed ahead, and outgoing mail queued at
    gateways.
@@ -699,7 +702,8 @@ for addresses that survive any one post office closing.
   accept lists, how a rebuilt post office catches up with the pickups and queued mail gateways
   report, and how often a restore is tested.
 * **The pilot's providers:** which VPS companies, and which relay while port 25 is closed.
-* **The project:** its own repository and its name.
+* **The project:** its own repository; registering `radiopost.org` before someone else does; a
+  trademark search on the name (Appendix B).
 
 ---
 
@@ -713,12 +717,13 @@ for addresses that survive any one post office closing.
 | Copy placed ahead | Waiting mail copied to a user's usual gateways in case the Internet fails. |
 | Credential | A post office's signed statement tying an address, an operator's callsign and a device key. |
 | DKIM, SPF, DMARC | The checks mail providers use to trust that mail comes from the domain it claims. |
+| Federated | Many servers, each run by a different group, working as one network because they follow the same published rules, as email does. Neither centralised (one owner, like Winlink's CMS) nor peer-to-peer (no servers). |
 | Gateway | A radio station that carries sessions between radio users and post offices. |
 | JMAP, IMAP | Ways for a program to read a mailbox over the Internet. |
 | Mail relay | A service that sends mail on a server's behalf, reached on port 587. |
 | MTA hook, milter | Ways for a mail server to ask another program about a message during SMTP. |
 | MX record | The DNS record that tells senders which server takes a domain's mail. |
-| Post office | A mail server holding mailboxes, plus the radio post office service. |
+| Post office | A mail server holding mailboxes, plus the RadioPost service. |
 | Radio route | How a post office's users can be reached by radio when its gateways are cut off. |
 | Reverse DNS | The record that turns a server's IP address back into its name; set by whoever owns the address. |
 | Session | One radio contact between a client and a gateway, or between two gateways. |
@@ -726,12 +731,24 @@ for addresses that survive any one post office closing.
 | Usual gateway | A gateway a user names as one they normally call. |
 | VPS | A virtual private server: a small Linux machine rented from a hosting company. |
 
-## Appendix B. The example names
+## Appendix B. The name and the example names
 
-Domains were checked with the .org registry's RDAP service on 2026-11-09. `wavelink.org` was
-already registered. `hfpost.org`, `radiopost.org`, `hampost.org` and `skywavemail.org` were not.
-Anyone may have registered them since. `example.com` is reserved for examples (RFC 2606). The
-callsigns N0CALL to N4CALL are placeholders.
+**The domains**, checked with the registries' RDAP services on 2026-11-09:
+
+| Domain | Status | Use here |
+|---|---|---|
+| `radiopost.org` | Not registered | The project's post office, the pilot. Register it soon. |
+| `radiopost.com` | Registered since 2019-02-02, by someone else; expires 2028-02-02 | Not available. |
+| `radiopost.radio` | Unknown: the .radio registry did not answer | `.radio` is a community domain run for the radio world, radio amateurs included, with eligibility rules; whether an amateur may register a project name rather than a call sign has to be asked of a registrar that sells `.radio`. |
+| `hampost.org` | Not registered | An example only: the Texas group's post office. |
+| `wavelink.org` | Registered | Not used. |
+
+Anyone may have registered the free ones since. `example.com` is reserved for examples (RFC
+2606). The callsigns N0CALL to N4CALL are placeholders.
+
+**The name.** A web search on 2026-11-09 found no amateur radio software called RadioPost (an iOS
+app called *RadioMail*, a Winlink client, exists). That is not a trademark search: one in the
+USPTO's database is owed before the name is used widely (§13).
 
 ## Appendix C. Standards referred to
 

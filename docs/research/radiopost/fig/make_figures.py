@@ -393,8 +393,8 @@ def fig_overview() -> None:
         108,
         "po",
         tag="Post office",
-        title="po.hfpost.org",
-        rows=["Serves hfpost.org", "Run by a Georgia radio group"],
+        title="po.radiopost.org",
+        rows=["Serves radiopost.org", "Run by the RadioPost project"],
         icon="envelope",
     )
     f.box(
@@ -404,8 +404,8 @@ def fig_overview() -> None:
         108,
         "po",
         tag="Post office",
-        title="po.radiopost.org",
-        rows=["Serves radiopost.org", "Run by a Texas radio group"],
+        title="po.hampost.org",
+        rows=["Serves hampost.org", "Run by a Texas radio group"],
         icon="envelope",
     )
     # gateways
@@ -450,7 +450,7 @@ def fig_overview() -> None:
         96,
         "client",
         tag="Role mailbox",
-        title="shelter3@hfpost.org",
+        title="shelter3@radiopost.org",
         rows=["Volunteers at a shelter"],
         icon="person",
         title_size=14.5,
@@ -462,7 +462,7 @@ def fig_overview() -> None:
         96,
         "client",
         tag="Facundo, KK4ODA",
-        title="facundo@hfpost.org",
+        title="facundo@radiopost.org",
         rows=["Mobile station"],
         icon="person",
         title_size=14.5,
@@ -474,7 +474,7 @@ def fig_overview() -> None:
         96,
         "client",
         tag="Ana, N0CALL",
-        title="ana@radiopost.org",
+        title="ana@hampost.org",
         rows=["Home station"],
         icon="person",
         title_size=14.5,
@@ -560,15 +560,15 @@ def fig_inside() -> None:
         150,
         150,
         "neutral",
-        title="DNS for hfpost.org",
-        mono_rows=["MX", "SPF  DKIM", "DMARC", "_radiomail", "  (post office key)"],
+        title="DNS for radiopost.org",
+        mono_rows=["MX", "SPF  DKIM", "DMARC", "_radiopost", "  (post office key)"],
         size=12.5,
         title_size=14,
     )
 
     # post office container
     f.rect(200, 72, 330, 556, "#f7fdf9", ROLES["po"][1], rx=14, sw=2)
-    f.text(220, 100, "Post office: po.hfpost.org", size=15.5, weight=700, color=ROLES["po"][1])
+    f.text(220, 100, "Post office: po.radiopost.org", size=15.5, weight=700, color=ROLES["po"][1])
     f.text(220, 120, "A rented VPS with a static IP address", size=12.5, color=MUTED)
     f.box(
         220,
@@ -594,7 +594,7 @@ def fig_inside() -> None:
         222,
         "po",
         tag="New code",
-        title="Radio post office service",
+        title="RadioPost service",
         rows=[
             "Accounts, keys, credentials",
             "Accept lists",
@@ -696,8 +696,8 @@ def fig_identity() -> None:
         420,
         92,
         "neutral",
-        tag="DNS record for hfpost.org (public)",
-        mono_rows=["_radiomail.hfpost.org  TXT", '  "v=1; k=ed25519; p=Hk3sW…9Q="'],
+        tag="DNS record for radiopost.org (public)",
+        mono_rows=["_radiopost.radiopost.org  TXT", '  "v=1; k=ed25519; p=Hk3sW…9Q="'],
         size=13,
     )
     f.box(
@@ -707,7 +707,7 @@ def fig_identity() -> None:
         110,
         "po",
         tag="Post office",
-        title="po.hfpost.org",
+        title="po.radiopost.org",
         rows=["Keeps its private key", "Issues credentials"],
         icon="envelope",
     )
@@ -719,12 +719,12 @@ def fig_identity() -> None:
         "paper",
         tag="Credential (about 150 bytes)",
         mono_rows=[
-            "address   facundo@hfpost.org",
+            "address   facundo@radiopost.org",
             "operator  KK4ODA",
             "device    ed25519:7Q4f…aZ",
             "issued    2026-11-09",
             "expires   2027-02-07",
-            "signed    hfpost.org (po2026)",
+            "signed    radiopost.org (po2026)",
         ],
         size=14,
         icon="doc",
@@ -736,7 +736,7 @@ def fig_identity() -> None:
         96,
         "client",
         tag="Facundo's laptop or phone",
-        title="Radio mail client",
+        title="RadioPost client",
         rows=["Private device key never leaves it"],
         icon="person",
     )
@@ -767,7 +767,7 @@ def fig_identity() -> None:
         158,
         "client",
         tag="Role mailbox",
-        title="shelter3@hfpost.org",
+        title="shelter3@radiopost.org",
         rows=[
             "One credential per volunteer,",
             "each under that volunteer's",
@@ -851,7 +851,7 @@ def fig_session() -> None:
         220,
         60,
         "po",
-        title="po.hfpost.org",
+        title="po.radiopost.org",
         rows=["his post office"],
         center=True,
         size=12.5,
@@ -877,7 +877,10 @@ def fig_session() -> None:
         c,
         g,
         "radio",
-        ["Hello: facundo@hfpost.org, operator KK4ODA.", "2 messages to send; last pickup was #418"],
+        [
+            "Hello: facundo@radiopost.org, operator KK4ODA.",
+            "2 messages to send; last pickup was #418",
+        ],
         "1",
     )
     step(244, g, p, "internet", ["Anything after #418?"], None)
@@ -954,7 +957,7 @@ def fig_outbound() -> None:
         h,
         "po",
         tag="3. His post office",
-        title="po.hfpost.org",
+        title="po.radiopost.org",
         rows=["Checks the signature", "Rebuilds a normal email"],
         icon="envelope",
     )
@@ -994,13 +997,13 @@ def fig_outbound() -> None:
         486,
         286,
         [
-            "From: Facundo <facundo@hfpost.org>",
+            "From: Facundo <facundo@radiopost.org>",
             "To: Maria <maria@example.com>",
             "Subject: Re: Are you safe?",
             "In-Reply-To: <CAF7x9q@mail.example.com>",
-            "Message-ID: <a3f9c27e@hfpost.org>",
+            "Message-ID: <a3f9c27e@radiopost.org>",
             "Radio-Path: KK4ODA via N1CALL-10 (HF)",
-            "DKIM-Signature: d=hfpost.org; s=po2026; ...",
+            "DKIM-Signature: d=radiopost.org; s=po2026; ...",
             "",
             "We are fine. Power is out, but ...",
             "--",
@@ -1012,13 +1015,13 @@ def fig_outbound() -> None:
     )
     f.link([(120, 198), (120, 234)], "local")
     f.link([(630, 198), (630, 234)], "local")
-    f.panel(20, 452, 420, 100, "Why it leaves from hfpost.org")
+    f.panel(20, 452, 420, 100, "Why it leaves from radiopost.org")
     f.lines(
         36,
         502,
         [
-            "Only hfpost.org's own server can sign for",
-            "hfpost.org, so Maria's provider trusts it.",
+            "Only radiopost.org's own server can sign for",
+            "radiopost.org, so Maria's provider trusts it.",
         ],
         size=13,
         color=MUTED,
@@ -1037,7 +1040,7 @@ def fig_inbound() -> None:
         1000,
         700,
         "Figure 5. From ordinary email to the radio",
-        "Maria writes to facundo@hfpost.org. The post office decides at the door, then makes "
+        "Maria writes to facundo@radiopost.org. The post office decides at the door, then makes "
         "the mail fit the air.",
     )
     f.box(
@@ -1103,7 +1106,7 @@ def fig_inbound() -> None:
         "warn",
         tag="Refused at the door, with a reason",
         mono_rows=[
-            "550 5.7.1 facundo@hfpost.org reads mail by",
+            "550 5.7.1 facundo@radiopost.org reads mail by",
             "  amateur radio and takes it only from senders",
             "  he has listed. Ask him to add you. Amateur",
             "  radio carries no business content.",
@@ -1125,7 +1128,7 @@ def fig_inbound() -> None:
         486,
         [
             "Grows by itself: writing to someone adds them.",
-            "Mail from other radio mail post offices is accepted by default.",
+            "Mail from other RadioPost post offices is accepted by default.",
             "Nothing is sent back to a forged sender: the refusal is an SMTP reply.",
         ],
         size=13,
@@ -1194,7 +1197,7 @@ def fig_outage() -> None:
             180,
             62,
             "po",
-            title="po.hfpost.org",
+            title="po.radiopost.org",
             rows=["his post office"],
             center=True,
             size=12,
@@ -1322,7 +1325,7 @@ def fig_forwarding() -> None:
         "client",
         tag="Role mailbox",
         title="Shelter 3",
-        rows=["shelter3@hfpost.org", "2 m radio"],
+        rows=["shelter3@radiopost.org", "2 m radio"],
         icon="person",
     )
     f.box(
@@ -1355,7 +1358,7 @@ def fig_forwarding() -> None:
         92,
         "po",
         tag="Post office",
-        title="po.hfpost.org",
+        title="po.radiopost.org",
         rows=["rented server, still up"],
         size=12.5,
         title_size=14.5,
@@ -1367,7 +1370,7 @@ def fig_forwarding() -> None:
         92,
         "po",
         tag="Post office",
-        title="po.radiopost.org",
+        title="po.hampost.org",
         rows=["Ana's post office"],
         size=12.5,
         title_size=14.5,
@@ -1380,7 +1383,7 @@ def fig_forwarding() -> None:
         "gateway",
         tag="Gateway",
         title="N1CALL-10",
-        rows=["Austin, HF, Internet up", "Radio route into", "Atlanta for hfpost.org"],
+        rows=["Austin, HF, Internet up", "Radio route into", "Atlanta for radiopost.org"],
         icon="antenna",
         size=12.5,
     )
@@ -1391,14 +1394,14 @@ def fig_forwarding() -> None:
         104,
         "client",
         tag="Ana, N0CALL",
-        title="ana@radiopost.org",
+        title="ana@hampost.org",
         rows=["Reads by IMAP"],
         icon="person",
         size=12.5,
         title_size=14.5,
     )
 
-    # out: shelter -> N2 -> N1 -> radiopost -> Ana; back: Ana -> radiopost -> hfpost -> N1 -> ...
+    # out: shelter -> N2 -> N1 -> radiopost -> Ana; back: Ana -> radiopost -> radiopost -> N1 -> ...
     f.link([(120, 468), (120, 370)], "radio", both=True)
     f.number(104, 420, "1", LINKS["radio"][0])
     f.number(136, 420, "9", LINKS["radio"][0])
@@ -1428,7 +1431,7 @@ def fig_forwarding() -> None:
         36,
         650,
         "1-4 Shelter 3 to Ana: by 2 m to the EOC, by HF to Austin, then the Internet.   "
-        "5-9 Ana's answer: her post office to hfpost.org,",
+        "5-9 Ana's answer: her post office to radiopost.org,",
         size=12.5,
         color=INK,
     )
@@ -1446,7 +1449,7 @@ def fig_forwarding() -> None:
         210,
         170,
         "paper",
-        tag="Radio route of hfpost.org",
+        tag="Radio route of radiopost.org",
         mono_rows=[
             "users at N2CALL-5, KK4ODA-1",
             "  via N1CALL-10",
@@ -1476,7 +1479,7 @@ def fig_modems() -> None:
         320,
         58,
         "client",
-        title="Radio mail client",
+        title="RadioPost client",
         center=True,
         icon="person",
         size=12.5,
@@ -1581,7 +1584,7 @@ def fig_redundancy() -> None:
         64,
         "mail",
         title="Ordinary email: the Internet's mail servers",
-        rows=["Gmail, Outlook, any provider, and other radio mail post offices"],
+        rows=["Gmail, Outlook, any provider, and other RadioPost post offices"],
         icon="globe",
     )
     f.box(
@@ -1591,7 +1594,7 @@ def fig_redundancy() -> None:
         112,
         "neutral",
         tag="DNS, kept at the registrar",
-        mono_rows=["MX 10  po.hfpost.org", "MX 20  mx2.hfpost.org", "", "on neither server"],
+        mono_rows=["MX 10  po.radiopost.org", "MX 20  mx2.radiopost.org", "", "on neither server"],
         size=13,
     )
 
@@ -1602,7 +1605,7 @@ def fig_redundancy() -> None:
         (730, 250, "Company C, storage"),
     ]:
         f.rect(x, 218, w, 172, "#f8fafc", FAINT, rx=12, sw=1.3, dash="6 5")
-        f.text(x + 16, 242, head, size=13, weight=700, color=MUTED)
+        f.text(x + 16, 242, head, size=13, weight=700, color=MUTED, halo=True)
     f.box(
         40,
         258,
@@ -1610,8 +1613,8 @@ def fig_redundancy() -> None:
         112,
         "po",
         tag="Main post office",
-        title="po.hfpost.org",
-        rows=["Stalwart + radio post office service", "Mailboxes, accounts, keys"],
+        title="po.radiopost.org",
+        rows=["Stalwart + RadioPost service", "Mailboxes, accounts, keys"],
         icon="envelope",
         size=12.5,
     )
@@ -1622,7 +1625,7 @@ def fig_redundancy() -> None:
         112,
         "po",
         tag="Backup mail server",
-        title="mx2.hfpost.org",
+        title="mx2.radiopost.org",
         rows=["Accepts and holds mail", "Copy of accept lists"],
         icon="envelope",
         size=12.5,
@@ -1655,7 +1658,7 @@ def fig_redundancy() -> None:
     f.link(
         [(575, 142), (575, 256)],
         "smtp",
-        label=["MX 20: only while", "po.hfpost.org is down"],
+        label=["MX 20: only while", "po.radiopost.org is down"],
         at=0.5,
         dx=8,
         dy=6,
@@ -1702,7 +1705,7 @@ def fig_redundancy() -> None:
             "1. Senders' servers fall back to MX 20; mail waits at mx2.",
             "2. Radio users still get copies held at gateways, and",
             "    what they send waits in the gateways' queues.",
-            "3. po.hfpost.org is rebuilt from the backup, at any",
+            "3. po.radiopost.org is rebuilt from the backup, at any",
             "    company, and one DNS record is changed.",
             "4. mx2 and the gateways hand over what they hold.",
         ],

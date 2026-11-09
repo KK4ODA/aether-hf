@@ -11,14 +11,14 @@
 <text xml:space="preserve" x="34.0" y="263.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Phone or laptop,</text>
 <text xml:space="preserve" x="34.0" y="281.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">when online</text>
 <rect x="20.0" y="410.0" width="150.0" height="150.0" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="1.5"/>
-<text xml:space="preserve" x="34.0" y="438.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1e293b" text-anchor="start">DNS for hfpost.org</text>
+<text xml:space="preserve" x="34.0" y="438.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1e293b" text-anchor="start">DNS for radiopost.org</text>
 <text xml:space="preserve" x="34.0" y="461.5" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.0" font-weight="400" fill="#1e293b" text-anchor="start">MX</text>
 <text xml:space="preserve" x="34.0" y="477.4" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.0" font-weight="400" fill="#1e293b" text-anchor="start">SPF  DKIM</text>
 <text xml:space="preserve" x="34.0" y="493.4" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.0" font-weight="400" fill="#1e293b" text-anchor="start">DMARC</text>
-<text xml:space="preserve" x="34.0" y="509.3" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.0" font-weight="400" fill="#1e293b" text-anchor="start">_radiomail</text>
+<text xml:space="preserve" x="34.0" y="509.3" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.0" font-weight="400" fill="#1e293b" text-anchor="start">_radiopost</text>
 <text xml:space="preserve" x="34.0" y="525.3" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', Menlo, monospace" font-size="11.0" font-weight="400" fill="#1e293b" text-anchor="start">  (post office key)</text>
 <rect x="200.0" y="72.0" width="330.0" height="556.0" rx="14" fill="#f7fdf9" stroke="#047857" stroke-width="2"/>
-<text xml:space="preserve" x="220.0" y="100.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15.5" font-weight="700" fill="#047857" text-anchor="start">Post office: po.hfpost.org</text>
+<text xml:space="preserve" x="220.0" y="100.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15.5" font-weight="700" fill="#047857" text-anchor="start">Post office: po.radiopost.org</text>
 <text xml:space="preserve" x="220.0" y="120.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">A rented VPS with a static IP address</text>
 <rect x="220.0" y="138.0" width="290.0" height="132.0" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
 <text xml:space="preserve" x="234.0" y="163.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="650" fill="#94a3b8" text-anchor="start">Mail server (Stalwart)</text>
@@ -29,7 +29,7 @@
 <g fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="480" y="151" width="18" height="7" rx="1.5"/><rect x="480" y="160" width="18" height="7" rx="1.5"/><circle cx="484" cy="154.5" r="0.9" fill="#94a3b8"/><circle cx="484" cy="163.5" r="0.9" fill="#94a3b8"/></g>
 <rect x="220.0" y="388.0" width="290.0" height="222.0" rx="10" fill="#ecfdf5" stroke="#047857" stroke-width="1.5"/>
 <text xml:space="preserve" x="234.0" y="413.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="650" fill="#047857" text-anchor="start">New code</text>
-<text xml:space="preserve" x="234.0" y="435.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="700" fill="#1e293b" text-anchor="start">Radio post office service</text>
+<text xml:space="preserve" x="234.0" y="435.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="700" fill="#1e293b" text-anchor="start">RadioPost service</text>
 <text xml:space="preserve" x="234.0" y="457.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Accounts, keys, credentials</text>
 <text xml:space="preserve" x="234.0" y="475.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Accept lists</text>
 <text xml:space="preserve" x="234.0" y="493.2" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Preparing mail for the air</text>

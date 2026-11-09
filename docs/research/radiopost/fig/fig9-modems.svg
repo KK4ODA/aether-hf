@@ -4,7 +4,7 @@
 <text x="24" y="34" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#1e293b">Figure 9. One session protocol over many modems</text>
 <text x="24" y="56" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" fill="#475569">The client and the gateway program never talk to a modem directly; an adapter does.</text>
 <rect x="150.0" y="76.0" width="320.0" height="58.0" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
-<text xml:space="preserve" x="310.0" y="105.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#1e293b" text-anchor="middle">Radio mail client</text>
+<text xml:space="preserve" x="310.0" y="105.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#1e293b" text-anchor="middle">RadioPost client</text>
 <g fill="none" stroke="#1d4ed8" stroke-width="1.6" stroke-linecap="round"><circle cx="449" cy="93.5" r="4"/><path d="M 441.5 106 Q 442 99 449 99 Q 456 99 456.5 106"/></g>
 <rect x="530.0" y="76.0" width="320.0" height="58.0" rx="10" fill="#fff7ed" stroke="#c2410c" stroke-width="1.5"/>
 <text xml:space="preserve" x="690.0" y="105.0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#1e293b" text-anchor="middle">Gateway program</text>
