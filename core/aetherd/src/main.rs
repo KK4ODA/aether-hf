@@ -157,16 +157,10 @@ struct Args {
     bandwidth: Option<u32>,
     /// How a busy trace's floor answers the radio's gain.
     busy_variant: Option<String>,
-    /// A recording to run through the receive-filter estimate, look by look.
+    /// A recording to run through the receive filter's reading, look by look.
     passband_trace: Option<PathBuf>,
-    /// The receive-filter review's candidate a passband trace runs beside today's estimate.
-    passband_variant: Option<String>,
-    /// Whether that candidate goes on taking looks while the audio clips.
-    no_clip_veto: bool,
 }
 
-// one arm an option: a long match, read top to bottom
-#[allow(clippy::too_many_lines)]
 fn parse_args() -> Result<Option<Args>, String> {
     let mut args = Args::default();
     let mut argv = std::env::args().skip(1);
@@ -235,13 +229,6 @@ fn parse_args() -> Result<Option<Args>, String> {
                     argv.next().ok_or("--passband-trace needs a WAV file")?,
                 ));
             }
-            "--passband-variant" => {
-                args.passband_variant = Some(
-                    argv.next()
-                        .ok_or("--passband-variant needs r0, r1, r2 or r3")?,
-                );
-            }
-            "--no-clip-veto" => args.no_clip_veto = true,
             "--busy-variant" => {
                 args.busy_variant = Some(argv.next().ok_or("--busy-variant needs a name")?);
             }
@@ -308,13 +295,12 @@ aetherd — the Aether HF station daemon
                       block as CSV: its power, why it was or was not taken as noise, the
                       floor, the busy state, the radio's gain, and the audio's power in and
                       out of the channel (with --expect, muted where the station transmitted)
-      --passband-trace WAV  run a recording through the receive-filter estimate and print
-                      every look it folds in as CSV: the look's level, the edges after it, the
-                      levels they were drawn from (with --expect, the looks a live station
-                      would have taken, by the sidecar's keying, frames and busy state)
-      --passband-variant r0|r1|r2|r3  trace one of the receive-filter review's
-                      candidates beside today's estimate (r0, the default, is today's)
-      --no-clip-veto  let the candidate go on taking looks while the audio clips
+      --passband-trace WAV  run a recording through the receive filter's reading and
+                      print as CSV every look it folds in, and the reading on a half-second
+                      beat between them: the verdict, the drop at each edge of the signal, the
+                      band noise over the chain's floor, the looks kept and the share of the
+                      audio clipping (with --expect, the looks a live station would have taken,
+                      by the sidecar's keying and frames)
       --bandwidth N   the bandwidth a trace runs at when no sidecar says (500 or 2300)
       --busy-variant plain  trace with the floor in dBFS, as before ADR-0078
       --channel HOST:PORT  take the audio from a scenario harness's channel server, in
@@ -339,7 +325,7 @@ fn busy_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// `--passband-trace`: the receive-filter estimate over a recording, look by look, as CSV on
+/// `--passband-trace`: the receive filter's reading over a recording, look by look, as CSV on
 /// stdout.
 fn passband_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
     let expectation = args
@@ -347,19 +333,7 @@ fn passband_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
         .as_deref()
         .map(aetherd::replay::Expectation::from_sidecar)
         .transpose()?;
-    let variant = args
-        .passband_variant
-        .as_deref()
-        .map(str::parse::<aetherd::passband::Variant>)
-        .transpose()?
-        .unwrap_or_default();
-    let readings = aetherd::passband_trace::trace(
-        wav,
-        expectation.as_ref(),
-        args.bandwidth,
-        variant,
-        !args.no_clip_veto,
-    )?;
+    let readings = aetherd::passband_trace::trace(wav, expectation.as_ref(), args.bandwidth)?;
     print!("{}", aetherd::passband_trace::to_csv(&readings));
     Ok(())
 }

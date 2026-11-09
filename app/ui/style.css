@@ -2548,6 +2548,16 @@ body:not(.compact) main:has(> .panel.fills:not([hidden])) {
   border-top: 1px solid var(--border);
 }
 
+/* a reading that is a line of its own: the receive filter under the channel's four */
+.status-readings .tiles > .tile.wide {
+  grid-column: 1 / -1;
+}
+
+/* a reading that warns: the receive filter cutting an edge of the signal */
+.reading .value.warn {
+  color: var(--status-warning);
+}
+
 .history-card .charts {
   flex: 1 1 auto;
   grid-template-columns: minmax(0, 1fr);
@@ -4066,8 +4076,7 @@ body.compact .brand-name,
 body.compact #dial,
 body.compact #strip-rung,
 body.compact #strip-snr,
-body.compact .state-strip,
-body.compact #rx-passband-note {
+body.compact .state-strip {
   display: none;
 }
 

@@ -319,3 +319,43 @@ Gate 4 is the decision ADR: R3 and C1 (with the author's answers), what they rem
 `PassbandMonitor`, `passband_edges` and their eight constants, the station's wait for quiet
 looks, `PASSBAND_MIN_LEVEL_DBFS`, the panel's 400 Hz and its width warning — and the port's plan:
 the banner in every view, the quiet "can't check" line in the Status tab, the manual.
+
+## 12. The port (Gate 5)
+
+ADR-0105 built, 2026-11-09. `crate::passband` is the station's reading (`ReceiveFilter`) and C1
+(`Clipping`); `Station::sample_passband` steps it every pass with the station's own rule for
+listening (not keyed, not deaf to its tail, not counting a burst as arriving), and every frame
+the receiver announces or reports goes to it. The old estimate, its constants, the quiet-window
+wait, the review's variants and the panel's width warning are deleted.
+
+**The code is about twice the old estimate's, not level as §9 and ADR-0105 §3 expected.** Counted
+without comments and blank lines: the reading 342 lines and C1 34 (`passband.rs`, before its
+tests), the station's look loop 15 and the panel 121 (the two banners with their dismissal, the
+tile, the clipping line), about 510 in all; the old estimate was 180 (`spectrum.rs`), its loop 39
+and the panel's warning 15, about 235. §9's "about 210" counted the reading as the prototype held
+it, before the hold, the span shift, the move between bandwidths and the record of each look were
+in it, and nothing for the panel. The difference is what the ADR asked for (the warnings in every
+view with their dismissal, C1, the hold against frames), and the tests cover cases the old one
+never did. The constants are eleven against twelve, as counted.
+
+**Found by the port.** A frame's span is placed on the receiver's clock, which runs about 20 ms
+behind the audio (`AudioToBaseband::rx_delay_samples`: the decimator and the band filter), while a
+look is timed on the audio. The prototype compared the two as they came, so a look ending in a
+frame's first 20 ms was kept. The station test that sends OFDM frames a little before a look is
+due found it; the reading now shifts a frame's span by the delay. On the field it changes the
+looks kept by one at most and no reading's verdict (below).
+
+**The checks, through the built daemon's `--passband-trace`:**
+
+| | corpus, draw 0 | corpus, held-out draw | field |
+|---|---|---|---|
+| K1, cuts of 20 dB or more named (of 48) | 48 | 48 | |
+| K2, uncut warned | 0 of 160 | 0 of 160 | 1 of 14 (the 15:06Z recording, in the free band, §11) |
+| K3, a side not cut named | 0 | 0 | 0 |
+| K4, Saturday (of 5) | | | 5 |
+| K5, in time / joined cleared / joined warned | 24 of 24 / 12 of 12 / 12 of 12 | 24 of 24 / 12 of 12 / 12 of 12 | |
+| K6, C1 on hot clips in time / on others | 52 of 52 / 0 | 52 of 52 / 0 | Saturday's 5 of 5 / 0 |
+
+Every number is Gate 3's: R3 as built reads the corpus and the field as the prototype did. The
+cuts are named at 11.46 s on a steady band and on the FT8 band; Saturday's three 2300 Hz
+sessions read 27.7–29.3 dB down at the top, the two 500 Hz ones 7.5 and 6.6 dB at 1740 Hz.

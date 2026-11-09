@@ -113,6 +113,18 @@
         <button class="small" id="btn-mismatch-call" title="Call the station heard under the same callsign with another SSID" hidden>Call it</button>
         <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">Dismiss</button>
       </div>
+      <!-- the radio's receive filter cuts an edge of the signal (ADR-0105): on every tab,
+           Compact included, with the side, how far down and the knob -->
+      <div class="note warn unsaved-banner" id="filter-banner" title="The radio's receive filter takes an edge of the signal away, read from the band's noise while the station listens: an edge 12 dB or more under the passband's own level is cut. Frames lose that edge, and the link runs slower than the path allows" role="alert" hidden>
+        <span id="filter-banner-text" title="Which edge of the signal the radio's filter cuts, about how far down, and what on the radio to turn"></span>
+        <button class="small" id="btn-filter-setup" title="Open Setup step 4, where the modem's bandwidth is set: the 500 Hz signal fits inside a narrow filter" hidden>Setup step 4</button>
+        <button class="small quiet" id="btn-filter-dismiss" title="Hide this warning until the reading changes: another edge, 3 dB further down, or another bandwidth">Dismiss</button>
+      </div>
+      <!-- the receive audio clips (ADR-0105 §2.2): on every tab, Compact included -->
+      <div class="note warn unsaved-banner" id="clip-banner" title="More than 0.1 % of the audio heard over the last ten seconds reached full scale: the sound card's input is overdriven, and what clips is lost to the receiver" role="alert" hidden>
+        <span id="clip-banner-text" title="What is clipping and what to turn">The receive audio is clipping: turn the radio's audio output or the sound card's input down.</span>
+        <button class="small quiet" id="btn-clip-dismiss" title="Hide this warning until the audio stops clipping and starts again">Dismiss</button>
+      </div>
       <!-- debug mode (ADR-0050), said once: what goes to the project, and the switch -->
       <div class="note unsaved-banner" id="debug-banner" title="Debug mode sends the sessions a host program runs to the Aether project: said once, with the switch to turn it off" role="status" hidden>
         <span id="debug-banner-text" title="After each session Winlink Express, Pat or VarAC runs through this station, its recording, the logs and your settings (never a password) go to the Aether project (KK4ODA) to find what goes wrong on real paths. The recording is the audio, and Aether can decode what was sent from it. Setup step 5 turns it off">Debug mode is on: each host program's session — its audio recording, the logs and your settings, never a password — goes to the Aether project (KK4ODA). Setup step 5.</span>
@@ -130,7 +142,6 @@
           <div class="state-name" id="state-name">disconnected</div>
           <div class="state-detail" id="state-detail">Not connected to a modem.</div>
         </div>
-        <p class="note warn" id="rx-passband-note" title="The receiver's passband, measured from the noise between signals, is narrower than the modem's signal — the radio's filter is set too narrow" role="alert" hidden></p>
 
         <!-- the readings on the left, the last ten minutes on the right; the charts take the room left over -->
         <div class="status-body">
@@ -165,9 +176,9 @@
             </section>
 
             <!-- 2. the channel: what the receiver hears between frames -->
-            <section class="card console-card tiles-card" id="channel-card" aria-labelledby="channel-title" title="The channel: the level over the noise, the tuning, the sound card and what is waiting to go">
+            <section class="card console-card tiles-card" id="channel-card" aria-labelledby="channel-title" title="The channel: the level over the noise, the tuning, the sound card, what is waiting to go and the radio's receive filter">
               <div class="card-head">
-                <h2 class="card-title" id="channel-title" title="The channel: the level over the noise, the tuning, the sound card and what is waiting to go. Signal above noise is the busy detector's reading in Aether's channel (500 or 2300 Hz wide): the level of its latest 25 ms of audio over its learned noise floor. The floor is the noise's middle level, so noise alone reads a few decibels either side of 0 dB. A negative value is noise under the floor. Frames the modem finds never count as noise, so in a session the floor stays the band's own. Tuning is the carrier offset the receiver removed from the last frame — positive means the other station is above your dial; a few hertz is nothing, a hundred is a dial to check. Receive level is the sound card's whole input over the last 3 seconds: the radio's whole passband, every signal in it included. Setup step 3 helps you set it. It measures more than Aether's channel, so it reads higher than the floor: on noise alone a 500 Hz channel holds about 7 dB less than a 2.4 kHz passband. Queued is what is still waiting to be sent.">Channel</h2>
+                <h2 class="card-title" id="channel-title" title="The channel: the level over the noise, the tuning, the sound card and what is waiting to go. Signal above noise is the busy detector's reading in Aether's channel (500 or 2300 Hz wide): the level of its latest 25 ms of audio over its learned noise floor. The floor is the noise's middle level, so noise alone reads a few decibels either side of 0 dB. A negative value is noise under the floor. Frames the modem finds never count as noise, so in a session the floor stays the band's own. Tuning is the carrier offset the receiver removed from the last frame — positive means the other station is above your dial; a few hertz is nothing, a hundred is a dial to check. Receive level is the sound card's whole input over the last 3 seconds: the radio's whole passband, every signal in it included. Setup step 3 helps you set it. It measures more than Aether's channel, so it reads higher than the floor: on noise alone a 500 Hz channel holds about 7 dB less than a 2.4 kHz passband. Queued is what is still waiting to be sent. Receive filter is what the radio's filter does to the edges of the signal, read from the band's noise.">Channel</h2>
               </div>
               <div class="tiles" id="readings-channel">
                 <div class="reading tile" title="The busy detector's reading in Aether's channel: the level of its latest 25 ms of audio above its noise floor. A negative value is noise under the floor">
@@ -189,6 +200,11 @@
                   <div class="label">Queued</div>
                   <div class="value" id="v-queued">—</div>
                   <div class="sub" id="v-compress-sub">bytes still to send</div>
+                </div>
+                <div class="reading tile wide" id="rx-filter-tile" title="What the radio's receive filter does to the edges of Aether's signal, read from the band's noise while the station listens: how far each edge lies under the passband's own level. An edge 12 dB or more down is cut, and a banner says which knob to turn. Can't check means the band's noise sits too close to the sound card's own floor to show a cut: turn the radio's audio up, or wait for the band to open">
+                  <div class="label">Receive filter</div>
+                  <div class="value" id="v-rx-filter">—</div>
+                  <div class="sub" id="v-rx-filter-sub">reading the band's noise</div>
                 </div>
               </div>
             </section>

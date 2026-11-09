@@ -2145,11 +2145,28 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         // rate lines (null where nothing moved that way)
         "sending_rung": station.data_rungs().0,
         "receiving_rung": station.data_rungs().1,
-        // the receiver's passband, learned from the noise, against the width the modem needs:
-        // materially narrower means the radio's filter is set too narrow for the signal
-        "rx_passband_hz": station.rx_passband_hz(),
-        "occupied_hz": station.occupied_bandwidth_hz(),
+        // what the radio's receive filter does to the signal's edges, read from the noise, and
+        // whether the audio clips (ADR-0105): the panel's banners and its Receive filter line
+        "rx_filter": rx_filter_json(station),
+        "clipping": {
+            "share": station.clipping().0,
+            "clips": station.clipping().1,
+        },
         "link": link_json(station),
+    })
+}
+
+/// The receive filter's reading (ADR-0105): `verdict` (`waiting`, `unknown`, `clear`, `top`,
+/// `bottom`, `both`), how far each edge of the signal lies under the passband's level, and the
+/// looks kept.
+fn rx_filter_json<P: Ptt>(station: &Station<P>) -> Value {
+    let reading = station.rx_filter();
+    let db = |v: Option<f32>| v.map(|v| (f64::from(v) * 10.0).round() / 10.0);
+    json!({
+        "verdict": reading.verdict.word(),
+        "low_drop_db": db(reading.low_drop_db),
+        "high_drop_db": db(reading.high_drop_db),
+        "looks": reading.looks,
     })
 }
 

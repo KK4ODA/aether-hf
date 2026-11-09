@@ -179,6 +179,8 @@ constant under, and W1 brings nothing forward. Two faults in the bench were foun
 grid's bottom cuts, the corpus's FT8 level), and the cost table was corrected. Four questions for
 the author.* *Gate 4 done the same day: the author agreed all four, and ADR-0105 is the decision
 (R3 and C1, no veto, W1 not built, what they remove, and the port's plan). Gate 5 is the port.*
+*Gate 5 done the same day (`04-results.md` §12): the station reads the filter and C1 live, the
+panel warns on every tab, the old estimate is deleted, and the checks repeat Gate 3's numbers.*
 
 ## 6. For the author
 

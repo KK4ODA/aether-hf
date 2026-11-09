@@ -1,4 +1,4 @@
-"""A labelled corpus for the receive-filter estimate, and today's estimate judged over it.
+"""A labelled corpus for the receive filter's reading, and the reading judged over it.
 
 The receive-filter review (``docs/research/receive-filter/``), Gate 0 item 3. Each clip is 48 kHz
 mono audio as a transceiver's codec delivers it with nobody on the channel: the band's noise
@@ -11,34 +11,31 @@ bandwidth (360 and 2640 Hz at 2300 Hz, 1260 and 1740 Hz at 500 Hz).
 
 Gate 3 added two kinds (``03-candidates.md`` §4): *line* clips, a cut of 12, 15 or 20 dB at one
 edge of one bandwidth's signal, steady, judged at that bandwidth only and against no criterion
-(they show where each candidate puts its line); and *joined* clips, a cut clip followed by its
+(they show where the reading puts its line); and *joined* clips, a cut clip followed by its
 uncut twin (``ssb2700`` under the same condition and floor) or the reverse, for how soon a
 reading follows the operator's knob.
 
     python tools/rxfilter_corpus.py make OUT_DIR [--only NAME-PART] [--seed N] [--list]
-    python tools/rxfilter_corpus.py judge OUT_DIR [--variant r0,r1,r2,r3] [--daemon PATH]
-        [--csv FILE] [--only NAME-PART] [--jobs N]
+    python tools/rxfilter_corpus.py judge OUT_DIR [--daemon PATH] [--csv FILE]
+        [--only NAME-PART] [--jobs N]
 
 ``field`` runs the same over the nineteen field recordings (``01-evidence.md`` §2) found under
 ``INBOX`` (``field/inbox/``, git-ignored), each with its sidecar, and judges them against what
 the review knows of each (K2, K4).
 
-    python tools/rxfilter_corpus.py field INBOX [--variant r0,r1,r2,r3] [--daemon PATH]
-        [--csv FILE] [--jobs N]
+    python tools/rxfilter_corpus.py field INBOX [--daemon PATH] [--csv FILE] [--jobs N]
 
 ``harness`` runs the same over both stations' recordings of every run of the cut grid
 (``tools/rxfilter_cost.py OUT --keep-audio``): the called station's radio is the one cut (its
 side and depth in the run's name), the caller's is not (K1, K2, K6 on the harness), and it sets
 the first frame a witness could read the cut edge from beside the first warning (K8).
 
-    python tools/rxfilter_corpus.py harness RUNS_DIR [--variant r3+keep] [--daemon PATH]
-        [--csv FILE] [--jobs N]
+    python tools/rxfilter_corpus.py harness RUNS_DIR [--daemon PATH] [--csv FILE] [--jobs N]
 
-``judge`` runs ``aetherd --passband-trace --passband-variant V`` over every clip at both
-bandwidths (no sidecar: the whole clip is listened to) and judges every reading against the
-truth: a side 20 dB or more down must be named, a side 10 dB or less down must not be, a side
-between is free. It prints the criteria's counts for each variant (K1, K2, K3, K5) and writes
-one row a clip, bandwidth and variant.
+``judge`` runs ``aetherd --passband-trace`` over every clip at both bandwidths (no sidecar: the
+whole clip is listened to) and judges every reading against the truth: a side 20 dB or more down
+must be named, a side 10 dB or less down must not be, a side between is free. It prints the
+criteria's counts (K1, K2, K3, K5, K6; ADR-0105 §4) and writes one row a clip and bandwidth.
 
 The building blocks are the busy detector's corpus's (``tools/busy_corpus.py``): its FT8
 stations, its AGC model and its WAV writer.
@@ -73,10 +70,6 @@ HOT_NOISE_RMS_DBFS = -8.0
 −8 dBFS over its recordings, 1.3–1.7 % of samples at full scale)."""
 SIGNAL_EDGES_HZ = {2300: (360.0, 2640.0), 500: (1260.0, 1740.0)}
 """The edges of what Aether sends at each bandwidth: its occupied width around 1500 Hz."""
-OCCUPIED_HZ = {2300: 2280.0, 500: 480.0}
-"""The occupied width the panel's warning compares the estimate with (``occupied_hz``)."""
-WARNING_SLACK_HZ = 400.0
-"""The panel warns when the estimate is under the occupied width less this (``applyPassband``)."""
 HEADROOM = 10 ** (-1.0 / 20.0)
 """The highest peak a clip outside the hot condition reaches: −1 dBFS, turned down to it."""
 FLOORS_DB = {"deep": 50.0, "shallow": 15.0}
@@ -351,9 +344,8 @@ def write_clip(job: tuple[Clip, Path]) -> str:
 
 # ── judging the candidates ────────────────────────────────────────────
 
-WARNINGS = {"top": {"top"}, "bottom": {"bottom"}, "both": {"top", "bottom"}, "narrow": None}
-"""The sides each warning names; today's ``narrow`` names none."""
-VARIANTS = ("r0", "r1", "r2", "r3")
+WARNINGS = {"top": {"top"}, "bottom": {"bottom"}, "both": {"top", "bottom"}}
+"""The sides each warning names."""
 CUT_DB = 20.0
 """A side this far down must be named (K1)."""
 SILENT_DB = 10.0
@@ -381,31 +373,17 @@ def sides(labels: dict, bandwidth: int) -> tuple[set[str], set[str]]:
 
 def right(verdict: str, need: set[str], forbid: set[str]) -> bool:
     """Whether a reading says what the truth asks: every side cut named and none uncut, or, with
-    nothing cut, no side named that is not free (today's ``narrow`` counts as naming the sides
-    cut, as the panel's one warning was all it had)."""
+    nothing cut, no side named that is not free."""
     if verdict not in WARNINGS:
         return not need
     named = WARNINGS[verdict]
-    if named is None:
-        return bool(need)
     return need <= named and not named & forbid
 
 
 def wrong_side(verdict: str, forbid: set[str]) -> bool:
     """Whether a warning names a side that is not cut, or warns with nothing cut (K2, K3)."""
     named = WARNINGS.get(verdict)
-    if verdict not in WARNINGS:
-        return False
-    if named is None:
-        return forbid == {"top", "bottom"}
-    return bool(named & forbid)
-
-
-def variant_args(variant: str) -> list[str]:
-    """``r3`` is a candidate with C1's veto, as registered; ``r3+keep`` the same taking looks
-    while the audio clips."""
-    name, _, keep = variant.partition("+")
-    return ["--passband-variant", name] + (["--no-clip-veto"] if keep == "keep" else [])
+    return named is not None and bool(named & forbid)
 
 
 def c1(readings: list[dict]) -> tuple[float | str, int]:
@@ -414,17 +392,10 @@ def c1(readings: list[dict]) -> tuple[float | str, int]:
     return (float(clipping[0]["t_s"]) if clipping else "", len(clipping))
 
 
-def trace(daemon: Path, wav: Path, bandwidth: int, variant: str) -> list[dict]:
+def trace(daemon: Path, wav: Path, bandwidth: int) -> list[dict]:
     """Every reading of ``aetherd --passband-trace`` over a clip."""
     out = subprocess.run(
-        [
-            str(daemon),
-            "--passband-trace",
-            str(wav),
-            "--bandwidth",
-            str(bandwidth),
-            *variant_args(variant),
-        ],
+        [str(daemon), "--passband-trace", str(wav), "--bandwidth", str(bandwidth)],
         capture_output=True,
         text=True,
         check=True,
@@ -444,10 +415,10 @@ def settled(readings: list[dict], since: float, ok) -> float | None:
     return round(float(after[k]["t_s"]) - since, 2)
 
 
-def judge_one(job: tuple[Path, Path, int, str]) -> dict:
-    daemon, labels_path, bandwidth, variant = job
+def judge_one(job: tuple[Path, Path, int]) -> dict:
+    daemon, labels_path, bandwidth = job
     labels = json.loads(labels_path.read_text(encoding="utf-8"))
-    readings = trace(daemon, labels_path.with_suffix(".wav"), bandwidth, variant)
+    readings = trace(daemon, labels_path.with_suffix(".wav"), bandwidth)
     need, forbid = sides(labels, bandwidth)
     row = {
         "clip": labels["name"],
@@ -455,7 +426,6 @@ def judge_one(job: tuple[Path, Path, int, str]) -> dict:
         "condition": labels["condition"],
         "floor": labels["floor"],
         "bandwidth": bandwidth,
-        "variant": variant,
         "loss_low": labels[f"loss_low_{bandwidth}"],
         "loss_high": labels[f"loss_high_{bandwidth}"],
         "hot": int(labels["condition"] == "hot"),
@@ -467,7 +437,7 @@ def judge_one(job: tuple[Path, Path, int, str]) -> dict:
         low_drop=last["low_drop_db"] if last else "",
         high_drop=last["high_drop_db"] if last else "",
         over_floor=last["over_floor_db"] if last else "",
-        kept=last["kept"] if last else 0,
+        looks=last["looks"] if last else 0,
     )
     first_part = readings
     if "then" in labels:
@@ -492,10 +462,10 @@ def judge_one(job: tuple[Path, Path, int, str]) -> dict:
     return row
 
 
-def summary(rows: list[dict], variants: list[str]) -> None:
-    """The criteria's counts for each variant."""
-    for variant in variants:
-        mine = [r for r in rows if r["variant"] == variant and r["kind"] == "corpus"]
+def summary(rows: list[dict]) -> None:
+    """The criteria's counts."""
+    if rows:
+        mine = [r for r in rows if r["kind"] == "corpus"]
         cut = [r for r in mine if r["need"] and not r["hot"]]
         detected = [r for r in cut if r["first_right_s"] != "" and r["right_at_end"]]
         silent = [
@@ -514,7 +484,7 @@ def summary(rows: list[dict], variants: list[str]) -> None:
             if r["condition"] in WITHIN_S and float(r["first_right_s"]) > WITHIN_S[r["condition"]]
         ]
         timed = [r for r in detected if r["condition"] in WITHIN_S]
-        joined = [r for r in rows if r["variant"] == variant and r["kind"] == "joined"]
+        joined = [r for r in rows if r["kind"] == "joined"]
         clears = [r for r in joined if r["then"] == UNCUT]
         cleared = [
             r
@@ -526,11 +496,9 @@ def summary(rows: list[dict], variants: list[str]) -> None:
         hot = [r for r in mine if r["hot"]]
         hot_warns = [r for r in hot if r["first_warning_s"] != ""]
         c1_hot = [r for r in hot if r["c1_first_s"] != "" and r["c1_first_s"] <= CLIP_WITHIN_S]
-        c1_other = [
-            r for r in rows if r["variant"] == variant and not r["hot"] and r["c1_first_s"] != ""
-        ]
+        c1_other = [r for r in rows if not r["hot"] and r["c1_first_s"] != ""]
         print(
-            f"\n{variant}: K1 {len(detected)} of {len(cut)} cuts named right by the end;"
+            f"\nK1 {len(detected)} of {len(cut)} cuts named right by the end;"
             f" K2 {len(false)} of {len(silent)} uncut clips warned;"
             f" K3 {len(wrong)} clips with a warning naming a side not cut;"
             f" K5 {len(timed) - len(late)} of {len(timed)} in time,"
@@ -544,14 +512,14 @@ def summary(rows: list[dict], variants: list[str]) -> None:
             if r not in detected:
                 print(
                     f"    missed {r['clip']} at {r['bandwidth']}: ended {r['final']}"
-                    f" ({r['low_drop']}/{r['high_drop']} dB, {r['kept']} looks)"
+                    f" ({r['low_drop']}/{r['high_drop']} dB, {r['looks']} looks)"
                 )
         for r in sorted(false, key=lambda r: r["clip"]):
             print(
                 f"    false {r['clip']} at {r['bandwidth']}: {r['false_warnings']} readings,"
                 f" ended {r['final']} ({r['low_drop']}/{r['high_drop']} dB)"
             )
-        lines = [r for r in rows if r["variant"] == variant and r["kind"] == "line"]
+        lines = [r for r in rows if r["kind"] == "line"]
         for r in sorted(lines, key=lambda r: r["clip"]):
             print(f"    line {r['clip']}: {r['final']} {r['low_drop']}/{r['high_drop']} dB")
         for r in sorted(joined, key=lambda r: r["clip"]):
@@ -561,23 +529,20 @@ def summary(rows: list[dict], variants: list[str]) -> None:
             )
 
 
-def judge(
-    out: Path, daemon: Path, table: Path | None, variants: list[str], only: str | None, jobs: int
-) -> None:
+def judge(out: Path, daemon: Path, table: Path | None, only: str | None, jobs: int) -> None:
     work = []
     for labels_path in sorted(out.glob("*.json")):
         labels = json.loads(labels_path.read_text(encoding="utf-8"))
         if only and only not in labels["name"]:
             continue
         for bandwidth in labels.get("bandwidths", [2300, 500]):
-            for variant in variants:
-                work.append((daemon, labels_path, int(bandwidth), variant))
+            work.append((daemon, labels_path, int(bandwidth)))
     rows = []
     with multiprocessing.Pool(jobs) as pool:
         for row in pool.imap_unordered(judge_one, work):
             rows.append(row)
-    rows.sort(key=lambda r: (r["variant"], r["clip"], r["bandwidth"]))
-    summary(rows, variants)
+    rows.sort(key=lambda r: (r["clip"], r["bandwidth"]))
+    summary(rows)
     if table is not None:
         fields = list(dict.fromkeys(k for r in rows for k in r))
         with table.open("w", newline="", encoding="utf-8") as f:
@@ -627,17 +592,10 @@ SATURDAY = (
 """The mobile's five sessions of Saturday night, every one clipped (K6)."""
 
 
-def trace_field(daemon: Path, wav: Path, variant: str) -> list[dict]:
+def trace_field(daemon: Path, wav: Path) -> list[dict]:
     """Every reading over a field recording, with its sidecar."""
     out = subprocess.run(
-        [
-            str(daemon),
-            "--passband-trace",
-            str(wav),
-            "--expect",
-            str(wav.with_suffix(".json")),
-            *variant_args(variant),
-        ],
+        [str(daemon), "--passband-trace", str(wav), "--expect", str(wav.with_suffix(".json"))],
         capture_output=True,
         text=True,
         check=True,
@@ -645,15 +603,14 @@ def trace_field(daemon: Path, wav: Path, variant: str) -> list[dict]:
     return list(csv.DictReader(out.splitlines()))
 
 
-def field_one(job: tuple[Path, Path, str, str]) -> dict:
-    daemon, wav, variant, expect = job
-    readings = trace_field(daemon, wav, variant)
+def field_one(job: tuple[Path, Path, str]) -> dict:
+    daemon, wav, expect = job
+    readings = trace_field(daemon, wav)
     c1_first, c1_readings = c1(readings)
     warned = [r for r in readings if r["verdict"] in WARNINGS]
     last = readings[-1] if readings else {}
     row = {
         "recording": wav.stem,
-        "variant": variant,
         "expect": expect,
         "readings": len(readings),
         "warnings": len(warned),
@@ -662,7 +619,7 @@ def field_one(job: tuple[Path, Path, str, str]) -> dict:
         "final": last.get("verdict", ""),
         "low_drop": last.get("low_drop_db", ""),
         "high_drop": last.get("high_drop_db", ""),
-        "kept": last.get("kept", 0),
+        "looks": last.get("looks", 0),
         "unknown": sum(r["verdict"] == "unknown" for r in readings),
         "c1_first_s": c1_first,
         "c1_readings": c1_readings,
@@ -683,27 +640,26 @@ def field_one(job: tuple[Path, Path, str, str]) -> dict:
     return row
 
 
-def field(inbox: Path, daemon: Path, table: Path | None, variants: list[str], jobs: int) -> None:
+def field(inbox: Path, daemon: Path, table: Path | None, jobs: int) -> None:
     work = []
     for name, expect in FIELD.items():
         found = sorted(inbox.rglob(f"{name}.wav"))
         if not found:
             print(f"    {name}: not under {inbox}")
             continue
-        for variant in variants:
-            work.append((daemon, found[0], variant, expect))
+        work.append((daemon, found[0], expect))
     with multiprocessing.Pool(jobs) as pool:
         rows = list(pool.imap_unordered(field_one, work))
-    rows.sort(key=lambda r: (r["variant"], r["expect"] != WORKING, r["recording"]))
-    for variant in variants:
-        mine = [r for r in rows if r["variant"] == variant]
+    rows.sort(key=lambda r: (r["expect"] != WORKING, r["recording"]))
+    if rows:
+        mine = rows
         working = [r for r in mine if r["expect"] == WORKING]
         cut = [r for r in mine if r["expect"] != WORKING]
         saturday = [r for r in mine if r["recording"].startswith(SATURDAY)]
         c1_ok = [r for r in saturday if r["c1_first_s"] != "" and r["c1_first_s"] <= CLIP_WITHIN_S]
         c1_other = [r for r in mine if r not in saturday and r["c1_first_s"] != ""]
         print(
-            f"\n{variant}: K2 {sum(not r['passes'] for r in working)} of {len(working)} working"
+            f"\nK2 {sum(not r['passes'] for r in working)} of {len(working)} working"
             f" recordings warned; K4 {sum(r['passes'] for r in cut)} of {len(cut)};"
             f" K6 C1 on {len(c1_ok)} of {len(saturday)} of Saturday's in time, on"
             f" {len(c1_other)} others"
@@ -714,7 +670,7 @@ def field(inbox: Path, daemon: Path, table: Path | None, variants: list[str], jo
                 f" {r['warnings']:3d}/{r['readings']:<4d} warned {r['warned_sides'] or '-':12s}"
                 f" first {r['first_warning_s']!s:8s} ended {r['final']:8s}"
                 f" {r['low_drop']}/{r['high_drop']} dB (median top {r['median_high_drop']}),"
-                f" {r['kept']} kept, {r['unknown']} unknown, C1 first {r['c1_first_s']}"
+                f" {r['looks']} looks, {r['unknown']} unknown, C1 first {r['c1_first_s']}"
             )
     if table is not None:
         with table.open("w", newline="", encoding="utf-8") as f:
@@ -769,9 +725,9 @@ def run_truth(run: Path) -> dict | None:
     }
 
 
-def harness_one(job: tuple[Path, Path, str, dict]) -> dict:
-    daemon, wav, variant, truth_ = job
-    readings = trace_field(daemon, wav, variant)
+def harness_one(job: tuple[Path, Path, dict]) -> dict:
+    daemon, wav, truth_ = job
+    readings = trace_field(daemon, wav)
     bandwidth = truth_["bandwidth"]
     losses = {
         f"loss_low_{bandwidth}": truth_["loss_low"],
@@ -796,7 +752,6 @@ def harness_one(job: tuple[Path, Path, str, dict]) -> dict:
     return {
         "run": truth_["run"],
         "station": truth_["station"],
-        "variant": variant,
         "bandwidth": bandwidth,
         "need": "+".join(sorted(need)),
         "silent": int(forbid == {"top", "bottom"}),
@@ -819,7 +774,7 @@ def harness_one(job: tuple[Path, Path, str, dict]) -> dict:
     }
 
 
-def harness(runs: Path, daemon: Path, table: Path | None, variants: list[str], jobs: int) -> None:
+def harness(runs: Path, daemon: Path, table: Path | None, jobs: int) -> None:
     work = []
     for run in sorted(p for p in runs.iterdir() if p.is_dir()):
         called = run_truth(run)
@@ -831,13 +786,12 @@ def harness(runs: Path, daemon: Path, table: Path | None, variants: list[str], j
                 truth_ = dict(called, run=run.name, station=station)
                 if station == "a":
                     truth_.update(loss_low=0.0, loss_high=0.0, hot=0)
-                for variant in variants:
-                    work.append((daemon, wav, variant, truth_))
+                work.append((daemon, wav, truth_))
     with multiprocessing.Pool(jobs) as pool:
         rows = list(pool.imap_unordered(harness_one, work))
-    rows.sort(key=lambda r: (r["variant"], r["run"], r["station"]))
-    for variant in variants:
-        mine = [r for r in rows if r["variant"] == variant]
+    rows.sort(key=lambda r: (r["run"], r["station"]))
+    if rows:
+        mine = rows
         cut = [r for r in mine if r["need"] and not r["hot"]]
         named = [r for r in cut if r["first_right_s"] != "" and r["right_at_end"]]
         silent = [r for r in mine if r["silent"] and not r["hot"]]
@@ -852,7 +806,7 @@ def harness(runs: Path, daemon: Path, table: Path | None, variants: list[str], j
             if r["first_edge_frame_s"] != "" and r["first_edge_frame_s"] < r["first_right_s"]
         ]
         print(
-            f"\n{variant}: cuts named {len(named)} of {len(cut)}; K2 {len(false)} of"
+            f"\ncuts named {len(named)} of {len(cut)}; K2 {len(false)} of"
             f" {len(silent)} uncut or ≤10 dB recordings warned; {len(wrong)} naming a side not"
             f" cut; K6 C1 on {len(c1_hot)} of {len(hot)} hot in time, on {len(c1_other)} others;"
             f" K8 a frame spanning the cut decoded before the warning in {len(sooner)} of"
@@ -891,34 +845,31 @@ def main() -> None:
     make.add_argument("--list", action="store_true", help="list the clips and stop")
     make.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     make.add_argument("--seed", type=int, default=0, help="draw the clips again")
-    jud = sub.add_parser("judge", help="the candidates over the clips")
+    jud = sub.add_parser("judge", help="the reading over the clips")
     jud.add_argument("out", type=Path)
     jud.add_argument("--daemon", type=Path, default=DEFAULT_DAEMON)
     jud.add_argument("--csv", type=Path)
-    jud.add_argument("--variant", default=",".join(VARIANTS))
     jud.add_argument("--only", help="judge only clips whose name contains this")
     jud.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
-    fld = sub.add_parser("field", help="the candidates over the field recordings")
+    fld = sub.add_parser("field", help="the reading over the field recordings")
     fld.add_argument("inbox", type=Path)
     fld.add_argument("--daemon", type=Path, default=DEFAULT_DAEMON)
     fld.add_argument("--csv", type=Path)
-    fld.add_argument("--variant", default=",".join(VARIANTS))
     fld.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
-    har = sub.add_parser("harness", help="the candidates over the cut grid's recordings")
+    har = sub.add_parser("harness", help="the reading over the cut grid's recordings")
     har.add_argument("runs", type=Path)
     har.add_argument("--daemon", type=Path, default=DEFAULT_DAEMON)
     har.add_argument("--csv", type=Path)
-    har.add_argument("--variant", default="r3+keep")
     har.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     args = ap.parse_args()
     if args.command == "harness":
-        harness(args.runs, args.daemon, args.csv, args.variant.split(","), args.jobs)
+        harness(args.runs, args.daemon, args.csv, args.jobs)
         return
     if args.command == "field":
-        field(args.inbox, args.daemon, args.csv, args.variant.split(","), args.jobs)
+        field(args.inbox, args.daemon, args.csv, args.jobs)
         return
     if args.command == "judge":
-        judge(args.out, args.daemon, args.csv, args.variant.split(","), args.only, args.jobs)
+        judge(args.out, args.daemon, args.csv, args.only, args.jobs)
         return
     clips = [c for c in corpus(args.seed) if not args.only or args.only in c.name]
     if args.list:

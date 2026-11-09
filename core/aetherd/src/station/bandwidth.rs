@@ -753,6 +753,8 @@ impl<P: Ptt> Station<P> {
         let before = std::mem::replace(&mut self.busy, busy);
         self.busy.keep_levels_from(&before);
         self.was_busy = false;
+        // the receive filter is the same radio's: its looks stay, judged at the new span
+        self.passband.set_air(params);
         self.occupancy = crate::regulatory::occupancy::air(hz).ok();
         let top = self.top_rung();
         self.config.link.max_mode = top;

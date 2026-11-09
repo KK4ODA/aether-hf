@@ -2815,6 +2815,29 @@ next:
 - the manual;
 - R0–R2 and the trace's variants are deleted.
 
+**Gate 5, the port (2026-11-09, beta.145).** `crate::passband` is the station's reading:
+`ReceiveFilter` (`step(now, listening, window, take)` takes a look every `LOOK_EVERY_S` while the
+station is neither keyed, deaf nor receiving, holds it `hold_for(params)` — the air's longest
+frame of any family and half a second — and drops it if a frame announced or reported lay under
+it; `frame(start, end)` from `absorb` and `heed_preambles`; `set_air` in `move_to` keeps the
+looks, divided again by the new span's level; `reading()` → `FilterReading`) and `Clipping` (C1,
+fed in `capture` while the station hears the radio). **A frame's span is on the receiver's clock,
+about 20 ms after its audio** (`AudioToBaseband::rx_delay_samples`); the reading shifts it, or a
+look ending in a frame's first 20 ms is kept (found by the port's station test). `metrics.rx_filter`
+`{verdict, low_drop_db, high_drop_db, looks}` and `metrics.clipping` `{share, clips}` replace
+`rx_passband_hz` and `occupied_hz`; a sidecar's `passband.readings` are `[t, taken, verdict,
+low_drop_db, high_drop_db, over_floor_db, looks, clipping_pct]` and `aetherd --passband-trace`
+prints the same columns (one line a look, and a half-second beat between). Panel: `#filter-banner`
+and `#clip-banner` on every tab, Compact included (`applyRxFilter`, `applyClipping`; a dismissal
+in `aether.filterDismissed` holds until another edge, 3 dB more or another bandwidth, and is
+cleared by a clear reading; `aether.clipDismissed` until the audio stops clipping), the Channel
+card's *Receive filter* tile (`#rx-filter-tile`, the whole row), the Receive level line reading
+C1. Gone: `PassbandMonitor`, `passband_edges`, `passband_width_hz`, `PassbandEdges`,
+`Spectrum::level_around`, `PASSBAND_SAMPLE_S`, `PASSBAND_MIN_LEVEL_DBFS`, the quiet-window wait,
+`applyPassband`, `#rx-passband-note`, `--passband-variant`, `--no-clip-veto`. The test noise of a
+receiver (band-limited over a chain floor) is `passband::test_noise::ReceiverNoise`: flat noise
+to 24 kHz, as `[sim]` adds it, has no chain floor and reads *can't check*.
+
 **RadioPost, and one modem for both systems (2026-11-09).** RadioPost (`KK4ODA/RadioPost`)
 reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the control API. The
 author asked whether to fork Aether for it. The answer: no fork. Aether stays one modem that doesn't

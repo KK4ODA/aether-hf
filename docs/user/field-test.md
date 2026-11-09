@@ -33,6 +33,16 @@ drive** → *Set drive* for the transmit level against the rig's ALC (the guide 
 card), on both stations. An overdriven card is the most common reason a mode "does not
 work".
 
+**The rig's receive filter.** Wide enough for the signal and centred on it: about 2.4–3 kHz
+for 2300 Hz, 600 Hz or wider centred on 1500 Hz for 500 Hz, with the IF shift (or passband
+tuning) centred and the low cut at 300 Hz or below. The Status tab's **Receive filter** line reads
+it from the band's noise within about twelve seconds of listening; a banner on every tab names the edge
+it cuts 12 dB or more down and the knob to turn: a moved IF shift, a high or low cut, or a filter
+narrower than the signal. A cut of 10 dB costs nothing; 20 dB costs speed. *Can't check* means
+the band's noise is too close to the sound card's own: turn the radio's audio up. A clipping
+banner means the receive audio reaches full scale: turn it down. `aetherd --passband-trace`
+replays a recording through the same reading, look by look (ADR-0105).
+
 **The rig's AGC.** Any setting, or OFF with the RF gain set so the band noise sits well
 above the sound card's own floor. A receiver's AGC cuts its gain the instant something
 strong appears anywhere in its passband, holds it down while the signal lasts, and lets
