@@ -161,8 +161,12 @@ struct Args {
     passband_trace: Option<PathBuf>,
     /// The receive-filter review's candidate a passband trace runs beside today's estimate.
     passband_variant: Option<String>,
+    /// Whether that candidate goes on taking looks while the audio clips.
+    no_clip_veto: bool,
 }
 
+// one arm an option: a long match, read top to bottom
+#[allow(clippy::too_many_lines)]
 fn parse_args() -> Result<Option<Args>, String> {
     let mut args = Args::default();
     let mut argv = std::env::args().skip(1);
@@ -237,6 +241,7 @@ fn parse_args() -> Result<Option<Args>, String> {
                         .ok_or("--passband-variant needs r0, r1, r2 or r3")?,
                 );
             }
+            "--no-clip-veto" => args.no_clip_veto = true,
             "--busy-variant" => {
                 args.busy_variant = Some(argv.next().ok_or("--busy-variant needs a name")?);
             }
@@ -309,6 +314,7 @@ aetherd — the Aether HF station daemon
                       would have taken, by the sidecar's keying, frames and busy state)
       --passband-variant r0|r1|r2|r3  trace one of the receive-filter review's
                       candidates beside today's estimate (r0, the default, is today's)
+      --no-clip-veto  let the candidate go on taking looks while the audio clips
       --bandwidth N   the bandwidth a trace runs at when no sidecar says (500 or 2300)
       --busy-variant plain  trace with the floor in dBFS, as before ADR-0078
       --channel HOST:PORT  take the audio from a scenario harness's channel server, in
@@ -347,8 +353,13 @@ fn passband_trace(wav: &std::path::Path, args: &Args) -> Result<(), String> {
         .map(str::parse::<aetherd::passband::Variant>)
         .transpose()?
         .unwrap_or_default();
-    let readings =
-        aetherd::passband_trace::trace(wav, expectation.as_ref(), args.bandwidth, variant)?;
+    let readings = aetherd::passband_trace::trace(
+        wav,
+        expectation.as_ref(),
+        args.bandwidth,
+        variant,
+        !args.no_clip_veto,
+    )?;
     print!("{}", aetherd::passband_trace::to_csv(&readings));
     Ok(())
 }

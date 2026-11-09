@@ -71,6 +71,62 @@ pub const SPECTRUM_TOP_HZ: f64 = FLOOR_BAND_HZ.1;
 /// The panel's slack today: it warns when the width is under the signal's less this (R0).
 pub const WARNING_SLACK_HZ: f64 = 400.0;
 
+/// A sample this near full scale counts as clipped (C1), as the Receive level tile counts it.
+pub const FULL_SCALE: f32 = 0.99;
+/// How much of the audio the station listened to clipping is read over (C1), seconds.
+pub const CLIP_WINDOW_S: f64 = 10.0;
+/// The share of samples at full scale over which the audio clips (C1): the panel's Receive level
+/// line today, which every one of Saturday's sessions passed (1.3–1.7 %) and no other recording
+/// reached.
+pub const CLIP_SHARE: f64 = 0.001;
+
+/// C1: the share of samples at full scale over the last [`CLIP_WINDOW_S`] of audio heard. While
+/// it is over [`CLIP_SHARE`] the audio clips: a warning of its own, and no look of the passband
+/// is taken, since a clipped spectrum is not the radio's response.
+#[derive(Debug, Clone, Default)]
+pub struct Clipping {
+    /// Per block (clipped, samples), oldest first.
+    blocks: VecDeque<(usize, usize)>,
+    held: usize,
+    window: usize,
+}
+
+impl Clipping {
+    /// A fresh reading at `rate` samples a second.
+    #[must_use]
+    pub fn new(rate: f64) -> Self {
+        Self {
+            window: (rate * CLIP_WINDOW_S) as usize,
+            ..Self::default()
+        }
+    }
+
+    /// A block of audio the station heard.
+    pub fn hear(&mut self, audio: &[f32]) {
+        let clipped = audio.iter().filter(|x| x.abs() >= FULL_SCALE).count();
+        self.blocks.push_back((clipped, audio.len()));
+        self.held += audio.len();
+        while self.held > self.window
+            && let Some((_, n)) = self.blocks.pop_front()
+        {
+            self.held -= n;
+        }
+    }
+
+    /// The share of the samples held at full scale.
+    #[must_use]
+    pub fn share(&self) -> f64 {
+        let clipped: usize = self.blocks.iter().map(|&(c, _)| c).sum();
+        clipped as f64 / self.held.max(1) as f64
+    }
+
+    /// Whether the audio clips now.
+    #[must_use]
+    pub fn clips(&self) -> bool {
+        self.share() > CLIP_SHARE
+    }
+}
+
 /// Which candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Variant {
@@ -659,6 +715,22 @@ mod tests {
         assert!(look[at - 2..=at + 2].iter().all(|v| v.is_nan()));
         assert!(look[at - 3].is_finite() && look[at + 3].is_finite());
         assert_eq!(look.iter().filter(|v| v.is_nan()).count(), 5);
+    }
+
+    #[test]
+    fn clipping_is_read_over_the_last_ten_seconds() {
+        let rate = 1000.0;
+        let mut c = Clipping::new(rate);
+        let mut block = vec![0.1f32; 100];
+        block[0] = 1.0;
+        block[1] = -0.995;
+        c.hear(&block);
+        assert!(c.clips(), "{}", c.share());
+        for _ in 0..100 {
+            c.hear(&[0.1f32; 100]);
+        }
+        assert!(c.share() < f64::EPSILON, "{}", c.share());
+        assert!(!c.clips());
     }
 
     #[test]
