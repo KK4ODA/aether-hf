@@ -2815,6 +2815,17 @@ next:
 - the manual;
 - R0–R2 and the trace's variants are deleted.
 
+**RadioPost, and one modem for both systems (2026-11-09).** RadioPost (`KK4ODA/RadioPost`)
+reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the control API. The
+author asked whether to fork Aether for it. The answer: no fork. Aether stays one modem that doesn't
+care which application runs on it, and RadioPost is another program beside the VARA port and the
+KISS port, because a gateway operator moving from Winlink will run both on one radio.
+**ADR-0106 (proposed, not built)** is what that needs. A program *claims* callsigns, starting with
+answering off. The first claim on a callsign holds it, and a claim ends with its connection. A call
+is answered only while its callsign's holder listens, and a session belongs to that holder (`owner`
+on state events). The host adapter's `MYCALL`/`LISTEN` become a claim. Debug mode uploads only the
+sessions the host interface owns.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
