@@ -6,12 +6,14 @@
 
 An open-source HF data modem for amateur radio: error-free ARQ links for Winlink, peer-to-peer
 messaging and file transfer over real, noisy, fading HF paths. Winlink Express, Pat, VarAC and
-RMS Trimode work with it unchanged. Its air interface is published, every transmission is
-checked against the licence's rules before the radio keys, and the same modem runs as a
-desktop application on Windows, Linux and macOS or headless on a Raspberry Pi gateway.
+RMS Trimode work with it unchanged, and it is the first modem of
+[RadioPost](https://github.com/KK4ODA/RadioPost), email by amateur radio with no central
+server. Its air interface is published, every transmission is checked against the licence's
+rules before the radio keys, and the same modem runs as a desktop application on Windows,
+Linux and macOS or headless on a Raspberry Pi gateway.
 
 > **Status: beta, on the air.** Signed builds ship from
-> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.143` at the time of
+> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.146` at the time of
 > writing): a Windows installer, Linux `.deb` and AppImage packages, an unsigned macOS build for
 > Apple Silicon, and the standalone `aetherd` daemon for gateways, with in-place updates on a
 > beta channel. Aether has been on the air with other stations on 80 m and 40 m since
@@ -126,6 +128,16 @@ cover everything else it does.
   up ([ADR-0071](docs/adr/0071-the-keying-latency-counts-the-radio-and-the-render.md),
   [ADR-0079](docs/adr/0079-the-receiver-follows-a-session-station-off-frequency.md),
   [ADR-0078](docs/adr/0078-the-busy-detectors-floor-follows-the-radios-gain.md)).
+* **★ It says when the radio is in the way.** While it listens, Aether reads the radio's receive
+  filter from the band's noise. A banner on every view says when the filter cuts an edge of
+  Aether's signal 12 dB or more, and names the knob: the IF shift, the high or low cut, or the
+  width. Another says when the receive audio clips. Both receivers also read the noise across
+  the band, so a filter that does cut in costs far less: with a receiver's IF shift turned fully
+  left, 23 dB down across the top of a 2300 Hz signal, OFDM rungs 13 and 16 went from no frame
+  decoded to 30 of 30
+  ([ADR-0105](docs/adr/0105-the-receive-filter-is-read-at-the-signals-edges.md),
+  [ADR-0104](docs/adr/0104-the-receivers-read-the-noise-across-the-band.md),
+  [`noise_shape_cuts.csv`](bench/baselines/noise_shape_cuts.csv)).
 * **★ Every contact can become a measurement.** A two-way probe says how each station hears
   the other without starting a session. A Test session measures a path end to end and records
   it. Recordings keep what the modem made of every frame beside the audio, replay through the
@@ -139,6 +151,11 @@ cover everything else it does.
   macOS, with no emulation layer; the daemon alone runs a Raspberry Pi 4 gateway under systemd,
   and its panel can be watched from a browser over an SSH tunnel. A documented JSON control API
   drives everything the panel does.
+* **★ One radio, several programs.** A Winlink gateway program on the host port and a RadioPost
+  gateway on the control API can run on the same radio at once. Each program claims its own
+  callsigns; a call is answered only while the program holding its callsign listens, and the
+  session is that program's alone
+  ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)).
 * **★ Every number can be reproduced.** The Python reference model is the specification and
   the shipped Rust core is held bit-exact to it in CI. Every performance figure comes from a
   benchmark curve committed in [`bench/baselines/`](bench/baselines/). A scenario harness runs
@@ -170,6 +187,9 @@ cover everything else it does.
 * A receiver that **weighs each OFDM carrier by its own noise**, so a narrowband interferer
   inside the passband costs the carriers it sits on, not the frame
   ([ADR-0043](docs/adr/0043-per-carrier-noise-and-the-rv-order.md)).
+* Receivers that read **the shape of the noise across the band**, from the pilots and the
+  tones, so a radio filter that cuts into the signal, noise and all, no longer reads as a bad
+  channel ([ADR-0104](docs/adr/0104-the-receivers-read-the-noise-across-the-band.md)).
 * **Pilot tracking that follows fast flutter** (polar and auroral paths) and **per-tone level
   tracking** on fading, each measured on the flutter channel too
   ([ADR-0082](docs/adr/0082-the-ofdm-receiver-follows-a-channel-that-moves-within-the-frame.md),
@@ -202,8 +222,8 @@ cover everything else it does.
 * **Closing Morse identification** handled for you: each station's identifier is the last
   thing it sends for a session, after the other's goodbye, never over it; a US callsign always
   identifies (§97.119), without its SSID and within the 20 wpm cap on an automatic identifier.
-* **Several callsigns**: a station answers to its own and to a host program's `MYCALL`, with
-  SSIDs and `/` suffixes.
+* **Several callsigns**: a station answers to its own, and each program attached answers for
+  the callsigns it claims (a host program's `MYCALL`), with SSIDs and `/` suffixes.
 
 ### Working with the radio
 
@@ -220,6 +240,10 @@ cover everything else it does.
   **Tuner tone** for an antenna tuner; **Set drive** sends real bursts to set the level against
   the ALC; the last transmit peak shows the modem's headroom.
 * A **receive level** meter (Setup step 3) that says *Good*, too quiet, or clipping.
+* ★ A **receive filter** reading: how far each edge of Aether's signal lies under the radio's
+  passband, read from the band's noise in seconds even on a busy band, with a banner that names
+  the knob when an edge is cut and another when the receive audio clips
+  ([ADR-0105](docs/adr/0105-the-receive-filter-is-read-at-the-signals-edges.md)).
 * A **key watchdog** (30 s by default), whole bursts handed to the sound card at once, and the
   key released by the sound card's own clock, not a guess.
 * ★ **Turnaround** declared in the call, so the other station waits for this radio to hear
@@ -262,11 +286,19 @@ cover everything else it does.
 * **One place for each setting**: while a program is attached, its callsign and its `BW500`
   / `BW2300` / `BW2750` set the station's (Setup shows *Host* there), and the station's own come
   back when it leaves; the program sees only its own sessions.
+* ★ **Several programs on one station**: a program on the host port and programs on the control
+  API each claim their own callsigns, with answering off until they say. A call is answered only
+  while the program holding its callsign listens, the session is that program's alone, and the
+  others see the channel busy until it ends. A program that crashes stops being answered for.
+  While a host program is attached it speaks for the station: the station's own callsigns it
+  does not hold are not answered
+  ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)).
 * A **KISS-over-TCP port** (127.0.0.1:8100) for APRS and packet programs and VarAC's broadcasts,
   several clients at once, with ACKMODE; each frame goes on the air as a datagram that any
   Aether station hears ([`docs/user/kiss.md`](docs/user/kiss.md)).
 * A **control API**, JSON over WebSocket or `POST /v1/<method>`, with events for everything the
-  station does; loopback by default, and a token required on any other address
+  station does; a program on it claims its callsigns and is told which sessions are its own.
+  Loopback by default, and a token required on any other address
   ([`docs/spec/control-api.md`](docs/spec/control-api.md)).
 * **One instance**: a host program launching Aether while it runs brings up its window.
 
@@ -277,16 +309,20 @@ cover everything else it does.
   and a Modem lamp.
 * **Full**, **Compact** and **Mini** views, and a **Light** theme for daylight and sunlight
   (lit lamps become filled blocks in glare).
-* **Banners** across every tab: the session, setup still needed, unsaved changes, a station in
-  another bandwidth, protocol or SSID (with buttons that fix it), and faults; a **chime** when a
-  session comes up and when it ends.
+* **Banners** across every tab: the session (and whose it is, when a program's), setup still
+  needed, unsaved changes, a station in another bandwidth, protocol or SSID (with buttons that
+  fix it), the radio's receive filter cutting the signal and clipped receive audio (these two in
+  Compact too), and faults; a **chime** when a session comes up and when it ends.
+* A chip naming the **programs using the station** and whether each is answering, with the
+  callsigns each answers for in its tooltip.
 * **Session**: the dial and its legality, call, probe, beacon and Test, keying and drive, the
   conversation, and the recorder.
 * A **Send box that tracks delivery**: what was sent stays with its time and turns ✓ only when
   the other station has all of it, in order, or ✗ if the session ended first.
 * **Status**: link and channel readings, the speed over ten minutes on a log scale against the
   rate of the rung each way, the SNR of every frame against the rung's threshold, the
-  channel's level and busy periods with adjustable axes, and counters.
+  channel's level and busy periods with adjustable axes, the receive filter's reading, and
+  counters.
 * **Stations**: the 200 stations heard most recently, with bandwidth, beacons and filters, and
   the last 500 sessions with what crossed each way, the fastest rung each way, how each station
   heard the other and how the session ended.
@@ -380,6 +416,23 @@ cover everything else it does.
   step by step in [`docs/user/winlink-gateway.md`](docs/user/winlink-gateway.md). An Aether
   gateway must not be listed as a gateway for another modem: the signals are not compatible.
 
+## RadioPost
+
+[RadioPost](https://github.com/KK4ODA/RadioPost) is email by amateur radio with no central server:
+ordinary email addresses, gateways any licensed amateur can run, post offices that clubs and
+groups run, and forwarding by radio when the Internet is down. It is a separate project with its
+own specifications, in early design, and it is not compatible with Winlink. Aether is its first
+modem; RadioPost does not depend on it.
+
+RadioPost programs drive a modem through RadioPost's modem interface (RPMI,
+[RP-4](https://github.com/KK4ODA/RadioPost/blob/main/spec/rp-0004-modem-interface.md)), which
+maps one to one onto Aether's control API
+([RP-4 §9.1](https://github.com/KK4ODA/RadioPost/blob/main/spec/rp-0004-modem-interface.md#91-aether)).
+From `0.2.0-beta.146` the two systems can share a station: a RadioPost gateway claims callsigns of
+its own (`N1CALL-10`, say) beside RMS Trimode's `MYCALL` (`N1CALL-1`), and each answers only for
+its own ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)). One Aether
+serves both; there is no separate RadioPost build of the modem.
+
 ## Where things stand
 
 A full technical audit was done on 2026-09-13 — read [`docs/AUDIT.md`](docs/AUDIT.md). In
@@ -400,7 +453,7 @@ distilled from how the community has received other open HF modems are in
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, host interface, gateway kit | done; Winlink Express, Pat, VarAC and RMS Trimode pass the bench |
 | 4 — Desktop application | station panel, Tauri shell, setup, diagnostics, accessibility | done; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.143` |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.146` |
 | 6 — Field validation | recordings, replay, simulated channel, field protocol, the air, on-air crowdsourcing (the Test session) | **in progress**: on the air with other stations since 2026-09-23, Winlink through an Aether gateway since 2026-11-06; granted slots (link protocol 8 onwards), the scenario harness and the rate controller's two reviews came from those sessions |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth peer-to-peer contacts use, the bandwidth in the handshake, answer-only, a two-way probe | done |
 | 9 — The modem's second rung | a faster start, the tone floor and the middle tone kinds, fading and NVIS receivers, an A/B bench against another modem, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: the tone floor, fast tones and four-tone kinds, fast-fading and echo-aware receivers, stuck frames in pieces done; the A/B runs and P9-3 open; time diversity paused |
@@ -409,15 +462,16 @@ distilled from how the community has received other open HF modems are in
 
 ## Architecture in one paragraph
 
-Application adapters (the host interface for Winlink and chat programs and a KISS port now;
-AGWPE with FM) sit on a PHY-agnostic link layer (session, granted slots, selective-repeat ARQ
-with HARQ-IR, rate selection, compression, datagrams) and a modem framework (frame codec,
-scheduler, metrics), which drive a pluggable PHY (HF OFDM and tone frames; FM later) over a
-hardware abstraction (audio, PTT, rig control, or the channel simulator). Nothing reaches the
-transmitter without the regulatory gate's leave. The Python model in `model/` is the
-specification: it designs and validates the waveform and generates the golden vectors the Rust
-core in `core/` is held to, bit-exactly, in CI. The desktop shell in `app/` supervises the
-daemon and serves its panel (ADR-0001, ADR-0005). Diagrams and rationale:
+Application adapters (the host interface for Winlink and chat programs, a KISS port, and the
+control API that RadioPost's modem interface maps onto; AGWPE with FM) sit on a PHY-agnostic
+link layer (session, granted slots, selective-repeat ARQ with HARQ-IR, rate selection,
+compression, datagrams) and a modem framework (frame codec, scheduler, metrics), which drive a
+pluggable PHY (HF OFDM and tone frames; FM later) over a hardware abstraction (audio, PTT, rig
+control, or the channel simulator). Nothing reaches the transmitter without the regulatory
+gate's leave. The Python model in `model/` is the specification: it designs and validates the
+waveform and generates the golden vectors the Rust core in `core/` is held to, bit-exactly, in
+CI. The desktop shell in `app/` supervises the daemon and serves its panel (ADR-0001, ADR-0005).
+Diagrams and rationale:
 [`docs/ROADMAP.md` §4](docs/ROADMAP.md#4-recommended-target-architecture).
 
 ## Repository layout
