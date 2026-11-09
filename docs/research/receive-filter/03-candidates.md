@@ -120,9 +120,11 @@ air the station runs.
   code than today's 200 lines for the reading. Every test today's has (the width, flat noise, the
   notch, the FT8 band, the wait for looks, the looks kept from frames and keying) passes in its
   new form, and new ones hold a moved passband and a cut low edge.
-* **K8, the witness earns its place.** If W1 is kept, its edge readings on the field recordings
-  agree with the noise's within 3 dB wherever both read, and on the harness's cut runs it warns,
-  in sessions, where the noise has not yet; if it does neither, it goes.
+* **K8, the witness earns its place.** W1 only brings forward a warning the noise agrees with (the
+  author's answer 1, §5). It stays if its edge readings on the field recordings agree with the
+  noise's within 3 dB wherever both read and, on the harness's cut runs, the warning comes
+  sooner in sessions with it than without; it never adds a warning the noise would not give. If
+  it brings nothing forward, it goes.
 * **K9, nothing else changes.** It only warns: on the harness, the prototype's runs pass as the
   shipped build's do, with no radiated overlap; and its cost on `aetherd --replay` is no more than
   2 % of real time over today's on the mini PC's recordings.
@@ -151,6 +153,15 @@ air the station runs.
 2. **When the cut cannot be measured.** On a quiet band with low audio, or under a pumping AGC, the
    band's noise may sit too close to the chain's floor for any cut to show. Should the panel say
    so (a line in the Status tab's readings, not a banner), or say nothing?
+
+### The author's answers (2026-11-09)
+
+1. **The frames only speed a warning up.** A cut seen in the frames makes a warning come sooner
+   when the noise's reading agrees; the noise alone decides that this radio's filter is cut, so
+   the other station's transmit filter is never blamed on this radio. K8 is judged that way: W1
+   stays if it brings warnings forward in sessions without adding any the noise would not give.
+2. **"Cannot tell" is said quietly**: a line in the Status tab's readings (for example *Receive
+   filter: can't check, band noise too weak*), never a banner.
 
 ## 6. The order of work in Gate 3
 
