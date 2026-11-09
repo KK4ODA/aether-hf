@@ -162,6 +162,11 @@ side named, the decoded frames' channel estimate as a second witness, and a clip
 that holds in a session. Criteria will ask for detection of a cut at either side of the span at the
 depth where the harness shows it costs throughput (§6.2), no warning on the corpus's working
 stations, words that name the side, and fewer constants than today.
+*Registered 2026-11-09 (`03-candidates.md`): the reading in four steps (R0 today, R1 the span
+judged at its edges with the side named, R2 looks normalised and kept only over the chain's floor,
+R3 occupied bins removed within each look), the frames as a second witness (W1), clipping as its
+own reading (C1), and a banner in every view; nine criteria (K1–K9), the line between 10 dB (costs
+nothing on beta.144's receiver) and 20 dB (costs); two questions for the author.*
 
 ### Gates 3–5
 
