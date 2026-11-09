@@ -167,19 +167,23 @@ candidates' (`03-candidates.md` §1) read again with the real depths:
 | bottom 20 dB (floor 15 / 50 dB down) | 0.76 / 0.70 | 0.98 / 0.89 | **1.02 / 0.94** | **1.00 / 0.94** |
 | Saturday's receiver | 0.63 | 0.82 | 0.96 | 0.90 |
 
-*(A fresh run of the whole grid on beta.144's receiver, the bottom cuts at their real depths;
-every run passed. The 500 Hz top 10 dB file's 0.65 is the median of 1.00, 0.65 and 0.60, its
-message's 1.00, 1.09 and 0.62. The earlier run of the same receiver, the candidates' table, had
-1.00, 0.72, 0.99 and 1.00, 0.96, 0.77 there: the same two draws lost in both runs, and on the
-third draw the 6 dB cut lost in both runs too (message 0.62–0.77) while its median stayed 1.00.
-Ten draws of the 500 Hz top cuts are being run to settle it.)*
+*(A fresh run of the whole grid on beta.144's receiver, the bottom cuts at their real depths; every
+run passed. The 500 Hz top 10 dB file's 0.65 is the median of 1.00, 0.65 and 0.60, its message's
+1.00, 1.09 and 0.62. The earlier run of the same receiver, the candidates' table, had 1.00, 0.72,
+0.99 and 1.00, 0.96, 0.77 there: the same two draws lost in both runs, and on the third draw the 6
+dB cut lost in both runs too (message 0.62–0.77) while its median stayed 1.00. Ten draws of the 500
+Hz top cuts, run again, settle it: 3, 6 and 10 dB cost nothing (medians 1.00/1.00, 0.99/1.00,
+0.99/0.98 message/file; the 10 dB cut's worst single draws, 0.77 and 0.72, are the spread a 3 dB cut
+shows too, 0.94 and 0.88), and 20 dB costs (0.90/0.84, five draws of ten under 0.85 on the file).
+The 0.65 was three draws' spread.)*
 
 What changes: **a 20 dB cut at the 500 Hz bottom edge costs nothing** (0.94–1.02). Gate 0's 68–82 %
 there was the 42 dB cut, and the candidates' "the bottom one most (at 500 Hz it is the tone
 detector's)" rested on it. ADR-0104's bench (`bench_cut.py`, its own analytic high-pass, as deep as
 named) is not touched; its harness line on "the 500 Hz bottom 20 dB cut" was the 42 dB one. What
 stands: **10 dB costs nothing anywhere; 20 dB costs at the 2300 Hz bottom (24–30 % of the
-message), at the 500 Hz top (7–13 %) and a step at the 2300 Hz top's file.** The line between 10
+message), at the 500 Hz top (7–13 % of the message on three draws; 10 % and 16 % of message and
+file on ten) and a step at the 2300 Hz top's file.** The line between 10
 and 20 dB holds at three edges of four; at the 500 Hz bottom it is early (§11, 4).
 
 ### 6.2 R3 on the grid
