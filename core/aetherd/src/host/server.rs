@@ -2474,6 +2474,19 @@ mod tests {
                 .is_some_and(|(method, params)| method == "listen" && params["enabled"] == true)
         }
 
+        /// Whether listening comes to `expected` within a second: `listen` is told, not asked,
+        /// so it reaches the modem a moment after the program hears its `OK`.
+        fn listening_comes_to(&self, expected: bool) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while self.listening() != expected {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            true
+        }
+
         /// The methods the adapter asked for, in order.
         fn methods(&self) -> Vec<String> {
             self.seen
@@ -2745,7 +2758,7 @@ mod tests {
         let _ = first.reader.read_to_end(&mut rest);
         // and what it said goes with it: the old connection's claim is let go, and the
         // newcomer has not said LISTEN ON
-        assert!(!modem.listening());
+        assert!(modem.listening_comes_to(false));
         second.send("MYCALL W4ODA");
         assert_eq!(second.expect(|l| l == "OK" || l == "WRONG"), "OK");
         assert!(modem.flags.attached.load(Ordering::SeqCst));
@@ -3010,27 +3023,27 @@ mod tests {
             "status" => json!({"own_callsigns": ["W4ODA"]}),
             _ => json!({}),
         });
-        let listening = || modem.listening();
+        let listening = |expected| modem.listening_comes_to(expected);
         let attached = || modem.flags.attached.load(Ordering::SeqCst);
         let mut client = Client::connect(&server);
         client.send("VERSION");
         client.expect(|l| l.starts_with("VERSION"));
-        assert!(attached() && !listening());
+        assert!(attached() && listening(false));
         client.send("LISTEN ON");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
-        assert!(listening());
+        assert!(listening(true));
         client.send("LISTEN OFF");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
-        assert!(!listening());
+        assert!(listening(false));
         client.send("CHAT ON");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
-        assert!(listening());
+        assert!(listening(true));
         drop(client);
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while attached() && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!attached() && !listening());
+        assert!(!attached() && listening(false));
         // ADR-0106: the program claimed the station's own callsign at its attach, its LISTEN
         // was that claim's, and its connection's close let the claim go
         let seen = modem.seen.lock().expect("seen");
