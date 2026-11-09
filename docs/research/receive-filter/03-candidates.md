@@ -36,6 +36,12 @@ A line in that band has one more constraint, the audio chain's own floor. The mo
 the floor add), and a 10 dB cut about 9. A line near 12 dB separates both floors; a line at 15 dB
 would miss a 20 dB cut over a shallow floor.
 
+*Correction (2026-11-09, Gate 3): the table's bottom cuts were deeper than named, at 500 Hz far
+deeper (6, 10 and 20 dB were 10.2, 19.8 and 42.1 dB down at 1260 Hz; at 2300 Hz 6.8, 11.9 and
+24.4 at 360 Hz). `04-results.md` §6.1 has the table at the real depths: a 20 dB cut at the 500 Hz
+bottom costs nothing, and the "bottom one most" above was the 42 dB cut. The line between 10 and
+20 dB holds at the other three edges. The criteria below are unchanged.*
+
 ## 2. The candidates
 
 The estimate has four parts, and the candidates change them one at a time, so each change's worth

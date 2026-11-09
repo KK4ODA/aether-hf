@@ -133,6 +133,8 @@ chain's own white floor 50 dB under the noise (the FTDX10) or 15 dB under it (th
 Saturday), under one of five conditions: steady; an AGC dipping for a strong signal the audio does
 not carry (the busy corpus's *mid* preset, a carrier keyed 1.5 s in every 5); QSB (±6 dB over 8 s);
 ten FT8 stations at +3 to +15 dB; and audio driven to −8 dBFS RMS, clipping as Saturday's did.
+(Gate 3 found the FT8 clips reaching full scale too, 1.3 % of one clip's samples: a clip outside
+the hot condition is now turned down to a −1 dBFS peak where it would pass it, `04-results.md` §7.)
 The responses are eighth-order band-passes: 2.7, 2.4, 2.1 and 1.8 kHz filters, a 500 Hz filter,
 the 2.4 kHz filter moved down 300, 600 and 1100 Hz (Saturday's), moved up 300 and 600 Hz, a low
 cut at 600 Hz, a 3 dB/kHz tilt above 1 kHz, and a 30 dB notch 60 Hz wide at 1800 Hz. Each clip's
@@ -225,6 +227,13 @@ How to read the rest:
 * **A warning line** follows: somewhere between 10 and 20 dB down at either edge of the signal.
   The FTDX10's own tilt is 5–9 dB down at 2.6–2.8 kHz, and a line at 10 dB leaves it alone.
   Where exactly is Gate 2's to register.
+
+*Correction (2026-11-09, Gate 3): the bottom cuts were deeper than named. The grid placed a
+bottom cut's corner by an eighth-order low-pass prototype's formula, and the channel server builds
+a band-pass, whose lower skirt is steeper: at 2300 Hz the 6, 10 and 20 dB cuts were 6.8, 11.9 and
+24.4 dB down at 360 Hz, at 500 Hz 10.2, 19.8 and 42.1 dB down at 1260 Hz. The top cuts and
+Saturday's receiver were as named. `04-results.md` §6.1 has the table at the real depths: a 20 dB
+cut at the 500 Hz bottom edge costs nothing; the 68–82 % above was the 42 dB one.*
 
 ## 9. Clipping (Gate 0 item 7, the author's answer 5)
 

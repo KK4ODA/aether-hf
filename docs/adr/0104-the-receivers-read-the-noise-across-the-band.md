@@ -155,7 +155,9 @@ before this ADR, built from the same tree):
   bit/s, file 1247/1026/1236 → 1258/1262/1196. The harness's Saturday is the mobile's whole chain:
   its floor 15 dB under the band's noise and its drive 8 dB hot, and in the filter's skirt that
   floor, not the receiver, takes the SNR, so the session gains less than the bench's frames. The
-  500 Hz bottom 20 dB cut: 4 of 6 → 6 of 6 passed.
+  500 Hz bottom 20 dB cut: 4 of 6 → 6 of 6 passed. (2026-11-09: that cut was 42 dB down at
+  1260 Hz, not 20; the grid's bottom cuts were deeper than named, `docs/research/receive-filter/
+  04-results.md` §6.1. The bench's cuts above, `bench_cut.py`'s own, are as named.)
 * **500 Hz NVIS.** The first build (data of every kind read tone by tone, the SNR too) ran these
   sessions 5–6 % longer; that is how the two changes in §2 were found. On fresh draws of the seven
   NVIS scenarios the shipped build ran 28 paired runs ×1.016 (27 and 27 passed). The three at

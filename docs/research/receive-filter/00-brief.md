@@ -172,6 +172,12 @@ nothing on beta.144's receiver) and 20 dB (costs); two questions for the author.
 
 A prototype beside the shipping code, judged on the corpus and the harness; the decision ADR
 with what is removed; the port, the manual, and the deletion of what it replaces.
+*Gate 3 done 2026-11-09 (`04-results.md`): R3, the reading that leaves out the bins a signal
+holds and needs no quiet window, meets K1, K2, K3 and K5 on two draws of the corpus and on the
+harness. On the field it meets K4 with C1's veto off. C1 meets K6, K7 is level on code and one
+constant under, and W1 brings nothing forward. Two faults in the bench were found and fixed (the
+grid's bottom cuts, the corpus's FT8 level), and the cost table was corrected. Four questions for
+the author.*
 
 ## 6. For the author
 

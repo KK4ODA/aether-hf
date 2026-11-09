@@ -2785,6 +2785,32 @@ the author chose to ship both halves with it (2026-11-09). One harness build rep
 runs to the second: judge a few-percent difference on two passes of each build, and split a change
 to find its half. The receive-filter review resumes at Gate 2 on this receiver.
 
+**The receive-filter review's Gates 2 and 3 (2026-11-09; `docs/research/receive-filter/03-candidates.md`,
+`04-results.md`).** The candidates live in `core/aetherd/src/passband.rs` and run only offline:
+`aetherd --passband-trace WAV [--expect SIDECAR] --passband-variant r0|r1|r2|r3 [--no-clip-veto]`
+adds the verdict, both edges' drops, the look's height over the chain's floor, the looks kept and
+C1's clipping share. R0 is today's estimate, column for column. `tools/rxfilter_corpus.py` builds
+the corpus (`make [--seed N]`, now with line and joined clips) and judges every reading:
+`judge` (the corpus), `field INBOX` (the nineteen recordings), and `harness RUNS` (the cut grid's
+recordings, truth from each run's own filter). A variant `r3+keep` turns the veto off.
+**R3**, the one that passed: a look every half second whenever the station listens. It leaves
+out the bins a signal holds (14 dB over the lower quartile of 150 Hz each side, and the main
+lobe beside them). It holds each look for the air's longest frame and drops it if a frame lay
+under it. Each look is divided by its own ninth decile over the signal's span, and kept only if
+that stands 12 dB over the chain's floor (6–10 kHz). The profile is each bin's median over 120
+kept looks, smoothed by a ±50 Hz running median. The drop at each span edge below its ninth
+decile names the side at 12 dB. R3 scored 48 of 48 cuts, no false warning on two corpus draws,
+21 of 24 cuts and none false on the harness, and K4 5 of 5 on the field; eleven constants.
+**Two bench faults were found and fixed**:
+- `rxfilter_cost.py`'s bottom cuts were deeper than named, at 500 Hz 6/10/20 → 10.2/19.8/42.1 dB;
+  a real 20 dB cut at the 500 Hz bottom costs nothing.
+- The corpus's FT8 band reached full scale.
+Open for the author's Gate 4:
+- dropping C1's registered veto, which makes K4 impossible on Saturday's clipped sessions;
+- the 2026-11-07 15:06Z recording, labelled working but read 14–16 dB down at the top;
+- W1, which brings nothing forward and goes;
+- the corrected cost table.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
