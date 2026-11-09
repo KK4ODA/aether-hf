@@ -177,7 +177,8 @@ holds and needs no quiet window, meets K1, K2, K3 and K5 on two draws of the cor
 harness. On the field it meets K4 with C1's veto off. C1 meets K6, K7 is level on code and one
 constant under, and W1 brings nothing forward. Two faults in the bench were found and fixed (the
 grid's bottom cuts, the corpus's FT8 level), and the cost table was corrected. Four questions for
-the author.*
+the author.* *Gate 4 done the same day: the author agreed all four, and ADR-0105 is the decision
+(R3 and C1, no veto, W1 not built, what they remove, and the port's plan). Gate 5 is the port.*
 
 ## 6. For the author
 

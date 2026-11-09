@@ -109,3 +109,4 @@ context → decision → alternatives considered → consequences.
 | [0102](0102-a-programs-call-goes-in-the-bandwidth-it-chose.md) | A program's call goes in the bandwidth it chose | accepted |
 | [0103](0103-a-called-program-hears-its-acceptance-keyed-before-connected.md) | A called program hears its acceptance keyed before CONNECTED | accepted |
 | [0104](0104-the-receivers-read-the-noise-across-the-band.md) | The receivers read the noise across the band | accepted |
+| [0105](0105-the-receive-filter-is-read-at-the-signals-edges.md) | The receive filter is read at the signal's edges | accepted |

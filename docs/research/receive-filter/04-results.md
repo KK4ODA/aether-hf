@@ -309,6 +309,12 @@ receiver) at 14.3–16.3 dB. **For the author** (§11, 1).
    only far deeper than 20 dB (§6.1's corrected table). Nothing in R3 changes for it, but the
    500 Hz bottom edge warns from 12 dB down, where a cut costs nothing yet.
 
+### The author's answers (2026-11-09)
+
+All four proposals agreed: the veto is dropped and C1 warns on its own; the 2026-11-07 15:06Z
+recording counts in the free band; W1 goes; the line stays at 12 dB at every edge, the 500 Hz
+bottom edge's early warning accepted. The decision is ADR-0105.
+
 Gate 4 is the decision ADR: R3 and C1 (with the author's answers), what they remove —
 `PassbandMonitor`, `passband_edges` and their eight constants, the station's wait for quiet
 looks, `PASSBAND_MIN_LEVEL_DBFS`, the panel's 400 Hz and its width warning — and the port's plan:

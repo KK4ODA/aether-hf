@@ -2805,11 +2805,15 @@ decile names the side at 12 dB. R3 scored 48 of 48 cuts, no false warning on two
 - `rxfilter_cost.py`'s bottom cuts were deeper than named, at 500 Hz 6/10/20 → 10.2/19.8/42.1 dB;
   a real 20 dB cut at the 500 Hz bottom costs nothing.
 - The corpus's FT8 band reached full scale.
-Open for the author's Gate 4:
-- dropping C1's registered veto, which makes K4 impossible on Saturday's clipped sessions;
-- the 2026-11-07 15:06Z recording, labelled working but read 14–16 dB down at the top;
-- W1, which brings nothing forward and goes;
-- the corrected cost table.
+**Gate 4, ADR-0105 (the author agreed all four answers, 2026-11-09):** R3 and C1 are the
+decision. C1 warns on its own and does not veto the reading. W1 is not built. The line is 12 dB
+at every edge. The 2026-11-07 15:06Z recording counts in the free band. Gate 5, the port, comes
+next:
+- the station's reading and C1 replace `PassbandMonitor` and the quiet-window wait;
+- `metrics.rx_filter` and `metrics.clipping` replace `rx_passband_hz` and `occupied_hz`;
+- two banners in every view, and a *Receive filter* line in the Status tab;
+- the manual;
+- R0–R2 and the trace's variants are deleted.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
