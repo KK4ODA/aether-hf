@@ -174,6 +174,9 @@ settings.
   attached, and the one set here comes back when the program leaves. Turn Host programs off to
   change it.
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*.
+  With **Keying** set to *Host* (step 2), Rules, Control, License class and Sideband read
+  **Host**: the host program keys the radio and owns its dial, which Aether cannot read, so the
+  rules are None and you check every transmission. Choose another keying in step 2 to set them.
 - **Control**: *Local* (you are at the radio), *Remote* (you are at the radio through a control
   link), or *Automatic* (nobody at the control point: an unattended mailbox or gateway). Aether
   never guesses this.
@@ -280,7 +283,8 @@ the sound card's own noise.
   from the panel and Tests are not sent this way.
 - **Recording notes**: written into every recording that starts on its own.
 - **Host programs**: let Winlink Express, Pat or VarAC use this station on the VARA-compatible
-  interface. The command port is 8300 by default and the data port the next number up. Never
+  interface. The command port is 8300 by default and the data port the next number up. The
+  RadioPost client and gateway do not use this port: they connect to the control port. Never
   give it 8515: that is Aether's control port, which this panel and RadioPost use, and on the
   same number Aether stops at start (*host interface: 127.0.0.1:8515 is already in use*).
 - **KISS programs**: open a KISS-over-TCP port for APRS and packet programs, and for VarAC's

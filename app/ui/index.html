@@ -731,7 +731,7 @@
                   <option value="us-fcc-part97">United States — FCC Part 97</option>
                   <option value="none">None — I check every transmission myself</option>
                 </select>
-                <span class="host-owned as-select" id="reg-profile-host" title="None: the host program keys the radio and owns its dial, which Aether cannot read; you check every transmission, as with VARA" hidden>Host</span>
+                <span class="host-owned as-select" id="reg-profile-host" title="None: the host program keys the radio and owns its dial, which Aether cannot read; you check every transmission, as with VARA. Choose another keying in step 2 to set the rules" hidden>Host</span>
               </div>
               <div class="row">
                 <label for="reg-control" title="How the station is controlled (§97.109)">Control</label>
@@ -741,7 +741,7 @@
                   <option value="remote">Remote — I am at the radio through a control link</option>
                   <option value="automatic">Automatic — it runs with nobody at the control point</option>
                 </select>
-                <span class="host-owned as-select" id="reg-control-host" title="Not used: the host program keys the radio, and Aether's rules are None" hidden>Host</span>
+                <span class="host-owned as-select" id="reg-control-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another keying in step 2 to set it" hidden>Host</span>
               </div>
               <div class="row">
                 <label for="reg-license" title="The control operator's license class (§97.301)">License class</label>
@@ -753,13 +753,13 @@
                   <option value="extra">Amateur Extra</option>
                   <option value="novice">Novice</option>
                 </select>
-                <span class="host-owned" id="reg-license-host" title="Not used: the host program keys the radio, and Aether's rules are None" hidden>Host</span>
+                <span class="host-owned" id="reg-license-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another keying in step 2 to set it" hidden>Host</span>
                 <label for="reg-sideband" class="label-inline" title="The sideband the radio transmits the modem's audio on">Sideband</label>
                 <select id="reg-sideband" class="narrow" title="The sideband the radio transmits the modem's audio on; data is sent on USB by convention, and on LSB the signal lands below the dial, mirrored">
                   <option value="usb">USB</option>
                   <option value="lsb">LSB</option>
                 </select>
-                <span class="host-owned" id="reg-sideband-host" title="Not used: the host program keys the radio, and Aether's rules are None" hidden>Host</span>
+                <span class="host-owned" id="reg-sideband-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another keying in step 2 to set it" hidden>Host</span>
               </div>
               <div class="field-group" role="group" aria-labelledby="field-log-title">
                 <h4 class="sub-heading" id="field-log-title" title="Details that go into every recording, so a report needs no follow-up">Field log</h4>
@@ -948,8 +948,8 @@
                 <input id="record-standing" title="Notes written into every recording that starts on its own: band, antenna, dial frequency" type="text" class="prose" placeholder="Band, antenna, dial" />
               </div>
               <div class="row">
-                <label for="host-enabled" title="Winlink Express, Pat, VarAC or RMS Trimode on the VARA-compatible interface">Host programs</label>
-                <input id="host-port" title="The command port a host program connects to; the data port is the next number up" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
+                <label for="host-enabled" title="Winlink Express, Pat, VarAC or RMS Trimode on the VARA-compatible interface. Not RadioPost: its client and gateway use Aether's control port, 8515, and nothing set here">Host programs</label>
+                <input id="host-port" title="The command port a host program (Winlink Express, Pat, VarAC, RMS Trimode) connects to; the data port is the next number up. RadioPost's client and gateway do not use it: they connect to Aether's control port, 8515. Never 8515 here, or Aether stops at start" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
                 <label class="check" title="Let a host program use this station over the VARA-compatible interface; while it is attached it sets the callsign and the bandwidth"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> On</label>
               </div>
               <div class="row">
