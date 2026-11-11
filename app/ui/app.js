@@ -4684,8 +4684,19 @@ function checkModemSettings() {
   return ok;
 }
 
+/// The host programs port and its data port (the next number up) keep off the control port,
+/// which this panel and RadioPost use: on its number the modem would not start. The modem
+/// refuses such a save too; this marks the step before it is tried.
+function hostPortClear() {
+  if (!$("host-enabled").checked) return true;
+  const control = portOf(liveConfig?.control?.bind) ?? 8515;
+  const host = Number($("host-port").value);
+  return host !== control && host + 1 !== control;
+}
+
 function checkAppSettings() {
-  const ok = numberWithin("host-port", 1024, 65535) && Boolean($("update-channel").value) && kissFormOk();
+  const ok = numberWithin("host-port", 1024, 65535) && hostPortClear()
+    && Boolean($("update-channel").value) && kissFormOk();
   showKissExposed();
   markStep(5, ok);
   return ok;

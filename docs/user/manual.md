@@ -285,8 +285,10 @@ the sound card's own noise.
 - **Host programs**: let Winlink Express, Pat or VarAC use this station on the VARA-compatible
   interface. The command port is 8300 by default and the data port the next number up. The
   RadioPost client and gateway do not use this port: they connect to the control port. Never
-  give it 8515: that is Aether's control port, which this panel and RadioPost use, and on the
-  same number Aether stops at start (*host interface: 127.0.0.1:8515 is already in use*).
+  give it 8515, or 8514, whose data port is 8515: that is Aether's control port, which this
+  panel and RadioPost use. Setup refuses a port that would share a number with another of the
+  station's (the control port, the host programs' two, the KISS port), and so does Aether at
+  start when the file was edited by hand.
 - **KISS programs**: open a KISS-over-TCP port for APRS and packet programs, and for VarAC's
   broadcasts. The default, 127.0.0.1 port 8100, is VARA HF's own, so a program set up for VARA
   needs no change. Keep the address at 127.0.0.1 unless the program runs on another computer of

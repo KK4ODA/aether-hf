@@ -1365,6 +1365,9 @@ impl Config {
             self.radio.params().is_some(),
             "the registry lists a bandwidth the physical layer does not have"
         );
+        if let Some(clash) = self.port_clash() {
+            return Err(ConfigError::Invalid(clash));
+        }
         // The control interface can key a transmitter, so an address the network can reach
         // is refused here rather than started open and warned about.
         if self.control.enabled
@@ -1378,6 +1381,60 @@ impl Config {
             )));
         }
         Ok(())
+    }
+
+    /// Two of the station's ports on one number: the second would not open. A host programs
+    /// port set to the control port's 8515 stopped a gateway's Aether at start; the host
+    /// programs' data port is the next number up, so 8514 takes the control port too. Ports
+    /// are compared without their addresses, since one bound to every address holds the
+    /// number on loopback as well. Port 0 asks for any free port, so it clashes with nothing.
+    #[must_use]
+    pub fn port_clash(&self) -> Option<String> {
+        let port = |bind: &str| {
+            bind.rsplit(':')
+                .next()
+                .and_then(|p| p.parse::<u32>().ok())
+                .filter(|p| *p != 0)
+        };
+        // (port, what it is, the advice for moving it); the later of a clashing pair moves
+        let mut taken: Vec<(u32, String, &str)> = Vec::new();
+        if self.control.enabled
+            && let Some(p) = port(&self.control.bind)
+        {
+            let what = format!("the control port ([control] bind {})", self.control.bind);
+            taken.push((p, what, "Give it another number."));
+        }
+        if self.host.enabled
+            && let Some(p) = port(&self.host.bind)
+        {
+            let advice = "Give the host programs port another number: 8300 is the usual one,                           and RadioPost does not use it.";
+            let command = format!("the host programs port ([host] bind {})", self.host.bind);
+            let data = format!(
+                "the host programs' data port (the next number up from [host] bind {})",
+                self.host.bind
+            );
+            taken.push((p, command, advice));
+            taken.push((p + 1, data, advice));
+        }
+        if self.kiss.enabled
+            && let Some(p) = port(&self.kiss.bind)
+        {
+            let what = format!("the KISS port ([kiss] bind {})", self.kiss.bind);
+            taken.push((
+                p,
+                what,
+                "Give the KISS port another number: 8100 is the usual one.",
+            ));
+        }
+        for (i, (p, later, advice)) in taken.iter().enumerate() {
+            if let Some((_, earlier, _)) = taken[..i].iter().find(|(q, _, _)| q == p) {
+                return Some(format!(
+                    "{earlier} and {later} are both port {p}, and the second would not open. \
+                     {advice}"
+                ));
+            }
+        }
+        None
     }
 
     /// Sound-card settings in the form the audio layer wants.
@@ -2065,6 +2122,44 @@ mod tests {
 
         let on = Config::parse("callsign = \"W4ODA\"\n[host]\nenabled = true\n").expect("parse");
         assert!(on.host.enabled);
+    }
+
+    #[test]
+    fn no_two_of_the_stations_ports_share_a_number() {
+        let with = |extra: &str| Config::parse(&format!("callsign = \"W4ODA\"\n{extra}"));
+        // the gateway's mistake: the host programs port on the control port's number
+        let clash = with("[host]\nenabled = true\nbind = \"127.0.0.1:8515\"\n")
+            .expect_err("8515 is the control port's");
+        let said = clash.to_string();
+        for part in [
+            "the control port",
+            "[host] bind 127.0.0.1:8515",
+            "8300 is the usual one",
+        ] {
+            assert!(said.contains(part), "{part}: {said}");
+        }
+        // one below: the host programs' data port lands on the control port
+        let data = with("[host]\nenabled = true\nbind = \"127.0.0.1:8514\"\n")
+            .expect_err("8514's data port is 8515");
+        assert!(data.to_string().contains("data port"), "{data}");
+        // the KISS port on the host programs' data port
+        let kiss =
+            with("[host]\nenabled = true\n[kiss]\nenabled = true\nbind = \"127.0.0.1:8301\"\n")
+                .expect_err("8301 is the host programs' data port");
+        assert!(kiss.to_string().contains("8100 is the usual one"), "{kiss}");
+        // what is not listened on clashes with nothing, and the defaults are apart
+        assert!(
+            with("[host]\nbind = \"127.0.0.1:8515\"\n").is_ok(),
+            "host off"
+        );
+        assert!(
+            with("[host]\nenabled = true\n[kiss]\nenabled = true\n").is_ok(),
+            "the defaults: 8515, 8300 and 8301, 8100"
+        );
+        // port 0 is any free port, as the two-daemon tests bind everything
+        let any = "[control]\nbind = \"127.0.0.1:0\"\n[host]\nenabled = true\nbind = \
+                   \"127.0.0.1:0\"\n[kiss]\nenabled = true\nbind = \"127.0.0.1:0\"\n";
+        assert!(with(any).is_ok(), "port 0 clashes with nothing");
     }
 
     #[test]

@@ -949,7 +949,7 @@
               </div>
               <div class="row">
                 <label for="host-enabled" title="Winlink Express, Pat, VarAC or RMS Trimode on the VARA-compatible interface. Not RadioPost: its client and gateway use Aether's control port, 8515, and nothing set here">Host programs</label>
-                <input id="host-port" title="The command port a host program (Winlink Express, Pat, VarAC, RMS Trimode) connects to; the data port is the next number up. RadioPost's client and gateway do not use it: they connect to Aether's control port, 8515. Never 8515 here, or Aether stops at start" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
+                <input id="host-port" title="The command port a host program (Winlink Express, Pat, VarAC, RMS Trimode) connects to; the data port is the next number up. RadioPost's client and gateway do not use it: they connect to Aether's control port, 8515. Not 8515 or 8514 here: this port or its data port would take the control port's number, and Setup refuses it" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
                 <label class="check" title="Let a host program use this station over the VARA-compatible interface; while it is attached it sets the callsign and the bandwidth"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> On</label>
               </div>
               <div class="row">
