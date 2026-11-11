@@ -280,7 +280,9 @@ the sound card's own noise.
   from the panel and Tests are not sent this way.
 - **Recording notes**: written into every recording that starts on its own.
 - **Host programs**: let Winlink Express, Pat or VarAC use this station on the VARA-compatible
-  interface. The command port is 8300 by default and the data port the next number up.
+  interface. The command port is 8300 by default and the data port the next number up. Never
+  give it 8515: that is Aether's control port, which this panel and RadioPost use, and on the
+  same number Aether stops at start (*host interface: 127.0.0.1:8515 is already in use*).
 - **KISS programs**: open a KISS-over-TCP port for APRS and packet programs, and for VarAC's
   broadcasts. The default, 127.0.0.1 port 8100, is VARA HF's own, so a program set up for VARA
   needs no change. Keep the address at 127.0.0.1 unless the program runs on another computer of
@@ -650,7 +652,9 @@ and says when a program attaches or leaves.
 **Two programs on one station.** A program on the host port and a program on the control API
 (a RadioPost gateway beside RMS Trimode, for example) can share one radio. Each answers for its
 own callsigns: give them different ones, such as KK4ODA-1 for Trimode and KK4ODA-10 for
-RadioPost. A call is answered only while the program holding its callsign is listening, and the
+RadioPost. RadioPost connects to the control port, 8515, not to the host port, and needs Aether
+to key the radio itself (Setup step 2): keyed by the host program, the station transmits only
+through that program. A call is answered only while the program holding its callsign is listening, and the
 session is that program's alone: the other program is not told of it and sees the channel busy
 until it ends. The station still runs one session at a time. Two programs cannot hold the same
 callsign: the first to claim it keeps it, and the Log says which program was refused it
