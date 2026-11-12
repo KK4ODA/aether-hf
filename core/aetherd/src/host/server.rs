@@ -2713,26 +2713,30 @@ mod tests {
         client.send("CONNECT W4ODA KK4XYZ");
         client.expect(|l| l == "OK");
 
+        // the payload may reach the modem in more than one `send` when the machine is busy
+        // (the whole suite at once): wait for all of it, not the first piece
+        let wanted = b"hello over the air";
+        let decoded_of = |sent: &[String]| -> Vec<u8> {
+            sent.iter()
+                .flat_map(|t| from_base64(t).unwrap_or_default())
+                .collect()
+        };
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let mut got = Vec::new();
+        let mut decoded = Vec::new();
         while std::time::Instant::now() < deadline {
-            if let Ok(seen) = seen.lock()
-                && !seen.is_empty()
-            {
-                got.clone_from(&seen);
-                break;
+            if let Ok(seen) = seen.lock() {
+                decoded = decoded_of(&seen);
+                if decoded.len() >= wanted.len() {
+                    break;
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         stop.store(true, Ordering::Relaxed);
         worker.join().expect("worker");
 
-        assert!(!got.is_empty(), "nothing reached the modem");
-        let decoded: Vec<u8> = got
-            .iter()
-            .flat_map(|t| from_base64(t).unwrap_or_default())
-            .collect();
-        assert_eq!(decoded, b"hello over the air");
+        assert!(!decoded.is_empty(), "nothing reached the modem");
+        assert_eq!(decoded, wanted);
     }
 
     #[test]
