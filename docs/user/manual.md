@@ -90,6 +90,8 @@ To the right:
 - **The rules badge** says *Legal*, *Warning* or *TX blocked* for your widest signal where the
   dial is now. Click it for the reasoning.
 - **Modem** is quiet when the panel is talking to the daemon and red when it is not.
+- **Your callsign**, the one the station is using now: the session's while one is up; while a
+  program answers for the station, the program's (section 12); otherwise Setup step 1's.
 - **Full**, **Compact** and **Mini** choose how much of the panel to show. **Full** is every
   tab. **Compact** shrinks the window to the state, the four link readings and the Status
   tab's two plots, small and side by side: the speed over the last ten minutes (or the SNR,
@@ -112,9 +114,9 @@ To the right:
   API that answers for callsigns of its own (a RadioPost gateway, for example), and KISS
   programs. A program that is not listening shows *not answering*: calls to its callsigns go
   unanswered until it listens. The chip's tooltip names the callsigns each program answers for.
-  When calls to the station's own callsign are not answered and no program holds it, the chip
+  When no program is there and calls to the station's own callsign are not answered, the chip
   says *not answering* and the callsign, and its tooltip says why: under automatic control only
-  a program answers calls (section 12), or a host program attached answers for other callsigns.
+  a program answers calls (section 12).
   Another chip shows the **bandwidth** when the station is running one that is not its own
   setting.
 
@@ -127,7 +129,7 @@ A banner across every tab tells you about something that needs attention:
 | Session banner | Calling, connected, disconnecting, a probe, a Test, a beacon waiting, or how the last session ended. A program's call or session says *for* the program | Nothing; it is there so you can see it from any tab |
 | Setup needed | The rules, the control or the license class is not set, so nothing transmits | **Open Setup**, step 1 |
 | Unsaved changes | Setup has edits the modem is not using yet | **Review in Setup** and save, or **Discard changes** |
-| Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID | Follow its buttons: Setup step 4, Check for Updates, Answer as it too, Call it, or Dismiss |
+| Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a callsign a program answered for, and that program is not running | Follow its buttons: Setup step 4, Check for Updates, Answer as it too, Call it, or Dismiss. For a program that is not running, start it again |
 | Receive filter | The radio's receive filter cuts the top, the bottom or both edges of Aether's signal, 12 dB or more down, and names the knob: the IF shift, the high or low cut, or the filter width | Turn that knob; the banner goes when the cut does. **Dismiss** hides it until the reading changes: another edge, 3 dB further down, or another bandwidth. Both edges cut at 2300 Hz also offers **Setup step 4**, to run at 500 Hz |
 | Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down. **Dismiss** hides it until the audio stops clipping and starts again |
 | Debug mode | Shown once: sessions run by a host program are sent to the project | **Keep it on** or **Turn it off** |
@@ -172,10 +174,19 @@ settings.
 ### Step 1: Callsign and rules
 
 - **Callsign**: yours, with an SSID (`KK4ODA-1`) or a suffix (`KK4ODA/P`) if you use one, up to
-  nine characters. With **Host programs** on (step 5) the box reads **Host**: the program's own
-  callsign (its `MYCALL`) is the one the modem answers to and identifies as while the program is
-  attached, and the one set here comes back when the program leaves. Turn Host programs off to
-  change it.
+  nine characters. What you start from this window (a call, a probe, a Test, a beacon) goes out
+  as it. While a program answers for the station, the box shows whose callsign is in use
+  instead, greyed:
+  - **Host**, with **Host programs** on (step 5). The program's own callsign (its `MYCALL`) is
+    the one the modem answers to and identifies as while the program is attached. Turn Host
+    programs off to change the callsign here.
+  - **The program's callsign and its name**, such as *KK4ODA-1 · RadioPost Gateway*, while a
+    RadioPost program holds a callsign. The gateway holds its callsign all the time; the
+    RadioPost app on a mobile holds its callsign only while it calls or listens. Stop the
+    program to change the callsign here.
+
+  Either way the callsign set here is kept, and comes back when the program leaves. Set a
+  program's callsign in the program itself, not here (section 12).
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*.
   With **Keying** set to *Host* (step 2), Rules, Control, License class and Sideband read
   **Host**: the host program keys the radio and owns its dial, which Aether cannot read, so the
@@ -659,6 +670,22 @@ radio is keyed.
 One program at a time uses the host port. If a program connects again, for example after it
 restarted its modem, the new connection replaces the old one. The Log tab says so (*host:* lines),
 and says when a program attaches or leaves.
+
+**A program speaks for the station.** This holds on either port: a host program (Trimode,
+Winlink Express, VarAC) and a RadioPost program (RadioPost Gateway, or the RadioPost app) alike.
+
+- While a program holds a callsign, only the programs' callsigns are answered. Setup step 1's
+  callsign is not answered meanwhile, and comes back when the last program leaves.
+- Setup step 1's box shows whose callsign is in use: **Host**, or the program's callsign and
+  name.
+- Set a program's callsign in the program: RadioPost Gateway's Setup, the RadioPost app's
+  enrollment, the host program's own settings. Do not copy it into Aether.
+- Setup step 1's callsign is the station's own. What you start from this window goes out as
+  it, and it is what is answered when no program is running.
+- If they differ (Setup KK4ODA, the gateway KK4ODA-1), a call to KK4ODA is not answered while
+  the gateway runs, even under local control. If they are the same, nothing changes.
+- When a program has left, a station calling its callsign brings up the mismatch banner, which
+  names the program to start again. Aether never offers to answer that callsign itself.
 
 **Two programs on one station.** A program on the host port and a program on the control API
 (a RadioPost gateway beside RMS Trimode, for example) can share one radio. Each answers for its

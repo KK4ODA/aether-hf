@@ -235,7 +235,7 @@ impl<P: Ptt> Station<P> {
         let capacity = timing.capacity(rung);
         let invalid = |e: DatagramError| DatagramRefusal::Invalid(e.to_string());
         let carried =
-            body(&self.engine.my_call, request.frame_type, &request.frame).map_err(invalid)?;
+            body(&self.station_callsign(), request.frame_type, &request.frame).map_err(invalid)?;
         if carried.len() > max_payload(capacity) {
             return Err(DatagramRefusal::Invalid(format!(
                 "{} bytes do not fit the {} a datagram carries at rung {rung}",

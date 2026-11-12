@@ -2892,6 +2892,32 @@ line of its own; RadioPost keeps `radiopost.log`/`gateway.log` and its Aether ad
 WebSocket ended. The suspect, unproven: the short socket read timeouts on Windows (10 ms in
 RadioPost's adapter, 50 ms here), which Microsoft documents can lose data.
 
+**Callsigns, made plain (2026-11-12, ADR-0108; the author: "whatever simplifies things the
+most").** An audit found:
+- two rules for one idea: a host program spoke for the station, a RadioPost claim did not;
+- RadioPost's guides asking for the program's callsign to be typed into Aether too;
+- `engine.my_call`, which keeps the last call's or probe's callsign, leaking into the header, the
+  Beacon, KISS datagrams and files' names;
+- ADR-0057's *Answer as it too* offered for a gone program's callsign.
+
+The author's answers:
+- **Any claim, on either port, speaks for the station.** `answers_for` checks for any claim, not
+  only the host's: the station's own callsigns no program holds rest until the last claim ends.
+- **Setup step 1's box reads *KK4ODA-1 · RadioPost Gateway*** while a control-API program holds
+  callsigns (`applyCallsignOwner`, `programCallsigns`, live from `status.claims`; *Host* with Host
+  programs ticked, as before; a placeholder callsign stays editable).
+- **The box follows the claim**, not `LISTEN`.
+
+The fixes that went with them:
+- `status.callsign` is `Station::callsign_in_use` (the session's, else a program's, else the
+  station's own).
+- The Beacon, datagrams, a Test's recording name, an idle recording and the zips use
+  `Station::station_callsign` (Setup's first, as Connect does).
+- A call to a callsign a program held since start and nobody holds now is a mismatch, `what` =
+  `program` (`gone_holder`, `note_program_gone`), naming the program, with no offer to answer it.
+- The panel refreshes status on `claims` log lines.
+- RadioPost's guides stopped asking for callsigns to be copied into Aether.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

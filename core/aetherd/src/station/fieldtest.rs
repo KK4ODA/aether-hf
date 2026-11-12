@@ -605,19 +605,20 @@ impl<P: Ptt> Station<P> {
             .filter(|m| usable.contains(m))
             .collect();
         let now = self.now();
-        let seed = self
-            .engine
-            .my_call
-            .bytes()
-            .fold(0x5DEE_CE66_D1CE_4E5Du64, |h, b| {
-                h.rotate_left(5) ^ u64::from(b)
-            })
-            ^ (now * 1000.0) as u64;
+        // the callsign the Test calls as: the one asked for, or the station's own — not the
+        // last session's (ADR-0108)
+        let calling_as = plan
+            .as_call
+            .clone()
+            .unwrap_or_else(|| self.station_callsign());
+        let seed = calling_as.bytes().fold(0x5DEE_CE66_D1CE_4E5Du64, |h, b| {
+            h.rotate_left(5) ^ u64::from(b)
+        }) ^ (now * 1000.0) as u64;
         let mut run = TestRun::new(plan, now, modes, seed);
         run.held_at_step = self.held_total_s;
         let name = format!(
             "{}_test",
-            crate::record::session_name(&self.engine.my_call, Some(&run.plan.remote))
+            crate::record::session_name(&calling_as, Some(&run.plan.remote))
         );
         let notes = self.record_notes.take().or_else(|| {
             (!self.config.record_notes.is_empty()).then(|| self.config.record_notes.clone())
