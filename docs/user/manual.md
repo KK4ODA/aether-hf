@@ -112,6 +112,9 @@ To the right:
   API that answers for callsigns of its own (a RadioPost gateway, for example), and KISS
   programs. A program that is not listening shows *not answering*: calls to its callsigns go
   unanswered until it listens. The chip's tooltip names the callsigns each program answers for.
+  When calls to the station's own callsign are not answered and no program holds it, the chip
+  says *not answering* and the callsign, and its tooltip says why: under automatic control only
+  a program answers calls (section 12), or a host program attached answers for other callsigns.
   Another chip shows the **bandwidth** when the station is running one that is not its own
   setting.
 
@@ -179,7 +182,8 @@ settings.
   rules are None and you check every transmission. Choose another keying in step 2 to set them.
 - **Control**: *Local* (you are at the radio), *Remote* (you are at the radio through a control
   link), or *Automatic* (nobody at the control point: an unattended mailbox or gateway). Aether
-  never guesses this.
+  never guesses this. Under *Automatic*, Aether answers calls only for a program that holds the
+  callsign called and is listening, such as RMS Trimode or a RadioPost gateway (section 12).
 - **License class**: decides which frequencies are yours.
 - **Sideband**: USB, the convention for data. On LSB the signal lands below the dial, mirrored.
 - **Field log**: grid (six characters lets the log work out the distance), rig, power in
@@ -665,6 +669,19 @@ session is that program's alone: the other program is not told of it and sees th
 until it ends. The station still runs one session at a time. Two programs cannot hold the same
 callsign: the first to claim it keeps it, and the Log says which program was refused it
 (*claims:* lines).
+
+**Under automatic control only a program answers calls.** With the rules set to *Automatic*
+(Setup step 1), nobody is at the station to carry a session of its own, so Aether answers a call
+only for a program that holds the callsign called and is listening: RMS Trimode, a RadioPost
+gateway. While no program holds the station's callsign, calls to it go unanswered; the header's
+chip says *not answering* and the callsign, and the Log says each caller left unanswered
+(*listen:* lines). Probes are still answered: an answer to a probe opens no session. Under local
+or remote control the station answers its own callsign as before.
+
+**A program that leaves takes its session with it.** When the program that owns a session or a
+call disconnects from Aether (it closed, crashed, or lost its connection), Aether ends that
+session as Disconnect does: what is already queued may still go, then the closing exchange and
+the identifiers. A call it placed stops. The Log says so (*claims:* lines).
 
 RMS Trimode starts its modem itself and, to restart it, closes what it started. When Trimode
 starts Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no

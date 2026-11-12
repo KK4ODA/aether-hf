@@ -2860,6 +2860,27 @@ say it, so `"owner": null` is the panel's session. `two_daemons.rs`
 `a_host_program_and_a_control_api_program_share_one_station` runs both kinds of program on one
 daemon.
 
+**The first RadioPost session on the air and ADR-0107 (2026-11-12).** KK4ODA (the mobile's
+RadioPost client) called KK4ODA-1 (RadioPost Gateway, automatic control) at 2300 Hz on 7.101 MHz;
+both sides uploaded. Neither station moved to 500 Hz (`moves 0`, sidecars 2300): what looked like
+500 Hz were the gateway's answers, all tone-floor control frames (400 Hz wide), because the mobile
+heard it at about −9 dB and the gateway had no data to send. The stall: two Setup saves restarted
+the gateway's Aether at 23:14/23:15, RadioPost's Aether adapter kept RadioPost Gateway's connection
+open with no Aether behind it, so the gateway never claimed again (`status.claims` `[]`), and Aether
+answered the call to KK4ODA-1 — also its own Setup callsign — itself; the 338-byte opening crossed
+in 300 s (rung 5 tone100-153 failed four rounds at −9 dB, then rung-2 pieces: the rate
+controller's, a data point for its review) and reached nobody. The mobile's RadioPost client left
+Aether at 00:55:54 with no disconnect or abort reaching it (why is not in Aether's files: the
+author had no RadioPost log), and the session ran on owned by nobody until the author's Abort at
+01:00:43. Fixed in RadioPost (RP-4 0.6.0 §2.1: an adapter that loses its modem closes the host's
+connection, and the gateway's own retry claims again). **ADR-0107** (the author's answers):
+under automatic control only a program answers calls — a call to a callsign no program holds is
+not answered, a probe to it is (`answers_call_for` beside `answers_for`; `status.not_answering`;
+the apps chip says *not answering <call>*) — and when the connection that owns a call or session
+closes, a call stops and a session closes as `disconnect` does (`connection_closed`). The harness
+runs no station under automatic control. In the uploads, RadioPost's client is `RadioPost client
+0.1.0-beta.6` and its gateway `radiopost-gateway 0.1.0-beta.6` in the `claims:` lines.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

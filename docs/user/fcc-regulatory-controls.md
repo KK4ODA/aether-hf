@@ -155,6 +155,11 @@ signal fits inside the sub-band from where the dial is — near a sub-band's edg
 narrower ones. Aether never upgrades an automatic station to a wider waveform than the rules
 allow where it is, whatever the other station offers.
 
+An automatic station answers calls only for a program that holds the callsign called and is
+listening (RMS Trimode, a RadioPost gateway): with nobody at the station, a session of the
+station's own would have nobody behind it (ADR-0107). Probes are still answered. The rules above
+decide where it may answer.
+
 An automatic station does not operate on 60 m at all: §97.221(c) excepts the 60 m channels, and
 whether that reaches the 60 m segment too is not clear, so Aether reads it as excepting both.
 

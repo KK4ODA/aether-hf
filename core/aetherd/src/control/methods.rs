@@ -2086,8 +2086,10 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         // the bandwidth it runs, its own, a host program's request, and why (ADR-0026)
         "bandwidth": station.bandwidth_status(),
         // whether calls to the station's first callsign are answered: always, unless a
-        // program holds it and is not listening (ADR-0106)
+        // program holds it and is not listening (ADR-0106), or under automatic control no
+        // program holds it (ADR-0107) — and why not, for the panel
         "answering": station.answering(),
+        "not_answering": station.not_answering_because(),
     })
 }
 

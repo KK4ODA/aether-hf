@@ -6,7 +6,10 @@ the building (§6). The daemon (`station/claims.rs`, `station/host.rs`), the con
 errors `claimed` and `not_owner`), the control channel (`control/protocol.rs`: `Connection`,
 `ConnectionId`), the host adapter (`MYCALL` and `LISTEN` are its program's claim, and a session is
 the program's when its claim owns it), the panel's apps chip and session banner, and the manual.
-**No wire change, no model change, no configuration key.**
+**No wire change, no model change, no configuration key.** Amended by
+[ADR-0107](0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md)
+(2026-11-12): under automatic control the station's own callsigns are answered only for probes,
+and a call or session goes with the program that owns it.
 
 ## 1. Context
 

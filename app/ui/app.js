@@ -4808,6 +4808,14 @@ function applyKiss(kiss, host, datagrams) {
   }
   // a host program from before its claim reaches the status
   if (host?.connected && !claims.some((c) => c.kind === "host")) using.push("host program");
+  // the station's own callsign unanswered with no program holding it: under automatic control
+  // only a program answers calls (ADR-0107), and a host program attached speaks for the station
+  const first = (lastStatus?.own_callsigns ?? [])[0];
+  if (first && lastStatus?.answering === false && lastStatus?.not_answering
+      && !claims.some((c) => (c.callsigns ?? []).includes(first))) {
+    using.push(`not answering ${first}`);
+    said.push(`Calls to ${first} are not answered: ${lastStatus.not_answering}`);
+  }
   if (count > 0) using.push(`${count} KISS`);
   const chip = $("apps-chip");
   chip.hidden = using.length === 0;

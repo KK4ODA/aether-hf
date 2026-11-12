@@ -17,6 +17,9 @@
 //! * While a program is attached on the host interface it speaks for the station, as VARA's
 //!   `MYCALL` replaced the modem's callsigns: the station's own callsigns it does not hold are
 //!   not answered.
+//! * Under automatic control only a program answers calls (ADR-0107): a call to a callsign no
+//!   program holds is not answered, because nobody is at the station to carry the session the
+//!   call would bring up. Probes are still answered: they bring up nothing.
 
 use serde_json::{Value, json};
 
@@ -347,30 +350,58 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A connection has closed: its claim goes, and the callsigns it held go back to the
-    /// station when they are its own, or stop being answered.
+    /// station when they are its own, or stop being answered. The call or session it owned
+    /// goes with it (ADR-0107): a call stops, as the panel's *Stop calling* does, and a session
+    /// closes as `disconnect` does — what is queued may still go, then the closing exchange and
+    /// the identifiers. Left up, nobody would hear what the other station sends or send it
+    /// anything: KK4ODA's session with KK4ODA-1 ran on five minutes after its `RadioPost` client
+    /// had gone (2026-11-12), until the operator pressed Abort.
     pub fn connection_closed(&mut self, connection: ConnectionId) {
-        let Some(index) = self
+        let index = self
             .claims
             .list
             .iter()
-            .position(|claim| claim.connection == connection)
-        else {
+            .position(|claim| claim.connection == connection);
+        // a program that let its callsigns go still owns the session it brought up
+        let owned = self.claims.owner == Some(connection);
+        if index.is_none() && !owned {
             return;
+        }
+        let answering = self.answering();
+        let (app, held) = match index.map(|index| self.claims.list.remove(index)) {
+            Some(claim) => {
+                let _ = self.apply_callsigns();
+                (claim.app, claim.callsigns)
+            }
+            None => ("the program".to_owned(), Vec::new()),
         };
-        let claim = self.claims.list.remove(index);
-        let _ = self.apply_callsigns();
+        let remote = self.engine.remote_call.clone();
+        let (ended, end) = match self.engine.state() {
+            State::Connecting if owned => (format!("; its call to {remote} stops"), Some(true)),
+            State::Connected if owned && !self.engine.disconnect_requested() => (
+                format!("; its session with {remote} closes, as Disconnect does"),
+                Some(false),
+            ),
+            _ => (String::new(), None),
+        };
         self.note(
             "claims",
             &format!(
-                "{} has gone: no longer answering for {}",
-                claim.app,
-                if claim.callsigns.is_empty() {
+                "{app} has gone: no longer answering for {}{ended}",
+                if held.is_empty() {
                     "anything".to_owned()
                 } else {
-                    claim.callsigns.join(", ")
+                    held.join(", ")
                 }
             ),
         );
+        // said first: the end it sets in motion is said after it
+        match end {
+            Some(true) => self.abort(),
+            Some(false) => self.disconnect(),
+            None => {}
+        }
+        self.say_answering_change(answering);
     }
 
     /// Whether a call to this callsign is answered now, or why not.
@@ -399,11 +430,39 @@ impl<P: Ptt> Station<P> {
         }
     }
 
+    /// Whether a call to this callsign is answered now, or why not: [`Self::answers_for`], and
+    /// under automatic control only for a program (ADR-0107).
+    ///
+    /// The station's own sessions are the operator's (ADR-0106 §2.1), and under automatic
+    /// control no operator is there to carry one. A gateway whose `RadioPost` program had lost
+    /// Aether answered KK4ODA's call to KK4ODA-1 itself (2026-11-12): the caller's opening
+    /// crossed in five minutes and reached nobody, and the session ran on until the caller's
+    /// operator aborted it. A probe is not a call: it is answered as [`Self::answers_for`] says.
+    pub(super) fn answers_call_for(&self, call: &str) -> Result<(), String> {
+        self.answers_for(call)?;
+        if self.claims.holder(call).is_none()
+            && self.config.regulatory.control == Some(crate::regulatory::ControlMode::Automatic)
+        {
+            return Err(format!(
+                "under automatic control only a program answers calls, and none holds {call}"
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether calls to the station's first callsign are answered now: what the panel shows.
     #[must_use]
     pub fn answering(&self) -> bool {
         let first = self.claims.own.first().cloned().unwrap_or_default();
-        self.answers_for(&first).is_ok()
+        self.answers_call_for(&first).is_ok()
+    }
+
+    /// Why calls to the station's first callsign are not answered now, for the panel; `None`
+    /// while they are.
+    #[must_use]
+    pub fn not_answering_because(&self) -> Option<String> {
+        let first = self.claims.own.first().cloned().unwrap_or_default();
+        self.answers_call_for(&first).err()
     }
 
     /// Hand the engine every callsign the station answers to, now or at the session's end.
@@ -422,14 +481,15 @@ impl<P: Ptt> Station<P> {
     }
 
     /// Say it when the station's first callsign stops or starts being answered by a change
-    /// that is not a program's `LISTEN` — a claim taking it, or letting it go.
-    fn say_answering_change(&mut self, was: bool) {
+    /// that is not a program's `LISTEN` — a claim taking it, or letting it go, or the control
+    /// the rules are set for.
+    pub(super) fn say_answering_change(&mut self, was: bool) {
         let now = self.answering();
         if now == was {
             return;
         }
         let first = self.claims.own.first().cloned().unwrap_or_default();
-        let detail = match self.answers_for(&first) {
+        let detail = match self.answers_call_for(&first) {
             Ok(()) => format!("answering calls to {first}"),
             Err(why) => format!("not answering calls to {first}: {why}"),
         };

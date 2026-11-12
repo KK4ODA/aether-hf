@@ -2422,8 +2422,11 @@ impl<P: Ptt> Station<P> {
         if settings.profile != self.config.regulatory.profile {
             self.policy = Policy::from_setting(&settings.profile);
         }
+        // the control decides whether calls with no program behind them are answered (ADR-0107)
+        let answering = self.answering();
         self.config.regulatory = settings;
         self.refresh_ceiling(true);
+        self.say_answering_change(answering);
     }
 
     /// Tune the radio, when the keying interface can ask it to. Refused during a session
@@ -8975,8 +8978,10 @@ mod tests {
                 ..config
             })
         };
-        // inside §97.221(b) (14.1005–14.112 MHz) it answers, and may call too
+        // inside §97.221(b) (14.1005–14.112 MHz) it answers, and may call too — for the program
+        // that holds its callsign, as only a program answers under automatic control (ADR-0107)
         let mut inside = setup(14_103_000);
+        claim_for_host(&mut inside.b, &["KK4XYZ"], true);
         assert!(inside.b.check_originate().is_ok());
         inside.a.connect("KK4XYZ").expect("idle");
         inside.run(60.0, |a, b| a.connected() && b.connected());
@@ -8985,6 +8990,7 @@ mod tests {
         // outside them it may not call; and no Aether emission is 500 Hz or less under the
         // conservative reading of §97.3(a)(8), so it does not answer either
         let mut outside = setup(14_080_000);
+        claim_for_host(&mut outside.b, &["KK4XYZ"], true);
         let refusal = outside.b.check_originate().expect_err("refused");
         assert!(refusal.code.starts_with("automatic_"), "{}", refusal.code);
         outside.a.connect("KK4XYZ").expect("idle");
@@ -9020,6 +9026,8 @@ mod tests {
             ..config
         });
         air.b.set_policy(policy);
+        // a program at the automatic station answers its calls (ADR-0107)
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(90.0, |a, b| a.connected() && b.connected());
         assert!(air.b.connected(), "answered under §97.221(c)");
@@ -9044,6 +9052,88 @@ mod tests {
             assert_eq!(d.code, "automatic_response", "{}", d.what);
             assert!(d.bandwidth_hz <= 500.0, "{}: {} Hz", d.what, d.bandwidth_hz);
         }
+    }
+
+    #[test]
+    fn under_automatic_control_only_a_program_answers_calls() {
+        // ADR-0107, from KK4ODA-1 on 2026-11-12: its RadioPost gateway had lost Aether at a
+        // restart, Aether answered KK4ODA's call to KK4ODA-1 itself, and the caller's opening
+        // crossed in five minutes to nobody. Under automatic control nobody is at the station
+        // to carry a session of its own, so a call to a callsign no program holds goes
+        // unanswered; a probe, which brings up nothing, is still answered.
+        use crate::regulatory::ControlMode;
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            regulatory: if config.callsign == "KK4XYZ" {
+                under_us_rules(14_103_000, ControlMode::Automatic)
+            } else {
+                under_us_rules(14_103_000, ControlMode::Local)
+            },
+            ..config
+        });
+        assert!(!air.b.answering());
+        assert_eq!(
+            air.b.not_answering_because().as_deref(),
+            Some("under automatic control only a program answers calls, and none holds KK4XYZ")
+        );
+        // a probe is answered
+        air.a.probe("KK4XYZ", None).expect("idle");
+        air.run(30.0, |a, _| a.engine().last_probe().is_some());
+        assert!(
+            air.a.engine().last_probe().is_some(),
+            "the probe went unanswered"
+        );
+        // a call is not
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |_, b| b.stats.calls_unanswered >= 2);
+        assert!(!air.b.connected());
+        assert_eq!(
+            air.b.stats.transmissions, 1,
+            "only the probe's answer was keyed"
+        );
+        let events = air.b.take_events();
+        assert!(
+            events.iter().any(|e| e
+                == "listen:a call from W4ODA to KK4XYZ not answered: under automatic control \
+                    only a program answers calls, and none holds KK4XYZ"),
+            "{events:?}"
+        );
+        // a program claims the callsign and listens: the next try is answered, its session
+        let gateway = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        air.b
+            .claim(gateway, Some("RadioPost gateway"), &["KK4XYZ".to_owned()])
+            .expect("valid");
+        assert!(!air.b.answering(), "a claim starts with answering off");
+        air.b.listen_for(gateway, true).expect("claimed");
+        assert!(air.b.answering());
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(air.b.connected());
+        assert_eq!(air.b.owner(), Some(gateway));
+        air.a.abort();
+        air.b.abort();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        // the program goes: the station stops answering, and says so
+        let _ = air.b.take_events();
+        air.b.connection_closed(gateway);
+        assert!(!air.b.answering());
+        assert!(air.b.take_events().iter().any(|e| e
+            == "listen:not answering calls to KK4XYZ: under automatic control only a \
+                    program answers calls, and none holds KK4XYZ"),);
+        // and under local control the station answers its own callsign again, and says so
+        air.b
+            .set_regulatory(under_us_rules(14_103_000, ControlMode::Local));
+        assert!(air.b.answering());
+        assert!(air.b.not_answering_because().is_none());
+        assert!(
+            air.b
+                .take_events()
+                .iter()
+                .any(|e| e == "listen:answering calls to KK4XYZ")
+        );
     }
 
     #[test]
@@ -11360,6 +11450,101 @@ mod tests {
                 .connect_for(Some(HOST_PROGRAM), "W4ODA", Some("KK4XYZ-10"), false),
             Err(NOT_HELD)
         );
+    }
+
+    #[test]
+    fn a_session_whose_program_goes_closes_as_disconnect_does() {
+        // ADR-0107, from KK4ODA on 2026-11-12: its RadioPost client went while its session with
+        // KK4ODA-1 was up, and the session ran on, owned by nobody, until the operator pressed
+        // Abort five minutes later. Now the program's going closes it, as Disconnect does:
+        // what is queued may still go first.
+        let mut air = Air::new(1.0, 0.0005);
+        let client = ConnectionId {
+            id: 9,
+            kind: ConnectionKind::Control,
+        };
+        air.a
+            .claim(client, Some("RadioPost client"), &["W4ODA".to_owned()])
+            .expect("valid");
+        air.a
+            .connect_for(Some(client), "KK4XYZ", None, false)
+            .expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert_eq!(air.a.owner(), Some(client));
+        air.a.send(&[0x42; 200]);
+        let _ = air.a.take_events();
+        air.a.connection_closed(client);
+        let said = air.a.take_events();
+        assert!(
+            said.iter().any(|e| e
+                == "claims:RadioPost client has gone: no longer answering for W4ODA; its \
+                    session with KK4XYZ closes, as Disconnect does"),
+            "{said:?}"
+        );
+        assert!(air.a.engine().disconnect_requested());
+        air.run(120.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        assert_eq!(air.a.state(), State::Idle);
+        assert_eq!(air.b.state(), State::Idle);
+        assert_eq!(
+            air.b.take_received().len(),
+            200,
+            "what was queued went first"
+        );
+        assert!(
+            air.b
+                .take_events()
+                .iter()
+                .any(|e| e == "disconnected:peer disconnected"),
+            "the other station heard an orderly end"
+        );
+    }
+
+    #[test]
+    fn a_call_whose_program_goes_stops() {
+        // a program that goes while its call is out takes the call with it, as Stop calling
+        let mut air = Air::new(1.0, 0.0005);
+        let client = ConnectionId {
+            id: 9,
+            kind: ConnectionKind::Control,
+        };
+        air.a
+            .claim(client, Some("RadioPost client"), &["W4ODA".to_owned()])
+            .expect("valid");
+        // nobody answers: the call keeps going until the program goes
+        claim_for_host(&mut air.b, &["KK4XYZ"], false);
+        air.a
+            .connect_for(Some(client), "KK4XYZ", None, false)
+            .expect("idle");
+        air.run(10.0, |_, _| false);
+        assert_eq!(air.a.state(), State::Connecting);
+        air.a.connection_closed(client);
+        assert!(air.a.take_events().iter().any(|e| e
+            == "claims:RadioPost client has gone: no longer answering for W4ODA; its call \
+                    to KK4XYZ stops"),);
+        air.run(30.0, |a, _| a.state() == State::Idle);
+        assert_eq!(air.a.state(), State::Idle);
+    }
+
+    #[test]
+    fn a_program_going_leaves_the_stations_own_session_alone() {
+        // a session the panel started is the operator's: a program that goes does not end it
+        let mut air = Air::new(1.0, 0.0005);
+        let client = ConnectionId {
+            id: 9,
+            kind: ConnectionKind::Control,
+        };
+        air.a
+            .claim(client, Some("RadioPost client"), &["W4ODA-10".to_owned()])
+            .expect("valid");
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert_eq!(air.a.owner(), None);
+        air.a.connection_closed(client);
+        assert!(!air.a.engine().disconnect_requested());
+        air.run(10.0, |_, _| false);
+        assert!(air.a.connected() && air.b.connected());
     }
 
     #[test]

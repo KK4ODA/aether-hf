@@ -88,8 +88,9 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A decoded call or probe to this station that is not to be answered, because the
-    /// program holding the callsign called is not listening (ADR-0106) or the daemon is
-    /// stopping: counted, said once a minute for a caller, and kept from the engine. Only
+    /// program holding the callsign called is not listening (ADR-0106), no program holds it
+    /// under automatic control (a call, ADR-0107) or the daemon is stopping: counted, said once
+    /// a minute for a caller, and kept from the engine. Only
     /// while idle — the answer to this station's own call, or anything in a session, is not an
     /// incoming call.
     pub(super) fn unanswered(&mut self, decoded: &aether_phy::DecodedFrame) -> bool {
@@ -118,7 +119,13 @@ impl<P: Ptt> Station<P> {
         if !self.engine.callsigns.contains(&to) {
             return false;
         }
-        let Err(why) = self.answers_for(&to) else {
+        // a probe brings up no session: only a call needs a program behind it (ADR-0107)
+        let answered = if what == "call" {
+            self.answers_call_for(&to)
+        } else {
+            self.answers_for(&to)
+        };
+        let Err(why) = answered else {
             return false;
         };
         self.stats.calls_unanswered += 1;

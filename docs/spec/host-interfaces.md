@@ -65,7 +65,8 @@ Trimode was restarted by hand (KK4ODA-1, 2026-10-25). The daemon's log says when
 attaches, leaves or is replaced, and when it opens or closes a data connection (`data port:
 connection <n> opened by the program`, `closed by the program`, `let go for a newer one`;
 ADR-0103 §2.4). Two programs set up for the same port will take it from each other; that is a
-setup to fix, and the log shows it.
+setup to fix, and the log shows it. A program that leaves, or is replaced, takes the call or
+session it owns with it: a call stops, a session closes as `disconnect` does (ADR-0107).
 
 The interface is **off by default** (`[host] enabled = false`). It allows other software to
 key this radio; that is not something to enable without being asked.

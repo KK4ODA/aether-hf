@@ -111,3 +111,4 @@ context → decision → alternatives considered → consequences.
 | [0104](0104-the-receivers-read-the-noise-across-the-band.md) | The receivers read the noise across the band | accepted |
 | [0105](0105-the-receive-filter-is-read-at-the-signals-edges.md) | The receive filter is read at the signal's edges | accepted |
 | [0106](0106-each-program-answers-for-its-own-callsigns.md) | Each program answers for its own callsigns and owns the sessions under them | accepted |
+| [0107](0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md) | Under automatic control only a program answers calls, and a program's session goes with it | accepted |

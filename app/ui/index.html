@@ -49,7 +49,7 @@
           <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
           <span id="reg-badge-text" title="The verdict on this station's widest transmission, here and now">—</span>
         </button>
-        <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, KISS programs on the KISS port" role="status" hidden></span>
+        <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, a program on the control API, KISS programs on the KISS port; and the station's callsign when calls to it are not answered" role="status" hidden></span>
         <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: a host program asked for it, or a call came in it" role="status" hidden></span>
         <span class="lamp modem-lamp" id="lamp-link" title="Modem: whether this panel is connected to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
         <div class="view-switch" id="view-switch" role="group" aria-label="View" title="How much of the panel to show: all of it, the readings with the channel's activity, or the readings alone">
@@ -735,7 +735,7 @@
               </div>
               <div class="row">
                 <label for="reg-control" title="How the station is controlled (§97.109)">Control</label>
-                <select id="reg-control" title="How the station is controlled (§97.109): it decides which rules apply. Aether never guesses it from the network">
+                <select id="reg-control" title="How the station is controlled (§97.109): it decides which rules apply. Aether never guesses it from the network. Under Automatic, calls are answered only for a program that holds the callsign called and is listening">
                   <option value="">choose…</option>
                   <option value="local">Local — I am at the radio</option>
                   <option value="remote">Remote — I am at the radio through a control link</option>
