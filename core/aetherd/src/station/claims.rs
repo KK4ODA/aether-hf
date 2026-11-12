@@ -14,9 +14,9 @@
 //! * A call or probe to a callsign is answered only while its holder listens; the session it
 //!   brings up belongs to that holder. A call a program places belongs to it. Everything else
 //!   — the panel's calls, a Test — is the station's own.
-//! * While a program is attached on the host interface it speaks for the station, as VARA's
-//!   `MYCALL` replaced the modem's callsigns: the station's own callsigns it does not hold are
-//!   not answered.
+//! * While a program holds a claim it speaks for the station, on either port (ADR-0108), as
+//!   VARA's `MYCALL` replaced the modem's callsigns: the station's own callsigns no program
+//!   holds are not answered, and come back when the last program goes.
 //! * Under automatic control only a program answers calls (ADR-0107): a call to a callsign no
 //!   program holds is not answered, because nobody is at the station to carry the session the
 //!   call would bring up. Probes are still answered: they bring up nothing.
@@ -92,6 +92,9 @@ pub(super) struct Claims {
     list: Vec<Claim>,
     /// Whose call or session is under way, or was the last: `None` is the station's own.
     owner: Option<ConnectionId>,
+    /// Each callsign a program has held since the daemon started, and the program that held it
+    /// last: a call to one nobody holds now is said to be that program's (ADR-0108).
+    held_before: Vec<(String, String)>,
 }
 
 impl Claims {
@@ -101,6 +104,7 @@ impl Claims {
             own: vec![callsign.trim().to_ascii_uppercase()],
             list: Vec::new(),
             owner: None,
+            held_before: Vec::new(),
         }
     }
 
@@ -109,6 +113,18 @@ impl Claims {
         self.list
             .iter()
             .find(|claim| claim.callsigns.iter().any(|held| held == call))
+    }
+
+    /// The program that last held a callsign nobody holds now and the station does not hold
+    /// either: a call to it is that program's, gone (ADR-0108).
+    fn gone_holder(&self, call: &str) -> Option<&str> {
+        if self.holder(call).is_some() || self.own.iter().any(|own| own == call) {
+            return None;
+        }
+        self.held_before
+            .iter()
+            .find(|(held, _)| held == call)
+            .map(|(_, app)| app.as_str())
     }
 
     /// Every callsign the station answers to: its own first — the first of them is what it
@@ -278,6 +294,17 @@ impl<P: Ptt> Station<P> {
         let app = self
             .claim_of(connection)
             .map_or_else(String::new, |claim| claim.app.clone());
+        for call in &taken {
+            match self
+                .claims
+                .held_before
+                .iter_mut()
+                .find(|(held, _)| held == call)
+            {
+                Some(entry) => entry.1.clone_from(&app),
+                None => self.claims.held_before.push((call.clone(), app.clone())),
+            }
+        }
         // a claim of nothing is a program letting go: it has no say over any call now
         if calls.is_empty() {
             self.claims
@@ -406,28 +433,76 @@ impl<P: Ptt> Station<P> {
 
     /// Whether a call to this callsign is answered now, or why not.
     ///
-    /// A callsign no program holds is the station's own. While a program is attached on the
-    /// host interface it speaks for the station, as VARA's `MYCALL` replaced the modem's
-    /// callsigns: the station's own callsigns it does not hold are not answered. A gateway
-    /// whose Setup says KK4ODA and whose Trimode says `MYCALL KK4ODA-1` answered nothing to
-    /// KK4ODA before claims, and must not start answering it unattended now.
+    /// A callsign no program holds is the station's own. While a program holds a claim it
+    /// speaks for the station, whichever port it is on (ADR-0108), as VARA's `MYCALL`
+    /// replaced the modem's callsigns: the station's own callsigns no program holds are not
+    /// answered. A gateway whose Setup says KK4ODA and whose Trimode says `MYCALL KK4ODA-1`
+    /// answered nothing to KK4ODA before claims, and must not start answering it unattended
+    /// now; a `RadioPost` gateway is a program the same way, so what Setup shows — the
+    /// program's callsign — is what is answered.
     pub(super) fn answers_for(&self, call: &str) -> Result<(), String> {
         if self.host.stopping {
             return Err("the modem is stopping".to_owned());
         }
-        let host_attached = self
-            .claims
-            .list
-            .iter()
-            .any(|claim| claim.connection.kind == ConnectionKind::Host);
         match self.claims.holder(call) {
             Some(claim) if !claim.listening => Err(claim.deaf_because()),
-            None if host_attached => Err(
-                "the host program attached answers only for the callsigns its MYCALL names"
-                    .to_owned(),
-            ),
-            _ => Ok(()),
+            Some(_) => Ok(()),
+            None => match self.claims.list.first() {
+                None => Ok(()),
+                Some(claim) if claim.connection.kind == ConnectionKind::Host => Err(
+                    "the host program attached answers only for the callsigns its MYCALL names"
+                        .to_owned(),
+                ),
+                Some(claim) => Err(format!(
+                    "{} answers for this station while it runs, as {}",
+                    claim.app,
+                    if claim.callsigns.is_empty() {
+                        "no callsign".to_owned()
+                    } else {
+                        claim.callsigns.join(", ")
+                    }
+                )),
+            },
         }
+    }
+
+    /// The callsign the station is using now: the one its call or session runs under; when
+    /// none is up, the first a program holds — a program speaks for the station (ADR-0108) —
+    /// or else its own first. What the panel's header shows; never the callsign of a session
+    /// that has ended.
+    #[must_use]
+    pub fn callsign_in_use(&self) -> String {
+        if self.engine.state() != State::Idle {
+            return self.engine.my_call.clone();
+        }
+        self.claims
+            .list
+            .iter()
+            .find_map(|claim| claim.callsigns.first())
+            .or_else(|| self.claims.own.first())
+            .cloned()
+            .unwrap_or_else(|| self.engine.my_call.clone())
+    }
+
+    /// The station's own callsign: the first of its own list, Setup's. What the station's own
+    /// calls, probes and Tests go as when none is named, and so its beacons, KISS frames and
+    /// the files it writes too — never the callsign of the last session (ADR-0108).
+    #[must_use]
+    pub fn station_callsign(&self) -> String {
+        self.claims
+            .own
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.engine.my_call.clone())
+    }
+
+    /// The program that answered for `call` earlier in this run and no longer does, when the
+    /// station does not answer to it either: a caller to it is that program's (ADR-0108).
+    #[must_use]
+    pub fn gone_holder(&self, call: &str) -> Option<String> {
+        self.claims
+            .gone_holder(&call.trim().to_ascii_uppercase())
+            .map(str::to_owned)
     }
 
     /// Whether a call to this callsign is answered now, or why not: [`Self::answers_for`], and

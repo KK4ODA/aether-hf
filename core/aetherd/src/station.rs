@@ -2514,7 +2514,9 @@ impl<P: Ptt> Station<P> {
         let call = match name.map(|n| n.trim().to_ascii_uppercase()) {
             Some(name) if self.names_this_station(&name) => name,
             Some(_) => return Err(BEACON_NOT_OURS),
-            None => self.engine.my_call.clone(),
+            // the station's own, as its calls go: never the callsign of the last session,
+            // which a program may have answered under (ADR-0108)
+            None => self.station_callsign(),
         };
         let mut body = pack_callsign(&call)
             .map_err(|_| "the callsign will not pack")?
@@ -2887,15 +2889,22 @@ impl<P: Ptt> Station<P> {
         }
         let remote = self.engine.remote_call.clone();
         let remote = (!remote.is_empty()).then_some(remote);
+        // a session's recording is named for the callsign it runs under; one started while
+        // idle for the station's own, not for the last session's (ADR-0108)
+        let callsign = if self.engine.state() == State::Idle {
+            self.station_callsign()
+        } else {
+            self.engine.my_call.clone()
+        };
         let name = name.map_or_else(
-            || crate::record::session_name(&self.engine.my_call, remote.as_deref()),
+            || crate::record::session_name(&callsign, remote.as_deref()),
             str::to_owned,
         );
         // the rig's frequency, when the keying backend can ask for it: the one fact about a
         // recording nobody can reconstruct afterwards
         let frequency_hz = self.ptt.inner_mut().frequency_hz();
         let meta = serde_json::json!({
-            "callsign": self.engine.my_call,
+            "callsign": callsign,
             "remote": remote,
             "notes": notes,
             "frequency_hz": frequency_hz,
@@ -11389,6 +11398,98 @@ mod tests {
         // the program goes: the station answers its own callsign again
         air.b.connection_closed(HOST_PROGRAM);
         assert!(air.b.answering());
+    }
+
+    #[test]
+    fn a_program_on_the_control_api_speaks_for_the_station_too() {
+        // ADR-0108: a RadioPost gateway on KK4XYZ-10 at a station whose Setup says KK4XYZ.
+        // Before, the station went on answering KK4XYZ itself beside the gateway, and Setup's
+        // box said KK4XYZ while callers reached two things. Now a program on either port
+        // speaks for the station, as a host program always did: KK4XYZ rests while the gateway
+        // holds its claim and the callsign in use is the gateway's; what the station does on
+        // its own goes as KK4XYZ; and once the gateway has gone, a caller to KK4XYZ-10 is said
+        // to be the gateway's, not offered to the station.
+        let mut air = Air::new(1.0, 0.0005);
+        let gateway = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        air.b
+            .claim(
+                gateway,
+                Some("RadioPost gateway"),
+                &["KK4XYZ-10".to_owned()],
+            )
+            .expect("valid");
+        air.b.listen_for(gateway, true).expect("claimed");
+        assert!(!air.b.answering());
+        assert_eq!(
+            air.b.not_answering_because().as_deref(),
+            Some("RadioPost gateway answers for this station while it runs, as KK4XYZ-10")
+        );
+        assert_eq!(air.b.callsign_in_use(), "KK4XYZ-10");
+        assert_eq!(air.b.station_callsign(), "KK4XYZ");
+        // a call to the station's own callsign is not answered while the gateway runs
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(40.0, |_, b| b.stats.calls_unanswered >= 1);
+        assert!(!air.b.connected());
+        let events = air.b.take_events();
+        assert!(
+            events.iter().any(|e| e.ends_with(
+                "not answered: RadioPost gateway answers for this station while it runs, as \
+                 KK4XYZ-10"
+            )),
+            "{events:?}"
+        );
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+        // a call to the gateway's is answered, and the session is the gateway's
+        air.a.connect("KK4XYZ-10").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert_eq!(air.b.owner(), Some(gateway));
+        assert_eq!(air.b.callsign_in_use(), "KK4XYZ-10");
+        air.a.abort();
+        air.b.abort();
+        air.run(60.0, |a, b| {
+            a.state() == State::Idle && b.state() == State::Idle
+        });
+        // the station's own beacon goes as its own callsign, not the session's — once both
+        // closing identifiers are over, so the other station is listening
+        air.run(30.0, |_, _| false);
+        let _ = air.a.take_events();
+        air.b.beacon(None).expect("idle");
+        air.run(150.0, |a, _| a.stats.beacons_heard > 0);
+        let heard = air.a.take_events();
+        assert!(
+            heard
+                .iter()
+                .any(|e| e.starts_with("beacon:heard KK4XYZ at")),
+            "{heard:?} {:?}",
+            air.b.take_events()
+        );
+        // the gateway goes: the station answers its own callsign again
+        air.b.connection_closed(gateway);
+        assert!(air.b.answering());
+        assert_eq!(air.b.callsign_in_use(), "KK4XYZ");
+        assert_eq!(
+            air.b.gone_holder("KK4XYZ-10").as_deref(),
+            Some("RadioPost gateway")
+        );
+        assert_eq!(air.b.gone_holder("KK4XYZ"), None);
+        // and a caller to the gateway's callsign is the gateway's: said, with no offer to
+        // answer as it here
+        air.a.connect("KK4XYZ-10").expect("idle");
+        air.run(30.0, |_, b| b.mismatch().is_some());
+        let mismatch = air.b.mismatch().expect("said").clone();
+        assert_eq!(mismatch.what, "program");
+        assert_eq!(mismatch.callsign, "W4ODA");
+        assert_eq!(mismatch.called.as_deref(), Some("KK4XYZ-10"));
+        assert_eq!(
+            mismatch.sentence,
+            "W4ODA called KK4XYZ-10, which RadioPost gateway answered for: RadioPost gateway \
+             is not running now, so nothing answers KK4XYZ-10. Start RadioPost gateway again."
+        );
+        assert!(!air.b.connected());
     }
 
     #[test]

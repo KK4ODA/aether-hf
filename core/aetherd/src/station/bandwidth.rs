@@ -93,7 +93,8 @@ pub struct Mismatch {
     /// For `what` = `callsign`: the callsign the other station called — one of this station's
     /// with another SSID or none, which the panel offers to answer to as well. For `what` =
     /// `suggest`: the callsign heard lately under the base of one this station called and got
-    /// no answer from, which the panel offers to call (ADR-0057).
+    /// no answer from, which the panel offers to call (ADR-0057). For `what` = `program`: the
+    /// callsign called, which a program answered for earlier and no longer does (ADR-0108).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub called: Option<String>,
 }
@@ -452,6 +453,12 @@ impl<P: Ptt> Station<P> {
         // a call or probe to another name of this station's — its base callsign, another SSID
         // — is warned of too (ADR-0057): KO4WX called KK4ODA, at 2 300 Hz, of a station that
         // answers as KK4ODA-1 at 500 Hz, and nothing said either
+        // a call to a callsign a program answered for and no longer does: the program is the
+        // fix, not answering as that callsign from here (ADR-0108)
+        if let Some(app) = self.gone_holder(&dst) {
+            self.note_program_gone(&src, &dst, what, &app, (theirs, ours));
+            return;
+        }
         let kin = self.kin_of_ours(&dst);
         if !kin && !self.engine.callsigns.contains(&dst) {
             return;
@@ -512,6 +519,42 @@ impl<P: Ptt> Station<P> {
             theirs_protocol: None,
             ours_protocol: None,
             called: kin.then_some(dst),
+        });
+    }
+
+    /// A call or probe from `src` to `dst`, a callsign `app` answered for earlier in this run
+    /// and no longer does (ADR-0108): it is the program's caller, and nothing here answers it
+    /// until the program runs again. Said once a minute per caller.
+    fn note_program_gone(
+        &mut self,
+        src: &str,
+        dst: &str,
+        what: &'static str,
+        app: &str,
+        (theirs, ours): (usize, usize),
+    ) {
+        let now_ms = super::beacons::unix_ms();
+        if self.bandwidth.mismatch.as_ref().is_some_and(|m| {
+            m.callsign == src && m.what == "program" && now_ms.saturating_sub(m.at_ms) < 60_000
+        }) {
+            return;
+        }
+        let verb = if what == "call" { "called" } else { "probed" };
+        let sentence = format!(
+            "{src} {verb} {dst}, which {app} answered for: {app} is not running now, so \
+             nothing answers {dst}. Start {app} again."
+        );
+        self.note("mismatch", &sentence);
+        self.bandwidth.mismatch = Some(Mismatch {
+            callsign: src.to_owned(),
+            what: "program",
+            theirs_hz: theirs,
+            ours_hz: ours,
+            at_ms: now_ms,
+            sentence,
+            theirs_protocol: None,
+            ours_protocol: None,
+            called: Some(dst.to_owned()),
         });
     }
 

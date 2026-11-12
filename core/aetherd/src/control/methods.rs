@@ -677,7 +677,7 @@ fn share_prepare<P: Ptt>(
     };
     let mut gathered = crate::share::gather(&places, &request);
     // the settings without their secrets, the devices, the status: the diagnostic bundle
-    let callsign = station.engine().my_call.clone();
+    let callsign = station.station_callsign();
     let bundle = diagnostics(station, Some(&mut *daemon), None)
         .result
         .unwrap_or(Value::Null);
@@ -791,7 +791,7 @@ fn share_upload<P: Ptt>(
             .and_then(Value::as_str)
             .map(|n| n.chars().take(2000).collect())
             .unwrap_or_default(),
-        callsign: station.engine().my_call.clone(),
+        callsign: station.station_callsign(),
         zip: None,
     };
     if let Err(error) = daemon.upload.start(job, (daemon.upload_http)()) {
@@ -837,7 +837,7 @@ pub fn start_debug_upload<P: Ptt>(
         recordings: Some(pending.iter().map(|p| p.recording.clone()).collect()),
     };
     let mut gathered = crate::share::gather(&places, &request);
-    let callsign = station.engine().my_call.clone();
+    let callsign = station.station_callsign();
     let bundle = diagnostics(station, Some(&mut *daemon), None)
         .result
         .unwrap_or(Value::Null);
@@ -2020,7 +2020,9 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
             aether_link::granted::Role::Master => "master",
             aether_link::granted::Role::Slave => "slave",
         },
-        "callsign": engine.my_call,
+        // the callsign in use: the session's, else a program's, else the station's own — never
+        // the last session's (ADR-0108)
+        "callsign": station.callsign_in_use(),
         "callsigns": engine.callsigns,
         // the station's own, which the panel edits; the programs' claims stand beside them
         // (ADR-0106)
@@ -3431,10 +3433,17 @@ mod tests {
         assert_eq!(status["callsigns"], json!(["W4ODA", "W4ODA-10"]));
         assert_eq!(status["claims"][0]["app"], "RadioPost gateway");
         assert_eq!(status["claims"][0]["kind"], "control");
+        // a program speaks for the station, on either port (ADR-0108): the station's own
+        // callsign is not answered while it holds a claim, and the callsign in use is its own
         assert_eq!(
-            status["answering"], true,
-            "the station's own callsign is answered"
+            status["answering"], false,
+            "the station's own callsign rests while a program holds a claim"
         );
+        assert_eq!(
+            status["not_answering"],
+            "RadioPost gateway answers for this station while it runs, as W4ODA-10"
+        );
+        assert_eq!(status["callsign"], "W4ODA-10");
         assert!(
             ask(
                 &mut station,
@@ -3508,6 +3517,8 @@ mod tests {
             .expect("status");
         assert_eq!(status["claims"].as_array().map(Vec::len), Some(1));
         assert_eq!(status["callsigns"], json!(["W4ODA"]));
+        // the callsign in use is Trimode's now, not the gateway's last call (ADR-0108)
+        assert_eq!(status["callsign"], "W4ODA");
     }
 
     #[test]

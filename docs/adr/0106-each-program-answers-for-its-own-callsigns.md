@@ -9,7 +9,10 @@ the program's when its claim owns it), the panel's apps chip and session banner,
 **No wire change, no model change, no configuration key.** Amended by
 [ADR-0107](0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md)
 (2026-11-12): under automatic control the station's own callsigns are answered only for probes,
-and a call or session goes with the program that owns it.
+and a call or session goes with the program that owns it. Amended by
+[ADR-0108](0108-every-program-speaks-for-the-station-and-setup-says-whose-callsign-it-is.md)
+(2026-11-12): §2.5's rule is every program's — a program on the control API speaks for the
+station too, and Setup's callsign box says whose callsign it is.
 
 ## 1. Context
 
@@ -150,7 +153,7 @@ What owning means:
   answer KK4ODA while Trimode was attached. Without this rule the claim would hand KK4ODA back to
   the station, which would then answer it unattended, with no program behind the session.
   Programs on the control API do not silence the station's own callsigns: a RadioPost gateway
-  claims callsigns of its own.
+  claims callsigns of its own. *(Superseded by ADR-0108: every program speaks for the station.)*
 * `PENDING` (ADR-0096 §2.1), the acceptance's keying (ADR-0103) and the holds of ADR-0051 and
   ADR-0100 apply to the calls the program's claim owns, and only to those.
 

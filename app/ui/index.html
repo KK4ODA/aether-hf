@@ -58,7 +58,7 @@
           <button class="ghost" id="btn-view-mini" data-view="mini" aria-pressed="false" title="Mini view: the state and the four readings alone, in the smallest window">Mini</button>
         </div>
         <button class="ghost" id="btn-theme" aria-pressed="false" title="Light colours, for a screen in daylight or sunlight: black on white, the lit lamps filled. Press again for the dark panel. The undocked signal window follows">Light</button>
-        <div class="callsign" id="callsign" title="This station's callsign, from Setup step 1">—</div>
+        <div class="callsign" id="callsign" title="The callsign the station is using now: the session's while one is up; while a program answers for the station, the program's; otherwise Setup step 1's">—</div>
       </div>
     </header>
 
@@ -105,7 +105,7 @@
       </div>
       <!-- a call or probe to this station in a bandwidth whose calls it does not answer
            (ADR-0035): on every tab, with both bandwidths and the fix -->
-      <div class="note warn unsaved-banner mismatch-banner" id="mismatch-banner" title="A station called or probed this one in another bandwidth or under another of its callsigns, or called or answered in another version of the link protocol — or a call of this station's went unanswered while the same operator was heard under another SSID" role="alert" hidden>
+      <div class="note warn unsaved-banner mismatch-banner" id="mismatch-banner" title="A station called or probed this one in another bandwidth or under another of its callsigns, or called or answered in another version of the link protocol — or a call of this station's went unanswered while the same operator was heard under another SSID, or a station called a callsign a program answered for while that program is not running" role="alert" hidden>
         <span id="mismatch-banner-text" title="Who, in which bandwidth or version, and what to do"></span>
         <button class="small" id="btn-mismatch-setup" title="Open Setup step 4, where the bandwidth is set">Setup step 4</button>
         <button class="small" id="btn-mismatch-update" title="Check for a newer version of Aether HF: this station's is the older one" hidden>Check for Updates</button>
@@ -721,7 +721,7 @@
               </div>
               <div class="row">
                 <label for="wz-call" title="This station's callsign">Callsign</label>
-                <input id="wz-call" title="Your callsign: letters, digits, - and /, up to nine characters. An SSID (KK4ODA-1) or a suffix (KK4ODA/P) is fine. A host program's own callsign (its MYCALL) is answered to while it is attached" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
+                <input id="wz-call" title="Your callsign: letters, digits, - and /, up to nine characters. An SSID (KK4ODA-1) or a suffix (KK4ODA/P) is fine. What you start from this window goes out as it. While a program answers for the station (a host program's MYCALL, or a RadioPost program's callsign), only the program's callsigns are answered, and this box shows them; this one comes back when the program stops" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
                 <span class="host-owned" id="wz-call-host" title="Set by the host program: its MYCALL is the callsign while it is attached, and this station's own comes back when it closes. Clear Host programs in step 5 to edit it" hidden>Host</span>
               </div>
               <div class="row">
@@ -1116,7 +1116,7 @@
             </div>
           </div>
           <dl class="kv about-paths">
-            <dt>Callsign</dt><dd class="numerals" id="help-callsign" title="This station's callsign">—</dd>
+            <dt>Callsign</dt><dd class="numerals" id="help-callsign" title="The callsign the station is using now">—</dd>
             <dt>Keying</dt><dd id="help-ptt" title="How the radio is keyed">—</dd>
             <dt>Configuration</dt><dd class="numerals" id="help-config" title="Where the configuration file is">—</dd>
             <dt>Log and recordings</dt><dd class="numerals" id="help-dir" title="Where the log and recordings are">—</dd>

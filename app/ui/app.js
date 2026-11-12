@@ -189,8 +189,9 @@ function onEvent(frame) {
       if (data.name === "test") noteTest(data.detail ?? "");
       // a sender that left without what the path would not carry says how much (ADR-0039)
       if (data.name === "disconnect") leftBehind = data.detail ?? "";
-      // what the banner shows moves with these at once, not at the next poll
-      if (["probe", "test", "beacon", "disconnect", "closing"].includes(data.name)) refreshStatus();
+      // what the banner shows moves with these at once, not at the next poll — and the header
+      // and Setup's callsign box with a program arriving or leaving (ADR-0108)
+      if (["probe", "test", "beacon", "disconnect", "closing", "claims"].includes(data.name)) refreshStatus();
       break;
     case "regulatory":
       onRegulatory(data);
@@ -551,12 +552,16 @@ async function refreshStatus() {
   setState(status.state, name, detail, who);
   syncBanner(status);
 
+  // the callsign in use: the session's, a program's while one speaks for the station, or the
+  // station's own (ADR-0108)
   $("callsign").textContent = status.callsign || "—";
+  applyCallsignOwner();
   renderBandwidth(status.bandwidth);
   renderDebug(status.debug);
   // a first run: the configuration still has the placeholder callsign, so the wizard is
   // where this panel should open — once, and only until Setup is saved
-  if (!firstRunShown && status.callsign === "N0CALL") {
+  const ownCallsign = (status.own_callsigns ?? [])[0] ?? status.callsign;
+  if (!firstRunShown && ownCallsign === "N0CALL") {
     firstRunShown = true;
     selectTab($("tab-setup"));
   }
@@ -3811,10 +3816,51 @@ function applyHostOwned() {
     $(id).hidden = owned;
     $(`${id}-host`).hidden = !owned;
   };
-  own("wz-call", programs);
+  applyCallsignOwner();
   own("radio-bandwidth", programs);
   for (const id of ["reg-profile", "reg-control", "reg-license", "reg-sideband"]) own(id, keyed);
   checkRulesStep();
+}
+
+/// The programs on the control API that hold callsigns, as Setup's callsign box says them:
+/// "KK4ODA-1 · RadioPost Gateway". Such a program speaks for the station while it runs, as a
+/// host program does (ADR-0108). Null when there is none.
+function programCallsigns(status) {
+  const claims = (status?.claims ?? []).filter((c) => c.kind !== "host" && (c.callsigns ?? []).length > 0);
+  if (claims.length === 0) return null;
+  const names = claims.map(programName).join(" and ");
+  const calls = claims.flatMap((c) => c.callsigns).join(", ");
+  const own = liveConfig?.callsign ?? "this station's own";
+  return {
+    text: claims.map((c) => `${c.callsigns.join(", ")} · ${programName(c)}`).join("; "),
+    title:
+      `Set by ${names} while it runs: it answers for this station as ${calls}, and calls to ` +
+      `${own} are not answered meanwhile. ${own} comes back when it stops. Stop ${names} to edit it`,
+  };
+}
+
+/// Setup's callsign box, greyed to say who sets the callsign (ADR-0108): "Host" with Host
+/// programs on (the program's MYCALL, while it is attached); otherwise, while a program on the
+/// control API holds callsigns, those callsigns and the program. A placeholder callsign stays
+/// editable, so a first setup can be finished. The box keeps its value underneath, saved as
+/// it was, for when the program is not there.
+function applyCallsignOwner() {
+  const box = $("wz-call");
+  const label = $("wz-call-host");
+  label.dataset.hostTitle ??= label.title;
+  const hosted = $("host-enabled").checked;
+  const saved = liveConfig?.callsign;
+  const program = !hosted && saved && saved !== "N0CALL" ? programCallsigns(lastStatus) : null;
+  if (hosted) {
+    label.textContent = "Host";
+    label.title = label.dataset.hostTitle;
+  } else if (program) {
+    label.textContent = program.text;
+    label.title = program.title;
+  }
+  const owned = hosted || program !== null;
+  box.hidden = owned;
+  label.hidden = !owned;
 }
 
 /// When the host program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
@@ -4808,11 +4854,12 @@ function applyKiss(kiss, host, datagrams) {
   }
   // a host program from before its claim reaches the status
   if (host?.connected && !claims.some((c) => c.kind === "host")) using.push("host program");
-  // the station's own callsign unanswered with no program holding it: under automatic control
-  // only a program answers calls (ADR-0107), and a host program attached speaks for the station
+  // the station's own callsign unanswered with no program there: under automatic control only
+  // a program answers calls (ADR-0107). A program that is there speaks for the station
+  // (ADR-0108): its own callsigns resting then is no news, and Setup shows whose they are
   const first = (lastStatus?.own_callsigns ?? [])[0];
-  if (first && lastStatus?.answering === false && lastStatus?.not_answering
-      && !claims.some((c) => (c.callsigns ?? []).includes(first))) {
+  if (first && lastStatus?.answering === false && lastStatus?.not_answering && claims.length === 0
+      && !host?.connected) {
     using.push(`not answering ${first}`);
     said.push(`Calls to ${first} are not answered: ${lastStatus.not_answering}`);
   }
@@ -4882,13 +4929,16 @@ function renderMismatch(mismatch) {
   // unanswered call (ADR-0057): the fix is a callsign, not the bandwidth
   const callsign = mismatch.what === "callsign";
   const suggest = mismatch.what === "suggest";
-  $("btn-mismatch-setup").hidden = version || callsign || suggest;
+  // a call to a callsign a program answered for and no longer does (ADR-0108): the fix is the
+  // program, never answering as its callsign from here
+  const program = mismatch.what === "program";
+  $("btn-mismatch-setup").hidden = version || callsign || suggest || program;
   // the update button only when this station's version is the older one
   $("btn-mismatch-update").hidden = !version || theirsOlder(mismatch) !== false;
   const called = mismatch.called ?? "";
   banner.dataset.called = called;
   const answer = $("btn-mismatch-answer");
-  answer.hidden = !called || suggest || (lastStatus?.callsigns ?? []).includes(called);
+  answer.hidden = !called || suggest || program || (lastStatus?.callsigns ?? []).includes(called);
   answer.textContent = `Answer as ${called} too`;
   const callIt = $("btn-mismatch-call");
   callIt.hidden = !suggest || !called;
