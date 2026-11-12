@@ -339,8 +339,9 @@ Type the other station's callsign, with its SSID if it uses one, then:
 - **Disconnect**: send what is queued, then close. At the station that was called, it sends
   what that station has queued and asks the caller to close; the caller stops sending and
   closes. It waits a minute at most: past that the session closes anyway. While it waits, the
-  banner and the line under the buttons say how much is still queued and how many seconds are
-  left. When the session ends, the banner says what did not get through. While calling it reads
+  banner and the line under the buttons say how much is left to send and the seconds left, for
+  example *Disconnecting from WC4Y: sending the last 1.2 kB (45 s at most). Abort closes now.*
+  When the session ends, the banner says what did not get through. While calling it reads
   **Stop calling**. Each station that identifies sends its Morse ID last: the other station's
   right after its goodbye, then yours.
 - **Abort**: drop the session at once. Aether sends no more data: it only tells the other

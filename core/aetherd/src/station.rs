@@ -2060,17 +2060,14 @@ impl<P: Ptt> Station<P> {
             if let Some(left) = self.leave_in_s() {
                 // the master closes at its limit; a slave's request is read an answer later,
                 // and the master counts from there
-                let bound = if self.engine.role() == Role::Master {
-                    "at most"
+                let within = if self.engine.role() == Role::Master {
+                    format!("{left:.0} s at most")
                 } else {
-                    "about"
+                    format!("about {left:.0} s")
                 };
                 self.note(
                     "closing",
-                    &format!(
-                        "{queued} bytes still queued go first, for {bound} {left:.0} s; \
-                         Abort closes at once"
-                    ),
+                    &format!("sending the last {queued} bytes ({within}). Abort closes now."),
                 );
             }
         }
@@ -9452,8 +9449,8 @@ mod tests {
             .collect();
         assert_eq!(said.len(), 1, "{events:?}");
         assert!(
-            said[0].contains("bytes still queued go first, for at most 60 s")
-                && said[0].contains("Abort closes at once"),
+            said[0].contains("sending the last ")
+                && said[0].contains(" bytes (60 s at most). Abort closes now."),
             "{said:?}"
         );
         let left = air.a.leave_in_s().expect("the limit");

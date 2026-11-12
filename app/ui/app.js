@@ -418,16 +418,22 @@ function leftBehindText(said) {
 }
 
 // What a disconnect still waits for and for how long at most (ADR-0072): on a slow path a
-// queue took minutes, and the operator took Disconnect for broken. A slave's limit is a floor
-// — the master counts from when it reads the request — so it says "about".
-function drainText(status) {
+// queue took minutes, and the operator took Disconnect for broken. One short sentence for the
+// banner and the line under the buttons: "sending the last 1.2 kB (45 s at most). Abort closes
+// now." A slave's limit is a floor — the master counts from when it reads the request — so it
+// says "about"; a slave with nothing queued is only waiting for the caller to close. `them`
+// is the other station as the sentence names it: "it" after the banner's callsign.
+function drainText(status, them = "it") {
   const bytes = status.queued_bytes ?? 0;
-  const what = bytes > 0 ? `${formatBytes(bytes)} still queued go first` : "what is still queued goes first";
+  const master = status.role === "master";
   const left = status.leave_in_s;
-  if (left == null) return what;
-  if (left < 1) return `${what}; closing at the next chance`;
-  const bound = status.role === "master" ? "at most" : "about";
-  return `${what}, for ${bound} ${Math.ceil(left)} s more`;
+  if (left != null && left < 1) return "closing now.";
+  let what;
+  if (bytes > 0) what = `sending the last ${formatBytes(bytes)}`;
+  else if (master) what = "finishing the transfer";
+  else return `asking ${them} to close. Abort closes now.`;
+  if (left != null) what += master ? ` (${Math.ceil(left)} s at most)` : ` (about ${Math.ceil(left)} s)`;
+  return `${what}. Abort closes now.`;
 }
 
 // The station probed last from this panel, for the banner: the status says a probe is out,
@@ -450,12 +456,7 @@ function bannerFor(status) {
     return ["closing", `Disconnecting from ${who}: waiting for the answer…`];
   }
   if (status.state === "connected" && status.closing) {
-    return [
-      "closing",
-      status.role === "master"
-        ? `Disconnecting from ${who}: ${drainText(status)}. Abort closes now.`
-        : `Disconnecting from ${who}: the next answer asks it to close; ${drainText(status)}. Abort closes now.`,
-    ];
+    return ["closing", `Disconnecting from ${who}: ${drainText(status)}`];
   }
   if (status.state === "connected") {
     if (test) return ["connected", `Test session with ${who}: ${TEST_STEP_NAMES[test.step] ?? test.step}`];
@@ -646,11 +647,10 @@ function applyClosing(status) {
     : "Close the session: what is queued is sent first, for a minute at most, then the session closes and says what was left. The called station asks the caller to close in its next answer. Abort closes at once";
   let note = "";
   if (status.closing) {
-    note = status.role === "master"
-      ? `Closing: ${drainText(status)}, then the disconnect. Abort closes at once.`
-      : `Closing: the next answer asks the other station to close; ${drainText(status)}. Abort closes at once.`;
+    const said = drainText(status, "the other station");
+    note = said === "closing now." ? "Closing now." : `Closing: ${said}`;
   } else if (status.state === "disconnecting") {
-    note = "Closing: waiting for the other station to answer the disconnect.";
+    note = "Closing: waiting for the other station's answer.";
   }
   $("closing-note").textContent = note;
 }
