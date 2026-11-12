@@ -4810,6 +4810,11 @@ function showKissExposed() {
   $("kiss-exposed").hidden = !(typed || kissExposedRunning);
 }
 
+// When each program last listened for calls, by its connection: the chip holds "listening"
+// this long after LISTEN goes off, so a scanning program's gaps do not make it blink.
+const listenedAt = new Map();
+const LISTEN_HOLD_MS = 10_000;
+
 function applyKiss(kiss, host, datagrams) {
   const k = kiss ?? { enabled: false, listening: false, clients: [] };
   const clients = k.clients ?? [];
@@ -4840,17 +4845,26 @@ function applyKiss(kiss, host, datagrams) {
     ? `${k.frames_in ?? 0} in · ${k.frames_out ?? 0} out · ${waiting} waiting`
     : "turn on KISS programs in Setup";
 
-  // the header: which programs are using this station now, each with the callsigns it answers
-  // for (ADR-0106) — and one that is not listening, which keeps those calls unanswered, as
-  // VARA's LISTEN OFF does
+  // the header: which programs are using this station now (ADR-0106), and which of them
+  // listen for calls. A program that only calls out (the RadioPost client) is named alone: a
+  // mark of what it is not doing read as a fault. A program that scans (RMS Trimode turns
+  // LISTEN off for half a second every few seconds) stays "listening" through its gaps.
   const claims = lastStatus?.claims ?? [];
   const using = [];
   const said = [];
+  const now = Date.now();
   for (const claim of claims) {
+    if (claim.listening) listenedAt.set(claim.id, now);
+    const listening = now - (listenedAt.get(claim.id) ?? -Infinity) < LISTEN_HOLD_MS;
     const name = programName(claim);
-    using.push(claim.listening ? name : `${name} · not answering`);
+    using.push(listening ? `${name} · listening` : name);
     const calls = (claim.callsigns ?? []).join(", ") || "no callsign";
-    said.push(`${name} answers for ${calls}${claim.listening ? "" : ", and is not listening: calls to them are not answered"}`);
+    said.push(listening
+      ? `${name} answers calls to ${calls}`
+      : `${name} uses ${calls} and is not listening for calls: it can call out, and calls to ${calls} are not answered until it listens`);
+  }
+  for (const id of listenedAt.keys()) {
+    if (!claims.some((c) => c.id === id)) listenedAt.delete(id);
   }
   // a host program from before its claim reaches the status
   if (host?.connected && !claims.some((c) => c.kind === "host")) using.push("host program");
@@ -4860,7 +4874,7 @@ function applyKiss(kiss, host, datagrams) {
   const first = (lastStatus?.own_callsigns ?? [])[0];
   if (first && lastStatus?.answering === false && lastStatus?.not_answering && claims.length === 0
       && !host?.connected) {
-    using.push(`not answering ${first}`);
+    using.push(`calls to ${first} not answered`);
     said.push(`Calls to ${first} are not answered: ${lastStatus.not_answering}`);
   }
   if (count > 0) using.push(`${count} KISS`);

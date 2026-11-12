@@ -112,11 +112,13 @@ To the right:
   choice for the next start. The waterfall keeps its own colours.
 - A chip shows the **programs using the station**: a host program, a program on the control
   API that answers for callsigns of its own (a RadioPost gateway, for example), and KISS
-  programs. A program that is not listening shows *not answering*: calls to its callsigns go
-  unanswered until it listens. The chip's tooltip names the callsigns each program answers for.
-  When no program is there and calls to the station's own callsign are not answered, the chip
-  says *not answering* and the callsign, and its tooltip says why: under automatic control only
-  a program answers calls (section 12).
+  programs. A program that listens for calls shows *listening*. A program shown by its name
+  alone can call out, but calls to its callsigns go unanswered until it listens: that is normal
+  for a program that only calls, such as the RadioPost client. A program that scans, as RMS
+  Trimode does, stays *listening* through its short gaps. The chip's tooltip names the callsigns
+  each program uses. When no program is there and calls to the station's own callsign are not
+  answered, the chip says *calls to* the callsign *not answered*, and its tooltip says why:
+  under automatic control only a program answers calls (section 12).
   Another chip shows the **bandwidth** when the station is running one that is not its own
   setting.
 
@@ -709,7 +711,7 @@ callsign: the first to claim it keeps it, and the Log says which program was ref
 (Setup step 1), nobody is at the station to carry a session of its own, so Aether answers a call
 only for a program that holds the callsign called and is listening: RMS Trimode, a RadioPost
 gateway. While no program holds the station's callsign, calls to it go unanswered; the header's
-chip says *not answering* and the callsign, and the Log says each caller left unanswered
+chip says *calls to* the callsign *not answered*, and the Log says each caller left unanswered
 (*listen:* lines). Probes are still answered: an answer to a probe opens no session. Under local
 or remote control the station answers its own callsign as before.
 

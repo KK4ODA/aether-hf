@@ -154,8 +154,8 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   station's bandwidth, in amber when it is not this station's.
 * **Answering calls.** With a program attached, Aether answers calls to its callsigns only once
   the program has said `LISTEN ON` (VarAC and Winlink Express do when they start), as VARA does.
-  The header says *host program · not answering* until then, and the log names every call left
-  unanswered.
+  The header says *host program · listening* once it has, and *host program* alone until then;
+  the log names every call left unanswered.
 * **The Morse ID at the end** (ADR-0075, as VARA does). Each station's Morse ID is the last
   thing it sends for a session. A US callsign always sends it; `CWID OFF` from the program is
   answered `OK` and changes nothing. Any other callsign sends it if Setup step 4's *Morse ID* is

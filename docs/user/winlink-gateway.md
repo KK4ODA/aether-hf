@@ -203,8 +203,8 @@ scanning, as it does for VARA), then `PTT ON` as it keys its answer, and `CONNEC
 that — 1.5 s after the `PENDING` at the least if the call came at the end of a listening window,
 once Trimode's half second of deafness is over (ADR-0051, ADR-0096, ADR-0100, ADR-0103). Turning Trimode's scanning off does not stop the cycling: it runs on one channel
 too. The Log tab says *LISTEN turned on and off … the program scans* once
-a minute. The header's chip reading *host program · not answering* for a moment now and then is
-that rhythm. `PUBLIC ON` is a VARA command about the
+a minute. The header's chip keeps reading *host program · listening* through that rhythm; it
+drops the word only when `LISTEN` has stayed off for ten seconds. `PUBLIC ON` is a VARA command about the
 gateway being open to the public, nothing to do with the service code; Aether answers `OK`.
 
 ### 3.3 Before you leave
@@ -283,7 +283,7 @@ gateway being open to the public, nothing to do with the service code; Aether an
 | Winlink Express cannot reach the TNC | Aether running? *Host programs* on, port 8300, saved? Another program on 8300? |
 | Trimode says the VARA program stopped, or keeps launching it | Trimode's log: `Restart Vara` after `Vara command wasn't acknowledged` is Trimode giving up on a command; Aether's Log tab shows each new connection (*replaces it*). Before 0.2.0-beta.125 the second connection was refused with `WRONG` until Trimode was restarted, and each restart closed Aether's window and opened another. Otherwise the program path (§3.2): try the next of the three ways |
 | Aether's window closes when Winlink Express closes | Winlink Express's *auto-launch* is on and it started Aether: it ends what it started. Untick the launch in its Vara TNC Setup and start Aether yourself (§4.2) |
-| The call goes out and nobody answers (*no response*) | The gateway's dial and bandwidth (the Stations tab and the mismatch banner, at either end); Trimode running and listening (its window: under automatic control Aether answers calls only while a program holds the callsign, and the header's chip says *not answering* when none does); the gateway's rules badge — *TX blocked* means the dial is outside the sub-band, or the radio's dial is not read (a serial line without *Dial is at*) |
+| The call goes out and nobody answers (*no response*) | The gateway's dial and bandwidth (the Stations tab and the mismatch banner, at either end); Trimode running and listening (its window: under automatic control Aether answers calls only while a program holds the callsign, and the header's chip says *calls to* the callsign *not answered* when none does); the gateway's rules badge — *TX blocked* means the dial is outside the sub-band, or the radio's dial is not read (a serial line without *Dial is at*) |
 | *Connected*, then nothing, then the session times out | Trimode's log: `Ignoring CONNECTED while LISTEN=FALSE` or `… in scan state Deaf` is the race 0.2.0-beta.90 and 0.2.0-beta.125 closed (ADR-0051, ADR-0096); `Connect pending received` and nothing more until `Pending Vara connection cancelled` is the wait 0.2.0-beta.137 closed (ADR-0100) — update the gateway; otherwise the Log tab's *host* lines and the host trace (§3.1) say what Trimode was told and when |
 | *Connected*, and Trimode drops the session at once | Trimode's log: `No PTT from Vara. Connection appears to be hung` in the second of `CONNECTED` — it had not been told of the answer's keying, and the last keying it knew of was minutes old. 0.2.0-beta.141 tells it first (ADR-0103): update the gateway |
 | *Connected* and the session ends with nothing sent | An SSID in Winlink Express's callsign; the message not posted to the outbox |
