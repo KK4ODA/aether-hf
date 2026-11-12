@@ -71,7 +71,7 @@ pub struct Session {
     /// session, as far as the station can tell. Older files say nothing, read as not.
     #[serde(default)]
     pub host: bool,
-    /// Whether a program owned it, on the host interface or the control API (a RadioPost
+    /// Whether a program owned it, on the host interface or the control API (a `RadioPost`
     /// client or gateway): what debug mode sends. Older files say nothing, read as not.
     #[serde(default)]
     pub program: bool,

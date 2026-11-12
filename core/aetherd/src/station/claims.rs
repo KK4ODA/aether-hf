@@ -196,17 +196,9 @@ impl<P: Ptt> Station<P> {
 
     /// Whether the call or session under way is a program's, on the host interface or the
     /// control API: what debug mode records and sends (ADR-0050; every program's since
-    /// 2026-11-12, RadioPost's as well as Winlink's). The panel's own has no owner.
+    /// 2026-11-12, `RadioPost`'s as well as Winlink's). The panel's own has no owner.
     pub(super) fn owned_by_program(&self) -> bool {
         self.claims.owner.is_some()
-    }
-
-    /// Whether the call or session under way is a program's on the host interface: whose
-    /// `CWID ON` it honours (ADR-0075 §2.7).
-    pub(super) fn owned_by_host(&self) -> bool {
-        self.claims
-            .owner
-            .is_some_and(|owner| owner.kind == ConnectionKind::Host)
     }
 
     /// Whether a callsign is held by the program on the host interface.

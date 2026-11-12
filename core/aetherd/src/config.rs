@@ -619,7 +619,7 @@ pub struct RecordSection {
     #[serde(default)]
     pub tx_audio: bool,
     /// Debug mode: every session a program runs (Winlink Express, Pat, `VarAC` on the host
-    /// interface, a RadioPost client or gateway on the control API — P2P or through a gateway)
+    /// interface, a `RadioPost` client or gateway on the control API — P2P or through a gateway)
     /// is recorded, and a minute after it ends its recording, audio
     /// included, the logs and the settings without their secrets go to the Aether project's
     /// upload folder (`tools/drive_upload/`). On by default while Aether is in its field

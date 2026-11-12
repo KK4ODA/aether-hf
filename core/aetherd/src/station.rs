@@ -746,11 +746,9 @@ struct SessionNotes {
     heard_there_db: Option<f64>,
     top_rung_sent: Option<usize>,
     top_rung_heard: Option<usize>,
-    /// A host program was attached when it came up: its session, as far as the station can
-    /// tell.
-    host: bool,
-    /// A program owned it, on either interface (debug mode sends those, ADR-0050).
-    program: bool,
+    /// Whose it was when it came up: a program's on the host interface or the control API,
+    /// or the station's own (`None`). Debug mode sends a program's (ADR-0050).
+    owner: Option<crate::control::protocol::ConnectionKind>,
     /// The recording running is the session's own, started when it came up: it ends with
     /// the session, though the setting or the host program that started it has gone since.
     recorded: bool,
@@ -4242,8 +4240,8 @@ impl<P: Ptt> Station<P> {
             top_rung_sent: notes.top_rung_sent,
             top_rung_heard: notes.top_rung_heard,
             test: self.test_running(),
-            host: notes.host,
-            program: notes.program,
+            host: notes.owner == Some(crate::control::protocol::ConnectionKind::Host),
+            program: notes.owner.is_some(),
             recording: self.recording().and_then(|(path, _)| {
                 path.file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
@@ -4292,10 +4290,8 @@ impl<P: Ptt> Station<P> {
             caller: detail.ends_with("(master)"),
             frequency_hz: self.frequency.value,
             acked_at_start: self.engine.stats.bytes_acked,
-            // a session the host program owns (ADR-0106)
-            host: self.owned_by_host(),
-            // a session any program owns, which debug mode sends (ADR-0050)
-            program: self.owned_by_program(),
+            // whose it is (ADR-0106): a program's, which debug mode sends (ADR-0050)
+            owner: self.owner().map(|owner| owner.kind),
             ..SessionNotes::default()
         });
         self.moved.clear();
