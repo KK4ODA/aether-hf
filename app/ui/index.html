@@ -126,8 +126,8 @@
         <button class="small quiet" id="btn-clip-dismiss" title="Hide this warning until the audio stops clipping and starts again">Dismiss</button>
       </div>
       <!-- debug mode (ADR-0050), said once: what goes to the project, and the switch -->
-      <div class="note unsaved-banner" id="debug-banner" title="Debug mode sends the sessions a host program runs to the Aether project: said once, with the switch to turn it off" role="status" hidden>
-        <span id="debug-banner-text" title="After each session Winlink Express, Pat or VarAC runs through this station, its recording, the logs and your settings (never a password) go to the Aether project (KK4ODA) to find what goes wrong on real paths. The recording is the audio, and Aether can decode what was sent from it. Setup step 5 turns it off">Debug mode is on: each host program's session — its audio recording, the logs and your settings, never a password — goes to the Aether project (KK4ODA). Setup step 5.</span>
+      <div class="note unsaved-banner" id="debug-banner" title="Debug mode sends the sessions a program runs to the Aether project: said once, with the switch to turn it off" role="status" hidden>
+        <span id="debug-banner-text" title="After each session Winlink Express, Pat, VarAC or RadioPost runs through this station, its recording, the logs and your settings (never a password) go to the Aether project (KK4ODA) to find what goes wrong on real paths. The recording is the audio, and Aether can decode what was sent from it. Setup step 5 turns it off">Debug mode is on: each program's session — its audio recording, the logs and your settings, never a password — goes to the Aether project (KK4ODA). Setup step 5.</span>
         <button class="small" id="btn-debug-keep" title="Keep debug mode on, and stop showing this">Keep it on</button>
         <button class="small quiet" id="btn-debug-off" title="Turn debug mode off: nothing is sent unless you send it from Log → Send files…">Turn it off</button>
       </div>
@@ -940,8 +940,8 @@
                 <label class="check" title="Record every session, from connect to disconnect"><input id="record-auto" title="Record every session, from connect to disconnect" type="checkbox" /> Every session</label>
               </div>
               <div class="row">
-                <label for="record-send" title="Send host-program sessions to the Aether project">Debug mode</label>
-                <label class="check" title="Record every session a host program runs (Winlink, Pat or VarAC), and send it to the Aether project a minute after it ends: the audio, which carries what was sent, the logs and the settings without passwords"><input id="record-send" title="Send each host program's session recording and logs to the Aether project" type="checkbox" checked /> Send to the project</label>
+                <label for="record-send" title="Send the sessions programs run (Winlink, Pat, VarAC, RadioPost) to the Aether project">Debug mode</label>
+                <label class="check" title="Record every session a program runs (Winlink, Pat, VarAC or RadioPost), and send it to the Aether project a minute after it ends: the audio, which carries what was sent, the logs and the settings without passwords"><input id="record-send" title="Send each program's session recording and logs to the Aether project" type="checkbox" checked /> Send to the project</label>
               </div>
               <div class="row">
                 <label for="record-standing" title="Notes for every automatic recording">Recording notes</label>

@@ -115,7 +115,8 @@ Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune thr
 
 ## Debug mode: your sessions help the project
 
-While Aether is in its field trials, every session a host program runs through it is recorded
+While Aether is in its field trials, every session a program runs through it (a host program,
+or RadioPost) is recorded
 and, a minute after it ends, sent to the Aether project with the logs and the settings (never
 a password) — **debug mode**, Setup step 5, on unless you turn it off. The recording is the
 audio of the session, so what was sent can be decoded from it. The panel says this once when

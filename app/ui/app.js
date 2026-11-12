@@ -5116,7 +5116,7 @@ function wireRxFilter() {
 
 // ── debug mode (ADR-0050) ───────────────────────────────────────────
 //
-// On by default during the field trials: the sessions a host program runs go to the project
+// On by default during the field trials: the sessions a program runs go to the project
 // with their audio. The operator is told once, on whatever tab is open, with the switch; the
 // daemon's log lines (`debug`) say each upload as it goes.
 

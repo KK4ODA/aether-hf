@@ -134,7 +134,7 @@ A banner across every tab tells you about something that needs attention:
 | Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a callsign a program answered for, and that program is not running | Follow its buttons: Setup step 4, Check for Updates, Answer as it too, Call it, or Dismiss. For a program that is not running, start it again |
 | Receive filter | The radio's receive filter cuts the top, the bottom or both edges of Aether's signal, 12 dB or more down, and names the knob: the IF shift, the high or low cut, or the filter width | Turn that knob; the banner goes when the cut does. **Dismiss** hides it until the reading changes: another edge, 3 dB further down, or another bandwidth. Both edges cut at 2300 Hz also offers **Setup step 4**, to run at 500 Hz |
 | Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down. **Dismiss** hides it until the audio stops clipping and starts again |
-| Debug mode | Shown once: sessions run by a host program are sent to the project | **Keep it on** or **Turn it off** |
+| Debug mode | Shown once: sessions run by a program (Winlink Express, Pat, VarAC, RadioPost) are sent to the project | **Keep it on** or **Turn it off** |
 | Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says; usually Setup step 2 |
 
 The receive filter and clipping banners show in Compact too. Aether tells a host program
@@ -294,8 +294,8 @@ the sound card's own noise.
 - **Recording**: record every session from connect to disconnect, and on until the closing
   Morse IDs have gone (yours, and the other station's when it identifies after you), at most
   30 s after the end.
-- **Debug mode**: on by default. After each session that Winlink Express, Pat or VarAC runs
-  through this station, its recording (with the audio), the logs and your settings (never a
+- **Debug mode**: on by default. After each session that Winlink Express, Pat, VarAC or
+  RadioPost runs through this station, its recording (with the audio), the logs and your settings (never a
   password) go to the Aether project, so problems on real paths can be found. Sessions you run
   from the panel and Tests are not sent this way.
 - **Recording notes**: written into every recording that starts on its own.

@@ -197,7 +197,7 @@ pub struct DaemonState {
     pub upload: crate::upload::Upload,
     /// How the upload reaches the network: a function, so the tests can stand in for Google.
     pub upload_http: fn() -> Box<dyn crate::upload::Http>,
-    /// Debug mode's queue: the host program's sessions on their way to the project.
+    /// Debug mode's queue: the programs' sessions on their way to the project.
     pub debug: crate::debug::DebugUploads,
     /// The audio is a simulated channel (`[sim]`, `--channel`) or a dry run: its sessions are
     /// a bench's, never sent to the project — CI and the harness would fill its folder.
@@ -3395,6 +3395,7 @@ mod tests {
             top_rung_heard: Some(7),
             test: true,
             host: false,
+            program: false,
             recording: None,
         };
         let response = dispatch_with(

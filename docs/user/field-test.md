@@ -273,8 +273,8 @@ limited number of uploads a day ([`tools/drive_upload/`](../../tools/drive_uploa
 when it is full, email is the way round.
 
 **Debug mode** (Setup step 5, on by default during the field trials; ADR-0050) does the first
-choice by itself for every session a host program runs — Winlink Express, Pat or VarAC, P2P or
-through a gateway: the session is recorded, and a minute after it ends its recording, the logs
+choice by itself for every session a program runs — Winlink Express, Pat, VarAC or RadioPost, P2P
+or through a gateway: the session is recorded, and a minute after it ends its recording, the logs
 and the diagnostic bundle go to the project, while the station is idle. The panel says so once
 when it is on, with *Turn it off*; the Log tab shows each upload (`debug`). The panel's own
 sessions and Test sessions are not sent.

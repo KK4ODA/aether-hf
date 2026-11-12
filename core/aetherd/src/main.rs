@@ -622,7 +622,7 @@ fn station_config(
         answer_only: config.radio.answer_only,
         record_dir: Some(record_dir),
         record_auto: config.record.auto,
-        record_host_sessions: config.record.send_to_project,
+        record_program_sessions: config.record.send_to_project,
         record_notes: config.record.notes.clone(),
         record_tx_audio: config.record.tx_audio,
         playback_lead_s: DEVICE_LATENCY_S,
@@ -1873,7 +1873,7 @@ fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
         daemon.log.record(
             Level::Info,
             "debug",
-            "debug mode is on: every session a host program runs is recorded, and its files — \
+            "debug mode is on: every session a program runs is recorded, and its files — \
              the recording with its audio, the logs, the settings without their secrets — go to \
              the Aether project a minute after it ends ([record] send_to_project)",
             "Idle",
@@ -1881,7 +1881,7 @@ fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
     }
 }
 
-/// Debug mode (ADR-0050): the host program's sessions that ended go to the Aether project,
+/// Debug mode (ADR-0050): the programs' sessions that ended go to the Aether project,
 /// one zip at a time, while the station is idle. What happened is said in the log, to the
 /// clients too: an operator should see their files go.
 fn debug_uploads(
@@ -1999,10 +1999,10 @@ fn note_sessions(
                 serde_json::to_value(&session).unwrap_or(serde_json::Value::Null),
             ));
         }
-        // debug mode (ADR-0050): a host program's session, recorded, goes to the project
+        // debug mode (ADR-0050): a program's session, recorded, goes to the project
         if daemon.config.record.send_to_project
             && !daemon.simulated
-            && session.host
+            && session.program
             && !session.test
             && let Some(recording) = session.recording.clone()
         {

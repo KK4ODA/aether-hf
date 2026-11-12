@@ -618,8 +618,9 @@ pub struct RecordSection {
     /// or the rig's scope against, and it writes a file per burst.
     #[serde(default)]
     pub tx_audio: bool,
-    /// Debug mode: every session a host program runs (Winlink Express, Pat, `VarAC` — P2P or
-    /// through a gateway) is recorded, and a minute after it ends its recording, audio
+    /// Debug mode: every session a program runs (Winlink Express, Pat, `VarAC` on the host
+    /// interface, a RadioPost client or gateway on the control API — P2P or through a gateway)
+    /// is recorded, and a minute after it ends its recording, audio
     /// included, the logs and the settings without their secrets go to the Aether project's
     /// upload folder (`tools/drive_upload/`). On by default while Aether is in its field
     /// trials: what a session did on a real path is what the project needs most, and asking
@@ -1899,7 +1900,7 @@ notes = ""
 # Every transmission's exact audio too, under tx/ with an envelope sidecar: for chasing a
 # problem in the transmitted signal, not for everyday use.
 # tx_audio = false
-# Debug mode: record every session a host program runs (Winlink Express, Pat, VarAC) and,
+# Debug mode: record every session a program runs (Winlink Express, Pat, VarAC, RadioPost) and,
 # a minute after it ends, send its recording — audio included, so what was sent with it —
 # the logs and the settings without their secrets to the Aether project's upload folder.
 # On while Aether is in its field trials; false keeps everything on this computer.

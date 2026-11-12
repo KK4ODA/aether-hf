@@ -3,7 +3,7 @@
 //! Field trials through a Winlink gateway on Aether need both sides of every session, and
 //! asking a station for its files after the fact found the logs gone (ND1J, 2026-09-29) or
 //! cost a PowerShell line in an email (KE4QCM, 2026-10-05). With `record.send_to_project` on
-//! — the default during the trials — every session a host program runs is recorded, and a
+//! — the default during the trials — every session a program runs is recorded, and a
 //! minute after it ends the daemon writes one zip of its recording, audio included, the logs
 //! and the settings without their secrets, and uploads it to the project's script
 //! (`upload::PROJECT_ENDPOINT`) on the upload's own thread.

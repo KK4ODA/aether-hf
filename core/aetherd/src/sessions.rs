@@ -71,6 +71,10 @@ pub struct Session {
     /// session, as far as the station can tell. Older files say nothing, read as not.
     #[serde(default)]
     pub host: bool,
+    /// Whether a program owned it, on the host interface or the control API (a RadioPost
+    /// client or gateway): what debug mode sends. Older files say nothing, read as not.
+    #[serde(default)]
+    pub program: bool,
     /// The recording it went into, by file name, when it was recorded.
     pub recording: Option<String>,
 }
@@ -193,6 +197,7 @@ mod tests {
             top_rung_heard: Some(7),
             test: true,
             host: false,
+            program: false,
             recording: Some("20260925-015107_KK4ODA-1_ND1J_test".to_owned()),
         }
     }

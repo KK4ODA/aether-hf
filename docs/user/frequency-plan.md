@@ -169,7 +169,7 @@ program attached, only once the program says `LISTEN ON`, `CQ` or `CHAT ON`), an
 `[record] auto = true` it records each session, from connect to disconnect, with the
 standing `[record] notes` and — under CAT, `rigctld` or FLRig keying — the dial frequency written
 into the sidecar. Park it on one of the frequencies in §3 and it is where the rules allow it
-to answer. Debug mode (Setup step 5, on by default) also sends every session a host program runs
+to answer. Debug mode (Setup step 5, on by default) also sends every session a program runs
 through it, audio included, to the Aether project; turn it off there if you would rather not.
 
 If you are running a gateway, find the rule that applies to you before you leave it running.

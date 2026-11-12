@@ -142,7 +142,7 @@ Pat's configuration, with Aether keying the radio.
 ## 6. Debug mode: what is sent, and how to stop it
 
 During the field trials, **debug mode** is on by default (Setup step 5). After every session a
-host program runs — Winlink Express, Pat or VarAC, P2P or through the gateway — Aether waits a
+program runs — Winlink Express, Pat, VarAC or RadioPost, P2P or through a gateway — Aether waits a
 minute, and while the station is idle uploads one zip to the Aether project's folder:
 
 * the session's **recording**: the audio Aether received during the session, and a summary of
@@ -151,7 +151,7 @@ minute, and while the station is idle uploads one zip to the Aether project's fo
 * your **settings, without passwords**.
 
 **The recording is the audio of the session, so what was sent can be decoded from it** —
-including the text of Winlink messages. Amateur radio traffic is not private, but you should
+including the text of Winlink and RadioPost messages. Amateur radio traffic is not private, but you should
 know. Aether says so once, the first time you open it with debug mode on, with *Keep it on* and
 *Turn it off*. To turn it off later: Setup step 5, untick **Debug mode**, Save. Sessions you
 start from Aether's own Session tab and Test sessions are never sent automatically.

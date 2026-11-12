@@ -32,7 +32,7 @@ the fact, for the right hours.
    (`share.rs`, the same format as *Send files…*). The audio is included: it is what makes a
    session replayable, and the author chose it.
 3. **Recording.** With the setting on, a host program's session is recorded whatever
-   `record.auto` says (`StationConfig::record_host_sessions`); a session's own recording ends
+   `record.auto` says (`StationConfig::record_program_sessions`); a session's own recording ends
    with it even if the setting or the program went in between (`recording_session`).
 4. **When.** A minute after the last such session ended (`QUIET_MS`: a client that calls again
    at once puts both in one zip), only while the station is idle and not transmitting, never
@@ -76,3 +76,16 @@ the fact, for the right hours.
 * Keeping the queue across a restart: the recordings are kept, and a restart is rare during a
   session's minute.
 * Sending without the audio by default: the author chose the audio.
+
+## 5. Amended 2026-11-12: every program's sessions
+
+The author's decision, after a morning of RadioPost sessions between KK4ODA and KK4ODA-1 with
+debug mode on at both ends left nothing in the upload folder: since ADR-0106 debug mode had
+recorded only a session owned by the program on the host interface, and RadioPost reaches the
+station on the control API. Now a session owned by any program that holds callsigns
+(`Station::owned_by_program`: the session has an owner), on either interface, is recorded and
+sent; the session history keeps `program` beside `host` (`host` still says whose `CWID ON` is
+honoured, ADR-0075 §2.7). The panel's own sessions have no owner and Tests are left out, as
+before. `StationConfig::record_host_sessions` is now `record_program_sessions`. The notice,
+Setup's tooltip, the start-up log line, the manual and the guides name RadioPost.
+

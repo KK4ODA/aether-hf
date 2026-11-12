@@ -352,8 +352,9 @@ cover everything else it does.
 * ★ **Send files…**: one zip of logs, the diagnostic bundle and chosen sessions, uploaded to the
   project with a progress bar, emailed, or **requested from the other station** by a link that
   opens its form filled in; or a Test reported as a GitHub issue.
-* **Debug mode** during the field trials: sessions a host program runs are sent to the project
-  after they end, said once on the panel, with one switch to turn it off.
+* **Debug mode** during the field trials: sessions a program runs (Winlink Express, Pat, VarAC,
+  RadioPost) are sent to the project after they end, said once on the panel, with one switch to
+  turn it off.
 * Logs of every run kept for 30 days, and a **diagnostic bundle** of the station's state.
 
 ### Installing, updating and running unattended
