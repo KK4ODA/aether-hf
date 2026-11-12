@@ -681,7 +681,10 @@ or remote control the station answers its own callsign as before.
 **A program that leaves takes its session with it.** When the program that owns a session or a
 call disconnects from Aether (it closed, crashed, or lost its connection), Aether ends that
 session as Disconnect does: what is already queued may still go, then the closing exchange and
-the identifiers. A call it placed stops. The Log says so (*claims:* lines).
+the identifiers. A call it placed stops. The Log says so (*claims:* lines), and when the
+connection broke rather than being closed by the program, it says how in brackets: *RadioPost
+client has gone (a read failed: …)*. A connection that held no callsign and broke gets a
+*control:* line of its own.
 
 RMS Trimode starts its modem itself and, to restart it, closes what it started. When Trimode
 starts Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no

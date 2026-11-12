@@ -2879,7 +2879,18 @@ not answered, a probe to it is (`answers_call_for` beside `answers_for`; `status
 the apps chip says *not answering <call>*) — and when the connection that owns a call or session
 closes, a call stops and a session closes as `disconnect` does (`connection_closed`). The harness
 runs no station under automatic control. In the uploads, RadioPost's client is `RadioPost client
-0.1.0-beta.6` and its gateway `radiopost-gateway 0.1.0-beta.6` in the `claims:` lines.
+0.1.0-beta.6` and its gateway `radiopost-gateway 0.1.0-beta.6` in the `claims:` lines. **The
+next four sessions (01:20–02:00Z)**: three gateway sessions crossed both ways (500 Hz twice, then
+2300 Hz at transmit level 0.1); the P2P call at 01:55 reached KK4ODA-1 with no program holding it
+(RadioPost Gateway stopped at 01:52, no client listening) and Aether answered it itself under the
+P2P profile's local control; and at 01:20 the mobile's RadioPost connection to Aether ended 35 s in
+with nothing sent first, as at 00:55:54 — both a few seconds into one of the mobile's own 2300 Hz
+transmissions at level 0.25, cause unknown. So a control connection's close now carries why it
+ended (`Connection::ended_because`, `carry_websocket`: the client's close says nothing, a failed
+read or write says how, the modem stopping says so), on the claim's *has gone* line or a `control:`
+line of its own; RadioPost keeps `radiopost.log`/`gateway.log` and its Aether adapter says why its
+WebSocket ended. The suspect, unproven: the short socket read timeouts on Windows (10 ms in
+RadioPost's adapter, 50 ms here), which Microsoft documents can lose data.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

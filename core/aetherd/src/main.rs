@@ -828,7 +828,22 @@ fn answer_commands(
         // crashed stops being answered for. Nothing to answer: nobody waits.
         if command.closed {
             if let Some(connection) = command.request.connection {
-                station.connection_closed(connection);
+                // why it ended, when it was not the program's own close: said with the claim
+                // it held, or on its own line when it held nothing (a panel's, a script's)
+                let why = command.request.params["why"].as_str();
+                let held =
+                    station.claim_of(connection).is_some() || station.owner() == Some(connection);
+                if let Some(why) = why
+                    && !held
+                {
+                    daemon.log.record(
+                        Level::Info,
+                        "control",
+                        &format!("a {} connection ended: {why}", connection.kind.name()),
+                        &state_name(station),
+                    );
+                }
+                station.connection_closed_because(connection, why);
                 note_sessions(station, Some(control), daemon);
                 publish_station(station, control, daemon);
             }

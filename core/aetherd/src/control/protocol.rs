@@ -218,6 +218,10 @@ pub struct ControlHandle {
 #[derive(Debug)]
 pub struct Connection {
     handle: ControlHandle,
+    /// Why it ended, for the log, when the end was not the program's own close: a read or a
+    /// write that failed, or the modem stopping. A connection that went silently had left no
+    /// trace at either end (KK4ODA's `RadioPost` client, 2026-11-12).
+    ended: Option<String>,
 }
 
 impl Connection {
@@ -225,6 +229,12 @@ impl Connection {
     #[must_use]
     pub fn handle(&self) -> &ControlHandle {
         &self.handle
+    }
+
+    /// Say why the connection is ending, before it is dropped: the reason goes to the modem
+    /// with its close, for the log.
+    pub fn ended_because(&mut self, why: impl Into<String>) {
+        self.ended = Some(why.into());
     }
 
     /// Its identity.
@@ -246,7 +256,12 @@ impl Drop for Connection {
             request: Request {
                 id: None,
                 method: String::new(),
-                params: serde_json::Value::Null,
+                // a close is never a client's request (`closed` is set only here), so what it
+                // says of why is the server's own word
+                params: self.ended.take().map_or(
+                    serde_json::Value::Null,
+                    |why| serde_json::json!({ "why": why }),
+                ),
                 connection: self.handle.connection,
             },
             reply,
@@ -305,7 +320,10 @@ impl ControlHandle {
         let id = self.numbers.fetch_add(1, Ordering::SeqCst) + 1;
         let mut handle = self.clone();
         handle.connection = Some(ConnectionId { id, kind });
-        Connection { handle }
+        Connection {
+            handle,
+            ended: None,
+        }
     }
 
     /// Send a request and wait for its reply. The request is stamped with this handle's
@@ -503,6 +521,20 @@ mod tests {
         assert_eq!(closed.len(), 1);
         assert!(closed[0].closed);
         assert_eq!(closed[0].request.connection, Some(gone));
+        assert_eq!(
+            closed[0].request.params,
+            serde_json::Value::Null,
+            "a plain close"
+        );
+        // a connection that failed says how, with its close
+        let mut third = handle.open(ConnectionKind::Control);
+        third.ended_because("a read failed: Connection reset without closing handshake");
+        drop(third);
+        let closed = channel.drain();
+        assert_eq!(
+            closed[0].request.params["why"],
+            "a read failed: Connection reset without closing handshake"
+        );
     }
 
     #[test]

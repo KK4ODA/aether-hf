@@ -11528,6 +11528,25 @@ mod tests {
     }
 
     #[test]
+    fn a_program_whose_connection_failed_is_said_to_have_gone_and_how() {
+        // the claim's line says why the connection ended when it was not the program's own
+        // close: KK4ODA's RadioPost client went twice on 2026-11-12 with no trace of how
+        let mut station = idle_station();
+        let client = ConnectionId {
+            id: 9,
+            kind: ConnectionKind::Control,
+        };
+        station
+            .claim(client, Some("RadioPost client"), &["W4ODA-10".to_owned()])
+            .expect("valid");
+        let _ = station.take_events();
+        station.connection_closed_because(client, Some("a read failed: Connection reset"));
+        assert!(station.take_events().iter().any(|e| e
+            == "claims:RadioPost client has gone (a read failed: Connection reset): no \
+                    longer answering for W4ODA-10"),);
+    }
+
+    #[test]
     fn a_program_going_leaves_the_stations_own_session_alone() {
         // a session the panel started is the operator's: a program that goes does not end it
         let mut air = Air::new(1.0, 0.0005);

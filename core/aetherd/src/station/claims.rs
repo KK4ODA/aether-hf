@@ -357,6 +357,14 @@ impl<P: Ptt> Station<P> {
     /// anything: KK4ODA's session with KK4ODA-1 ran on five minutes after its `RadioPost` client
     /// had gone (2026-11-12), until the operator pressed Abort.
     pub fn connection_closed(&mut self, connection: ConnectionId) {
+        self.connection_closed_because(connection, None);
+    }
+
+    /// [`Self::connection_closed`], with why the connection ended when it was not the
+    /// program's own close (a read or write that failed, the modem stopping), said in the
+    /// claim's line: two of KK4ODA's `RadioPost` sessions lost their program with nothing in
+    /// either log to say how (2026-11-12).
+    pub fn connection_closed_because(&mut self, connection: ConnectionId, why: Option<&str>) {
         let index = self
             .claims
             .list
@@ -387,7 +395,8 @@ impl<P: Ptt> Station<P> {
         self.note(
             "claims",
             &format!(
-                "{app} has gone: no longer answering for {}{ended}",
+                "{app} has gone{}: no longer answering for {}{ended}",
+                why.map(|why| format!(" ({why})")).unwrap_or_default(),
                 if held.is_empty() {
                     "anything".to_owned()
                 } else {

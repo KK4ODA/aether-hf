@@ -423,18 +423,33 @@ fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, runnin
         tungstenite::WebSocket::from_raw_socket(cloned, tungstenite::protocol::Role::Server, None);
 
     // this client's identity: what it claims goes when the connection does (ADR-0106)
-    let connection = handle.open(crate::control::protocol::ConnectionKind::Control);
-    let handle = connection.handle();
+    let mut connection = handle.open(crate::control::protocol::ConnectionKind::Control);
+    let why = carry_websocket(&mut socket, connection.handle(), running);
+    // said with the close, for the log: a connection that failed had left no trace at either
+    // end (KK4ODA's RadioPost client, 2026-11-12)
+    if let Some(why) = why {
+        connection.ended_because(why);
+    }
+}
+
+/// Requests in and replies and events out, until the connection ends: why, when it was not
+/// the client's own close.
+fn carry_websocket<S: Read + Write>(
+    socket: &mut tungstenite::WebSocket<S>,
+    handle: &ControlHandle,
+    running: &AtomicBool,
+) -> Option<String> {
     let events = handle.subscribe();
     while running.load(Ordering::Relaxed) {
         match socket.read() {
             Ok(tungstenite::Message::Text(text)) => {
                 let sent = match serde_json::from_str::<Request>(&text) {
                     // sent before the request stops counting as unwritten, as over REST
-                    Ok(request) => handle
-                        .call_and_deliver(request, |response| send_json(&mut socket, &response)),
+                    Ok(request) => {
+                        handle.call_and_deliver(request, |response| send_json(socket, &response))
+                    }
                     Err(error) => send_json(
-                        &mut socket,
+                        socket,
                         &Response::failed(
                             None,
                             ApiError::new(
@@ -445,8 +460,8 @@ fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, runnin
                         ),
                     ),
                 };
-                if sent.is_err() {
-                    return;
+                if let Err(error) = sent {
+                    return Some(format!("a reply could not be written: {error}"));
                 }
             }
             // a read timeout is how this thread gets a turn to push events; anything else
@@ -454,26 +469,28 @@ fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, runnin
             Err(tungstenite::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::WouldBlock
                     || error.kind() == std::io::ErrorKind::TimedOut => {}
-            Ok(tungstenite::Message::Close(_)) | Err(_) => return,
+            Ok(tungstenite::Message::Close(_)) => return None,
+            Err(error) => return Some(format!("a read failed: {error}")),
             Ok(_) => {}
         }
 
         for event in events.try_iter() {
-            if send_json(&mut socket, &event).is_err() {
-                return;
+            if let Err(error) = send_json(socket, &event) {
+                return Some(format!("an event could not be written: {error}"));
             }
         }
     }
+    Some("the modem is stopping".to_owned())
 }
 
 fn send_json<T: serde::Serialize, S: Read + Write>(
     socket: &mut tungstenite::WebSocket<S>,
     value: &T,
-) -> Result<(), ()> {
-    let text = serde_json::to_string(value).map_err(|_| ())?;
+) -> Result<(), String> {
+    let text = serde_json::to_string(value).map_err(|error| error.to_string())?;
     socket
         .send(tungstenite::Message::Text(text.into()))
-        .map_err(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -738,6 +755,60 @@ mod tests {
         assert!(saw_reply, "no reply to the request");
         assert!(saw_event, "no unsolicited event");
         modem.join().expect("modem thread");
+    }
+
+    #[test]
+    fn a_connection_that_ends_badly_says_how_and_a_closed_one_says_nothing() {
+        // KK4ODA's RadioPost client lost its connection twice on 2026-11-12 with nothing in
+        // either station's log: the close now carries why, unless the client closed it
+        let (handle, control) = channel();
+        let server = ControlServer::start(
+            &ControlConfig {
+                bind: "127.0.0.1:0".to_owned(),
+                token: None,
+                ui_dir: None,
+            },
+            handle,
+        )
+        .expect("start");
+        let url = format!("ws://{}/v1", server.address);
+        let open = || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Ok((socket, _)) = tungstenite::connect(&url) {
+                    return socket;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the control interface never accepted a WebSocket"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let closed = |control: &crate::control::ControlChannel| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(command) = control.drain().into_iter().find(|c| c.closed) {
+                    return command;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "no close reached the modem"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        // closed by the client: a plain close
+        let mut polite = open();
+        polite.close(None).expect("close");
+        let _ = polite.flush();
+        assert_eq!(closed(&control).request.params, json!(null));
+        // the socket dropped with no closing handshake: a read failed, and how
+        let rude = open();
+        drop(rude);
+        let command = closed(&control);
+        let why = command.request.params["why"].as_str().unwrap_or("");
+        assert!(why.starts_with("a read failed: "), "{why:?}");
     }
 
     #[test]
