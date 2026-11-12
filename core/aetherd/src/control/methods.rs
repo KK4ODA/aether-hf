@@ -94,6 +94,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "frequencies.set"
             | "frequency.set"
             | "rate.pin"
+            | "share.include"
     ) || crate::control::profiles::is_mutating(method)
 }
 
@@ -168,6 +169,9 @@ pub struct DaemonState {
     pub sessions: crate::sessions::SessionLog,
     /// The remembered dials, kept beside it too.
     pub memories: crate::memories::Memories,
+    /// The logs the programs using the modem offered for the shared zips (`share.include`),
+    /// kept beside it too: the zip that needs one is made after its program has gone.
+    pub program_logs: crate::share::ProgramLogs,
     /// The host interface, when one is listening.
     pub host: Option<HostStatus>,
     /// What the host interface knows that the KISS port obeys: a host attached, `CHAT ON`,
@@ -254,6 +258,9 @@ impl DaemonState {
             sessions: crate::sessions::SessionLog::open(Some(path.with_file_name("sessions.json"))),
             memories: crate::memories::Memories::open(Some(
                 path.with_file_name("frequencies.json"),
+            )),
+            program_logs: crate::share::ProgramLogs::open(Some(
+                path.with_file_name("program-logs.json"),
             )),
             host: None,
             host_flags: crate::kiss::HostFlags::default(),
@@ -419,6 +426,7 @@ pub fn dispatch_with<P: Ptt>(
         "share.upload" => {
             return share_upload(station, daemon, &request.params, request.id.clone());
         }
+        "share.include" => return share_include(station, daemon, request),
         // whether a restart is something the panel can do for the operator is the
         // daemon's to know, not the station's
         "heard.list" => return heard_list(daemon.as_deref(), request.id.clone()),
@@ -668,6 +676,7 @@ fn share_prepare<P: Ptt>(
         config: daemon.path.clone(),
         recordings: station.record_dir().map(std::path::Path::to_path_buf),
         log_file: daemon.config.log.file.clone(),
+        program_logs: daemon.program_logs.current(now),
     };
     let request = crate::share::Request {
         since_ms,
@@ -697,6 +706,7 @@ fn share_prepare<P: Ptt>(
         gathered.sessions,
         if audio { "included" } else { "left out" },
     );
+    let readme = format!("{readme}{}\n", gathered.programs_line());
     gathered.entries.push((
         "README.txt".into(),
         crate::share::Entry::Bytes(readme.into_bytes()),
@@ -718,6 +728,83 @@ fn share_prepare<P: Ptt>(
             }),
         ),
         Err(message) => Response::failed(id, ApiError::new("io", message, true)),
+    }
+}
+
+/// A program using the modem offers its own log for the zips `share.prepare` and debug mode
+/// make (`share.rs`, [`crate::share::ProgramLogs`]): an absolute path to a file named `*.log`,
+/// remembered beside the configuration after the program has gone. The program is named by
+/// `app`, else by its claim's name. A `log` line named `share` says a new offer.
+fn share_include<P: Ptt>(
+    station: &mut Station<P>,
+    daemon: Option<&mut DaemonState>,
+    request: &Request,
+) -> Response {
+    let id = request.id.clone();
+    let Some(daemon) = daemon else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "unavailable",
+                "This modem keeps no files to share a log with.",
+                false,
+            ),
+        );
+    };
+    let Some(path) = request
+        .params
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    else {
+        return Response::failed(
+            id,
+            ApiError::new("bad_params", "Name the log by its path.", false),
+        );
+    };
+    let app = request
+        .params
+        .get("app")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            request
+                .connection
+                .and_then(|c| station.claim_of(c))
+                .map(|claim| claim.app.clone())
+        })
+        .unwrap_or_default();
+    let path = std::path::Path::new(path);
+    let now = unix_ms(std::time::SystemTime::now());
+    match daemon.program_logs.offer(&app, path, now) {
+        Ok(news) => {
+            let offered = &daemon.program_logs.entries()[0];
+            if news {
+                daemon.log.record(
+                    crate::log::Level::Info,
+                    "share",
+                    &format!(
+                        "{} offers its log for the files this station shares: {}",
+                        offered.app,
+                        offered.path.display()
+                    ),
+                    &format!("{:?}", station.state()),
+                );
+            }
+            Response::ok(
+                id,
+                json!({
+                    "app": offered.app,
+                    "path": offered.path.display().to_string(),
+                    "logs": daemon.program_logs.entries().len(),
+                }),
+            )
+        }
+        Err(why) if why.starts_with("cannot remember") => {
+            Response::failed(id, ApiError::new("io", why, true))
+        }
+        Err(why) => Response::failed(id, ApiError::new("bad_params", why, false)),
     }
 }
 
@@ -829,6 +916,7 @@ pub fn start_debug_upload<P: Ptt>(
         config: daemon.path.clone(),
         recordings: station.record_dir().map(std::path::Path::to_path_buf),
         log_file: daemon.config.log.file.clone(),
+        program_logs: daemon.program_logs.current(now),
     };
     let request = crate::share::Request {
         since_ms,
@@ -854,6 +942,7 @@ pub fn start_debug_upload<P: Ptt>(
         remotes.join(", "),
         gathered.sessions,
     );
+    let readme = format!("{readme}{}\n", gathered.programs_line());
     gathered.entries.push((
         "README.txt".into(),
         crate::share::Entry::Bytes(readme.into_bytes()),
@@ -2891,6 +2980,83 @@ mod tests {
     }
 
     #[test]
+    fn a_program_offers_its_log_and_the_shared_zip_carries_it() {
+        // the mobile's RadioPost client, 2026-11-12: why its connection to the modem ended was
+        // in a file on the laptop. Its adapter offers that file when it connects; Send files
+        // carries it afterwards, the program gone or not
+        let dir = std::env::temp_dir().join(format!("aether-share-include-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let log = dir.join("radiopost.log");
+        std::fs::write(
+            &log,
+            "2026-11-12T00:55:54Z Aether adapter: the connection ended\n",
+        )
+        .expect("write");
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.path = dir.join("station.toml");
+        let ask = |method: &str, params: Value| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params,
+            connection: None,
+        };
+        assert!(is_mutating("share.include"));
+        let offered = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &ask(
+                "share.include",
+                json!({"path": log.display().to_string(), "app": "RadioPost client 0.1.0-beta.9"}),
+            ),
+        );
+        let result = offered.result.expect("offered");
+        assert_eq!(result["app"], "RadioPost client 0.1.0-beta.9");
+        assert_eq!(result["logs"], 1);
+        assert!(
+            daemon.log.recent().iter().any(|e| e
+                .detail
+                .starts_with("RadioPost client 0.1.0-beta.9 offers its log")),
+            "said in the modem's log"
+        );
+        // a file that is not a log is refused
+        let refused = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &ask(
+                "share.include",
+                json!({"path": dir.join("station.toml").display().to_string()}),
+            ),
+        );
+        assert_eq!(refused.error.expect("refused").code, "bad_params");
+        // and with no files at all, nothing is remembered
+        let unavailable = dispatch_with(
+            &mut station,
+            None,
+            &ask("share.include", json!({"path": log.display().to_string()})),
+        );
+        assert_eq!(unavailable.error.expect("refused").code, "unavailable");
+        let shared = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &ask("share.prepare", json!({"hours": 1})),
+        );
+        let result = shared.result.expect("zip");
+        let files: Vec<&str> = result["files"]
+            .as_array()
+            .expect("files")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            files,
+            ["programs/radiopost.log", "diagnostics.json", "README.txt"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_shared_zip_goes_to_the_upload_script_the_request_named() {
         // the request link carries the asking station's upload script and a code; the zip
         // goes there on a thread of its own and `status.upload` follows it
@@ -3286,6 +3452,7 @@ mod tests {
         daemon.heard = crate::heard::HeardList::open(None);
         daemon.sessions = crate::sessions::SessionLog::open(None);
         daemon.memories = crate::memories::Memories::open(None);
+        daemon.program_logs = crate::share::ProgramLogs::open(None);
         daemon.profiles = crate::profile::Store::open(None);
         // not the machine's own: enumerating audio devices on a machine with no audio
         // service crashes inside the platform API, and a test must not depend on a sound card

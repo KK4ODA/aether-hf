@@ -597,6 +597,13 @@ your files to the project so we can look.
 Nothing leaves without your press, and nothing you typed in Send or Received is included. The
 zip stays in the `shared` folder beside your settings.
 
+The zip also carries the logs of the programs that use Aether, when they offer them: RadioPost
+and RadioPost Gateway do (`radiopost.log`, `gateway.log`). They go in the zip's `programs`
+folder, with the copy before each, whenever they were written in the period you chose. Aether
+remembers a program's log after the program has closed, for 30 days. It takes only files named
+`.log`, and leaves out one over 8 MB. The zip's `README.txt` names them. Debug mode's zips carry
+them too.
+
 ## 10. Help / About and updates
 
 **About** shows the version, the daemon, the update channel and the latest release, and where

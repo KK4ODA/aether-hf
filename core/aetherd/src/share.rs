@@ -13,15 +13,35 @@
 //! panel opens an email for the operator to attach it to. A log never holds what was said —
 //! the station logs how much, never what — and neither does a sidecar.
 //!
+//! The programs using the modem keep logs of their own, and a fault between a program and the
+//! modem shows in both (2026-11-12: a `RadioPost` client's connection ended twice in mid-session,
+//! and what the client saw was in a file on the other side of the room from anyone asking). A
+//! program offers its log once it connects (`share.include`, [`ProgramLogs`]); the zips carry it
+//! under `programs/`, with the copy before it, whenever it was written in the period. The modem
+//! remembers the offer after the program has gone — that is when its log is wanted — and takes
+//! only a file named `*.log`, at most [`PROGRAM_LOG_MAX_BYTES`]: a program's own word that the
+//! file is a log, kept by the same rule as the modem's.
+//!
 //! The zip is written by hand (stored or deflated entries, a central directory, no ZIP64):
 //! a few dozen lines against the format's published description (PKWARE APPNOTE 6.3.x §4),
 //! with `flate2` — already the session compression's — for the deflate and the CRC.
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 /// The zips kept under `shared/`; older ones go when a new one is written.
 pub const KEEP: usize = 5;
+
+/// The programs' logs remembered, newest offer first: a station runs a few programs.
+pub const PROGRAM_LOGS: usize = 8;
+/// A log not offered again for this long is forgotten: its program is no longer used here.
+pub const PROGRAM_LOG_FORGET_MS: u64 = 30 * 24 * 3_600_000;
+/// A program's log larger than this is left out of a zip, and the README says so: `RadioPost`
+/// sets its log aside at 2 MB, and a zip goes by email or a phone's upload.
+pub const PROGRAM_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// What to gather.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +68,8 @@ pub struct Places {
     pub recordings: Option<PathBuf>,
     /// The daemon's own log file, when `[log] file` names one (a gateway).
     pub log_file: Option<PathBuf>,
+    /// The logs the programs using the modem offered ([`ProgramLogs`]).
+    pub program_logs: Vec<ProgramLog>,
 }
 
 /// One file in the zip.
@@ -66,6 +88,34 @@ pub struct Gathered {
     pub entries: Vec<(String, Entry)>,
     /// Recordings' sidecars that matched.
     pub sessions: usize,
+    /// The programs' logs left out for their size, by path, for the README.
+    pub too_large: Vec<PathBuf>,
+}
+
+impl Gathered {
+    /// A line for the README: which programs' logs are in the zip, and which were too large.
+    #[must_use]
+    pub fn programs_line(&self) -> String {
+        let names: Vec<&str> = self
+            .entries
+            .iter()
+            .filter_map(|(n, _)| n.strip_prefix("programs/"))
+            .collect();
+        let mut line = if names.is_empty() {
+            "Programs' logs: none written in the period".to_owned()
+        } else {
+            format!("Programs' logs: {}", names.join(", "))
+        };
+        for path in &self.too_large {
+            let _ = write!(
+                line,
+                "; {} left out, over {} MB",
+                path.display(),
+                PROGRAM_LOG_MAX_BYTES / (1024 * 1024)
+            );
+        }
+        line
+    }
 }
 
 /// Gather the files for `request`. A file that is not there is left out; nothing here fails.
@@ -121,6 +171,7 @@ pub fn gather(places: &Places, request: &Request) -> Gathered {
             out.entries.push((name.to_owned(), Entry::File(path)));
         }
     }
+    add_program_logs(&mut out, places, request);
     // the recordings of the period, with the station asked about when one is
     if let Some(recordings) = &places.recordings {
         let recordings = if recordings.is_relative() {
@@ -163,6 +214,175 @@ pub fn gather(places: &Places, request: &Request) -> Gathered {
         }
     }
     out
+}
+
+/// The programs' logs, and the copy each set aside before it, written in the period: under
+/// `programs/`, a name taken twice numbered, a file over [`PROGRAM_LOG_MAX_BYTES`] noted
+/// instead.
+fn add_program_logs(out: &mut Gathered, places: &Places, request: &Request) {
+    for log in &places.program_logs {
+        let mut older = log.path.clone().into_os_string();
+        older.push(".old");
+        for path in [log.path.clone(), PathBuf::from(older)] {
+            if !path.is_file() || !written_since(&path, request.since_ms) {
+                continue;
+            }
+            if std::fs::metadata(&path).map_or(true, |m| m.len() > PROGRAM_LOG_MAX_BYTES) {
+                out.too_large.push(path);
+                continue;
+            }
+            let file = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let mut name = format!("programs/{file}");
+            let mut n = 2;
+            while out.entries.iter().any(|(taken, _)| *taken == name) {
+                name = format!("programs/{n}-{file}");
+                n += 1;
+            }
+            out.entries.push((name, Entry::File(path)));
+        }
+    }
+}
+
+/// A log a program using the modem offered for the zips (`share.include`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramLog {
+    /// The program, as it named itself when it offered the log.
+    pub app: String,
+    /// The file: an absolute path whose name ends `.log`.
+    pub path: PathBuf,
+    /// When it was last offered, milliseconds since the Unix epoch.
+    pub offered_ms: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ProgramLogsFile {
+    schema: u32,
+    logs: Vec<ProgramLog>,
+}
+
+/// The programs' logs the modem remembers, kept in a file beside the configuration: a program
+/// offers its log while it runs, and the zip that needs it is made after it has gone.
+#[derive(Debug)]
+pub struct ProgramLogs {
+    entries: Vec<ProgramLog>,
+    path: Option<PathBuf>,
+}
+
+impl ProgramLogs {
+    /// The list kept in `path`, loaded from it if it exists; empty when it does not or cannot
+    /// be read, or with no file at all.
+    #[must_use]
+    pub fn open(path: Option<PathBuf>) -> Self {
+        let entries = path
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|text| serde_json::from_str::<ProgramLogsFile>(&text).ok())
+            .filter(|file| file.schema == 1)
+            .map(|file| file.logs)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|log| offerable(&log.path).is_ok())
+            .collect();
+        Self { entries, path }
+    }
+
+    /// The logs remembered, the newest offer first.
+    #[must_use]
+    pub fn entries(&self) -> &[ProgramLog] {
+        &self.entries
+    }
+
+    /// The logs not forgotten by `now_ms`: what a zip made now takes.
+    #[must_use]
+    pub fn current(&self, now_ms: u64) -> Vec<ProgramLog> {
+        self.entries
+            .iter()
+            .filter(|log| now_ms.saturating_sub(log.offered_ms) <= PROGRAM_LOG_FORGET_MS)
+            .cloned()
+            .collect()
+    }
+
+    /// Remember `path` as `app`'s log, and write the list. Whether it is news: a log not
+    /// remembered before, or remembered under another program's name — a program offers its
+    /// log at every connection, and only news is worth a line in the modem's log.
+    ///
+    /// # Errors
+    /// For a path that is not absolute or whose name does not end `.log`, or when the list
+    /// cannot be written.
+    pub fn offer(&mut self, app: &str, path: &Path, now_ms: u64) -> Result<bool, String> {
+        offerable(path)?;
+        let app: String = app.trim().chars().take(80).collect();
+        let app = if app.is_empty() {
+            "a program".to_owned()
+        } else {
+            app
+        };
+        let before = self.entries.iter().position(|log| log.path == path);
+        let news = before.is_none_or(|i| self.entries[i].app != app);
+        if let Some(i) = before {
+            self.entries.remove(i);
+        }
+        self.entries.insert(
+            0,
+            ProgramLog {
+                app,
+                path: path.to_path_buf(),
+                offered_ms: now_ms,
+            },
+        );
+        self.entries
+            .retain(|log| now_ms.saturating_sub(log.offered_ms) <= PROGRAM_LOG_FORGET_MS);
+        self.entries.truncate(PROGRAM_LOGS);
+        self.save()
+            .map_err(|e| format!("cannot remember the log: {e}"))?;
+        Ok(news)
+    }
+
+    /// Write the list, whole, to a temporary file renamed into place.
+    fn save(&self) -> std::io::Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        let file = ProgramLogsFile {
+            schema: 1,
+            logs: self.entries.clone(),
+        };
+        let text = serde_json::to_string_pretty(&file).map_err(std::io::Error::other)?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, text)?;
+        std::fs::rename(&temporary, path)
+    }
+}
+
+/// Whether a program may offer `path` as its log: an absolute path, with no `..` in it, to a
+/// file named `*.log`. The modem does not read it until a zip is made, so it need not exist
+/// yet: a program names its log before it has written to it.
+///
+/// # Errors
+/// What is wrong with it, in a sentence for the program's author.
+pub fn offerable(path: &Path) -> Result<(), String> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("a log is named by its absolute path, without `..`".to_owned());
+    }
+    let named_log = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("log"))
+        && path.file_stem().is_some_and(|s| !s.is_empty());
+    if !named_log {
+        return Err("only a file whose name ends .log is taken as a program's log".to_owned());
+    }
+    Ok(())
 }
 
 /// Write `entries` as a zip at `path`, through a temporary file so a reader never sees half
@@ -560,6 +780,7 @@ mod tests {
             config,
             recordings: Some(recordings),
             log_file: None,
+            program_logs: Vec::new(),
         };
         let since = stamp_ms("20261005-000000").expect("stamp");
         let names = |g: &Gathered| g.entries.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
@@ -626,6 +847,108 @@ mod tests {
                 .iter()),
             "{:?}",
             names(&got)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mobile's `RadioPost` client lost its connection to the modem twice on 2026-11-12, and
+    /// its log was on the laptop, not in the zip. A program offers its log; the zip carries it,
+    /// and the one set aside before it, while they were written in the period — after the
+    /// program has gone too, which is when they are wanted.
+    #[test]
+    fn a_programs_log_goes_in_the_zip_after_the_program_has_gone() {
+        let dir = scratch("programs");
+        let config = dir.join("station.toml");
+        std::fs::write(&config, "").expect("write");
+        let home = dir.join("home").join(".radiopost");
+        std::fs::create_dir_all(&home).expect("dir");
+        let log = home.join("radiopost.log");
+        std::fs::write(&log, "2026-11-12T00:55:54Z the connection to Aether ended").expect("write");
+        std::fs::write(home.join("radiopost.log.old"), "before").expect("write");
+        let gateway = dir.join(".radiopost-gateway").join("radiopost.log");
+        std::fs::create_dir_all(gateway.parent().expect("dir")).expect("dir");
+        std::fs::write(&gateway, "another program, the same name").expect("write");
+        let now = modified_ms(&log).expect("written");
+
+        let kept = dir.join("program-logs.json");
+        let mut logs = ProgramLogs::open(Some(kept.clone()));
+        assert_eq!(
+            logs.offer("RadioPost client 0.1.0-beta.8", &log, now),
+            Ok(true)
+        );
+        assert_eq!(
+            logs.offer("RadioPost client 0.1.0-beta.8", &log, now),
+            Ok(false),
+            "offered again at the next connection: no news"
+        );
+        assert_eq!(logs.offer("RadioPost Gateway", &gateway, now), Ok(true));
+        // what is not a log is refused, and nothing is remembered of it
+        for refused in [
+            dir.join("station.toml"),
+            dir.join("home").join(".ssh").join("id_ed25519"),
+            PathBuf::from("radiopost.log"),
+            home.join("..").join("..").join("station.log"),
+            home.join(".log"),
+        ] {
+            assert!(
+                logs.offer("RadioPost client", &refused, now).is_err(),
+                "{} was taken",
+                refused.display()
+            );
+        }
+        // the program has gone, and the modem restarted: the offer is still there
+        let logs = ProgramLogs::open(Some(kept));
+        assert_eq!(logs.entries().len(), 2);
+        assert_eq!(logs.entries()[0].app, "RadioPost Gateway");
+
+        let places = Places {
+            config,
+            recordings: None,
+            log_file: None,
+            program_logs: logs.current(now),
+        };
+        let request = |since_ms| Request {
+            since_ms,
+            remote: None,
+            audio: false,
+            recordings: None,
+        };
+        let got = gather(&places, &request(now.saturating_sub(3_600_000)));
+        let names: Vec<&str> = got.entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "programs/radiopost.log",
+                "programs/2-radiopost.log",
+                "programs/radiopost.log.old",
+            ],
+            "the gateway's first, then the client's under another name, and the one before it"
+        );
+        assert_eq!(
+            got.programs_line(),
+            "Programs' logs: radiopost.log, 2-radiopost.log, radiopost.log.old"
+        );
+        // not written in the period: left out
+        let got = gather(&places, &request(now + 60_000));
+        assert!(got.entries.is_empty(), "{:?}", got.entries);
+        assert_eq!(
+            got.programs_line(),
+            "Programs' logs: none written in the period"
+        );
+        // forgotten a month after the last offer
+        assert_eq!(logs.current(now + PROGRAM_LOG_FORGET_MS + 1), Vec::new());
+        // a log grown past the limit stays out, and the README says so
+        std::fs::write(
+            &log,
+            vec![b'x'; usize::try_from(PROGRAM_LOG_MAX_BYTES).expect("size") + 1],
+        )
+        .expect("write");
+        let got = gather(&places, &request(0));
+        assert_eq!(got.too_large, std::slice::from_ref(&log));
+        assert!(
+            got.programs_line().contains("left out, over 8 MB"),
+            "{}",
+            got.programs_line()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

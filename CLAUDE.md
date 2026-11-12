@@ -2918,6 +2918,18 @@ The fixes that went with them:
 - The panel refreshes status on `claims` log lines.
 - RadioPost's guides stopped asking for callsigns to be copied into Aether.
 
+**The programs' logs in the shared zips (2026-11-12, the author's "can we include those files
+automatically").** A control-API program offers its own log with `share.include {path, app?}`: an
+absolute path to a `*.log` file, no `..` (`share::offerable`), remembered in `program-logs.json`
+beside the configuration (`share::ProgramLogs`: eight, the newest offer first, forgotten 30 days
+after the last offer) so that the zip made after the program has gone still carries it. Every zip
+(`share.prepare`, debug mode) takes each log and its `<name>.old` sibling when written in the period,
+under `programs/` (a second `radiopost.log` is `programs/2-radiopost.log`), leaves one over 8 MB out,
+and says which in `README.txt` (`Gathered::programs_line`). RadioPost's Aether adapter offers the
+client's `radiopost.log` and the gateway's `gateway.log`; RadioPost keeps correspondents' addresses
+and subjects out of those files (the author's choice), so they follow the rule that a log never
+holds what was said.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

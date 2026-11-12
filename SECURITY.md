@@ -28,7 +28,9 @@ a way to reproduce (Help / About shows the version). You should hear back within
 - File sharing (`share.upload`): the daemon uploads only a zip `share.prepare` wrote, only
   to a Google Apps Script address (`https://script.google.com/…/exec`) with a code the
   asking station issued. Any path that sends other files, sends elsewhere, or puts the
-  settings' secrets in the zip is a bug.
+  settings' secrets in the zip is a bug. The zip carries a program's own log only when the
+  program offered it (`share.include`): an absolute path to a file named `*.log`, at most 8 MB.
+  A zip that takes any other file a client names is a bug.
 
 ## Out of scope
 
