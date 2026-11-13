@@ -46,6 +46,7 @@ import os
 import re
 import statistics
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1493,6 +1494,7 @@ def replay_sender(
     receiver: two_sides.Side,
     txs: list[Transmission],
     blocks: dict[int, Block],
+    watch: Callable[[Transmission, RateController], None] | None = None,
 ) -> list[SenderStep]:
     """C1 at the sender (the review's ``delivery-s``, Gate 3) on what the sender recorded, as the
     engine feeds it: seeded by the other station's first reading of this one (the master's by
@@ -1503,7 +1505,8 @@ def replay_sender(
     (``granted._judge_copies``); a data transmission nothing answered steps it down
     (``granted._back_off``). A step is each data transmission: what the advice in hand said
     (the last recommendation the sender read, or what it sent before any), against the
-    choice."""
+    choice. ``watch`` is shown the controller after each transmission has been fed to it (the
+    third rate review's `tools/c1_replay.py`)."""
     ctl = controller_for(sender.air, controller="delivery")
     assert hasattr(ctl, "observe_frames"), "C1 needs a tree with the rate review's controller"
     foreign = foreign_rungs(sender.air)
@@ -1568,6 +1571,8 @@ def replay_sender(
         if tx.ack is None:
             if tx.data:
                 ctl.silent(GrantConfig.silence_step)
+            if watch is not None:
+                watch(tx, ctl)
             continue
         advice = tx.ack.rung
         if tx.ack.snr is not None:
@@ -1587,6 +1592,8 @@ def replay_sender(
             copies = []
             families()
             ctl.observe_frames(outcomes[::-1], peer_db)
+        if watch is not None:
+            watch(tx, ctl)
     return steps
 
 

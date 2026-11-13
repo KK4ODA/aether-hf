@@ -1,0 +1,931 @@
+[
+ {
+  "recording": "20261102-200657_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-02T20:06:57.899Z",
+  "versions": [
+   "0.2.0-beta.125",
+   "0.2.0-beta.125"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 3,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 14.08775,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261102-201147_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-02T20:11:47.346Z",
+  "versions": [
+   "0.2.0-beta.125",
+   "0.2.0-beta.125"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 4,
+    "agree": 3,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 13.043124999999947,
+    "regret": 1.2902388943613474,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 8,
+    "agree": 8,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 45.86175000000014,
+    "regret": -0.009590880458014038,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261102-201448_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-02T20:14:48.341Z",
+  "versions": [
+   "0.2.0-beta.125",
+   "0.2.0-beta.125"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 6,
+    "agree": 4,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 28.941000000000365,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 4,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 20.05675000000005,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261106-223113_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-06T22:31:13.952Z",
+  "versions": [
+   "0.2.0-beta.136",
+   "0.2.0-beta.136"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 2,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 7.164375000000007,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 2,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 14.047499999999985,
+    "regret": 0.8046692918745549,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261106-224142_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-06T22:41:42.524Z",
+  "versions": [
+   "0.2.0-beta.136",
+   "0.2.0-beta.136"
+  ],
+  "directions": []
+ },
+ {
+  "recording": "20261107-135330_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-07T13:53:30.353Z",
+  "versions": [
+   "0.2.0-beta.137",
+   "0.2.0-beta.137"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 4,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 15.369874999999922,
+    "regret": 1.3083868757865587,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 4,
+    "agree": 3,
+    "tries": [],
+    "blocked_s": 5.438999999999993,
+    "doubled_s": 0.0,
+    "exchange_s": 23.972749999999934,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261107-150601_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-07T15:06:01.663Z",
+  "versions": [
+   "0.2.0-beta.138",
+   "0.2.0-beta.138"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 3,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 27.31200000000004,
+    "doubled_s": 0.0,
+    "exchange_s": 44.63887500000001,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 6,
+    "agree": 0,
+    "tries": [
+     {
+      "rung": 12,
+      "start": 103.00572916666667,
+      "transmissions": 0,
+      "frames": 0,
+      "decoded": 0,
+      "end": 119.21512499999999,
+      "won": false,
+      "margin": -0.9886857921331864
+     },
+     {
+      "rung": 10,
+      "start": 135.6431875,
+      "transmissions": 0,
+      "frames": 0,
+      "decoded": 0,
+      "end": null,
+      "won": null,
+      "margin": null
+     }
+    ],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 106.29100000000008,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261108-005459_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-08T00:54:59.785Z",
+  "versions": [
+   "0.2.0-beta.142",
+   "0.2.0-beta.142"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 7,
+    "agree": 3,
+    "tries": [
+     {
+      "rung": 7,
+      "start": 235.88000000000002,
+      "transmissions": 0,
+      "frames": 0,
+      "decoded": 0,
+      "end": null,
+      "won": null,
+      "margin": null
+     }
+    ],
+    "blocked_s": 86.44049999999964,
+    "doubled_s": 0.0,
+    "exchange_s": 120.74316669527745,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 5,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 84.41012499999994,
+    "regret": 1.9875217600052708,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261108-010123_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-08T01:01:23.590Z",
+  "versions": [
+   "0.2.0-beta.142",
+   "0.2.0-beta.142"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 1,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 19.015499999999804,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 2,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 48.77974999999999,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261108-010450_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-08T01:04:50.483Z",
+  "versions": [
+   "0.2.0-beta.142",
+   "0.2.0-beta.142"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 3,
+    "agree": 3,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 51.69493749999914,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 5,
+    "agree": 3,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 111.24962499999994,
+    "regret": 0.8383179976730747,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261108-011008_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-08T01:10:08.642Z",
+  "versions": [
+   "0.2.0-beta.142",
+   "0.2.0-beta.142"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 2,
+    "agree": 1,
+    "tries": [
+     {
+      "rung": 5,
+      "start": 95.58999999999992,
+      "transmissions": 1,
+      "frames": 1,
+      "decoded": 1,
+      "end": null,
+      "won": null,
+      "margin": null
+     }
+    ],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 43.39012499999966,
+    "regret": 1.3452719465157403,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 14,
+    "agree": 6,
+    "tries": [
+     {
+      "rung": 7,
+      "start": 177.63218750000033,
+      "transmissions": 1,
+      "frames": 6,
+      "decoded": 0,
+      "end": 201.9941875000004,
+      "won": false,
+      "margin": -0.9964944367397618
+     }
+    ],
+    "blocked_s": 16.080000000000002,
+    "doubled_s": 0.0,
+    "exchange_s": 296.52987499999995,
+    "regret": 0.8038142983280099,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261108-012431_WD5EMA_KK4ODA",
+  "bandwidth_hz": 500,
+  "started": "2026-11-08T01:24:31.869Z",
+  "versions": [
+   "0.2.0-beta.142",
+   "0.2.0-beta.142"
+  ],
+  "directions": [
+   {
+    "sender": "WD5EMA",
+    "receiver": "KK4ODA",
+    "role": "master",
+    "data_transmissions": 1,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 13.159999999999975,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA",
+    "receiver": "WD5EMA",
+    "role": "slave",
+    "data_transmissions": 1,
+    "agree": 0,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 18.530124999999998,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-005058_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-12T00:50:58.151Z",
+  "versions": [
+   "0.2.0-beta.146",
+   "0.2.0-beta.146"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 11,
+    "agree": 1,
+    "tries": [
+     {
+      "rung": 7,
+      "start": 318.80999999999995,
+      "transmissions": 0,
+      "frames": 0,
+      "decoded": 0,
+      "end": null,
+      "won": null,
+      "margin": null
+     }
+    ],
+    "blocked_s": 240.1909583333331,
+    "doubled_s": 0.0,
+    "exchange_s": 278.2709583333334,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-012003_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-12T01:20:03.367Z",
+  "versions": [
+   "0.2.0-beta.146",
+   "0.2.0-beta.146"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 3,
+    "agree": 0,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 63.033875000000364,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 1,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 13.109875000000102,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-012738_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-12T01:27:38.792Z",
+  "versions": [
+   "0.2.0-beta.146",
+   "0.2.0-beta.146"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 8,
+    "agree": 8,
+    "tries": [
+     {
+      "rung": 4,
+      "start": 59.48999999999978,
+      "transmissions": 3,
+      "frames": 3,
+      "decoded": 2,
+      "end": 137.8499999999999,
+      "won": false,
+      "margin": -0.08873339933699664
+     }
+    ],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 198.53343749999954,
+    "regret": -0.016655679219461157,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 2,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 47.754874999999814,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-013739_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-12T01:37:39.129Z",
+  "versions": [
+   "0.2.0-beta.146",
+   "0.2.0-beta.146"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 9,
+    "agree": 8,
+    "tries": [
+     {
+      "rung": 3,
+      "start": 82.49000000000024,
+      "transmissions": 1,
+      "frames": 1,
+      "decoded": 1,
+      "end": 111.73000000000002,
+      "won": true,
+      "margin": 0.4999999637909911
+     },
+     {
+      "rung": 4,
+      "start": 137.76000000000022,
+      "transmissions": 2,
+      "frames": 3,
+      "decoded": 2,
+      "end": 195.6600000000003,
+      "won": true,
+      "margin": 0.08802991770549307
+     }
+    ],
+    "blocked_s": 65.13981250000057,
+    "doubled_s": 0.0,
+    "exchange_s": 214.297000000001,
+    "regret": 0.5249829982042519,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 3,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 60.884000000000015,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-014600_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-12T01:46:00.552Z",
+  "versions": [
+   "0.2.0-beta.146",
+   "0.2.0-beta.146"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 8,
+    "agree": 5,
+    "tries": [
+     {
+      "rung": 7,
+      "start": 91.10999999999967,
+      "transmissions": 1,
+      "frames": 6,
+      "decoded": 0,
+      "end": 117.14999999999964,
+      "won": false,
+      "margin": -0.9998685352131426
+     }
+    ],
+    "blocked_s": 10.169124999999696,
+    "doubled_s": 0.0,
+    "exchange_s": 176.17868749999985,
+    "regret": -1.0,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 2,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 47.77012500000046,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-015551_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-12T01:55:51.919Z",
+  "versions": [
+   "0.2.0-beta.146",
+   "0.2.0-beta.146"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 3,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 68.31850000000023,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-140808_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-12T14:08:08.448Z",
+  "versions": [
+   "0.2.0-beta.150",
+   "0.2.0-beta.150"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 1,
+    "agree": 1,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 6.435937499999998,
+    "regret": null,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 1,
+    "agree": 0,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 3.2690000000000055,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-141103_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-12T14:11:03.623Z",
+  "versions": [
+   "0.2.0-beta.150",
+   "0.2.0-beta.150"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 5,
+    "agree": 4,
+    "tries": [
+     {
+      "rung": 10,
+      "start": 30.239999999999952,
+      "transmissions": 1,
+      "frames": 1,
+      "decoded": 1,
+      "end": null,
+      "won": null,
+      "margin": null
+     }
+    ],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 36.39293749999997,
+    "regret": 0.4044129777396052,
+    "near_misses": 0
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 3,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 16.159000000000077,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-141353_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 500,
+  "started": "2026-11-12T14:13:53.107Z",
+  "versions": [
+   "0.2.0-beta.150",
+   "0.2.0-beta.150"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 54,
+    "agree": 52,
+    "tries": [
+     {
+      "rung": 10,
+      "start": 39.99000000000001,
+      "transmissions": 3,
+      "frames": 3,
+      "decoded": 3,
+      "end": 65.67000000000002,
+      "won": true,
+      "margin": 0.2810771872850293
+     },
+     {
+      "rung": 11,
+      "start": 65.67000000000002,
+      "transmissions": 3,
+      "frames": 3,
+      "decoded": 3,
+      "end": 91.34999999999997,
+      "won": false,
+      "margin": -0.016314605966920137
+     },
+     {
+      "rung": 11,
+      "start": 194.07999999999998,
+      "transmissions": 3,
+      "frames": 3,
+      "decoded": 3,
+      "end": 219.77000000000004,
+      "won": true,
+      "margin": 0.08878457315396115
+     },
+     {
+      "rung": 12,
+      "start": 219.77000000000004,
+      "transmissions": 2,
+      "frames": 3,
+      "decoded": 0,
+      "end": 236.88000000000005,
+      "won": false,
+      "margin": -0.7181449230072573
+     },
+     {
+      "rung": 12,
+      "start": 451.06,
+      "transmissions": 3,
+      "frames": 4,
+      "decoded": 1,
+      "end": 476.77000000000004,
+      "won": false,
+      "margin": -0.37329297826458885
+     }
+    ],
+    "blocked_s": 77.03987499999957,
+    "doubled_s": 77.03987499999957,
+    "exchange_s": 453.9800624999998,
+    "regret": 0.04143943808466507,
+    "near_misses": 1
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 2,
+    "agree": 0,
+    "tries": [],
+    "blocked_s": 3.289000000000044,
+    "doubled_s": 0.0,
+    "exchange_s": 12.908000000000044,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ },
+ {
+  "recording": "20261112-142612_KK4ODA_KK4ODA-1",
+  "bandwidth_hz": 2300,
+  "started": "2026-11-12T14:26:12.925Z",
+  "versions": [
+   "0.2.0-beta.150",
+   "0.2.0-beta.150"
+  ],
+  "directions": [
+   {
+    "sender": "KK4ODA",
+    "receiver": "KK4ODA-1",
+    "role": "master",
+    "data_transmissions": 21,
+    "agree": 20,
+    "tries": [
+     {
+      "rung": 12,
+      "start": 79.72000000000003,
+      "transmissions": 3,
+      "frames": 3,
+      "decoded": 3,
+      "end": 105.38000000000011,
+      "won": false,
+      "margin": -0.018156403518183706
+     }
+    ],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 172.1210624999994,
+    "regret": 0.14548170195851778,
+    "near_misses": 1
+   },
+   {
+    "sender": "KK4ODA-1",
+    "receiver": "KK4ODA",
+    "role": "slave",
+    "data_transmissions": 2,
+    "agree": 2,
+    "tries": [],
+    "blocked_s": 0.0,
+    "doubled_s": 0.0,
+    "exchange_s": 12.918000000000177,
+    "regret": null,
+    "near_misses": 0
+   }
+  ]
+ }
+]

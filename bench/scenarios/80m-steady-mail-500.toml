@@ -1,0 +1,34 @@
+name = "80m-steady-mail-500"
+description = """A long message on a steady 80 m path at 500 Hz, as the mobile's RadioPost mail went to the
+gateway on 2026-11-12 (14:13Z, 465 s): 22.5 kB from the mobile, which the gateway heard at about +4.5 dB
+and which heard the gateway about 5 dB better. A clean wire stands in for the path: at that
+reading its 16-QAM ¾ decoded 171 of 174 and its 64-QAM ⅔ 1 of 9, which is AWGN's edge, not a fading path's.
+The third rate review's strong-path scenario (docs/research/rate-control-3/00-brief.md, Gate 0):
+how near the controller comes to the best fixed rung on a path that holds still."""
+tags = ["80m", "speed"]
+bandwidth = 500
+seconds = 900
+seed = 1113
+transfer_s = 700
+
+[stations.a]
+callsign = "W4ODA"
+[stations.b]
+callsign = "KK4XYZ"
+
+[path]
+profile = "awgn"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = 5.0
+[path.b_to_a]
+snr_db = 10.0
+
+[script]
+steps = ["connect", "message 22500", "reply 120", "disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+max_collisions = 0
