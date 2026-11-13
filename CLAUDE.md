@@ -2959,6 +2959,31 @@ CI does not run it; what a fuzzer finds is fixed with a unit test in the crate i
 fuzzed yet: the granted engine fed frames in a session, and the PHY. The `Decompressor` has no cap
 on what it hands over (DEFLATE expands up to about a thousand times).
 
+**RadioPost mail on a steady 80 m path (2026-11-12 14:08–14:29Z, read 11-13).** Four sessions
+from the mobile (KK4ODA: RadioPost client, TS-480 at 65 W into a screwdriver, keyed by RTS) to the
+gateway (KK4ODA-1: RadioPost Gateway, FTDX10 on CAT, 50 W, T2D) on 3.590 MHz, beta.150 at both
+ends, both sides with audio. Session 1 failed in RadioPost (`ERROR unknown-post-office`); the
+others delivered five messages, among them 22.5 kB at 500 Hz in 465 s and 22.6 kB at 2300 Hz in
+183 s: on this path 2300 Hz was 2.5 times as fast. The gateway read the mobile at +4.3 to +5 dB, and
+the mobile read the gateway about 5 dB higher. Timing was clean: no overlap, 0.556 s the least clear
+air, answers 64–165 ms into their slots, loop latency 57 ms each way, every call accepted at its
+first try (11–12 s on the floor), a single 28 ms capture skip in a session (the 11-07 losses at
+2300 Hz did not recur), receive filter clear at both ends, no clipping. Found, each the author's
+call: (1) **C1's prior holds the climb** (the rate controller rule applies: evidence for a review,
+no patch). The prior (the AWGN curve 3 dB under the peer's reading, 0.5 dB slope, worth two frames)
+gave 500 Hz rung 11 a 14–55 % chance at these readings and 2300 Hz rung 12 1–3 %, where the path
+decoded 171 of 174 and 4 of 4. A try ends after three frames, and three clean frames cannot outweigh
+a near-zero prior: at 2300 Hz rung 12 (+13 % a frame) would need about sixteen in a row, so the
+link stayed at rung 11. At 500 Hz rung 10 held for 100 s after a clean try of 11. (2) **The
+keyed-audio watch warned falsely at the mobile** ("may not be transmitting", 14:18:35). The
+TS-480's receive audio while keyed drops 16–25 dB in 1–2.8 kHz but only 2–4 dB below 600 Hz, where
+60/120/180/300 Hz hum from the interface stays. The watch's whole-band level put 11 of 62
+transmissions inside its 6 dB margin; read over 1–2.5 kHz, none, with at least 12.6 dB to spare.
+The FTDX10 drops about 60 dB either way. (3) The Windows 997 drops (above). Tool fixes the same
+day: `rung_reading.py` reads protocol 12's control frames, `two_sides.py` judges an open window
+by its length; `rung_reading.py` does not finish on a session over 256 data frames (the sequence
+number wraps; a task of its own).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
