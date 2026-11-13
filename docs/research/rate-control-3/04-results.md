@@ -210,3 +210,39 @@ the author's call (`00-brief.md` §6, answer 2).
 **The author's decision (2026-11-13):** the 20 m DX miss is accepted as a narrow one, inside the
 10 % guard by its median; the candidate goes on to the last checks (K4 every scenario at three
 draws, K5 the real-modem link bench), asked for before they run.
+
+### 5.4 The last checks (K4, K5)
+
+`candidate.yml` run 3 at `1f847c0` (`bench_link = prior_margin_db=1,family_gain_db=1,wide_only`,
+`--rate prior_margin_db=1,family_gain_db=1,wide_only=1`), about four hours of runner time.
+
+**K4, every scenario at three draws**, against the nightly of the same build with the switches off
+(run 65 at `bc6a003`: 192 of 192 passed, no radiated overlap): **190 of 192**, no radiated
+overlap. Two failures:
+
+* `80m-agc-carrier-outside-500`, draw 1 (seed 1031): the message did not arrive in 300 s. On the
+  500 Hz air the candidate runs today's controller, and today's lost exactly this draw in run 24;
+  the nightly passed it. The test's edge and the harness's course, not the candidate.
+* `40m-rtty-contest-2300`, draw 0: the Test's file ran out of its budget (3 424 of 4 096 bytes, 92
+  bit/s; the nightly 218 bit/s on the same draw, and the baseline's slowest run 96). The candidate
+  acts here, and the trace says how. Four RTTY stations sit in the passband; at the receiver,
+  rung 11 decoded **1 of 39** frames and rungs 7–8 decoded 52 of 56. The candidate kept going back
+  to rung 11 between stretches at 7–8 (the caller's data: 11 ×34, 7 ×6, 11 ×11, 8, 11 ×6, …, 11 ×3
+  five more times), where today's controller stayed on rungs 8–10. The reading, +12 dB, does not
+  see narrowband interference; with 1 dB of caution the prior rates rung 11 near certain again as
+  its failures age out of its account, and each return costs a transmission. The other two draws:
+  400 against 362 and 142 against 139 bit/s.
+
+**K5, the real-modem link bench, both arms** (8 000 B, three trials a point, −4 … +20 dB):
+
+* 500 Hz: identical to today's at every point (the candidate runs today's controller there).
+* 2300 Hz: completion equal at every point; session time pooled **×0.964**. AWGN ×0.67–0.79 from
+  0 to +12 dB. Two points over ×1.05: **Moderate 0 dB ×1.071** (364 → 390 s) and **Poor 0 dB
+  ×1.057** (350 → 369 s).
+
+**What the last checks say.** The candidate is right for strong and clean 2300 Hz paths, and
+costs a few per cent where a 2300 Hz path is weak and fading, or where interference the reading
+cannot see sits on a rung (20 m DX Moderate 8 dB, the bench's 0 dB fading points, the RTTY
+contest). In each the mechanism is the same: with 1 dB of caution, a rung that keeps failing is
+rated good again as its failures age, and it is tried again. Three narrow misses (K2 on 20 m DX,
+K5 at two points, K4 on one RTTY draw) for the author.
