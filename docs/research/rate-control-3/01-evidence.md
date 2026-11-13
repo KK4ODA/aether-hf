@@ -107,6 +107,35 @@ changed since by ADR-0104, so a reference, not the baseline):
 | `40m-good-throughput-2300` | +24.0 % | 17 (4), 18 (4), 19 (2) |
 | `quick-awgn-2300` (3 kB) | +0.0 % | 16 (8), 17, 18 |
 
+**Today's C1 on the same draws** (the oracle workflow's run 22 on GitHub's runners, 2026-11-13,
+beta.156's daemon, C1 only, beta.127's ten seeds; `data/oracle_strong_beta156.csv`). The fixed
+rungs were not run again. So the regret below is against beta.127's best fixed rung. The receivers
+have changed since (ADR-0104), so today's best fixed rung may be faster and the true regret larger.
+
+| scenario | C1 today, median (range), bit/s | C1 on beta.127 | regret today | on beta.127 |
+|---|---|---|---|---|
+| `80m-strong-moderate-500` | 318 (272–393) | 302 (264–349) | **+12.3 %** (−4 … +34) | +21.8 % |
+| `40m-good-throughput-2300` | 2 247 (1 829–2 560) | 2 247 (1 829–2 909) | **+28.2 %** (+6 … +67) | +24.0 % |
+| `quick-awgn-2300` | 2 400 (2 000–2 400) | 2 182 (2 000–2 182) | −9.1 % | +0.0 % |
+
+* **40 m Good at +20 dB: unchanged.** Six draws of ten deliver exactly what beta.127's did (the
+  measure is whole seconds of a 16 kB message and a 4 kB reply), and the regret is a quarter. The
+  replay (`tools/c1_replay.py` on each run's two sidecars; it chose as the run sent in 67 of 73
+  of the master's data transmissions) shows why. C1 starts at rung 16 (15 in two draws), the
+  message takes 51–71 s of exchanges, and in that time it tries the rung above once or twice.
+  Rung 17 was taken in 5 of its 8 decided tries. Rung 18 was never taken: two tries lost, three
+  still running when the message ended, 4 of 6 frames decoded. Yet 18 or 19 was the best fixed
+  rung in six of beta.127's ten draws. The best rungs are two or three above where C1 starts, and
+  a short transfer ends before one try a rung gets there.
+* **80 m Moderate at 500 Hz: a little faster, within the noise.** Paired by draw, C1 delivers
+  ×1.03 of beta.127's (median). The drop from +21.8 to +12.3 % is inside the ten points a ten-draw
+  median regret moves between runs (ROADMAP P9-18). C1 sits on rungs 10–11 where 12 was the best
+  fixed rung in six draws. Its tries of rung 12 were taken 5 times and lost 6 (22 of 31 frames
+  decoded), and rung 13 lost every decided try (4 of 15 frames decoded). On this path the
+  rung above is a real gamble, unlike the steady path's.
+* **AWGN, 3 kB: no regret.** C1 finishes a second sooner than beta.127's best fixed rung in nine
+  draws of ten. The transfer is too short and the measure too coarse to say more.
+
 ## 4. The count
 
 The guess rests on C1's seven settings (`rate.py`): `half_life` 12, `prior_frames` 2,
@@ -119,8 +148,9 @@ transmissions) and the doubling of a lost try's wait. The controller is 710 line
 ## 5. What Gate 0 says to Gate 2
 
 1. **Where the speed is.** On a steady strong path at 2300 Hz C1 leaves about a fifth of the
-   throughput unused (harness +22 %, field +15 %), at 500 Hz very little (+3 %, +4 %); the regret
-   set's strong fading scenarios left +22–24 % on beta.127 (§3).
+   throughput unused (harness +22 %, field +15 %), at 500 Hz very little (+3 %, +4 %). On the
+   regret set's strong fading paths today's C1 leaves +28 % at 2300 Hz (Good, +20 dB) and +12 %
+   at 500 Hz (Moderate), against beta.127's best fixed rungs (§3).
 2. **Why, at 2300 Hz.** The try of the rung above decoded every frame and lost its verdict by
    under 2 %, and the doubled wait then outlasted the session. The prior is three decibels too
    cautious on a clean path (§2) and counts as two frames against a try of three; the family's
@@ -134,5 +164,13 @@ transmissions) and the doubling of a lost try's wait. The controller is 710 line
    rung rated better tried at once), G5 (a try's frames not aged by the current rung's air before
    the verdict), and G2 or the family offset's gain (the guess corrected faster by frames that keep
    decoding). G1 only as a margin learned per family, if at all.
-5. **Owed before Gate 2's criteria are fixed**: the oracle on today's receivers for the regret
-   set's strong scenarios (§3's reference is beta.127's), on GitHub's runners with the author's go.
+5. **The start and the pace of the climb matter as much as the verdict.** On the 2300 Hz Good
+   path the best rung is two or three above C1's first choice, and a 16 kB message ends after one
+   or two tries (§3). A candidate that only fixes near misses (G3, G4) will not get there in that
+   time. The prior's margin (G1) or the family offset's gain (G2) sets where C1 starts, so those
+   two count here too, checked against the 500 Hz Moderate path, where the rung above loses about
+   half its tries. Gate 2's criteria should hold a short transfer on a strong path as well as a
+   long one.
+6. **Today's best fixed rungs were not run** (the author chose C1 alone, about 45 minutes of
+   runners). If Gate 2 needs the regret exactly rather than against beta.127's rungs, the fixed
+   rungs of these three scenarios are the next oracle run, with the author's go and its cost.
