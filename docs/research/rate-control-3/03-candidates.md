@@ -198,3 +198,26 @@ scenarios and the start pair (about 2 hours), the candidate on the same (about 2
 passes, K4 and K5 (about 3 hours). About **7 hours** of runner time in all, against §4's 12. If the
 candidate passes, each of G3, G4 and G5 is taken out in turn on the K1 paths and the two echo tests
 (about 30 minutes each) to see which earn their place.
+
+## 6. Gate 3's tooling (2026-11-13)
+
+Built, no runner time spent:
+
+* **The switches.** `RateController.prior_steps_aside` (G3), `clean_try_keeps_wait` (G4) and
+  `try_unaged` (G5) in the model, set through `GrantConfig.rate`; `RateReview` in the port, set
+  through `GrantConfig.rate_review`. All off by default, and a station on the air cannot turn them
+  on.
+* **A simulated daemon** takes them from `AETHER_BENCH_LINK` (comma separated, the three names
+  above) and says so in its log at start.
+* **The oracle workflow** has a `bench_link` input that sets it, and its matrix gains the two
+  steady-mail scenarios and the start pair.
+* **Tests.** Model tests for each switch, built on the near miss: on the 2300 Hz air at 14 dB a
+  try of rung 17 whose three frames all decode loses to the prior today and climbs with G3
+  (`model/tests/test_rate.py`). The granted vectors gain five sessions with the switches on, placed
+  by a scan where they change the session (`try-*`; G4 alone in `try-clean-wait-wide`); the earlier
+  sessions are unchanged byte for byte, and a planted fault in each switch of the port fails the
+  replay.
+
+One local harness run of `quick-awgn-2300` (draw 0) as a check of the plumbing, not a measurement:
+off, 2 400 bit/s as on the runners; on, 2 182. One draw of a 3 kB transfer, a second apart, says
+nothing yet; it is the first thing the baseline and the candidate's run will show.

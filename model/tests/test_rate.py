@@ -16,7 +16,7 @@ from aether_model.link.frames import GrantFrame, data_capacity, seq_after
 from aether_model.link.granted import GrantConfig, GrantedEngine, State, _TxRecord
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container
-from aether_model.link.rate import FrameOutcome, RateController, decode_probability
+from aether_model.link.rate import FrameOutcome, RateController, _Account, decode_probability
 from aether_model.link.sim import TwoStationSim
 
 
@@ -202,6 +202,87 @@ def test_a_failed_try_waits_its_doubled_wait_whatever_the_frames() -> None:
     while ctl._since_probe.get(up, 0.0) + 2 * air < ctl._wait_s(up):
         ctl.observe_frames(clean, 15.0)
         assert ctl._probing is None, "a clean transmission cut a failed try's wait short"
+
+
+def _near_miss(**switches: bool) -> tuple[RateController, int, int]:
+    """A 2 300 Hz controller at 14 dB on rung 16, three clean transmissions there, then a try of
+    rung 17 whose three frames all decode: the near miss of the 2026-11-12 sessions
+    (``rate-control-3/01-evidence.md`` §1), where the prior rates rung 17 at 0.03."""
+    timing = phy_timing(WIDE.params)
+    a, _ = _pair(WIDE)
+    ctl = a.rate
+    assert isinstance(ctl, RateController)
+    for name, on in switches.items():
+        setattr(ctl, name, on)
+    ctl.seed(14.0)
+    here, up = ctl.modes[ctl._index], ctl.modes[ctl._index + 1]
+
+    def frame(mode: int) -> FrameOutcome:
+        cap = data_capacity(timing.capacity(mode))
+        return FrameOutcome(mode, timing.data_frame_s_for(mode), cap, True, True, False, 14.0)
+
+    for _ in range(3):
+        ctl.observe_frames([frame(here)] * 5, 14.0)
+    ctl._index = ctl.modes.index(here)
+    ctl._cancel_try()
+    ctl._probing = up
+    for _ in range(3):
+        ctl.observe_frames([frame(here)] * 5 + [frame(up)], 14.0)
+    return ctl, here, up
+
+
+def test_the_review_switches_are_off_by_default() -> None:
+    ctl = RateController()
+    assert not (ctl.prior_steps_aside or ctl.clean_try_keeps_wait or ctl.try_unaged)
+
+
+def test_a_clean_try_loses_to_the_prior_today() -> None:
+    """The near miss as C1 has it: every frame of the try decoded, the verdict went to the rung
+    below, and the wait before the next try doubled."""
+    ctl, here, up = _near_miss()
+    assert (here, up) == (16, 17)
+    assert ctl.modes[ctl._index] == here
+    assert ctl._probe_wait[up] == 2 * ctl.probe_every
+
+
+def test_g3_the_prior_steps_aside_once_a_rung_has_a_whole_try() -> None:
+    """G3 (``rate-control-3/03-candidates.md`` §2): the prior counts in full with no frames of
+    the rung's own, half at half a try, and nothing once the rung has a whole try's worth, so
+    the clean try climbs and the climb holds."""
+    ctl = RateController(prior_steps_aside=True)
+    assert ctl._prior_weight(_Account()) == ctl.prior_frames
+    assert math.isclose(ctl._prior_weight(_Account(frames=1.5)), ctl.prior_frames / 2)
+    assert ctl._prior_weight(_Account(frames=3.0)) == 0.0
+    assert ctl._prior_weight(_Account(frames=9.0)) == 0.0
+    assert RateController()._prior_weight(_Account(frames=9.0)) == RateController().prior_frames
+    ctl, _, up = _near_miss(prior_steps_aside=True)
+    assert ctl.modes[ctl._index] == up
+    assert ctl._probe_wait[up] == ctl.probe_every
+
+
+def test_g4_a_lost_try_whose_frames_all_decoded_keeps_its_wait() -> None:
+    """G4: the clean try still loses to the prior, but its rung's wait is not doubled; a try
+    that lost a frame doubles it as before."""
+    ctl, here, up = _near_miss(clean_try_keeps_wait=True)
+    assert ctl.modes[ctl._index] == here
+    assert ctl._probe_wait[up] == ctl.probe_every
+    ctl, here, up, clean, lost = _strong_path()
+    ctl.clean_try_keeps_wait = True
+    while ctl._probing is None:
+        ctl.observe_frames(clean, 15.0)
+    for _ in range(3):
+        ctl.observe_frames([*clean[:5], lost], 15.0)
+    assert ctl._probing is None and ctl._probe_wait[up] == 2 * ctl.probe_every
+
+
+def test_g5_a_tried_rung_is_not_aged_by_the_air_sent_beside_it() -> None:
+    """G5: while rung 17 is tried, rung 16's frames sent with it do not age rung 17's account;
+    the try's three frames are all there at the verdict."""
+    on, _, up = _near_miss(try_unaged=True)
+    off, _, _ = _near_miss()
+    assert on._accounts[up].frames > off._accounts[up].frames
+    decay = 0.5 ** (1.0 / on.half_life)
+    assert math.isclose(on._accounts[up].frames, 1.0 + decay + decay**2)
 
 
 def test_a_rungs_account_ages_with_the_air_sent_at_other_rungs() -> None:

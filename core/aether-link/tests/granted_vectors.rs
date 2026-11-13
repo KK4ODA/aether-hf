@@ -16,8 +16,8 @@
 use std::{cell::RefCell, collections::VecDeque, fs, path::PathBuf};
 
 use aether_link::{
-    Action, Container, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
-    State, TxFrame, granted::Role,
+    Action, Container, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming, RateReview,
+    SoftFrame, State, TxFrame, granted::Role,
 };
 use serde_json::Value;
 
@@ -163,6 +163,17 @@ fn config(doc: &Value) -> GrantConfig {
         silence_levels_after: int(&doc["silence_levels_after"]),
         on_time_to_lower: int(&doc["on_time_to_lower"]),
         need_ease_after: int(&doc["need_ease_after"]),
+        rate_review: rate_review(&doc["rate_review"]),
+    }
+}
+
+/// The third rate review's candidate switches, when a session sets them (absent: all off).
+fn rate_review(doc: &Value) -> RateReview {
+    let on = |name: &str| doc[name].as_bool().unwrap_or(false);
+    RateReview {
+        prior_steps_aside: on("prior_steps_aside"),
+        clean_try_keeps_wait: on("clean_try_keeps_wait"),
+        try_unaged: on("try_unaged"),
     }
 }
 

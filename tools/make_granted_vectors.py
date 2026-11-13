@@ -91,10 +91,16 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
     }
 
 
+REVIEW_SWITCHES = ("prior_steps_aside", "clean_try_keeps_wait", "try_unaged")
+"""The third rate review's candidate switches (``rate-control-3/03-candidates.md`` §2), the only
+rate controller settings a session may change: the port takes them as ``GrantConfig.rate_review``."""
+TRY_REVIEW = dict.fromkeys(REVIEW_SWITCHES, True)
+
+
 def config_doc(c: GrantConfig) -> dict[str, Any]:
-    if c.rate:
-        raise ValueError("the vectors use the rate controller's defaults")
-    return {
+    if set(c.rate) - set(REVIEW_SWITCHES):
+        raise ValueError("the vectors use the rate controller's defaults, but for the review's")
+    doc = {
         "max_data_frames": c.max_data_frames,
         "max_burst_s": bits(c.max_burst_s),
         "max_retries": c.max_retries,
@@ -138,6 +144,9 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "on_time_to_lower": c.on_time_to_lower,
         "need_ease_after": c.need_ease_after,
     }
+    if c.rate:
+        doc["rate_review"] = {name: bool(c.rate.get(name)) for name in REVIEW_SWITCHES}
+    return doc
 
 
 def tx_frame_doc(f: TxFrame) -> dict[str, Any]:
@@ -423,6 +432,22 @@ def clean_wide() -> list[Recorder]:
     return [ra, rb]
 
 
+def steady(
+    air: AirInterface, snr: float, seed: int, size: int, rate: dict[str, Any] | None = None
+) -> Callable[[], list[Recorder]]:
+    """A steady path a long message climbs on: where the review's switches act (a try whose
+    frames all decode, ``rate-control-3/01-evidence.md`` §1)."""
+
+    def run() -> list[Recorder]:
+        a, b, ra, rb = _pair(air, **({"rate": rate} if rate else {}))
+        rng = random.Random(seed)
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed)
+        _exchange(sim, a, b, _message(rng, size), _message(rng, size // 8))
+        return [ra, rb]
+
+    return run
+
+
 def weak_narrow() -> list[Recorder]:
     a, b, ra, rb = _pair(NARROW)
     rng = random.Random(2)
@@ -432,10 +457,15 @@ def weak_narrow() -> list[Recorder]:
 
 
 def fading_field(
-    air: AirInterface, channel: str, snr: float, seed: int, size: int
+    air: AirInterface,
+    channel: str,
+    snr: float,
+    seed: int,
+    size: int,
+    rate: dict[str, Any] | None = None,
 ) -> Callable[[], list[Recorder]]:
     def run() -> list[Recorder]:
-        a, b, ra, rb = _pair(air, latency=0.35)
+        a, b, ra, rb = _pair(air, latency=0.35, **({"rate": rate} if rate else {}))
         rng = random.Random(seed)
         sim = TwoStationSim(
             a,
@@ -1274,6 +1304,14 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "floor-in-flight": floor_in_flight(45),
     "edge-at-the-end": floor_in_flight(46, WIDE, 6.0, 1000),
     "own-choice": own_choice(47),
+    # the third rate review's try candidate, G3 + G4 + G5 (rate-control-3/03-candidates.md)
+    # (each placed where the switches change the session: a scan of levels and lengths)
+    "try-steady-wide": steady(WIDE, 8.0, 61, 20000, TRY_REVIEW),
+    "try-steady-narrow": steady(NARROW, 3.0, 61, 3000, TRY_REVIEW),
+    "try-good-wide": fading_field(WIDE, "good", 12.0, 63, 12000, TRY_REVIEW),
+    "try-moderate-narrow": fading_field(NARROW, "moderate", 6.0, 64, 2000, TRY_REVIEW),
+    # G4 alone: a weak steady path where a try that decoded every frame still loses
+    "try-clean-wait-wide": steady(WIDE, 3.0, 61, 20000, {"clean_try_keeps_wait": True}),
 }
 
 

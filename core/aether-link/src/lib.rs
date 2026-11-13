@@ -24,4 +24,4 @@ pub use granted::{
     Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult, State,
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
-pub use rate::{AWGN_THRESHOLD_DB, FrameOutcome, RateController, usable_modes};
+pub use rate::{AWGN_THRESHOLD_DB, FrameOutcome, RateController, RateReview, usable_modes};
