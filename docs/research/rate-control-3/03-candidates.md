@@ -183,3 +183,18 @@ Notes:
 
 So about **12 hours** of runner time over several runs, each asked for first with its cost, no
 audio kept. Gate 3's results go in `04-results.md`; the decision ADR is Gate 4.
+
+## 5. The author's answers (2026-11-13)
+
+1. **K1 as proposed:** the gap to the best single rung cut to **+15 % or less** on both strong
+   2300 Hz paths.
+2. **The screen runs G3 + G4 + G5 alone** (the try). G1, G2 and G6 are not screened now; they stay
+   on file here, with their evidence, for a later decision.
+3. **The other criteria as proposed**, K8's comparison with the best fixed rung dropped.
+4. **Build first, then ask before each run** with its cost.
+
+With one candidate the screen and K2's full set are one run: today's baseline on K2's 24
+scenarios and the start pair (about 2 hours), the candidate on the same (about 2 hours), then, if it
+passes, K4 and K5 (about 3 hours). About **7 hours** of runner time in all, against §4's 12. If the
+candidate passes, each of G3, G4 and G5 is taken out in turn on the K1 paths and the two echo tests
+(about 30 minutes each) to see which earn their place.
