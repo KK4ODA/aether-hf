@@ -66,7 +66,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import aether_model  # noqa: E402, F401  — the tree's package, claimed before two_sides asks
 import two_sides  # noqa: E402
 from aether_model.frame.modes import NARROW, WIDE, AirInterface  # noqa: E402
-from aether_model.link.frames import SEQ_MOD, WINDOW, data_capacity, seq_distance  # noqa: E402
+from aether_model.link.frames import SEQ_MOD, WINDOW, data_capacity  # noqa: E402
 from aether_model.link.granted import (  # noqa: E402
     RV_SEQUENCE,
     GrantConfig,
@@ -310,6 +310,8 @@ class Frame:
     seconds: float
     heard: dict[str, Any] | None = None
     seq: int | None = None
+    """Its block's :attr:`Block.index` — the sequence number unwrapped — or a measurement
+    frame's index in its transmission."""
     copy: int = 0
     """Which copy of its block this is, 1 first; 0 for a measurement frame."""
     measure: bool = False
@@ -381,6 +383,15 @@ class Ack:
         if d >= WINDOW:
             return d >= SEQ_MOD // 2
         return not self.reports and bool((self.bitmap >> d) & 1)
+
+    def received_at(self, index: int, near: int) -> bool:
+        """:meth:`received` for the block numbered ``index`` in the session, this frame's base
+        read as the block index nearest ``near`` (:func:`unwrap`): a block before the base has
+        arrived, one past the window has not."""
+        d = index - unwrap(self.base, near)
+        if d < 0:
+            return True
+        return d < WINDOW and not self.reports and bool((self.bitmap >> d) & 1)
 
     def measured(self, index: int) -> bool:
         return self.reports and 0 <= index < WINDOW - 1 and bool((self.bitmap >> (index + 1)) & 1)
@@ -547,11 +558,23 @@ def attach_acks(txs: list[Transmission], acks: list[Ack]) -> None:
 # ── sequence numbers ──────────────────────────────────────────────────
 
 
+def unwrap(seq: int, near: int) -> int:
+    """The block index a sequence number names: of the numbers it is modulo ``SEQ_MOD``, the one
+    nearest ``near``. A session of more than 256 data frames uses every sequence number again
+    (seq 28 at 74 s and at 442 s in the 2026-11-12 14:13Z session), while the frames in flight
+    and the acknowledgement's base all lie within a window (``WINDOW``, 16) of each other, far
+    under half the ring, so the nearest is the block meant."""
+    half = SEQ_MOD // 2
+    return near + (seq - near + half) % SEQ_MOD - half
+
+
 @dataclass
 class Block:
-    """One sequence number's history: its copies, in order, and the copy that delivered it."""
+    """One block's history: its copies, in order, and the copy that delivered it."""
 
-    seq: int
+    index: int
+    """Its place in the session: the sequence number unwrapped (0, 1, … 255, 256, …), the key a
+    block is kept under, so two blocks the window put 256 apart under one number stay two."""
     copies: list[Frame] = field(default_factory=list)
     delivered_by: Frame | None = None
     acked_after: int | None = None
@@ -562,6 +585,11 @@ class Block:
     tx_count: int = 0
     """Copies sent since the block was last encoded: what its next redundancy version follows
     (``_TxRecord.tx_count``, which a re-encode starts over)."""
+
+    @property
+    def seq(self) -> int:
+        """The sequence number on the air."""
+        return self.index % SEQ_MOD
 
     @property
     def mode(self) -> int:
@@ -609,10 +637,23 @@ def reconstruct(
 
 
 def _from_record(txs: list[Transmission], receiver_records: bool) -> dict[int, Block]:
-    """The blocks from the sequence numbers the sender recorded: a number heard again before its
-    block was acknowledged is a copy of it, one heard after is a new block."""
+    """The blocks from the sequence numbers the sender recorded, each unwrapped (:func:`unwrap`)
+    next to the number the sender would give its next new block: a resend lies a window or less
+    behind it, a new block at or a window ahead of it, the same number 256 frames on another
+    block. A number heard again after the acknowledgements read said its block arrived is
+    flagged: the engine never resends an acknowledged block."""
     blocks: dict[int, Block] = {}
-    base = 0
+    first = next(
+        (
+            f.sent_seq
+            for tx in txs
+            for f in tx.data
+            if not f.sent_measure and f.sent_seq is not None
+        ),
+        0,
+    )
+    base = first
+    top = first - 1
     for tx in txs:
         data = tx.data
         if data and all(f.sent_measure for f in data):
@@ -625,10 +666,14 @@ def _from_record(txs: list[Transmission], receiver_records: bool) -> dict[int, B
         else:
             for f in data:
                 assert f.sent_seq is not None
-                block = blocks.get(f.sent_seq)
-                if block is None or block.delivered:
-                    block = Block(f.sent_seq)
-                    blocks[f.sent_seq] = block
+                index = unwrap(f.sent_seq, top + 1)
+                top = max(top, index)
+                block = blocks.get(index)
+                if block is None:
+                    block = Block(index)
+                    blocks[index] = block
+                elif block.delivered:
+                    tx.flagged.append(f"block {index} sent again after it was acknowledged")
                 elif f.rung != block.mode or f.rv != block.next_rv:
                     block.held = 0  # re-encoded, or in pieces: the receiver starts over
                     block.tx_count = 0
@@ -638,12 +683,12 @@ def _from_record(txs: list[Transmission], receiver_records: bool) -> dict[int, B
                     f.combined = block.held > 0
                 block.copies.append(f)
                 block.tx_count += 1
-                f.seq = block.seq
+                f.seq = block.index
                 f.copy = len(block.copies)
                 if f.detected and not f.decoded:
                     block.held += 1
         if tx.ack is not None:
-            tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index))
+            tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index, base))
             base = _advance(blocks, base)
     return blocks
 
@@ -659,7 +704,7 @@ def agreement(
         tx.measure = False
     _reconstructed(trial, ladder)
     pairs = [
-        (f.sent_seq, g.seq)
+        (f.sent_seq, None if g.seq is None else g.seq % SEQ_MOD)
         for tx, ty in zip(txs, trial, strict=True)
         for f, g in zip(tx.data, ty.data, strict=True)
     ]
@@ -675,7 +720,8 @@ def _reconstructed(
     ``RV_SEQUENCE`` and a frame re-encoded at another rung starts over at RV 0. Measurement
     frames (the Test's ladder) take none: the receiver said so in the header it decoded, or the
     master's ladder names a transmission of that rung and size whose answer reported, or went
-    unheard."""
+    unheard. Blocks are numbered in the order they were first sent (:attr:`Block.index`), so a
+    session past 256 data frames keeps every block its own."""
     blocks: dict[int, Block] = {}
     tx_next = 0
     base = 0
@@ -686,7 +732,7 @@ def _reconstructed(
         data = tx.data
         if not data:
             if tx.ack is not None:
-                tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index))
+                tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index, base))
                 base = _advance(blocks, base)
                 silent = 0
             elif tx.frames:
@@ -717,10 +763,7 @@ def _reconstructed(
                 ladder_left.pop(0)
             last_silent_measure = rung if tx.ack is None else None
         else:
-            unacked = sorted(
-                (s for s, b in blocks.items() if not b.delivered),
-                key=lambda s: seq_distance(s, base),
-            )
+            unacked = sorted(s for s, b in blocks.items() if not b.delivered)
             if silent < 2:
                 unacked = [s for s in unacked if not blocks[s].unknown]
             # one family a transmission: a block of the other family is deferred — unless it
@@ -741,16 +784,16 @@ def _reconstructed(
                     f.combined = block.held > 0
                     block.copies.append(f)
                     block.tx_count += 1
-                    f.seq = block.seq
+                    f.seq = block.index
                     f.copy = len(block.copies)
                 else:
-                    if seq_distance(tx_next, base) >= WINDOW:
+                    if tx_next - base >= WINDOW:
                         tx.flagged.append("more new frames than the window holds")
                     block = Block(tx_next, [f], tx_count=1)
                     blocks[tx_next] = block
                     f.seq = tx_next
                     f.copy = 1
-                    tx_next = (tx_next + 1) % SEQ_MOD
+                    tx_next += 1
                 if f.detected and not f.decoded:
                     block.held += 1
         if tx.ack is None:
@@ -761,7 +804,7 @@ def _reconstructed(
                     blocks[f.seq].unknown = True
             continue
         silent = 0
-        tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index))
+        tx.flagged.extend(_take_ack(blocks, tx.ack, tx.index, base))
         base = _advance(blocks, base)
     return blocks
 
@@ -784,27 +827,31 @@ def _consistent(data: list[Frame], unacked: list[Block]) -> int | None:
     return None
 
 
-def _take_ack(blocks: dict[int, Block], ack: Ack, index: int) -> list[str]:
-    """Apply an acknowledgement; returns what it contradicts: a block whose copy the receiver
-    decoded on its own in the transmission acknowledged, and which it does not acknowledge —
-    the numbering has drifted, or the receiver dropped the frame (another session, a
-    measurement it took for data)."""
+def _take_ack(blocks: dict[int, Block], ack: Ack, index: int, base: int) -> list[str]:
+    """Apply an acknowledgement, its base read next to ``base``, the oldest block not yet
+    acknowledged; returns what it contradicts: a block whose copy the receiver decoded on its own
+    in the transmission acknowledged, and which it does not acknowledge — the numbering has
+    drifted, or the receiver dropped the frame (another session, a measurement it took for
+    data)."""
     doubts = []
     for b in blocks.values():
         b.unknown = False
         if b.delivered or not b.copies:
             continue
-        if ack.received(b.seq):
+        if ack.received_at(b.index, base):
             b.delivered_by = b.copies[-1]
             b.acked_after = index
         elif b.copies[-1].decoded and not b.copies[-1].measure and not ack.reports:
-            doubts.append(f"block {b.seq} decoded and not acknowledged")
+            doubts.append(f"block {b.index} decoded and not acknowledged")
     return doubts
 
 
 def _advance(blocks: dict[int, Block], base: int) -> int:
+    """The oldest block not yet acknowledged, from ``base`` on (block indices only grow, so this
+    ends: the old ``% SEQ_MOD`` stepping went round the ring for ever once a session had used all
+    256 numbers and every block was acknowledged)."""
     while base in blocks and blocks[base].delivered:
-        base = (base + 1) % SEQ_MOD
+        base += 1
     return base
 
 
@@ -1955,6 +2002,12 @@ def main() -> int:
         argv = [a for a in sys.argv[1:] if a != "--tree" and Path(a) != args.tree]
         env = {**os.environ, "AETHER_MODEL_TREE": str(args.tree.resolve())}
         os.execve(sys.executable, [sys.executable, "-I", __file__, *argv], env)
+    if args.replay and not hasattr(controller_for(WIDE), "margin_db"):
+        ap.error(
+            "--replay compares the advice controller with the rungs its answers recommended, and "
+            "from link protocol 12 (ADR-0099) there are neither: pass --tree at the build of a "
+            "session before beta.128"
+        )
     if args.inbox:
         found = pairs(sorted(args.inbox.rglob("*.json")))
         if not found:

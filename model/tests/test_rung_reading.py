@@ -459,3 +459,211 @@ def test_c1_at_the_sender_replays_as_the_engine_feeds_it(tmp_path: Path) -> None
         (11, first, True),
         (11, second, True),
     ]
+
+
+def test_an_acknowledgement_is_read_past_the_wrap() -> None:
+    """A base on the air is modulo 256: next to the blocks in flight it names the block 256
+    on, and the blocks before it have arrived whatever their number on the air."""
+    ack = rr.parse_control(
+        "Answer session 38 count 0 level 0 base 28 bitmap 0x0006 missed 0 n 0 snr 5", 1.0
+    )
+    assert ack is not None
+    assert [ack.received(s) for s in (27, 28, 29, 30, 31)] == [True, False, True, True, False]
+    assert [ack.received_at(i, 280) for i in (283, 284, 285, 286, 287, 28)] == [
+        True,
+        False,
+        True,
+        True,
+        False,
+        True,
+    ]
+    assert rr.unwrap(28, 280) == 284 and rr.unwrap(20, 284) == 276 and rr.unwrap(5, 3) == 5
+
+
+# ── a session past 256 data frames ───────────────────────────────────
+
+
+def _wrapped_script() -> list[list[tuple[int, int, str]]]:
+    """The master's data, one list a transmission of (block, rung, what the slave made of it):
+    ``ok`` decoded alone, ``fail`` detected and not decoded, ``rescued`` not decoded alone but
+    combined with the copy before it into the block. The shape of KK4ODA's 2026-11-12 14:13Z
+    session to KK4ODA-1 (80 m, 500 Hz): 316 data frames, 309 blocks, so sequence numbers 0–52
+    each name two blocks 256 apart. Counted by hand, by rung:
+
+    ====  =====  ======  ======  =====  ======  =======  ======
+    rung  sends  first   failed  alone  d:1st   d:later  d:comb
+    ====  =====  ======  ======  =====  ======  =======  ======
+       9     25      25       0     25      25        0       0
+      10    105     105       0    105     105        0       0
+      11    177     174       3    174     171        3       0
+      12      9       5       8      1       1        0       4
+    ====  =====  ======  ======  =====  ======  =======  ======
+
+    Rung 11's three failures (blocks 151, 234, 239) each went once more at rung 11 and decoded;
+    rung 12 decoded block 293 at its first copy, and its four other blocks (136, 142, 299 and
+    305: seqs 136, 142, 43 and 49) failed twice there and were delivered by combining the two
+    copies."""
+    txs = [[(b, 9, "ok") for b in range(i, i + 5)] for i in range(0, 25, 5)]
+    txs += [[(b, 10, "ok") for b in range(i, i + 5)] for i in range(25, 130, 5)]
+
+    def eleven(blocks: range) -> list[tuple[int, int, str]]:
+        return [(b, 11, "ok") for b in blocks]
+
+    txs.append(eleven(range(130, 136)))
+    txs.append([(136, 12, "fail"), *eleven(range(137, 142))])
+    txs.append([(136, 12, "rescued"), (142, 12, "fail"), *eleven(range(143, 147))])
+    txs.append([(142, 12, "rescued"), *eleven(range(147, 151)), (151, 11, "fail")])
+    txs.append([(151, 11, "ok"), *eleven(range(152, 157))])
+    todo = list(range(157, 293))  # past 255: the sequence numbers start again at 0
+    resend: list[int] = []
+    while todo or resend:
+        tx = [(b, 11, "ok") for b in resend]
+        resend = []
+        while len(tx) < 6 and todo:
+            block = todo.pop(0)
+            outcome = "fail" if block in (234, 239) else "ok"
+            tx.append((block, 11, outcome))
+            if outcome == "fail":
+                resend.append(block)
+        txs.append(tx)
+    txs.append([(293, 12, "ok"), *eleven(range(294, 299))])
+    txs.append([(299, 12, "fail"), *eleven(range(300, 305))])
+    txs.append([(299, 12, "rescued"), (305, 12, "fail"), *eleven(range(306, 309))])
+    txs.append([(305, 12, "rescued")])
+    return txs
+
+
+def wrapped_session(tmp_path: Path, numbered: bool = True) -> tuple[Path, Path]:
+    """Both sidecars of :func:`_wrapped_script`, the answers spelt as protocol 12's are; with
+    ``numbered`` each data frame carries its sequence number on the air, as beta.122 on records
+    it (and, at the slave, whether copies combined into it)."""
+    from aether_model.link.granted import RV_SEQUENCE
+
+    b = Builder()
+    b.events["M"].append({"event": "role", "detail": "master", "t_s": 9.5})
+    b.events["S"].append({"event": "role", "detail": "slave", "t_s": 5.9})
+    b.keying("S", 8.0, [data(0)], [decoded()])
+    copies: dict[int, int] = {}
+    delivered: set[int] = set()
+    key = 12.0
+    for tx in _wrapped_script():
+        frames = [header()]
+        heard: list[dict[str, Any] | None] = [
+            decoded(
+                f"Header session {SESSION} count {len(tx)} level 0 base 0 bitmap 0x0000 "
+                "missed 0 n 0 snr 1"
+            )
+        ]
+        for block, rung, outcome in tx:
+            rv = RV_SEQUENCE[copies.get(block, 0) % len(RV_SEQUENCE)]
+            copies[block] = copies.get(block, 0) + 1
+            frame = data(rung, rv)
+            note: dict[str, Any] = {"decoded": outcome == "ok"}
+            if outcome == "rescued":
+                note |= {"combined": True, "rescued": True}
+            if numbered:
+                frame["seq"] = note["seq"] = block % 256
+            frames.append(frame)
+            heard.append(note)
+            if outcome != "fail":
+                delivered.add(block)
+        end = b.keying("M", key, frames, heard)
+        base = 0
+        while base in delivered:
+            base += 1
+        bitmap = sum(1 << i for i in range(16) if base + i in delivered)
+        reply = (
+            f"Answer session {SESSION} count 0 level 0 base {base % 256} bitmap {bitmap:#06x} "
+            "missed 0 n 0 snr 8"
+        )
+        b.keying("S", end + 0.75 - RADIATE, [header()], [decoded(reply)])
+        key = end + 3.0
+    end = b.keying(
+        "M",
+        key,
+        [header()],
+        [
+            decoded(
+                f"Disc session {SESSION} count 0 level 0 base 0 bitmap 0x0000 missed - n 0 snr 1"
+            )
+        ],
+    )
+    b.events["M"].append({"event": "disconnected", "detail": "closed", "t_s": end + 1.5})
+    b.events["S"].append(
+        {"event": "disconnected", "detail": "peer disconnected", "t_s": end + 0.2 - OFFSET}
+    )
+    return b.write(tmp_path)
+
+
+WRAPPED_COUNTS = {
+    # rung: (sends, first copies, failed, decoded alone, d:1st, d:later, d:comb, lost)
+    9: (25, 25, 0, 25, 25, 0, 0, 0),
+    10: (105, 105, 0, 105, 105, 0, 0, 0),
+    11: (177, 174, 3, 174, 171, 3, 0, 0),
+    12: (9, 5, 8, 1, 1, 0, 4, 0),
+}
+
+
+def _counts(acc: rr.RungAccount) -> tuple[int, ...]:
+    return (
+        acc.sends,
+        acc.first_copies,
+        acc.failed,
+        acc.decoded_alone,
+        acc.delivered_alone_first,
+        acc.delivered_alone_later,
+        acc.delivered_combined,
+        acc.lost,
+    )
+
+
+@pytest.mark.timeout(60)
+def test_a_session_past_256_data_frames_keeps_every_block_its_own(tmp_path: Path) -> None:
+    """Sequence numbers are modulo 256: the tool had kept blocks under the bare number, so a
+    second block under one number replaced the first, and once a session had used every number
+    and every block was acknowledged, stepping to the oldest block not yet acknowledged went
+    round the ring for ever (the 14:13Z session's reading ran 26 minutes and was killed)."""
+    master, slave = wrapped_session(tmp_path)
+    down = rr.read_session(master, slave).directions[0]
+    assert down.numbering == "recorded" and down.agrees == (316, 316)
+    assert not down.flagged
+    assert {r: _counts(acc) for r, acc in down.accounts.items()} == WRAPPED_COUNTS
+    assert sum(acc.never_detected for acc in down.accounts.values()) == 0
+    blocks = down.blocks
+    assert sorted(blocks) == list(range(309))
+    # one sequence number, two blocks 256 apart, each delivered by its own single copy
+    for seq in (28, 34, 40):
+        first, second = blocks[seq], blocks[seq + 256]
+        assert first.seq == second.seq == seq
+        assert [len(first.copies), len(second.copies)] == [1, 1]
+        assert first.how == second.how == "alone"
+        assert first.copies[0].at < second.copies[0].at
+    assert [(blocks[i].seq, blocks[i].how, len(blocks[i].copies)) for i in (299, 305)] == [
+        (43, "combined", 2),
+        (49, "combined", 2),
+    ]
+    assert sum(acc.bytes_delivered for acc in down.accounts.values()) == (
+        25 * data_capacity(PAYLOAD[9])
+        + 105 * data_capacity(PAYLOAD[10])
+        + 174 * data_capacity(PAYLOAD[11])
+        + 5 * data_capacity(PAYLOAD[12])
+    )
+
+
+@pytest.mark.timeout(60)
+def test_a_session_past_256_data_frames_is_reconstructed_alike(tmp_path: Path) -> None:
+    """A sidecar from before beta.122 records no sequence numbers: the reconstruction numbers the
+    blocks in the order they were first sent, past 255 too, and reads the same account."""
+    recorded = rr.read_session(*wrapped_session(tmp_path)).directions[0]
+    other = tmp_path / "unnumbered"
+    other.mkdir()
+    down = rr.read_session(*wrapped_session(other, numbered=False)).directions[0]
+    assert down.numbering == "reconstructed"
+    assert {r: _counts(acc) for r, acc in down.accounts.items()} == WRAPPED_COUNTS
+    assert {r: vars(acc) for r, acc in down.accounts.items()} == {
+        r: vars(acc) for r, acc in recorded.accounts.items()
+    }
+    assert sorted(down.blocks) == list(range(309))
+    assert [f.seq for tx in down.txs for f in tx.data] == [
+        f.seq for tx in recorded.txs for f in tx.data
+    ]
