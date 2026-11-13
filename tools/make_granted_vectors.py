@@ -94,8 +94,8 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
 REVIEW_SWITCHES = ("prior_steps_aside", "clean_try_keeps_wait", "try_unaged")
 """The third rate review's candidate switches (``rate-control-3/03-candidates.md`` §2), the only
 rate controller settings a session may change: the port takes them as ``GrantConfig.rate_review``."""
-REVIEW_VALUES = ("prior_margin_db",)
-"""The review's candidate values (G1): the port takes them as ``RateReview`` fields too."""
+REVIEW_VALUES = ("prior_margin_db", "family_gain_db")
+"""The review's candidate values (G1, G2b): the port takes them as ``RateReview`` fields too."""
 TRY_REVIEW = dict.fromkeys(REVIEW_SWITCHES, True)
 
 
@@ -1320,6 +1320,10 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "margin-good-wide": fading_field(WIDE, "good", 12.0, 63, 12000, {"prior_margin_db": 1.0}),
     "margin-moderate-narrow": fading_field(
         NARROW, "moderate", 6.0, 64, 2000, {"prior_margin_db": 1.0}
+    ),
+    # G1 with G2b: the family offset moved twice as far a frame
+    "margin-gain-moderate-narrow": fading_field(
+        NARROW, "moderate", 6.0, 64, 2000, {"prior_margin_db": 1.0, "family_gain_db": 1.0}
     ),
 }
 

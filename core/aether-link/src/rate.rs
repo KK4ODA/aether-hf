@@ -216,6 +216,9 @@ pub struct RateReview {
     pub try_unaged: bool,
     /// G1: the prior's margin under the reading, dB, in place of today's 3 (`None`: today's).
     pub prior_margin_db: Option<f64>,
+    /// G2b: how far a frame moves its family's offset, dB, in place of today's 0.5 (`None`:
+    /// today's).
+    pub family_gain_db: Option<f64>,
 }
 
 /// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.
@@ -360,6 +363,9 @@ impl RateController {
     pub const fn with_review(mut self, review: RateReview) -> Self {
         if let Some(margin) = review.prior_margin_db {
             self.prior_margin_db = margin;
+        }
+        if let Some(gain) = review.family_gain_db {
+            self.family_gain_db = gain;
         }
         self.review = review;
         self
