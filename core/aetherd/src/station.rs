@@ -3740,24 +3740,16 @@ impl<P: Ptt> Station<P> {
         if self.keyed_audio.is_none() || audio.is_empty() {
             return;
         }
-        let power = audio
-            .iter()
-            .map(|&x| f64::from(x) * f64::from(x))
-            .sum::<f64>()
-            / audio.len() as f64;
         let now = self.now();
         let (transmitting, deaf) = (self.transmitting, now < self.deaf_until);
-        let seconds = audio.len() as f64 / self.config.params.audio_rate as f64;
+        let rate = self.config.params.audio_rate;
+        let seconds = audio.len() as f64 / rate as f64;
         let Some(watch) = &mut self.keyed_audio else {
             return;
         };
-        watch.block(
-            now,
-            seconds,
-            10.0 * power.max(1e-12).log10(),
-            transmitting,
-            deaf,
-        );
+        // in the band where a receiver's mute shows, not under an interface's hum
+        let level = watch.level_db(audio, rate);
+        watch.block(now, seconds, level, transmitting, deaf);
     }
 
     /// The key came down: say what the radio's audio did while it was up, when there is

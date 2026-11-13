@@ -871,7 +871,9 @@ radios, RTS or DTR keying works only on one of its two USB serial ports, or afte
 Then press **Key 1 s** and watch the radio and the log. Aether says this once after three
 transmissions in a row, and again every ten minutes while it goes on. The first transmission after
 a host program attaches is judged on its own, so a program keying the wrong port is caught at its
-first try.
+first try. Aether listens between 1 and 2.5 kHz, where the receiver passes the band, so hum on the
+audio cable does not hide a radio that does mute its receiver; the levels in the line are that
+band's.
 
 **The log says the sound card's playback skipped some milliseconds inside a transmission.** Your
 computer or its USB audio stalled while Aether was sending. What went on the air had a short
