@@ -296,7 +296,7 @@ impl<P: Ptt> Station<P> {
         let Some(front) = self.datagrams.queue.front() else {
             return;
         };
-        if front.wait_for_clear && (!self.air.busy.settled() || self.air.busy.busy(now)) {
+        if front.wait_for_clear && (!self.air.sense().settled() || self.air.sense().busy(now)) {
             return;
         }
         if now < self.datagrams.next_try_s {

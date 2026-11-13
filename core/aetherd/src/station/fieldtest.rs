@@ -688,9 +688,8 @@ impl<P: Ptt> Station<P> {
             return Value::Null;
         };
         let now = self.now();
-        let air = self.air.interface();
-        let ladder = air.ladder();
-        let name = |mode: usize| ladder.get(mode).map(aether_phy::modes::Rung::name);
+        let ladder = self.air.ladder();
+        let name = |mode: usize| ladder.get(mode).map(|rung| rung.name.clone());
         let transfer = match run.step {
             Step::Message | Step::File if run.entered => {
                 let total = if run.step == Step::Message {

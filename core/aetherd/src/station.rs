@@ -56,15 +56,13 @@ use aether_link::{
     },
     granted::{HEADER_UNDECODABLE_SHARE, Role},
 };
-use aether_phy::{
-    Complex, Modem, Received,
-    waveform::{WIDE_2300, WaveformParams},
-};
+use aether_phy::waveform::{WIDE_2300, WaveformParams};
 
+pub use crate::air::phy_timing;
 use crate::{
-    air::hf::{HfAir, Listened, Listening},
+    air::{Air, ChannelSense, FrameDecoder, HeardFrame, HfAir, Listening},
     audio::OnsetGuard,
-    busy::{BusyConfig, BusyDetector},
+    busy::BusyConfig,
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
     passband::{Clipping, FilterReading, ReceiveFilter, SPECTRUM_TOP_HZ},
@@ -204,11 +202,18 @@ impl Default for StationConfig {
 /// decode, which is why this is a `RefCell` and not a lock: everything in a station runs on
 /// one thread, and the audio callback talks to it through a queue.
 pub struct PhyFrame {
-    /// The soft frame of either family: an OFDM frame, or the tone floor's (ADR-0013).
-    frame: Received,
+    /// The air's own soft frame: on HF, an OFDM frame or the tone floor's (ADR-0013).
+    soft: Box<dyn std::any::Any>,
+    /// Sent in the air's robust family (HF's tone floor).
+    floor: bool,
+    /// Its redundancy version, SNR, count of frames to follow and echo, as the air read them.
+    rv: u8,
+    snr_3k_db: f64,
+    follows: Option<u8>,
+    echo: Option<f64>,
     /// The rung of the ladder it was sent at; 0 for a control frame.
     rung: usize,
-    modem: Rc<RefCell<Modem>>,
+    decoder: Rc<RefCell<dyn FrameDecoder>>,
     t_start: f64,
     t_end: f64,
     container: Container,
@@ -223,9 +228,9 @@ impl std::fmt::Debug for PhyFrame {
         f.debug_struct("PhyFrame")
             .field("container", &self.container)
             .field("rung", &self.rung)
-            .field("tone", &self.frame.is_tone())
-            .field("rv", &self.frame.rv())
-            .field("snr_3k_db", &self.frame.snr_3k_db())
+            .field("tone", &self.floor)
+            .field("rv", &self.rv)
+            .field("snr_3k_db", &self.snr_3k_db)
             .finish_non_exhaustive()
     }
 }
@@ -240,15 +245,15 @@ impl SoftFrame for PhyFrame {
     }
 
     fn floor(&self) -> bool {
-        self.frame.is_tone()
+        self.floor
     }
 
     fn rv(&self) -> u8 {
-        self.frame.rv()
+        self.rv
     }
 
     fn snr_db(&self) -> f64 {
-        self.frame.snr_3k_db()
+        self.snr_3k_db
     }
 
     fn trusted(&self) -> bool {
@@ -256,11 +261,11 @@ impl SoftFrame for PhyFrame {
     }
 
     fn follows(&self) -> Option<u8> {
-        self.frame.follows()
+        self.follows
     }
 
     fn echo(&self) -> Option<f64> {
-        self.frame.echo()
+        self.echo
     }
 
     fn t_start(&self) -> f64 {
@@ -272,13 +277,7 @@ impl SoftFrame for PhyFrame {
     }
 
     fn decode(&self, buffer: Option<&HarqBuffer>) -> (Option<Vec<u8>>, HarqBuffer) {
-        let mut modem = self.modem.borrow_mut();
-        match modem.decode_received(&self.frame, buffer.map(Vec::as_slice)) {
-            Ok((payload, llrs)) => (payload, llrs),
-            // A frame the codec will not even look at is not a frame; there is nothing to
-            // keep for a later combine either.
-            Err(_) => (None, Vec::new()),
-        }
+        self.decoder.borrow_mut().decode(self.soft.as_ref(), buffer)
     }
 }
 
@@ -1068,8 +1067,8 @@ impl CaptureLag {
 pub struct Station<P: Ptt> {
     config: StationConfig,
     engine: GrantedEngine,
-    /// The physical layer (ADR-0113).
-    air: HfAir,
+    /// The physical layer and channel sense (ADR-0113).
+    air: Box<dyn Air>,
     /// Where the receive mixer is centred, and the station it follows (ADR-0079).
     centre: centre::Centre,
     ptt: PttWatchdog<P>,
@@ -1198,7 +1197,7 @@ pub struct Station<P: Ptt> {
     finished: Vec<crate::sessions::Session>,
     /// The last frame, and its equalised constellation, for the diagnostics display.
     last_frame: Option<FrameReport>,
-    last_symbols: Vec<Complex>,
+    last_symbols: Vec<crate::air::Iq>,
     /// What the sound card is delivering, for the spectrum display.
     spectrum: SpectrumAnalyser,
     /// The radio's receive filter, read from the noise the station hears while it listens, so
@@ -1304,7 +1303,8 @@ impl<P: Ptt> Station<P> {
         config.key_tail_s += config.playback_lead_s;
         config.max_mode_setting.get_or_insert(config.link.max_mode);
         let params = config.params;
-        let mut timing = phy_timing(params);
+        let air: Box<dyn Air> = Box::new(HfAir::new(params, config.busy));
+        let mut timing = air.timing();
         // how long after a transmission is keyed it radiates: what an answer is keyed ahead of
         // its slot by (07-protocol-8.md §10); the card's own report replaces the assumed lead
         timing.tx_latency_s = config.key_lead_s + config.playback_lead_s;
@@ -1326,7 +1326,7 @@ impl<P: Ptt> Station<P> {
         let engine = GrantedEngine::new(&config.callsign, timing, link, seed);
         let mut station = Self {
             engine,
-            air: HfAir::new(params, config.busy),
+            air,
             centre: centre::Centre::default(),
             ptt: PttWatchdog::new(ptt, config.max_key_s),
             capture_lag: CaptureLag::default(),
@@ -1431,7 +1431,7 @@ impl<P: Ptt> Station<P> {
     /// The station clock, in seconds of captured audio.
     #[must_use]
     pub fn now(&self) -> f64 {
-        self.audio_seen as f64 / self.config.params.audio_rate as f64
+        self.audio_seen as f64 / self.air.info().audio_rate as f64
     }
 
     /// Where the session is.
@@ -1468,7 +1468,7 @@ impl<P: Ptt> Station<P> {
     /// behaviour: release on drain.
     pub fn device_played(&mut self, played: u64) {
         self.clock.device_played = Some(played);
-        let rate = self.config.params.audio_rate as f64;
+        let rate = self.air.info().audio_rate as f64;
         let now = self.now();
         self.capture_lag.read(played as f64 / rate, now);
     }
@@ -1576,7 +1576,7 @@ impl<P: Ptt> Station<P> {
     /// Whether the channel is occupied.
     #[must_use]
     pub fn channel_busy(&self) -> bool {
-        self.air.busy.busy(self.now())
+        self.air.sense().busy(self.now())
     }
 
     /// The application's own bytes still to send: queued, or handed to the link and not yet
@@ -1673,7 +1673,7 @@ impl<P: Ptt> Station<P> {
     /// The last frame's equalised constellation, thinned to at most
     /// [`CONSTELLATION_POINTS`] points, with the frame it came from.
     #[must_use]
-    pub fn constellation(&self) -> Option<(&FrameReport, &[Complex])> {
+    pub fn constellation(&self) -> Option<(&FrameReport, &[crate::air::Iq])> {
         self.last_frame
             .as_ref()
             .map(|frame| (frame, self.last_symbols.as_slice()))
@@ -1772,7 +1772,7 @@ impl<P: Ptt> Station<P> {
             .value
             .is_some_and(|old| old.abs_diff(hz) >= DIAL_RETUNE_HZ)
         {
-            self.air.busy.retune(now);
+            self.air.sense_mut().retune(now);
             self.note(
                 "dial",
                 &format!("moved to {hz} Hz: the busy detector learns the band again"),
@@ -1795,15 +1795,15 @@ impl<P: Ptt> Station<P> {
         &self.engine
     }
 
-    /// The busy detector.
+    /// Whether someone else is on the frequency, and the panel's reading of it.
     #[must_use]
-    pub fn busy_detector(&self) -> &BusyDetector {
-        &self.air.busy
+    pub fn channel_sense(&self) -> &dyn ChannelSense {
+        self.air.sense()
     }
 
     /// Start a new interval for the detector's peak reading, once the last one has gone out.
     pub fn reset_busy_peak(&mut self) {
-        self.air.busy.reset_excess_peak();
+        self.air.sense_mut().reset_excess_peak();
     }
 
     /// What the radio is keyed through.
@@ -2246,7 +2246,7 @@ impl<P: Ptt> Station<P> {
         self.config.answer_only = config.radio.answer_only;
         self.ptt.max_key_s = config.radio.max_key_s;
         self.air
-            .busy
+            .sense_mut()
             .set_threshold_db(config.radio.busy_threshold_db);
         self.config.record_auto = config.record.auto;
         self.config.record_program_sessions = config.record.send_to_project;
@@ -2504,7 +2504,7 @@ impl<P: Ptt> Station<P> {
         // reads the callsign and never looks further
         body.push(aether_link::frames::with_bandwidth(
             0,
-            self.config.params.bandwidth.hz(),
+            self.air.info().bandwidth_hz,
         ));
         let header = DataHeader {
             kind: DataKind::Beacon,
@@ -2661,7 +2661,7 @@ impl<P: Ptt> Station<P> {
         if !(0.2..=5.0).contains(&seconds) {
             return Err("a keying test lasts between 0.2 and 5 seconds");
         }
-        let samples = (seconds * self.config.params.audio_rate as f64) as usize;
+        let samples = (seconds * self.air.info().audio_rate as f64) as usize;
         self.pending.push_back(Outgoing::Audio {
             samples: vec![0.0; samples],
             silent: true,
@@ -2690,7 +2690,7 @@ impl<P: Ptt> Station<P> {
         if !(0.5..=10.0).contains(&seconds) {
             return Err("a tune tone lasts between 0.5 and 10 seconds");
         }
-        if self.config.wait_for_clear && !self.air.busy.settled() {
+        if self.config.wait_for_clear && !self.air.sense().settled() {
             return Err(
                 "the busy detector is still learning the noise floor; try again in a few seconds",
             );
@@ -2698,7 +2698,7 @@ impl<P: Ptt> Station<P> {
         if self.config.wait_for_clear && !self.channel_clear(self.now()) {
             return Err("the channel is busy");
         }
-        let rate = self.config.params.audio_rate as f64;
+        let rate = self.air.info().audio_rate as f64;
         let tone = crate::cwid::CwId {
             // a steady tone is one very long dah; the shaped edges keep it from clicking
             wpm: 1.2 / (seconds / 3.0),
@@ -2746,7 +2746,7 @@ impl<P: Ptt> Station<P> {
         if !(1..=10).contains(&bursts) {
             return Err("a drive check is between 1 and 10 bursts");
         }
-        if self.config.wait_for_clear && !self.air.busy.settled() {
+        if self.config.wait_for_clear && !self.air.sense().settled() {
             return Err(
                 "the busy detector is still learning the noise floor; try again in a few seconds",
             );
@@ -2754,10 +2754,10 @@ impl<P: Ptt> Station<P> {
         if self.config.wait_for_clear && !self.channel_clear(self.now()) {
             return Err("the channel is busy");
         }
-        let air = self.air.interface();
-        let index = self.config.link.max_mode.min(air.n_rungs() - 1);
-        let rung = air.rung(index);
-        let bytes = rung.payload_bytes();
+        let ladder = self.air.ladder();
+        let index = self.config.link.max_mode.min(self.air.info().rungs - 1);
+        let rung = &ladder[index];
+        let bytes = rung.payload_bytes;
         if bytes == 0 {
             return Err("this mode carries no payload to send");
         }
@@ -2766,7 +2766,7 @@ impl<P: Ptt> Station<P> {
         // A burst is several frames back to back, long enough to read the ALC and turn the
         // knob against, and the bursts are spaced by as much silence: a one-frame burst is
         // a second long, which is no time at all for a hand on a drive control.
-        let frame_s = rung.duration_s().max(0.1);
+        let frame_s = rung.duration_s.max(0.1);
         let per_burst = (DRIVE_BURST_S / frame_s).ceil().max(1.0) as usize;
         let frame = aether_link::TxFrame {
             container: aether_link::Container::Data,
@@ -2886,7 +2886,7 @@ impl<P: Ptt> Station<P> {
             "remote": remote,
             "notes": notes,
             "frequency_hz": frequency_hz,
-            "bandwidth_hz": self.config.params.bandwidth.hz(),
+            "bandwidth_hz": self.air.info().bandwidth_hz,
             "max_mode": self.config.link.max_mode,
             "compress": self.config.compress,
             "tx_level": self.config.tx_level,
@@ -2902,7 +2902,7 @@ impl<P: Ptt> Station<P> {
         let recording = crate::record::Recording::start(
             &dir,
             &name,
-            u32::try_from(self.config.params.audio_rate).unwrap_or(48_000),
+            u32::try_from(self.air.info().audio_rate).unwrap_or(48_000),
             self.now(),
             meta,
         )
@@ -2917,7 +2917,7 @@ impl<P: Ptt> Station<P> {
             );
         }
         // where the busy detector stood, so a trace of the audio can carry on from it
-        recording.busy_state(self.air.busy.state(self.now()));
+        recording.busy_state(self.air.sense().state(self.now()));
         // and the receive filter's profile, which a trace of the audio starts without
         recording.passband_profile(false, self.passband.noise_profile(), self.passband.looks());
         let path = recording.path().to_path_buf();
@@ -3098,7 +3098,7 @@ impl<P: Ptt> Station<P> {
         self.events.push(format!("{event}:{detail}"));
         if let Some(recording) = &mut self.recording {
             recording.event(
-                self.audio_seen as f64 / self.config.params.audio_rate as f64,
+                self.audio_seen as f64 / self.air.info().audio_rate as f64,
                 event,
                 detail,
                 &format!("{:?}", self.engine.state()),
@@ -3118,7 +3118,7 @@ impl<P: Ptt> Station<P> {
         self.hear_keyed_audio(audio);
         self.spectrum.push(audio);
         if self.recording.is_none() {
-            let keep = (PREROLL_S * self.config.params.audio_rate as f64) as usize;
+            let keep = (PREROLL_S * self.air.info().audio_rate as f64) as usize;
             self.preroll.extend(audio.iter().copied());
             let excess = self.preroll.len().saturating_sub(keep);
             self.preroll.drain(..excess);
@@ -3181,9 +3181,9 @@ impl<P: Ptt> Station<P> {
         }
         self.note_busy_transition(now);
         if let Some(recording) = &mut self.recording {
-            recording.busy_reading(now, &self.air.busy.reading(now));
+            recording.busy_reading(now, &self.air.sense().reading(now));
         }
-        self.reservation.channel(now, self.air.busy.busy(now));
+        self.reservation.channel(now, self.air.sense().busy(now));
         self.trace_after_release(now);
         self.sample_passband(now);
 
@@ -3304,7 +3304,7 @@ impl<P: Ptt> Station<P> {
                 .map(|latest| Onset {
                     by: keyed + std::time::Duration::from_secs_f64((latest - starts_at).max(0.0)),
                     handed: 0,
-                    lead: (self.config.key_lead_s * self.config.params.audio_rate as f64) as u64,
+                    lead: (self.config.key_lead_s * self.air.info().audio_rate as f64) as u64,
                 });
             self.transmitting = true;
             if let Some(watch) = &mut self.keyed_audio {
@@ -3318,7 +3318,7 @@ impl<P: Ptt> Station<P> {
             // where its frames end if it plays whole: the slot it grants is anchored there, by
             // the other station on what its header stated, whatever cuts it short — from where
             // the air's clock stands once the key is up, then the card's output latency
-            let audio_rate = self.config.params.audio_rate as f64;
+            let audio_rate = self.air.info().audio_rate as f64;
             let output_latency =
                 starts_at - now + self.radiation_latency_s() - self.config.key_lead_s;
             if let Some(window) = &mut self.keying {
@@ -3549,7 +3549,7 @@ impl<P: Ptt> Station<P> {
             // Where the sound card stood when the key came up, against where it drains: how
             // long the radio stayed keyed past the burst's last sample, which the turnaround
             // plot puts at its t = 0 (ADR-0037).
-            let rate = self.config.params.audio_rate as f64;
+            let rate = self.air.info().audio_rate as f64;
             let seconds = |samples: Option<u64>| samples.map(|s| format!("{:.3}", s as f64 / rate));
             recording.event(
                 now,
@@ -3582,7 +3582,7 @@ impl<P: Ptt> Station<P> {
         // there, as the other station measures it from the frames it hears end.
         if let Some(window) = self.keying.take() {
             // the frames end before the closing identifier behind them (ADR-0075)
-            let trailing = window.trailing_samples as f64 / self.config.params.audio_rate as f64;
+            let trailing = window.trailing_samples as f64 / self.air.info().audio_rate as f64;
             let frames_end =
                 now - tail_s - trailing + self.radiation_latency_s() - self.config.key_lead_s;
             self.engine.on_tx_done(now, Some(frames_end));
@@ -3617,7 +3617,7 @@ impl<P: Ptt> Station<P> {
     /// How long, in samples of the sound card's playback clock, the render of a transmission
     /// of the engine's took ([`Self::render_pending`]).
     pub fn render_took(&mut self, samples: u64) {
-        let seconds = samples as f64 / self.config.params.audio_rate as f64;
+        let seconds = samples as f64 / self.air.info().audio_rate as f64;
         self.latency.render.push(seconds);
         self.rendered_s = Some(seconds);
         self.tell_engine_latency();
@@ -3748,7 +3748,7 @@ impl<P: Ptt> Station<P> {
         }
         let now = self.now();
         let (transmitting, deaf) = (self.transmitting, now < self.deaf_until);
-        let rate = self.config.params.audio_rate;
+        let rate = self.air.info().audio_rate;
         let seconds = audio.len() as f64 / rate as f64;
         let Some(watch) = &mut self.keyed_audio else {
             return;
@@ -3802,9 +3802,9 @@ impl<P: Ptt> Station<P> {
             "after {:.3} power {:.1} level {:.1} floor {:.1} busy {} deaf {}",
             now - self.released_at,
             10.0 * power.max(1e-12).log10(),
-            self.air.busy.level_db,
-            self.air.busy.floor_db,
-            u8::from(self.air.busy.busy(now)),
+            self.air.sense().level_db(),
+            self.air.sense().floor_db(),
+            u8::from(self.air.sense().busy(now)),
             u8::from(now < self.deaf_until),
         );
         let state = format!("{:?}", self.engine.state());
@@ -3825,15 +3825,10 @@ impl<P: Ptt> Station<P> {
     // ── internals ─────────────────────────────────────────────────────
 
     /// Feed the streaming receiver and pass what it finds to the engine.
-    fn absorb(&mut self, listened: Listened, now: f64) {
-        let fs = self.config.params.fs_baseband;
-        // where this receiver's positions start: a move to the other bandwidth (ADR-0026)
-        // builds another, but what this one found is placed by its own count
-        let Listened {
-            origin,
-            frames,
-            preambles,
-        } = listened;
+    fn absorb(&mut self, heard: crate::air::Heard, now: f64) {
+        // placed on the station's clock by the receiver that found them: a move to the other
+        // bandwidth (ADR-0026) builds another, but what this one found is placed by its count
+        let crate::air::Heard { frames, arrivals } = heard;
 
         // Completed frames first, then preambles. Both can come out of one block, and the
         // order matters: a preamble found in this block belongs to a frame that is *still
@@ -3841,23 +3836,18 @@ impl<P: Ptt> Station<P> {
         // receiver decides a burst has ended in the middle of it and answers over the rest.
         for decoded in frames {
             self.stats.frames_detected += 1;
-            let air = self.air.interface();
-            let control = decoded.frame.is_control();
+            let control = decoded.control;
             // the rung a DATA frame was sent at; chips naming an OFDM mode on no rung of the
             // ladder are noise, and go no further (the model's harness drops them too)
-            let Some(rung) = (if control {
-                Some(0)
-            } else {
-                decoded.frame.rung(&air)
-            }) else {
+            let Some(rung) = (if control { Some(0) } else { decoded.rung }) else {
                 continue;
             };
             self.report(&decoded, rung, now);
-            let detected = decoded.frame.detect_confidence(&air);
-            let span_start = (origin + decoded.frame.start()) as f64 / fs;
-            let span_end = span_start + decoded.frame.samples(&air) as f64 / fs;
+            let detected = decoded.detect_confidence;
+            let span_start = decoded.start_s;
+            let span_end = span_start + decoded.length_s;
             // its blocks are a frame's, not the noise's (ADR-0076), and so is its spectrum
-            self.air.busy.explain(span_start, span_end);
+            self.air.sense_mut().explain(span_start, span_end);
             self.passband.frame(span_start, span_end);
             let record = self.frame_record(&decoded, rung, (span_start, span_end), now);
             self.keep_frame(record, now);
@@ -3866,28 +3856,28 @@ impl<P: Ptt> Station<P> {
             // beacon drew a reply would be unusable.
             if let Some(caller) = beacon_callsign(&decoded) {
                 self.stats.beacons_heard += 1;
-                self.air.busy.mark_frame(now, detected);
+                self.air.sense_mut().mark_frame(now, detected);
                 self.note(
                     "beacon",
-                    &format!("heard {caller} at {:.1} dB", decoded.frame.snr_3k_db()),
+                    &format!("heard {caller} at {:.1} dB", decoded.snr_3k_db),
                 );
                 continue;
             }
             let container = [Container::Data, Container::Control][usize::from(control)];
-            let start = (origin + decoded.frame.start()) as f64 / fs;
-            let frame_s = decoded.frame.samples(&air) as f64 / fs;
+            let start = decoded.start_s;
+            let frame_s = decoded.length_s;
             let decoded_ok = decoded.ok();
             // a frame the sound card's capture lost audio inside of says nothing of the path:
             // two of WC4Y's rung-3 frames at -1 to -4 dB, where that rung decodes 9 dB lower,
             // were lost that way, and the failure stepped the recommendation down (ADR-0076)
-            let trusted = trusted_measurement(decoded.frame.mode_confidence(), detected)
+            let trusted = trusted_measurement(decoded.mode_confidence, detected)
                 && !self.capture_skipped_within(start, start + frame_s);
             // A frame that decoded is real whatever its acquisition looked like, and a weak
             // one at the floor may have acquired below the gate below — it counts here. One
             // that did not decode is a soft frame the engine may still combine, and it says
             // nothing about the channel: a phantom gets this far too.
             if decoded_ok {
-                self.air.busy.mark_frame(now, detected);
+                self.air.sense_mut().mark_frame(now, detected);
             }
             // a call or a probe to this station while the host program attached says not to
             // answer (`LISTEN OFF`, VARA's default until it says otherwise)
@@ -3907,7 +3897,7 @@ impl<P: Ptt> Station<P> {
             self.note_version(&decoded);
             if let Some(caller) = narrower {
                 self.move_to(500, BandwidthWhy::Call(caller));
-                rung = decoded.frame.rung(&self.air.interface()).unwrap_or(rung);
+                rung = self.air.rung_of(&decoded).unwrap_or(rung);
             }
             let asked = asked_by(decoded.payload.as_deref(), &self.engine.callsigns);
             let frame = PhyFrame {
@@ -3915,8 +3905,13 @@ impl<P: Ptt> Station<P> {
                 t_start: start,
                 t_end: start + frame_s,
                 rung,
-                frame: decoded.frame,
-                modem: self.air.decoder(),
+                floor: decoded.floor,
+                rv: decoded.rv,
+                snr_3k_db: decoded.snr_3k_db,
+                follows: decoded.follows,
+                echo: decoded.echo,
+                soft: decoded.soft,
+                decoder: self.air.decoder(),
                 trusted,
             };
             self.hand_over(&frame, asked, decoded_ok, now);
@@ -3925,7 +3920,7 @@ impl<P: Ptt> Station<P> {
             }
         }
 
-        self.heed_preambles(&preambles, origin, now);
+        self.heed_preambles(&arrivals, now);
         self.pump();
     }
 
@@ -4023,33 +4018,31 @@ impl<P: Ptt> Station<P> {
 
     /// Describe a frame for the displays, and keep its constellation. `rung` is the rung of
     /// the ladder a DATA frame was sent at.
-    fn report(&mut self, decoded: &aether_phy::DecodedFrame, rung: usize, now: f64) {
-        let frame = &decoded.frame;
-        let control = frame.is_control();
-        let payload = decoded.payload.as_deref();
-        let span_start = self.air.seconds_at(frame.start());
+    fn report(&mut self, frame: &HeardFrame, rung: usize, now: f64) {
+        let control = frame.control;
+        let payload = frame.payload.as_deref();
+        let span_start = frame.start_s;
         let mut report = FrameReport {
             t_s: now,
             kind: if control { "control" } else { "data" },
             mode: rung,
-            rv: frame.rv(),
-            snr_db: frame.snr_3k_db(),
+            rv: frame.rv,
+            snr_db: frame.snr_3k_db,
             // the true offset: the receiver may be centred on the session's station (ADR-0079)
-            cfo_hz: self.true_cfo(frame.cfo_hz(), span_start),
-            confidence: frame.mode_confidence(),
-            detect_confidence: frame.detect_confidence(&self.air.interface()),
-            decoded: decoded.ok(),
+            cfo_hz: self.true_cfo(frame.cfo_hz, span_start),
+            confidence: frame.mode_confidence,
+            detect_confidence: frame.detect_confidence,
+            decoded: frame.ok(),
             bytes: payload.map_or(0, <[u8]>::len),
             from: None,
             to: None,
             control: None,
             bandwidth_hz: None,
-            follows: frame.follows(),
+            follows: frame.follows,
             capture_skip: false,
-            echo: frame.echo(),
+            echo: frame.echo,
         };
-        let span_end = span_start
-            + frame.samples(&self.air.interface()) as f64 / self.config.params.fs_baseband;
+        let span_end = span_start + frame.length_s;
         report.capture_skip = self.capture_skipped_within(span_start, span_end);
         // a frame that belongs to the session is the other station's; one with another
         // session id is somebody else's business and stays unattributed
@@ -4124,10 +4117,8 @@ impl<P: Ptt> Station<P> {
         }
         // the constellation, thinned evenly so a long frame costs a display no more
         // than a short one; a tone frame has none — one tone at a time, detected by energy
-        self.last_symbols = frame.ofdm().map_or_else(Vec::new, |ofdm| {
-            let step = ofdm.symbols.len().div_ceil(CONSTELLATION_POINTS).max(1);
-            ofdm.symbols.iter().step_by(step).copied().collect()
-        });
+        let step = frame.symbols.len().div_ceil(CONSTELLATION_POINTS).max(1);
+        self.last_symbols = frame.symbols.iter().step_by(step).copied().collect();
         self.last_frame = Some(report.clone());
         // bounded, for a station nobody drains: a test harness, or a client that never asks
         if self.reports.len() >= MAX_UNTAKEN_REPORTS {
@@ -4206,7 +4197,7 @@ impl<P: Ptt> Station<P> {
             } else {
                 crate::sessions::Role::Called
             },
-            bandwidth_hz: u32::try_from(self.config.params.bandwidth.hz()).unwrap_or(u32::MAX),
+            bandwidth_hz: u32::try_from(self.air.info().bandwidth_hz).unwrap_or(u32::MAX),
             frequency_hz: self.frequency.value.or(notes.frequency_hz),
             bytes_sent: link.bytes_sent,
             bytes_acked: self
@@ -4526,7 +4517,7 @@ impl<P: Ptt> Station<P> {
         let waited_out = self
             .held_from
             .is_some_and(|from| now - from >= OTHER_ID_WAIT_MAX_S);
-        let busy_for_id = alone && self.air.busy.busy(now) && !waited_out;
+        let busy_for_id = alone && self.air.sense().busy(now) && !waited_out;
         // an identifier waits for a clear channel no longer than the wait above: §97.119 asks
         // for it at the end of the communication, and a host program waits for it
         let id_waited_out = alone && waited_out;
@@ -4638,7 +4629,7 @@ impl<P: Ptt> Station<P> {
         }
         if self.config.record_tx_audio {
             self.tx_capture = Some(crate::record::TxCapture::begin(
-                self.config.params.audio_rate as u32,
+                self.air.info().audio_rate as u32,
                 self.config.tx_level,
                 self.config.key_lead_s,
                 self.tail_s(),
@@ -4646,7 +4637,11 @@ impl<P: Ptt> Station<P> {
             ));
         }
 
-        let Some((baseband, first_frame)) = self.modulate(&frames) else {
+        let Some(crate::air::Rendered {
+            audio: rendered,
+            first_frame,
+        }) = self.render_frames(&frames)
+        else {
             // nothing of an engine transmission goes out: the engine is told, as for a drop
             if link.is_some() {
                 self.engine.on_tx_dropped(now);
@@ -4654,11 +4649,9 @@ impl<P: Ptt> Station<P> {
             return;
         };
 
-        let audio_rate = self.config.params.audio_rate as f64;
+        let audio_rate = self.air.info().audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
-        // flush the chain after the burst, or its filters keep the tail of the last frame
-        let rendered = self.air.upconvert(&baseband);
 
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
@@ -4669,8 +4662,7 @@ impl<P: Ptt> Station<P> {
             let header =
                 (frames.first().map(|f| f.container) == Some(Container::Control)).then(|| {
                     let start = self.playback.len();
-                    let len = rendered.len() * first_frame / baseband.len();
-                    (start, start + len)
+                    (start, start + first_frame)
                 });
             self.playback.extend(rendered);
             let frames_samples = self.playback.len();
@@ -4697,47 +4689,16 @@ impl<P: Ptt> Station<P> {
         self.tx_tag = Some(self.tag(now, origin, &frames, with_id));
     }
 
-    /// The frames' baseband, back to back, and the first frame's share of it; `None` when there
-    /// is nothing to send.
-    fn modulate(&mut self, frames: &[aether_link::TxFrame]) -> Option<(Vec<Complex>, usize)> {
-        let mut baseband: Vec<Complex> = Vec::new();
-        let mut first = 0;
-        for frame in frames {
-            let burst = match frame.container {
-                // a rung of the ladder: the tone floor's, at its peak, or an OFDM mode
-                Container::Data => {
-                    // an OFDM frame says how many of the burst follow it (ADR-0041)
-                    self.air.transmitter().rung_burst_following(
-                        &frame.payload,
-                        frame.mode,
-                        frame.rv,
-                        frame.follows,
-                    )
-                }
-                Container::Control => {
-                    self.air
-                        .transmitter()
-                        .control_burst_of(&frame.payload, frame.rv, frame.floor)
-                }
-            };
-            match burst {
-                Ok(samples) => {
-                    baseband.extend(samples);
-                    if first == 0 {
-                        first = baseband.len();
-                    }
-                }
-                // The engine only ever asks for payloads it sized from this same table, so
-                // this cannot happen without a bug; dropping the frame keeps a bug off the
-                // air rather than transmitting something malformed.
-                Err(error) => {
-                    self.events
-                        .push(format!("error:cannot modulate frame: {error}"));
-                    return None;
-                }
-            }
-        }
-        (!baseband.is_empty()).then_some((baseband, first))
+    /// The frames rendered by the air; `None` when there is nothing to send, or for what would
+    /// not modulate. The engine only ever asks for payloads it sized from this same table, so
+    /// that cannot happen without a bug; dropping the frame keeps a bug off the air rather than
+    /// transmitting something malformed.
+    fn render_frames(&mut self, frames: &[aether_link::TxFrame]) -> Option<crate::air::Rendered> {
+        self.air.render(frames).unwrap_or_else(|error| {
+            self.events
+                .push(format!("error:cannot modulate frame: {error}"));
+            None
+        })
     }
 
     /// [`Self::render_identifier`], with its account of the air.
@@ -4823,13 +4784,13 @@ impl<P: Ptt> Station<P> {
     /// station's clock.
     fn frame_record(
         &self,
-        decoded: &aether_phy::DecodedFrame,
+        decoded: &HeardFrame,
         rung: usize,
         (span_start, span_end): (f64, f64),
         now: f64,
     ) -> crate::record::FrameRecord {
-        let control = decoded.frame.is_control();
-        let detected = decoded.frame.detect_confidence(&self.air.interface());
+        let control = decoded.control;
+        let detected = decoded.detect_confidence;
         let (seq, measure) = if control {
             (None, false)
         } else {
@@ -4839,18 +4800,18 @@ impl<P: Ptt> Station<P> {
             t_s: now,
             start_s: Some(span_start),
             end_s: Some(span_end),
-            follows: decoded.frame.follows(),
+            follows: decoded.follows,
             kind: if control { "control" } else { "data" }.into(),
             mode: rung,
-            rv: decoded.frame.rv(),
-            snr_3k_db: decoded.frame.snr_3k_db(),
+            rv: decoded.rv,
+            snr_3k_db: decoded.snr_3k_db,
             cfo_hz: reported_cfo(
                 decoded.ok(),
-                decoded.frame.mode_confidence(),
+                decoded.mode_confidence,
                 detected,
-                self.true_cfo(decoded.frame.cfo_hz(), span_start),
+                self.true_cfo(decoded.cfo_hz, span_start),
             ),
-            confidence: decoded.frame.mode_confidence(),
+            confidence: decoded.mode_confidence,
             detect_confidence: detected,
             decoded: decoded.ok(),
             bytes: decoded.payload.as_ref().map_or(0, Vec::len),
@@ -4863,7 +4824,7 @@ impl<P: Ptt> Station<P> {
                 None
             },
             capture_skip: self.capture_skipped_within(span_start, span_end),
-            echo: decoded.frame.echo(),
+            echo: decoded.echo,
             seq,
             measure,
             // the engine sees the frame after the record is kept: `engine_heard`
@@ -4937,7 +4898,7 @@ impl<P: Ptt> Station<P> {
     /// The Morse identifier on its own, inside the keying's lead and tail, for a contact that
     /// went no further than its setup (ADR-0055 §4): as the callsign the setup went as.
     fn render_identifier(&mut self, now: f64) {
-        let audio_rate = self.config.params.audio_rate as f64;
+        let audio_rate = self.air.info().audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
         let call = self.identifier.setup_call.clone();
@@ -4958,7 +4919,7 @@ impl<P: Ptt> Station<P> {
     /// host program that keys the radio has gone — is reported done at once, and the log says
     /// why.
     fn render_link_identifier(&mut self, now: f64, tx: &LinkTx) {
-        let audio_rate = self.config.params.audio_rate as f64;
+        let audio_rate = self.air.info().audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
         let call = self.engine.my_call.clone();
@@ -5008,7 +4969,7 @@ impl<P: Ptt> Station<P> {
     /// Raw audio goes out as it is, inside the same keying and lead and tail as a burst, so
     /// a keying test exercises exactly the path a transmission uses.
     fn render_audio(&mut self, samples: Vec<f32>, tone: bool) {
-        let audio_rate = self.config.params.audio_rate as f64;
+        let audio_rate = self.air.info().audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
@@ -5017,7 +4978,7 @@ impl<P: Ptt> Station<P> {
         self.playing_test = tone;
         if self.config.record_tx_audio {
             self.tx_capture = Some(crate::record::TxCapture::begin(
-                self.config.params.audio_rate as u32,
+                self.air.info().audio_rate as u32,
                 self.config.tx_level,
                 self.config.key_lead_s,
                 self.tail_s(),
@@ -5047,16 +5008,15 @@ impl<P: Ptt> Station<P> {
     /// [`DETECT_CONFIDENCE_TRUSTED`]; a tone frame (ADR-0013) is announced only once its
     /// first sync block has cleared a threshold set over the noise maximum of that block and
     /// beaten its neighbours for three symbols, which is the gate already.
-    fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], origin: usize, now: f64) {
-        let air = self.air.interface();
-        let fs = self.config.params.fs_baseband;
-        for pending in preambles {
-            let trusted = pending.tone || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
-            let start_s = (origin + pending.start) as f64 / fs;
+    fn heed_preambles(&mut self, arrivals: &[crate::air::Arrival], now: f64) {
+        let data_frame_s = self.air.info().data_frame_s;
+        for pending in arrivals {
+            let trusted = pending.floor || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
+            let start_s = pending.start_s;
             // a frame arriving: none of it is the noise floor, heeded or not (ADR-0076), nor
             // the noise the receive filter is read from (ADR-0105)
-            let end_s = (origin + pending.end) as f64 / fs;
-            self.air.busy.explain(start_s, end_s);
+            let end_s = pending.end_s;
+            self.air.sense_mut().explain(start_s, end_s);
             self.passband.frame(start_s, end_s);
             // every announcement, heeded or not, so a frame can be placed against the key's
             // release and a phantom just after it seen (ADR-0037)
@@ -5064,8 +5024,8 @@ impl<P: Ptt> Station<P> {
                 let detail = format!(
                     "ago {:.3} frame_s {:.3} tone {} confidence {:.2} heeded {}",
                     now - start_s,
-                    pending.end.saturating_sub(pending.start) as f64 / fs,
-                    u8::from(pending.tone),
+                    pending.length_s,
+                    u8::from(pending.floor),
                     pending.detect_confidence,
                     u8::from(trusted),
                 );
@@ -5082,8 +5042,8 @@ impl<P: Ptt> Station<P> {
             // the frame named itself — an OFDM preamble its layout, a tone frame its kind:
             // its own air time, not a guess from the peer's last mode — a floor frame after
             // ordinary connect frames is five times as long (ADR-0012)
-            let frame_s = pending.end.saturating_sub(pending.start) as f64 / fs;
-            self.rx_until = self.rx_until.max(now + frame_s.max(air.long.duration_s()));
+            let frame_s = pending.length_s;
+            self.rx_until = self.rx_until.max(now + frame_s.max(data_frame_s));
             self.engine.on_preamble(start_s, now, Some(frame_s));
         }
     }
@@ -5155,17 +5115,17 @@ impl<P: Ptt> Station<P> {
     /// every transition says: the level and floor at that moment, the threshold, and the
     /// reason the hold was last extended.
     fn note_busy_transition(&mut self, now: f64) {
-        let busy = self.air.busy.busy(now);
+        let busy = self.air.sense().busy(now);
         if busy == self.was_busy {
             return;
         }
         self.was_busy = busy;
-        let margin = self.air.busy.config().threshold_db;
-        let (level, floor) = (self.air.busy.level_db, self.air.busy.floor_db);
+        let margin = self.air.sense().threshold_db();
+        let (level, floor) = (self.air.sense().level_db(), self.air.sense().floor_db());
         // one line per transition, every quantity the decision used, in a fixed order:
         //   signal | floor | delta | margin | threshold | before -> after | reason
         let why = if busy {
-            match self.air.busy.reason() {
+            match self.air.sense().reason() {
                 Some(crate::busy::BusyReason::Level { .. }) => {
                     "energy over the threshold for the attack".to_owned()
                 }
@@ -5184,7 +5144,7 @@ impl<P: Ptt> Station<P> {
         // and a reader of the log should know the noise moved for that reason
         let gain = self
             .air
-            .busy
+            .sense()
             .gain_db()
             .filter(|&g| g <= -RADIO_GAIN_SHOWN_DB)
             .map_or_else(String::new, |g| format!(" | radio gain {g:.0} dB"));
@@ -5287,7 +5247,7 @@ impl<P: Ptt> Station<P> {
         let Some(cw) = self.identifier_for(call) else {
             return 0.0;
         };
-        let rate = self.config.params.audio_rate as f64;
+        let rate = self.air.info().audio_rate as f64;
         let cw = crate::cwid::CwId {
             wpm: self.sent_wpm(cw),
             ..cw
@@ -5453,7 +5413,7 @@ impl<P: Ptt> Station<P> {
         let air = self.occupancy.ok_or_else(|| {
             format!(
                 "nothing is measured for the {} Hz air",
-                self.config.params.bandwidth.hz()
+                self.air.info().bandwidth_hz
             )
         })?;
         match outgoing {
@@ -5928,7 +5888,7 @@ impl<P: Ptt> Station<P> {
         }
         // a session this station heard holds the channel through the quiet between its
         // transmissions, which the busy detector does not bridge (10-step-3.md §3.2)
-        self.air.busy.settled() && !self.air.busy.busy(now) && !self.reservation.holds(now)
+        self.air.sense().settled() && !self.air.sense().busy(now) && !self.reservation.holds(now)
     }
 
     /// A decoded frame of a session not this station's holds the channel ([`Self::other_session`]).
@@ -6041,8 +6001,8 @@ fn stated_bandwidth_hz(caps: u8) -> Option<u32> {
 }
 
 /// The callsign in a beacon frame, if that is what this is.
-fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
-    if decoded.frame.is_control() {
+fn beacon_callsign(decoded: &HeardFrame) -> Option<String> {
+    if decoded.control {
         return None;
     }
     let payload = decoded.payload.as_ref()?;
@@ -6051,73 +6011,6 @@ fn beacon_callsign(decoded: &aether_phy::DecodedFrame) -> Option<String> {
         return None;
     }
     unpack_callsign(&body).ok()
-}
-
-/// Link-layer timing derived from the waveform tables — what the model's harness
-/// (`phy_timing`) hands its engines.
-///
-/// Every number here comes from [`WaveformParams`] or a measurement, never a guess: the frame
-/// durations are what the frames actually occupy, and the capacities are what the rungs of
-/// the air's ladder — the tone floor's two, then its OFDM modes (ADR-0013) — actually carry.
-///
-/// # Panics
-/// If the air's tone floor has data kinds of different lengths, which the link layer cannot
-/// time: the fixed tables never have.
-#[must_use]
-pub fn phy_timing(params: WaveformParams) -> PhyTiming {
-    let air = aether_phy::modes::air_interface(params);
-    let narrow = params.bandwidth == aether_phy::waveform::Bandwidth::Narrow500;
-    // the thresholds the air's benchmarks measured, so the rate controller steps whichever
-    // ladder the air has (empty: the wide one), and its control frames' for the family
-    let (thresholds, controls) = if narrow {
-        (
-            aether_link::rate::NARROW_AWGN_THRESHOLD_DB.to_vec(),
-            aether_link::rate::NARROW_CONTROL_THRESHOLD_DB,
-        )
-    } else {
-        (Vec::new(), aether_link::rate::CONTROL_THRESHOLD_DB)
-    };
-    let floor_s = air.tone_data()[0].duration_s();
-    assert!(
-        air.tone_data()
-            .iter()
-            .all(|k| (k.duration_s() - floor_s).abs() < 1e-12),
-        "the link layer takes one floor data-frame length"
-    );
-    PhyTiming {
-        data_frame_s: air.long.duration_s(),
-        control_frame_s: air.short.duration_s(),
-        // PTT, the radio's own transmit delay, and the audio buffers at both ends
-        turnaround_s: 0.25,
-        detect_latency_s: 0.15,
-        // the station fills this in from its keying lead and the daemon's playback backlog
-        tx_latency_s: 0.0,
-        // acquisition reports an OFDM frame once its preamble is in, plus the sidelobe guard
-        // and the search block: four symbols
-        preamble_detect_s: Some(
-            (aether_phy::PREAMBLE_SYMBOLS + 2) as f64 * params.symbol_period_s(),
-        ),
-        data_capacity: air
-            .ladder()
-            .iter()
-            .map(aether_phy::Rung::payload_bytes)
-            .collect(),
-        mode_threshold_db: thresholds,
-        // the tone floor (ADR-0013): its frames' air times and how many rungs are its
-        floor_data_frame_s: Some(floor_s),
-        floor_control_frame_s: Some(air.tone_control().duration_s()),
-        floor_modes: air.floor_modes(),
-        control_threshold_db: Some(controls),
-        // a tone frame is announced once its first sync block is in and has beaten its
-        // neighbours, plus this receiver's own lateness (blanker, filter and a block)
-        floor_preamble_detect_s: Some(aether_phy::tone::announce_delay_s(0.1)),
-        // rungs a path's echo breaks, against what the tone floor's frames read of it (ADR-0087)
-        echo_limit: if narrow {
-            aether_link::rate::NARROW_ECHO_LIMIT.to_vec()
-        } else {
-            aether_link::rate::ECHO_LIMIT.to_vec()
-        },
-    }
 }
 
 /// Helpers other modules' tests use to get a station in a known state.
@@ -6166,7 +6059,7 @@ mod tests {
     use crate::control::protocol::{ConnectionId, ConnectionKind};
     use crate::passband::Verdict;
     use crate::ptt::NullPtt;
-    use aether_phy::{AudioToBaseband, BasebandToAudio};
+    use aether_phy::{AudioToBaseband, BasebandToAudio, Complex};
 
     /// The program on the host interface, as the tests' stations know it (ADR-0106).
     const HOST_PROGRAM: ConnectionId = ConnectionId {
@@ -7213,14 +7106,13 @@ mod tests {
         let fs = station.config.params.fs_baseband;
         let start = ((now + 0.2) * fs) as usize;
         station.heed_preambles(
-            &[aether_phy::PendingFrame {
-                start,
-                end: start + 1000,
+            &[crate::air::Arrival {
+                start_s: start as f64 / fs,
+                end_s: (start + 1000) as f64 / fs,
+                length_s: 1000.0 / fs,
+                floor: false,
                 detect_confidence: 1.05,
-                tone: false,
-                control: false,
             }],
-            0,
             now,
         );
         assert!(!station.receiving(), "a phantom lit the receive indicator");
@@ -8623,7 +8515,7 @@ mod tests {
         // the channel busy throughout, as the contest kept it
         for _ in 0..200 {
             let now = air.a.now();
-            air.a.air.busy.mark_frame(now, 3.0);
+            air.a.air.sense_mut().mark_frame(now, 3.0);
             air.run(0.1, |_, _| false);
             sent_disc |= air.a.transmitting() && air.a.state() == State::Idle;
             if !air.b.connected() {
@@ -9667,15 +9559,13 @@ mod tests {
         };
         let identifier_s = station.identifier_length_for("W4ODA");
         let rate = station.config.params.audio_rate as f64;
-        let (alone, _) = station
-            .modulate(std::slice::from_ref(&frame))
-            .expect("a frame");
-        let frames = {
-            let mut chain = station.air.upconverter().clone();
-            let mut out = chain.process(&alone);
-            out.extend(chain.flush());
-            out.len()
-        };
+        // rendered alone by an air as the station's own is now, so the station's is untouched
+        let mut alone = HfAir::new(station.config.params, station.config.busy);
+        let frames = crate::air::Air::render(&mut alone, std::slice::from_ref(&frame))
+            .expect("modulates")
+            .expect("a frame")
+            .audio
+            .len();
         station.pending.push_back(Outgoing::Link(LinkTx {
             frames: vec![frame],
             origin: Origin::station("test"),
@@ -11979,7 +11869,7 @@ mod tests {
             NullPtt::default(),
             1,
         );
-        assert!(!station.air.busy.settled());
+        assert!(!station.air.sense().settled());
         assert!(
             station.tune(1.0).is_err(),
             "a tone went out before the channel was known to be clear"
@@ -12023,19 +11913,19 @@ mod tests {
             station.capture(&hiss(rate / 50)).expect("capture");
         }
         assert!(
-            station.air.busy.settled(),
+            station.air.sense().settled(),
             "four seconds of noise did not settle the detector"
         );
         let now = station.now();
         station.read_dial(7_074_000, now);
         station.read_dial(7_076_000, now);
         assert!(
-            station.air.busy.settled(),
+            station.air.sense().settled(),
             "a nudge of the dial started the detector over"
         );
         station.read_dial(3_590_000, now);
         assert!(
-            !station.air.busy.settled(),
+            !station.air.sense().settled(),
             "a move to another band kept what was learned"
         );
         assert_eq!(station.frequency.value, Some(3_590_000));
@@ -12050,7 +11940,7 @@ mod tests {
             station.capture(&hiss(rate / 50)).expect("capture");
         }
         assert!(
-            station.air.busy.settled(),
+            station.air.sense().settled(),
             "it did not listen again after the move"
         );
     }
@@ -12163,7 +12053,7 @@ mod tests {
         for i in 0..80 {
             station.capture(&quiet_block(i)).expect("capture");
         }
-        assert!(station.busy_detector().settled());
+        assert!(station.channel_sense().settled());
         let loud: Vec<f32> = (0..4096)
             .map(|i| {
                 let phase = 2.0 * std::f64::consts::PI * 1500.0 * f64::from(i) / 48000.0;
@@ -12224,7 +12114,7 @@ mod tests {
         );
         assert!(
             matches!(
-                station.busy_detector().reason(),
+                station.channel_sense().reason(),
                 Some(crate::busy::BusyReason::Level { .. })
             ),
             "and the reason is the level"
@@ -12258,18 +12148,19 @@ mod tests {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        let preamble = |confidence: f64| aether_phy::PendingFrame {
-            start: 0,
-            end: 1000,
+        let fs = station.config.params.fs_baseband;
+        let preamble = |confidence: f64| crate::air::Arrival {
+            start_s: 0.0,
+            end_s: 1000.0 / fs,
+            length_s: 1000.0 / fs,
+            floor: false,
             detect_confidence: confidence,
-            tone: false,
-            control: true,
         };
         assert!(!station.channel_busy(), "quiet to begin with");
 
         // just over the threshold: what noise produces
         let phantom = preamble(1.05);
-        station.heed_preambles(&[phantom], 0, now);
+        station.heed_preambles(&[phantom], now);
         assert!(
             !station.channel_busy(),
             "a phantom acquisition must not silence the station"
@@ -12277,7 +12168,7 @@ mod tests {
 
         // well clear of it, as a frame would be — still nothing: acquisition is not evidence
         let confident = preamble(2.5);
-        station.heed_preambles(&[confident], 0, now);
+        station.heed_preambles(&[confident], now);
         assert!(
             !station.channel_busy(),
             "an acquisition alone must not mark the channel, however confident"
@@ -12288,13 +12179,13 @@ mod tests {
         );
 
         // a decoded frame is the evidence, and it does
-        station.air.busy.mark_frame(now, 1.38);
+        station.air.sense_mut().mark_frame(now, 1.38);
         assert!(
             station.channel_busy(),
             "a decoded frame marks the channel busy"
         );
         assert!(matches!(
-            station.air.busy.reason(),
+            station.air.sense().reason(),
             Some(crate::busy::BusyReason::Frame { .. })
         ));
     }
@@ -12315,29 +12206,36 @@ mod tests {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        let air = station.air.interface();
-        let frame = |peak: f64, payload: Option<Vec<u8>>| aether_phy::DecodedFrame {
-            payload,
-            frame: aether_phy::Received::Ofdm(aether_phy::rx::ReceivedFrame {
-                sync: FrameSync {
-                    start: 0,
-                    cfo_hz: 0.0,
-                    frame_type: FrameType::Control,
-                    timing_peak: peak,
-                    type_confidence: 1.0,
+        let air = aether_phy::modes::air_interface(station.config.params);
+        // read out as the station's air reads a frame its receiver finished with
+        let hf = HfAir::new(station.config.params, station.config.busy);
+        let frame = |peak: f64, payload: Option<Vec<u8>>| {
+            hf.read_out(
+                aether_phy::DecodedFrame {
+                    payload,
+                    frame: aether_phy::Received::Ofdm(aether_phy::rx::ReceivedFrame {
+                        sync: FrameSync {
+                            start: 0,
+                            cfo_hz: 0.0,
+                            frame_type: FrameType::Control,
+                            timing_peak: peak,
+                            type_confidence: 1.0,
+                        },
+                        symbols: Vec::new(),
+                        noise_var: Vec::new(),
+                        snr_carrier_db: -5.0,
+                        snr_3k_db: -12.0,
+                        cfo_hz: 0.0,
+                        mode: 0,
+                        rv: 0,
+                        chip_runner_up: 1,
+                        mode_confidence: 1.0,
+                        follows: 0,
+                        motion_weight: None,
+                    }),
                 },
-                symbols: Vec::new(),
-                noise_var: Vec::new(),
-                snr_carrier_db: -5.0,
-                snr_3k_db: -12.0,
-                cfo_hz: 0.0,
-                mode: 0,
-                rv: 0,
-                chip_runner_up: 1,
-                mode_confidence: 1.0,
-                follows: 0,
-                motion_weight: None,
-            }),
+                0,
+            )
         };
         assert!(!station.receiving(), "dark to begin with");
 
@@ -12443,7 +12341,7 @@ mod tests {
         for i in 0..80 {
             station.capture(&quiet_block(i)).expect("capture");
         }
-        assert!(station.busy_detector().settled());
+        assert!(station.channel_sense().settled());
         let heard_at = station.now();
         station.reservation.heard(heard_at, Heard::Session);
         assert!(!station.channel_clear(heard_at));
@@ -12482,7 +12380,7 @@ mod tests {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        station.air.busy.mark_frame(now, 3.0);
+        station.air.sense_mut().mark_frame(now, 3.0);
         assert!(station.channel_busy());
         assert!(
             !station.channel_clear(now),

@@ -123,7 +123,7 @@ impl<P: Ptt> Station<P> {
             && self.pending.is_empty()
             && !self.transmitting
             && now >= self.engine.hold_until();
-        let clear = self.air.busy.settled() && !self.air.busy.busy(now);
+        let clear = self.air.sense().settled() && !self.air.sense().busy(now);
         if idle && clear {
             match self.beacon(None) {
                 Ok(()) => self.beacons.next_s = now + every,
@@ -187,7 +187,7 @@ impl<P: Ptt> Station<P> {
             // a beacon pressed for and not yet sent, and whether the channel is what holds it:
             // ND1J pressed twice on a busy channel and saw nothing either time (2026-09-29)
             "waiting": waiting,
-            "waiting_for_clear": waiting && self.config.wait_for_clear && self.air.busy.busy(now),
+            "waiting_for_clear": waiting && self.config.wait_for_clear && self.air.sense().busy(now),
             "every_s": self.beacons.every_s,
             "next_in_s": self.beacons.every_s.map(|_| (self.beacons.next_s - now).max(0.0)),
             "last_sent_ms": self.beacons.last_sent_ms,

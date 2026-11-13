@@ -93,9 +93,9 @@ impl<P: Ptt> Station<P> {
     /// a minute for a caller, and kept from the engine. Only
     /// while idle — the answer to this station's own call, or anything in a session, is not an
     /// incoming call.
-    pub(super) fn unanswered(&mut self, decoded: &aether_phy::DecodedFrame) -> bool {
+    pub(super) fn unanswered(&mut self, decoded: &crate::air::HeardFrame) -> bool {
         use aether_link::frames::{ConnectBody, DataKind, ProbeBody, decode_data};
-        if self.engine.state() != State::Idle || decoded.frame.is_control() {
+        if self.engine.state() != State::Idle || decoded.control {
             return false;
         }
         let Some((header, body)) = decoded

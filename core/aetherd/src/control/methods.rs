@@ -2283,7 +2283,7 @@ fn level_json(reading: &crate::station::LevelReading) -> Value {
 /// The numbers that change while a link is running.
 #[must_use]
 pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
-    let busy = station.busy_detector();
+    let busy = station.channel_sense();
     // Null until the detector has heard enough to know: JSON has no way to say "minus
     // infinity", and a client that plotted one as a number would draw a cliff. Not knowing
     // and knowing it is quiet are different things, and the difference is worth showing.
@@ -2299,8 +2299,8 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
     json!({
         "mode": station.engine().current_mode(),
         "queued_bytes": station.queued_bytes(),
-        "noise_floor_db": level(busy.floor_db),
-        "level_db": level(busy.level_db),
+        "noise_floor_db": level(busy.floor_db()),
+        "level_db": level(busy.level_db()),
         // the largest level-over-floor since the last reading: the decision is made forty
         // times a second on a 50 ms quantity, so the excursions that trip the threshold
         // are the ones a twice-a-second sample almost never lands on
@@ -2314,7 +2314,7 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         }),
         // the passband's highest spectral bin over its median, dB: flat noise reads about
         // 6, a narrowband signal 15 and up, and the AGC cannot change it
-        "shape_db": level(busy.shape_db),
+        "shape_db": level(busy.shape_db()),
         // how far the radio's AGC holds its gain down, dB, when it does (ADR-0078): the floor
         // follows it, and the operator should know why the noise dropped
         "radio_gain_db": busy

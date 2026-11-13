@@ -198,7 +198,7 @@ impl<P: Ptt> Station<P> {
     /// The bandwidth the station runs now, in hertz.
     #[must_use]
     pub fn bandwidth_hz(&self) -> usize {
-        self.config.params.bandwidth.hz()
+        self.air.info().bandwidth_hz
     }
 
     /// A host program's `BW<n>`: run `hz` from now on while the program is attached — or, with
@@ -422,9 +422,9 @@ impl<P: Ptt> Station<P> {
     /// answer: kept for the panel and said in the log, with both bandwidths and the fix. A
     /// 2 300 Hz station answers 500 Hz calls by moving (the narrower call), so what is left is
     /// a wider call — or probe, which is answered, but warns that a call would not be.
-    pub(super) fn note_mismatch(&mut self, decoded: &aether_phy::DecodedFrame) {
+    pub(super) fn note_mismatch(&mut self, decoded: &crate::air::HeardFrame) {
         use aether_link::frames::{ConnectBody, DataKind, ProbeBody, bandwidth_hz_of, decode_data};
-        if self.engine.state() != State::Idle || decoded.frame.is_control() {
+        if self.engine.state() != State::Idle || decoded.control {
             return;
         }
         let Some((header, body)) = decoded
@@ -590,11 +590,9 @@ impl<P: Ptt> Station<P> {
     /// A call to this station, or an answer to its call, from a station speaking another link
     /// protocol: the engine ignores it — the two cannot connect — and the panel says which of
     /// the two needs to update, where before only a log line said "ignored" (ADR-0041).
-    pub(super) fn note_version(&mut self, decoded: &aether_phy::DecodedFrame) {
+    pub(super) fn note_version(&mut self, decoded: &crate::air::HeardFrame) {
         use aether_link::frames::{ConnectBody, DataKind, PROTOCOL_VERSION, decode_data};
-        if decoded.frame.is_control()
-            || !matches!(self.engine.state(), State::Idle | State::Connecting)
-        {
+        if decoded.control || !matches!(self.engine.state(), State::Idle | State::Connecting) {
             return;
         }
         let Some((header, body)) = decoded
@@ -744,11 +742,11 @@ impl<P: Ptt> Station<P> {
     /// the wider and could move: the callsign calling. The engine would ignore it — the
     /// handshake states the bandwidth, and a call claiming another is not a session to start
     /// on this air — so the station moves first and the engine, on the caller's air, answers.
-    pub(super) fn narrower_call(&self, decoded: &aether_phy::DecodedFrame) -> Option<String> {
+    pub(super) fn narrower_call(&self, decoded: &crate::air::HeardFrame) -> Option<String> {
         use aether_link::frames::{
             ConnectBody, DataKind, PROTOCOL_VERSION, bandwidth_code, bandwidth_code_of, decode_data,
         };
-        if self.bandwidth_hz() != 2300 || decoded.frame.is_control() {
+        if self.bandwidth_hz() != 2300 || decoded.control {
             return None;
         }
         let (header, body) = decode_data(decoded.payload.as_ref()?).ok()?;
@@ -776,7 +774,9 @@ impl<P: Ptt> Station<P> {
         // every part new; the new receiver counts its samples from here, the station's from its
         // start. The detector's floor was learned through the other band filter: it learns
         // again; the radio's levels on quiet are the radio's, and stay (ADR-0078 §5)
-        self.air = self.air.moved_to(params, self.config.busy);
+        if let Some(air) = self.air.moved_to(hz, self.config.busy) {
+            self.air = air;
+        }
         // a move is between sessions: the new receiver starts on the dial (ADR-0079)
         self.front_end_rebuilt(now, false);
         self.was_busy = false;
@@ -826,12 +826,12 @@ impl<P: Ptt> Station<P> {
         self.config
             .max_mode_setting
             .unwrap_or(self.config.link.max_mode)
-            .min(self.air.interface().n_rungs().saturating_sub(1))
+            .min(self.air.info().rungs.saturating_sub(1))
     }
 
     /// The link timing of the air the station runs, with this station's keying in it.
     pub(super) fn air_timing(&self) -> aether_link::PhyTiming {
-        let mut timing = super::phy_timing(self.config.params);
+        let mut timing = self.air.timing();
         timing.tx_latency_s = self.engine_latency_s();
         timing
     }
