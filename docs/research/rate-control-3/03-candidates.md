@@ -1,7 +1,6 @@
 # Gate 2: candidates and criteria
 
-*Written 2026-11-13, after Gate 0 (`01-evidence.md`) and with Gate 1's reading under way
-(`02-survey.md`). Registered before any candidate runs. The criteria are proposed here for the
+*Written 2026-11-13, after Gate 0 (`01-evidence.md`) and Gate 1 (`02-survey.md`). Registered before any candidate runs. The criteria are proposed here for the
 author to agree; nothing in §2 is built until they are.*
 
 ## 1. What every candidate keeps
@@ -59,7 +58,9 @@ until it counts for nothing once the rung has a whole try's worth (`prior_frames
 the weight is `prior_frames × max(0, 1 − frames / (prior_frames + 1))`.
 
 * **Answers:** the near misses (Gate 0 §1): tries whose every frame decoded, lost by 1.2–1.8 %
-  because the prior, worth two frames, still rated the rung at 0.77. Judging only the verdict on
+  because the prior, worth two frames, still rated the rung at 0.77. Every scheme the survey read
+  drops its prior once a rate is measured, and Mercury, which met the same near miss, does not
+  judge a clean probe on its prior (`02-survey.md` §1, §2). Judging only the verdict on
   the try's own frames would not do: the choice is made again from the estimates straight after
   the verdict (`_decide`), and with the prior still in the estimate it would step back down at
   once. So the prior has to step aside in the estimate itself.
@@ -81,6 +82,10 @@ Today it doubles whatever the frames did, and the doubled wait also closes the c
   (`00-brief.md` §1, Gate 0 §1).
 * **Could lose:** on a path where a rung's frames decode but its value per exchange is lower (the
   floor's edge, where answers change family), it is tried again sooner, one frame a transmission.
+* **Elsewhere:** Mercury doubles a probe's wait only while the rung is marginal and delivered under
+  half, and measured doubling regardless at 17 % on a rising link (`02-survey.md` §2). If G4 passes
+  and tries that lost one frame of three still hold the climb, Mercury's "under half" is the next
+  variant to run; it would add a constant.
 * **Tunables:** a rule; none added.
 
 ### G5: no aging during a try
@@ -105,7 +110,8 @@ transmission when it holds that many, so the verdict comes after one exchange in
   transmission with the rung tried, and started a try after every clean transmission whatever the
   estimate said; its losses came from the two together, a whole transmission spent on a try that
   could not win, every time (`docs/research/rate-control-2/04-results.md` §3.3: AWGN at rung 16
-  and the weak 2300 Hz path). G6 keeps today's conditions for starting a try.
+  and the weak 2300 Hz path). G6 keeps today's conditions for starting a try. No scheme in the
+  survey does this: their tries cost microseconds, or one transmission each (`02-survey.md` §2).
 * **Tunables:** a rule; none added.
 
 ### Together
