@@ -206,3 +206,7 @@ choosing much alike (both on rung 11 for most of the session, the ladder at the 
 rate set by where the fades fell. By K2's rule it fails: its range ends over 1.10 on both sets of
 draws. By size it is a few per cent, inside the 10 % the guard allows for a median. A narrow miss,
 the author's call (`00-brief.md` §6, answer 2).
+
+**The author's decision (2026-11-13):** the 20 m DX miss is accepted as a narrow one, inside the
+10 % guard by its median; the candidate goes on to the last checks (K4 every scenario at three
+draws, K5 the real-modem link bench), asked for before they run.

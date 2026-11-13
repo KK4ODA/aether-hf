@@ -1,0 +1,124 @@
+name: Rate candidate checks
+run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.confirm && 'Rate candidate checks (not started, "I need this answer" was not ticked)' || 'Rate candidate checks' }}
+
+# The rate controller review's last checks on a candidate (docs/research/rate-control-3/
+# 03-candidates.md §3): every scenario at three draws with the candidate's switches (K4:
+# completion, no new failure, no radiated overlap; judged against the nightly's three draws of the
+# same build with the switches off), and the real-modem link bench, both arms on its registered
+# grid (K5: AWGN, Good, Moderate, Poor; -4 … +20 dB; 8000 B; three trials; both airs). The
+# switches reach a simulated daemon only (AETHER_BENCH_LINK) and the model's engine through
+# `bench_link.py --rate`. Brought back from the second review (b696e5c), which deleted it at its
+# end.
+#
+# Started by hand, it runs only with "I need this answer" ticked: about four hours of runner time
+# (the second review's two runs took 225 and 245 minutes). Unticked, every job is skipped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "I need this answer: about 4 hours of runner time from the month's allowance"
+        type: boolean
+        default: false
+      bench_link:
+        description: "The candidate's daemon switches (AETHER_BENCH_LINK)"
+        default: "prior_margin_db=1,family_gain_db=1,wide_only"
+      rate:
+        description: "The candidate's rate controller settings for the link bench (bench_link.py --rate)"
+        default: "prior_margin_db=1,family_gain_db=1,wide_only=1"
+      scenarios:
+        description: "Run every scenario at three draws (K4)"
+        type: boolean
+        default: true
+      link_bench:
+        description: "Run the real-modem link bench, both arms (K5)"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    if: ${{ inputs.confirm && inputs.scenarios }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build the daemon
+        working-directory: core
+        run: cargo build --release -p aetherd
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aetherd-candidate
+          path: core/target/release/aetherd
+          retention-days: 2
+
+  # every scenario, as the nightly runs them (three draws: the scenario's own seed and two more)
+  scenarios:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: aetherd-candidate
+          path: bin
+      - run: chmod +x bin/aetherd
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Scenarios
+        env:
+          AETHER_BENCH_LINK: ${{ inputs.bench_link }}
+        run: >-
+          uv run python tools/session_matrix.py --jobs 2 --variant ${{ matrix.variant }}
+          --drop-passing-audio --daemon bin/aetherd
+          --out "${{ runner.temp }}/scenarios" --csv "${{ runner.temp }}/scenarios/results.csv"
+      - name: Keep the runs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: candidate-scenarios-${{ matrix.variant }}-run${{ github.run_number }}
+          path: ${{ runner.temp }}/scenarios
+          retention-days: 7
+
+  # the real modem, one fade a session shared by both directions; one job a point of the grid's
+  # air, channel and arm (the bench runs its sessions one after another)
+  link-bench:
+    if: ${{ inputs.confirm && inputs.link_bench }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        bandwidth: [2300, 500]
+        channel: [awgn, good, moderate, poor]
+        arm: [base, candidate]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.1.0
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Link bench
+        run: |
+          rate=""
+          if [ "${{ matrix.arm }}" = "candidate" ]; then rate="${{ inputs.rate }}"; fi
+          mkdir -p out
+          uv run python tools/bench_link.py --backend phy --continuous \
+            --bandwidth ${{ matrix.bandwidth }} --channels ${{ matrix.channel }} \
+            --rate "$rate" --out "out/link-${{ matrix.bandwidth }}-${{ matrix.channel }}-${{ matrix.arm }}.csv"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: link-${{ matrix.bandwidth }}-${{ matrix.channel }}-${{ matrix.arm }}-run${{ github.run_number }}
+          path: out
+          retention-days: 7

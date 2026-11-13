@@ -74,7 +74,7 @@ from aether_model.frame.modes import NARROW, TONE_CONTROL, WIDE, AirInterface
 from aether_model.link.fading import FadingPipe, SharedFading, frame_key, shapes_for
 from aether_model.link.frames import data_capacity
 from aether_model.link.granted import GrantConfig, GrantedEngine
-from aether_model.link.harness import phy_timing, two_modem_sim
+from aether_model.link.harness import bandwidth_capabilities, phy_timing, two_modem_sim
 from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
@@ -408,7 +408,13 @@ def run_point(
     # keying, so this measures the header and the slot's cost, not keying's. The session sends
     # and disconnects at once, so the disconnect's wait is the transfer: the minute an operator's
     # disconnect waits (ADR-0072) is lifted unless `--link` sets it
-    knobs = {"disc_drain_s": math.inf, **(link or {})}
+    # each station states its own air, as a daemon does: what the third rate review's
+    # `wide_only` (rate-control-3/04-results.md §5.3) reads the air from
+    knobs = {
+        "disc_drain_s": math.inf,
+        "capabilities": bandwidth_capabilities(air.params),
+        **(link or {}),
+    }
     cfg = GrantConfig(max_mode=air.n_rungs - 1, rate=dict(rate or {}), **knobs)  # type: ignore[arg-type]
     a = GrantedEngine("W4ODA", timing, cfg, seed=seed)
     b = GrantedEngine("KK4XYZ", timing, cfg, seed=seed + 1)
