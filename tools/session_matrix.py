@@ -69,6 +69,11 @@ STOP_WAIT_S = 30.0
 """How long the runner waits for a daemon, and the channel, to stop before killing it: a daemon
 asked to stop mid-session takes up to its ``WIND_DOWN`` (22 s) to end the session on the air, and
 one killed sooner leaves its log and its recordings cut short."""
+PAT_BUFFER_TIMEOUT_S = 60.0
+"""Pat's wait on the modem's count (Pat-Vara 1.2.0, ``vara/conn.go``): its ``Write`` and ``Flush``
+restart a one-minute timer at each ``BUFFER`` line, and give up on the session when it runs out
+("write: buffer timeout"). Wall clock, as Pat's own timer and the host port's repeat are
+(ADR-0109): a run held to the wall clock (``realtime``) is where a slow path can show it."""
 POLL_S = 0.02
 """How often the runner looks: a host program answers within milliseconds of a delivery, and
 at several times real time a quarter second of wall clock was a second of air."""
@@ -342,7 +347,12 @@ class Host:
     ``PENDING`` of, with no ``PTT ON`` between them, is a fault: Trimode judges a link hung when it
     hears ``CONNECTED`` with no PTT for minutes, and the acceptance's keying had never been told
     (KK4ODA-1, 2026-11-07, ADR-0103). ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
-    ``-T`` alias in ``MYCALL``, never ``CWID``) and pings with ``host-ping``."""
+    ``-T`` alias in ``MYCALL``, never ``CWID``) and pings with ``host-ping``. ``pat`` opens as Pat's
+    VARA driver does (Pat-Vara 1.2.0, ``vara/vara.go``: ``LISTEN OFF`` unless it is the station
+    called), says the call's bandwidth and ``WINLINK SESSION`` before each ``CONNECT``, and waits on
+    the modem's count as Pat does (:data:`PAT_BUFFER_TIMEOUT_S`): connected with bytes the modem
+    holds and no ``BUFFER`` line for a minute of wall clock is a fault, and it hangs up as Pat
+    does then. A ``CONNECTED`` without both callsigns is a fault too: Pat panics on one."""
 
     def __init__(self, run: Run, station: Station, kind: str) -> None:
         self.run, self.station, self.kind = run, station, kind
@@ -370,6 +380,10 @@ class Host:
         # told PTT ON since the PENDING: the acceptance's keying comes before CONNECTED
         self.keyed_since_pending = False
         self.connected = False
+        # Pat's own count of the bytes the modem holds — the last BUFFER, and what it wrote since —
+        # and when its wait's timer last started, on the wall clock
+        self.buffer_count = 0
+        self.buffer_wall = time.monotonic()
         self.problems: list[str] = []
         self.lock = threading.Lock()
         self.closed = False
@@ -389,6 +403,16 @@ class Host:
                 f"MYCALL {station.callsign} {station.callsign}-T",
                 bw,
             ]
+        elif kind == "pat":
+            opening = [
+                "PUBLIC ON",
+                "CWID ON",
+                "COMPRESSION TEXT",
+                f"MYCALL {station.callsign}",
+                "LISTEN OFF",
+            ]
+            if station.who == "b":
+                opening.append("LISTEN ON")  # `pat --listen varahf`
         else:  # a Winlink Express client
             opening = [
                 "PUBLIC ON",
@@ -402,6 +426,8 @@ class Host:
             self.send(line)
         if kind == "trimode":
             threading.Thread(target=self._scan, daemon=True).start()
+        if kind == "pat":
+            threading.Thread(target=self._pat_waits, daemon=True).start()
 
     def send(self, line: str) -> None:
         if line.startswith("LISTEN"):
@@ -409,9 +435,20 @@ class Host:
         self.note("Out:", line)
         self.cmd.sendall((line + "\r").encode())
 
+    def dial(self, called: str) -> None:
+        """The program's call: Pat sets the call's bandwidth and the session's kind first
+        (``vara/transport.go``); the others just ``CONNECT``."""
+        if self.kind == "pat":
+            self.send("BW500" if self.run.scenario.get("bandwidth") == 500 else "BW2300")
+            self.send("WINLINK SESSION")
+        self.send(f"CONNECT {self.station.callsign} {called}")
+
     def write(self, payload: bytes) -> None:
         """Bytes on the data port, as a program hands the modem its data."""
         self.note("Data out:", f"{len(payload)} bytes")
+        with self.lock:
+            self.buffer_count += len(payload)
+            self.buffer_wall = time.monotonic()
         self.data.sendall(payload)
 
     def note(self, what: str, line: str) -> None:
@@ -449,7 +486,19 @@ class Host:
                 elif line == "CANCELPENDING":
                     self.pending_at = None
                     self.pending_wall = None
+                elif line.startswith("BUFFER"):
+                    with self.lock, contextlib.suppress(ValueError):
+                        self.buffer_count = int(line.split()[1])
+                        self.buffer_wall = time.monotonic()
                 elif line.startswith("CONNECTED"):
+                    if self.kind == "pat" and len(line.split()) < 3:
+                        self.problems.append(
+                            f"{self.station.who}: {line!r} at {self.run.air_s():.1f} s, which Pat "
+                            "panics on (two callsigns expected)"
+                        )
+                    with self.lock:
+                        self.buffer_count = 0
+                        self.buffer_wall = time.monotonic()
                     if self.deaf and self.kind == "trimode":
                         self.problems.append(
                             f"{self.station.who}: CONNECTED while deaf at {self.run.air_s():.1f} s"
@@ -488,6 +537,24 @@ class Host:
                 return
             self.note("Data in:", f"{len(chunk)} bytes")
             self.received += len(chunk)
+
+    def _pat_waits(self) -> None:
+        """Pat's wait on the count: connected, with bytes the modem holds, a minute of wall clock
+        without a ``BUFFER`` line ends its session ("write: buffer timeout"), once."""
+        while not self.closed:
+            time.sleep(0.25)
+            with self.lock:
+                waiting = self.connected and self.buffer_count > 0
+                quiet = time.monotonic() - self.buffer_wall
+                count = self.buffer_count
+            if waiting and quiet > PAT_BUFFER_TIMEOUT_S:
+                self.problems.append(
+                    f"{self.station.who}: Pat's buffer timeout at {self.run.air_s():.1f} s — "
+                    f"{count} bytes held and no BUFFER for {quiet:.0f} s of wall clock"
+                )
+                with self.lock:
+                    self.buffer_count = 0
+                self.send("DISCONNECT")
 
     def _holding(self) -> bool:
         """Trimode holds its scan for a pending call: up to 120 s, a fault after 20."""
@@ -726,7 +793,7 @@ def step(run: Run, text: str) -> bool:
         who = arg or "a"
         ha, hb = run.hosts[who], run.hosts["b"]
         was_a, was_b = ha.heard("CONNECTED"), hb.heard("CONNECTED")
-        ha.send(f"CONNECT {run.stations[who].callsign} {b.callsign}")
+        ha.dial(b.callsign)
         run.connected = run.wait(
             "host connected",
             lambda: ha.heard("CONNECTED") > was_a and hb.heard("CONNECTED") > was_b,
@@ -770,7 +837,7 @@ def step(run: Run, text: str) -> bool:
         # into a gateway busy with another client's session; `host-wait c` sees it through
         ha = run.hosts[arg]
         ha.calls_from = ha.heard("CONNECTED")
-        ha.send(f"CONNECT {run.stations[arg].callsign} {b.callsign}")
+        ha.dial(b.callsign)
         return True
     if word == "host-wait":
         ha = run.hosts[arg]

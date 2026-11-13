@@ -50,6 +50,10 @@ repeat. 50 s is Mercury's, ten seconds inside Pat's minute.
 * Tests (`host/server.rs`): `a_count_that_stands_still_is_said_again`, with the interval at
   300 ms: the count said again while it stands, said as it moves, and `BUFFER 0` once and not
   again. It fails without the repeat.
-* The session harness's host stand-ins (`tools/session_matrix.py`, `Host`) model RMS Trimode and
-  VarAC, not Pat. A `pat` stand-in that counts a minute without `BUFFER` as a fault would show the
-  drop on a slow scenario; it is not built.
+* The session harness has a `pat` stand-in (`tools/session_matrix.py`, `Host`): connected,
+  holding bytes, a minute of wall clock without `BUFFER` is a fault, and it hangs up as Pat does.
+  The harness runs the air several times faster than real time, so no wait of Pat's could run out
+  there; a scenario with `realtime = true` holds the channel to the wall clock.
+  `80m-pat-fade-500` fades the path out for 40 s as Pat writes 1,200 bytes: the count stands at
+  1,200 for 90 s and is said again at 50 s, and the run passes. Without the repeat it fails: "Pat's
+  buffer timeout at 85.0 s", the message lost.

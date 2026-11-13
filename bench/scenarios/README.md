@@ -12,6 +12,8 @@ tags = ["quick"]            # `--tag quick` runs the ones CI runs
 bandwidth = 500             # both stations' [radio] bandwidth
 seconds = 900               # the most air time the session may take
 seed = 1
+realtime = false            # true: the air never runs ahead of the wall clock, for a host
+                            # program's own timers (Pat's minute); a run takes its air time
 
 [stations.a]                # the caller
 callsign = "W4ODA"
@@ -129,7 +131,12 @@ capture skip audio: what fell in a skip never arrives. A build that greets the c
 program to a's host port (its opening line as the bench recorded it), `host b trimode` an RMS
 Trimode-like gateway that scans — `LISTEN` off half a second in every three and a half of air,
 and a `CONNECTED` it is told while not listening is a failure (ADR-0051), and `host a varac` a
-VarAC-like program (`CHAT ON`, its `-T` alias in `MYCALL`, no `CWID`). Then `host-connect`
+VarAC-like program (`CHAT ON`, its `-T` alias in `MYCALL`, no `CWID`), and `host a pat` Pat's VARA
+driver (Pat-Vara 1.2.0): `LISTEN OFF` unless it is b, the call's `BW` and `WINLINK SESSION` before
+its `CONNECT`, and its wait on the count — connected, holding bytes, and a minute of wall clock
+without a `BUFFER` line is a failure ("write: buffer timeout"), after which it hangs up as Pat
+does. That minute is the wall clock's, as Pat's is, so only a `realtime` scenario can show it
+(`80m-pat-fade-500`, ADR-0109). Then `host-connect`
 (a's program calls b), `host-ping` (VarAC's ping: a `CONNECT` to b's `-T` alias, a 14-byte report
 back, a's `DISCONNECT`), `host-send N` / `host-reply N` (bytes over the data ports, a → b and
 b → a), `host-disconnect` (a's program's `DISCONNECT`; both told `DISCONNECTED`) and

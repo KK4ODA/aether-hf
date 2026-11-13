@@ -13,7 +13,10 @@ scenario's channel to the other — the reference model's fading and noise at th
 (:class:`channel_cable.CableChannel`, the A/B bench's own), plus the scenario's other
 stations and static crashes (:mod:`aether_model.qrm`) — and each station is sent the block it
 heard. A tick waits for both stations to ask for it, so the session runs as fast as the two
-daemons can process audio and its clock is the audio's, as a station's is.
+daemons can process audio and its clock is the audio's, as a station's is. With ``realtime =
+true`` in the scenario it never runs ahead of the wall clock: a host program's timers and the host
+port's own run on the wall clock (Pat's minute without ``BUFFER``, ADR-0109), and at several times
+real time no wait of theirs could ever run out.
 
 The radios are modelled at both ends, from what the field recordings showed (ADR-0036…0040):
 
@@ -1025,6 +1028,8 @@ def main() -> int:
         machine(st, stations.get(who, {}).get("machine", {}), int(scenario.get("seed", 1)), who)
     server = Server(scenario, on_air)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
+    realtime = bool(scenario.get("realtime", False))
+    began = time.monotonic()
     commands_done = 0
     threading.Thread(target=watchdog, args=(server,), daemon=True).start()
     # a runner that gives up on a stalled air stops the server: the account of the air up to
@@ -1035,6 +1040,10 @@ def main() -> int:
     try:
         while server.t / AUDIO_RATE < limit:
             server.tick()
+            if realtime:
+                ahead = server.t / AUDIO_RATE - (time.monotonic() - began)
+                if ahead > 0:
+                    time.sleep(ahead)
             if server.t % AUDIO_RATE < TICK:
                 faulthandler.dump_traceback_later(2 * STALL_REPORT_S, file=sys.stdout)
                 if args.progress_file:
