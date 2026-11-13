@@ -9,6 +9,7 @@
 //! that keep a station lawful and polite are checked in the test suite rather than on the
 //! air.
 
+pub mod air;
 pub mod audio;
 pub mod busy;
 pub mod busy_trace;

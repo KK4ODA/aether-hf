@@ -80,7 +80,7 @@ impl<P: Ptt> Station<P> {
     /// or 0.
     #[must_use]
     pub const fn rx_offset_hz(&self) -> f64 {
-        self.from_audio.offset_hz()
+        self.air.offset_hz()
     }
 
     /// A frame's true carrier offset: what it measured, plus the mixer's offset where it began
@@ -108,7 +108,7 @@ impl<P: Ptt> Station<P> {
         }
         match &self.centre.heard {
             Some((call, hz)) if *call == self.engine.remote_call => *hz,
-            _ => self.from_audio.offset_hz(),
+            _ => self.air.offset_hz(),
         }
     }
 
@@ -116,7 +116,7 @@ impl<P: Ptt> Station<P> {
     /// has moved [`FOLLOW_STEP_HZ`] or more, or back on the dial.
     pub(super) fn follow_at_key(&mut self, now: f64) {
         let target = self.centre_target();
-        let current = self.from_audio.offset_hz();
+        let current = self.air.offset_hz();
         if (target - current).abs() >= FOLLOW_STEP_HZ || (target == 0.0 && current != 0.0) {
             self.move_centre(target, now);
         }
@@ -125,10 +125,7 @@ impl<P: Ptt> Station<P> {
     /// Each pass: back on the dial once no session is under way, at the first moment no frame
     /// is arriving.
     pub(super) fn advance_centre(&mut self, now: f64) {
-        if self.from_audio.offset_hz() == 0.0
-            || self.engine.state() != State::Idle
-            || self.receiving()
-        {
+        if self.air.offset_hz() == 0.0 || self.engine.state() != State::Idle || self.receiving() {
             return;
         }
         self.move_centre(0.0, now);
@@ -140,7 +137,7 @@ impl<P: Ptt> Station<P> {
     pub(super) fn front_end_rebuilt(&mut self, now: f64, keep: bool) {
         let was = self.centre.at(now);
         let hz = if keep { was } else { 0.0 };
-        self.from_audio.set_offset_hz(hz);
+        self.air.set_offset_hz(hz);
         if (hz - was).abs() > f64::EPSILON {
             self.centre.push(now, hz);
             self.record_centre(now, hz);
@@ -148,8 +145,8 @@ impl<P: Ptt> Station<P> {
     }
 
     fn move_centre(&mut self, hz: f64, now: f64) {
-        let was = self.from_audio.offset_hz();
-        self.from_audio.set_offset_hz(hz);
+        let was = self.air.offset_hz();
+        self.air.set_offset_hz(hz);
         self.centre.push(now, hz);
         self.record_centre(now, hz);
         if hz.abs() >= FOLLOW_SAID_HZ && was.abs() < FOLLOW_SAID_HZ {

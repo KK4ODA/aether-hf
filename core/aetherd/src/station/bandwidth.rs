@@ -773,15 +773,9 @@ impl<P: Ptt> Station<P> {
         let now = self.now();
         let from = self.bandwidth_hz();
         self.config.params = params;
-        self.receiver = aether_phy::StreamingReceiver::new(params, 6.0, true);
-        // the new receiver counts its samples from here, the station's from its start
-        self.rx_origin = self.baseband_seen;
-        self.decoder = std::rc::Rc::new(std::cell::RefCell::new(aether_phy::Modem::new(
-            params, false,
-        )));
-        self.transmitter = aether_phy::Modem::new(params, false);
-        self.to_audio = aether_phy::BasebandToAudio::new(params);
-        self.from_audio = aether_phy::AudioToBaseband::new(params);
+        // every part new; the new receiver counts its samples from here, the station's from its
+        // start
+        self.air = self.air.moved_to(params);
         // a move is between sessions: the new receiver starts on the dial (ADR-0079)
         self.front_end_rebuilt(now, false);
         // the detector's floor was learned through the other band filter: it learns again; the
@@ -842,7 +836,7 @@ impl<P: Ptt> Station<P> {
         self.config
             .max_mode_setting
             .unwrap_or(self.config.link.max_mode)
-            .min(self.air().n_rungs().saturating_sub(1))
+            .min(self.air.interface().n_rungs().saturating_sub(1))
     }
 
     /// The link timing of the air the station runs, with this station's keying in it.

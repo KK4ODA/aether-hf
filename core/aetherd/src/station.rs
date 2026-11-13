@@ -57,11 +57,12 @@ use aether_link::{
     granted::{HEADER_UNDECODABLE_SHARE, Role},
 };
 use aether_phy::{
-    AudioToBaseband, BasebandToAudio, Complex, Modem, Received, StreamingReceiver,
+    Complex, Modem, Received,
     waveform::{WIDE_2300, WaveformParams},
 };
 
 use crate::{
+    air::HfAir,
     audio::OnsetGuard,
     busy::{BusyConfig, BusyDetector},
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
@@ -1067,12 +1068,8 @@ impl CaptureLag {
 pub struct Station<P: Ptt> {
     config: StationConfig,
     engine: GrantedEngine,
-    receiver: StreamingReceiver,
-    /// Shared with every [`PhyFrame`] handed to the engine, for decoding and combining.
-    decoder: Rc<RefCell<Modem>>,
-    transmitter: Modem,
-    to_audio: BasebandToAudio,
-    from_audio: AudioToBaseband,
+    /// The physical layer (ADR-0113).
+    air: HfAir,
     /// Where the receive mixer is centred, and the station it follows (ADR-0079).
     centre: centre::Centre,
     ptt: PttWatchdog<P>,
@@ -1084,7 +1081,6 @@ pub struct Station<P: Ptt> {
     /// Audio waiting for the sound card, at unit level; the transmit level is applied as
     /// it leaves, which is what lets the level change under a tone that is playing.
     playback: VecDeque<f32>,
-    baseband_seen: usize,
     audio_seen: usize,
     transmitting: bool,
     /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
@@ -1269,9 +1265,6 @@ pub struct Station<P: Ptt> {
     bandwidth: bandwidth::Bandwidth,
     /// The answer gap each station has shown it needs (ADR-0054).
     gaps: gaps::LearnedGaps,
-    /// Where the receiver's sample count starts in the station's: the receiver is built again
-    /// when the station moves to another bandwidth, and counts from there.
-    rx_origin: usize,
     /// What the host program attached now said about this station: `CHAT`, `CWID`, and whether
     /// the daemon is stopping (which answers nothing).
     host: host::Host,
@@ -1340,18 +1333,13 @@ impl<P: Ptt> Station<P> {
         });
         let mut station = Self {
             engine,
-            receiver: StreamingReceiver::new(params, 6.0, true),
-            decoder: Rc::new(RefCell::new(Modem::new(params, false))),
-            transmitter: Modem::new(params, false),
-            to_audio: BasebandToAudio::new(params),
-            from_audio: AudioToBaseband::new(params),
+            air: HfAir::new(params),
             centre: centre::Centre::default(),
             ptt: PttWatchdog::new(ptt, config.max_key_s),
             busy,
             capture_lag: CaptureLag::default(),
             reservation: reserve::Reservation::default(),
             playback: VecDeque::new(),
-            baseband_seen: 0,
             audio_seen: 0,
             transmitting: false,
             playing_test: false,
@@ -1433,7 +1421,6 @@ impl<P: Ptt> Station<P> {
             beacons: beacons::Beacons::default(),
             bandwidth: bandwidth::Bandwidth::new(params.bandwidth.hz()),
             gaps: gaps::LearnedGaps::default(),
-            rx_origin: 0,
             host: host::Host::default(),
             claims: claims::Claims::new(&config.callsign),
             stats: StationStats::default(),
@@ -2773,7 +2760,7 @@ impl<P: Ptt> Station<P> {
         if self.config.wait_for_clear && !self.channel_clear(self.now()) {
             return Err("the channel is busy");
         }
-        let air = self.air();
+        let air = self.air.interface();
         let index = self.config.link.max_mode.min(air.n_rungs() - 1);
         let rung = air.rung(index);
         let bytes = rung.payload_bytes();
@@ -3150,7 +3137,7 @@ impl<P: Ptt> Station<P> {
             self.note("error", &format!("recording stopped: {error}"));
             self.recording = None;
         }
-        let baseband = self.from_audio.process(audio);
+        let baseband = self.air.downconvert(audio);
         let now = self.now();
 
         if self.transmitting {
@@ -3856,10 +3843,11 @@ impl<P: Ptt> Station<P> {
         let fs = self.config.params.fs_baseband;
         // where this receiver's positions start: a move to the other bandwidth (ADR-0026)
         // builds another, but what this one found is placed by its own count
-        let origin = self.rx_origin;
-        let frames = self.receiver.feed(baseband);
-        let preambles = self.receiver.take_preambles();
-        self.baseband_seen += baseband.len();
+        let crate::air::hf::Listened {
+            origin,
+            frames,
+            preambles,
+        } = self.air.listen(baseband);
 
         // Completed frames first, then preambles. Both can come out of one block, and the
         // order matters: a preamble found in this block belongs to a frame that is *still
@@ -3867,7 +3855,7 @@ impl<P: Ptt> Station<P> {
         // receiver decides a burst has ended in the middle of it and answers over the rest.
         for decoded in frames {
             self.stats.frames_detected += 1;
-            let air = self.air();
+            let air = self.air.interface();
             let control = decoded.frame.is_control();
             // the rung a DATA frame was sent at; chips naming an OFDM mode on no rung of the
             // ladder are noise, and go no further (the model's harness drops them too)
@@ -3933,7 +3921,7 @@ impl<P: Ptt> Station<P> {
             self.note_version(&decoded);
             if let Some(caller) = narrower {
                 self.move_to(500, BandwidthWhy::Call(caller));
-                rung = decoded.frame.rung(&self.air()).unwrap_or(rung);
+                rung = decoded.frame.rung(&self.air.interface()).unwrap_or(rung);
             }
             let asked = asked_by(decoded.payload.as_deref(), &self.engine.callsigns);
             let frame = PhyFrame {
@@ -3942,7 +3930,7 @@ impl<P: Ptt> Station<P> {
                 t_end: start + frame_s,
                 rung,
                 frame: decoded.frame,
-                modem: Rc::clone(&self.decoder),
+                modem: self.air.decoder(),
                 trusted,
             };
             self.hand_over(&frame, asked, decoded_ok, now);
@@ -4047,19 +4035,13 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// The air interface this station runs, for the numbers that only mean something
-    /// against it — an acquisition threshold, a layout, a mode table.
-    fn air(&self) -> aether_phy::modes::AirInterface {
-        aether_phy::modes::air_interface(self.config.params)
-    }
-
     /// Describe a frame for the displays, and keep its constellation. `rung` is the rung of
     /// the ladder a DATA frame was sent at.
     fn report(&mut self, decoded: &aether_phy::DecodedFrame, rung: usize, now: f64) {
         let frame = &decoded.frame;
         let control = frame.is_control();
         let payload = decoded.payload.as_deref();
-        let span_start = (self.rx_origin + frame.start()) as f64 / self.config.params.fs_baseband;
+        let span_start = self.air.seconds_at(frame.start());
         let mut report = FrameReport {
             t_s: now,
             kind: if control { "control" } else { "data" },
@@ -4069,7 +4051,7 @@ impl<P: Ptt> Station<P> {
             // the true offset: the receiver may be centred on the session's station (ADR-0079)
             cfo_hz: self.true_cfo(frame.cfo_hz(), span_start),
             confidence: frame.mode_confidence(),
-            detect_confidence: frame.detect_confidence(&self.air()),
+            detect_confidence: frame.detect_confidence(&self.air.interface()),
             decoded: decoded.ok(),
             bytes: payload.map_or(0, <[u8]>::len),
             from: None,
@@ -4080,8 +4062,8 @@ impl<P: Ptt> Station<P> {
             capture_skip: false,
             echo: frame.echo(),
         };
-        let span_end =
-            span_start + frame.samples(&self.air()) as f64 / self.config.params.fs_baseband;
+        let span_end = span_start
+            + frame.samples(&self.air.interface()) as f64 / self.config.params.fs_baseband;
         report.capture_skip = self.capture_skipped_within(span_start, span_end);
         // a frame that belongs to the session is the other station's; one with another
         // session id is somebody else's business and stays unattributed
@@ -4690,8 +4672,7 @@ impl<P: Ptt> Station<P> {
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
         // flush the chain after the burst, or its filters keep the tail of the last frame
-        let mut rendered = self.to_audio.process(&baseband);
-        rendered.extend(self.to_audio.flush());
+        let rendered = self.air.upconvert(&baseband);
 
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
@@ -4740,7 +4721,7 @@ impl<P: Ptt> Station<P> {
                 // a rung of the ladder: the tone floor's, at its peak, or an OFDM mode
                 Container::Data => {
                     // an OFDM frame says how many of the burst follow it (ADR-0041)
-                    self.transmitter.rung_burst_following(
+                    self.air.transmitter().rung_burst_following(
                         &frame.payload,
                         frame.mode,
                         frame.rv,
@@ -4748,7 +4729,8 @@ impl<P: Ptt> Station<P> {
                     )
                 }
                 Container::Control => {
-                    self.transmitter
+                    self.air
+                        .transmitter()
                         .control_burst_of(&frame.payload, frame.rv, frame.floor)
                 }
             };
@@ -4861,7 +4843,7 @@ impl<P: Ptt> Station<P> {
         now: f64,
     ) -> crate::record::FrameRecord {
         let control = decoded.frame.is_control();
-        let detected = decoded.frame.detect_confidence(&self.air());
+        let detected = decoded.frame.detect_confidence(&self.air.interface());
         let (seq, measure) = if control {
             (None, false)
         } else {
@@ -5080,7 +5062,7 @@ impl<P: Ptt> Station<P> {
     /// first sync block has cleared a threshold set over the noise maximum of that block and
     /// beaten its neighbours for three symbols, which is the gate already.
     fn heed_preambles(&mut self, preambles: &[aether_phy::PendingFrame], origin: usize, now: f64) {
-        let air = self.air();
+        let air = self.air.interface();
         let fs = self.config.params.fs_baseband;
         for pending in preambles {
             let trusted = pending.tone || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
@@ -5143,13 +5125,11 @@ impl<P: Ptt> Station<P> {
             self.recording = None;
         }
         self.audio_seen += samples;
-        self.from_audio = AudioToBaseband::new(params);
+        self.air.restart_front_end();
         // still in the session it was in: the receiver stays on the station it follows
         let now = self.now();
         self.front_end_rebuilt(now, true);
-        self.baseband_seen += (samples as f64 * params.fs_baseband / rate).round() as usize;
-        self.receiver = StreamingReceiver::new(params, 6.0, true);
-        self.rx_origin = self.baseband_seen;
+        self.air.lose_captured(samples);
         self.note(
             "audio",
             &format!(
@@ -6199,6 +6179,7 @@ mod tests {
     use crate::control::protocol::{ConnectionId, ConnectionKind};
     use crate::passband::Verdict;
     use crate::ptt::NullPtt;
+    use aether_phy::{AudioToBaseband, BasebandToAudio};
 
     /// The program on the host interface, as the tests' stations know it (ADR-0106).
     const HOST_PROGRAM: ConnectionId = ConnectionId {
@@ -9702,7 +9683,7 @@ mod tests {
             .modulate(std::slice::from_ref(&frame))
             .expect("a frame");
         let frames = {
-            let mut chain = station.to_audio.clone();
+            let mut chain = station.air.upconverter().clone();
             let mut out = chain.process(&alone);
             out.extend(chain.flush());
             out.len()
@@ -12346,7 +12327,7 @@ mod tests {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        let air = station.air();
+        let air = station.air.interface();
         let frame = |peak: f64, payload: Option<Vec<u8>>| aether_phy::DecodedFrame {
             payload,
             frame: aether_phy::Received::Ofdm(aether_phy::rx::ReceivedFrame {
