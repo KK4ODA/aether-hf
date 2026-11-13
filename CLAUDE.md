@@ -2937,6 +2937,10 @@ the VARA port said `BUFFER` only when the count changed, and the count stands st
 waits for its acknowledgement, up to two minutes on the tone floor (ADR-0033). In the program's own
 session a count above zero is now said again after 50 s unsaid (`BUFFER_REPEAT`, Mercury's figure;
 `HostConfig::buffer_repeat`, which tests shorten). Mercury found it on the air (its issue 397).
+The scenario harness's `host a pat` stand-in waits as Pat does, on the wall clock; `realtime = true`
+holds a scenario's channel to the wall clock, since at several times real time no wall-clock
+wait can run out. `80m-pat-fade-500` (a 40 s fade as Pat writes) passes, and fails without the
+repeat.
 
 **Fuzzing (2026-11-13, the author's go).** `core/fuzz/` holds cargo-fuzz targets for the parsers
 that take outside bytes: `air_frames` (every link decoder on one payload), `datagrams` (fragments
