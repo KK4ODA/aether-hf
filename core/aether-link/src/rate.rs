@@ -219,6 +219,22 @@ pub struct RateReview {
     /// G2b: how far a frame moves its family's offset, dB, in place of today's 0.5 (`None`:
     /// today's).
     pub family_gain_db: Option<f64>,
+    /// The values and switches above apply on the 2 300 Hz air alone; a station on the 500 Hz
+    /// air runs today's controller (`rate-control-3/04-results.md` §5.3).
+    pub wide_only: bool,
+}
+
+impl RateReview {
+    /// What applies on an air: all of it, or nothing on the 500 Hz air when
+    /// [`wide_only`](Self::wide_only) is set (the model's `GrantedEngine._rate_review`).
+    #[must_use]
+    pub fn for_air(self, wide: bool) -> Self {
+        if self.wide_only && !wide {
+            Self::default()
+        } else {
+            self
+        }
+    }
 }
 
 /// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.

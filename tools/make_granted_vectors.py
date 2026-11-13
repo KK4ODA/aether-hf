@@ -91,12 +91,13 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
     }
 
 
-REVIEW_SWITCHES = ("prior_steps_aside", "clean_try_keeps_wait", "try_unaged")
+REVIEW_SWITCHES = ("prior_steps_aside", "clean_try_keeps_wait", "try_unaged", "wide_only")
 """The third rate review's candidate switches (``rate-control-3/03-candidates.md`` §2), the only
 rate controller settings a session may change: the port takes them as ``GrantConfig.rate_review``."""
 REVIEW_VALUES = ("prior_margin_db", "family_gain_db")
 """The review's candidate values (G1, G2b): the port takes them as ``RateReview`` fields too."""
 TRY_REVIEW = dict.fromkeys(REVIEW_SWITCHES, True)
+WIDE_ONLY = {"prior_margin_db": 1.0, "family_gain_db": 1.0, "wide_only": True}
 
 
 def config_doc(c: GrantConfig) -> dict[str, Any]:
@@ -1325,6 +1326,9 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "margin-gain-moderate-narrow": fading_field(
         NARROW, "moderate", 6.0, 64, 2000, {"prior_margin_db": 1.0, "family_gain_db": 1.0}
     ),
+    # the 1 dB margin and G2b on the 2 300 Hz air alone: the 500 Hz session is today's
+    "wide-only-good-wide": fading_field(WIDE, "good", 12.0, 63, 12000, WIDE_ONLY),
+    "wide-only-moderate-narrow": fading_field(NARROW, "moderate", 6.0, 64, 2000, WIDE_ONLY),
 }
 
 

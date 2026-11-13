@@ -151,3 +151,13 @@ paths; the gains are mostly on 2300 Hz paths. Gate 0 §2 measured the 500 Hz run
 penalty as the larger (their 10 % points 5.8–9.7 dB over AWGN by the reading at 500 Hz, against
 2.6–6.3 at 2300 Hz), which fits: the narrow air, with a fifth of the frequency diversity, needs
 the caution the wide one does not. The next step is the author's.
+
+### 5.3 The 2300 Hz air alone
+
+The author's next choice: the 1 dB margin and G2b on the 2 300 Hz air only, today's controller on
+the 500 Hz air. A bench switch, `wide_only` (`GrantedEngine._rate_review` in the model,
+`RateReview::for_air` in the port, `AETHER_BENCH_LINK=…,wide_only`), applies the review's values
+by the air the station's capability byte states, so a station that moves between airs
+(ADR-0026) takes them on and off with it. The granted vectors gain `wide-only-good-wide` (the
+same session as the 1 dB margin with G2b) and `wide-only-moderate-narrow` (the same session as
+today's); a planted fault in the air check fails the replay.

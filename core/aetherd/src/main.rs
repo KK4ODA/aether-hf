@@ -599,7 +599,7 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
 
 /// Bench only: the third rate review's candidate switches a harness names in
 /// `AETHER_BENCH_LINK` (comma separated: `prior_steps_aside`, `clean_try_keeps_wait`,
-/// `try_unaged`, `prior_margin_db=<dB>`, `family_gain_db=<dB>`), honoured only by a simulated daemon: a station on the
+/// `try_unaged`, `prior_margin_db=<dB>`, `family_gain_db=<dB>`, `wide_only`), honoured only by a simulated daemon: a station on the
 /// air never runs a prototype. The oracle workflow sets it to judge a candidate on the same build
 /// as the shipping default (`docs/research/rate-control-3/03-candidates.md`).
 fn bench_rate_review(simulated: bool) -> RateReview {
@@ -621,6 +621,7 @@ fn bench_rate_review(simulated: bool) -> RateReview {
         try_unaged: on("try_unaged"),
         prior_margin_db: value("prior_margin_db"),
         family_gain_db: value("family_gain_db"),
+        wide_only: on("wide_only"),
     }
 }
 

@@ -176,6 +176,7 @@ fn rate_review(doc: &Value) -> RateReview {
         try_unaged: on("try_unaged"),
         prior_margin_db: opt(&doc["prior_margin_db"]),
         family_gain_db: opt(&doc["family_gain_db"]),
+        wide_only: on("wide_only"),
     }
 }
 

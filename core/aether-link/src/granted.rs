@@ -1078,6 +1078,13 @@ impl std::fmt::Debug for GrantedEngine {
 }
 
 /// The rate controller on an air's table (the model's `_rate_controller`).
+/// The rate review's bench switches for the air `config` states (the model's `_rate_review`).
+fn review_for(config: &GrantConfig) -> RateReview {
+    config
+        .rate_review
+        .for_air(bandwidth_hz_of(config.capabilities) != Some(500))
+}
+
 fn rate_for(timing: &PhyTiming) -> RateController {
     let thresholds = if timing.mode_threshold_db.is_empty() {
         crate::rate::AWGN_THRESHOLD_DB.to_vec()
@@ -1124,7 +1131,7 @@ impl GrantedEngine {
     #[allow(clippy::too_many_lines)] // the engine's state, a field a line
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
-        let rate = rate_for(&timing).with_review(config.rate_review);
+        let rate = rate_for(&timing).with_review(review_for(&config));
         let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
@@ -1254,7 +1261,7 @@ impl GrantedEngine {
         self.measure_out = None;
         self.measure_unheard = false;
         self.measure_again = false;
-        self.rate = rate_for(&self.timing).with_review(self.config.rate_review);
+        self.rate = rate_for(&self.timing).with_review(review_for(&self.config));
         self.last_rx_mode = None;
         self.missed = MISSED_UNKNOWN;
         self.price_controllers();
@@ -1928,7 +1935,7 @@ impl GrantedEngine {
         if let Some(rung) = max_mode {
             self.config.max_mode = rung;
         }
-        self.rate = rate_for(&self.timing).with_review(self.config.rate_review);
+        self.rate = rate_for(&self.timing).with_review(review_for(&self.config));
         self.price_controllers();
     }
 

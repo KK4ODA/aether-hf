@@ -1580,8 +1580,17 @@ class GrantedEngine:
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
-            **{**floor, **priced, **self.cfg.rate},  # type: ignore[arg-type]
+            **{**floor, **priced, **self._rate_review()},  # type: ignore[arg-type]
         )
+
+    def _rate_review(self) -> dict[str, float | int | None]:
+        """:attr:`GrantConfig.rate`, for this air: with ``wide_only`` set (a bench switch of the
+        third rate review, ``rate-control-3/04-results.md`` §5.3) the values apply on the 2 300 Hz
+        air alone, and a station on the 500 Hz air runs today's."""
+        rate = dict(self.cfg.rate)
+        if rate.pop("wide_only", False) and bandwidth_hz_of(self.cfg.capabilities) == 500:
+            return {}
+        return rate
 
     # ── keying ────────────────────────────────────────────────────────
 

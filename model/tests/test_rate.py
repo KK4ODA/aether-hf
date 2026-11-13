@@ -302,6 +302,26 @@ def test_g1_a_smaller_margin_starts_higher() -> None:
     assert smaller.first_mode(19.0) > today.first_mode(19.0)
 
 
+def test_wide_only_keeps_the_review_values_off_the_500_hz_air() -> None:
+    """With ``wide_only`` the review's values apply on the 2 300 Hz air alone: a station on the
+    500 Hz air runs today's controller (``rate-control-3/04-results.md`` §5.3), and moving
+    between airs (ADR-0026) takes the values on and off with it."""
+    rate = {"prior_margin_db": 1.0, "family_gain_db": 1.0, "wide_only": True}
+
+    def engine(air: AirInterface) -> GrantedEngine:
+        config = GrantConfig(
+            capabilities=bandwidth_capabilities(air.params), max_mode=air.n_rungs - 1, rate=rate
+        )
+        return GrantedEngine("W4ODA", phy_timing(air.params), config, seed=1)
+
+    wide, narrow = engine(WIDE).rate, engine(NARROW).rate
+    assert (wide.prior_margin_db, wide.family_gain_db) == (1.0, 1.0)
+    assert (narrow.prior_margin_db, narrow.family_gain_db) == (3.0, 0.5)
+    moved = engine(WIDE)
+    moved.set_air(phy_timing(NARROW.params), bandwidth_capabilities(NARROW.params))
+    assert moved.rate.prior_margin_db == 3.0
+
+
 def test_a_rungs_account_ages_with_the_air_sent_at_other_rungs() -> None:
     """Three frames of an OFDM rung that did well, then the floor's: the rung's account ages with
     the floor's air, so it no longer outweighs the prior and the rung is chosen again only by a
