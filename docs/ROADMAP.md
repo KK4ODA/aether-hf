@@ -433,6 +433,8 @@ CPU time per second of audio. **All SNRs referenced to 3 kHz noise bandwidth.**
 
 ## 11. Architecture for eventual Aether FM
 
+*2026-11-13: the plan is now [`docs/research/aether-fm/00-proposal.md`](research/aether-fm/00-proposal.md) and Phase 10 below. Items 1, 3, 4 and 5 stand; the PHY sketch at the end is replaced by the proposal's SC-FDE through the voice path or the flat data port, with the level calibrated by the far station.*
+
 The layering in §4.1 already isolates the PHY. Decisions to make **now** so FM is cheap later:
 
 1. **PHY trait, not PHY constants.** `Phy::modes()`, `Phy::modulate(frame, mode)`,
@@ -634,7 +636,7 @@ within 20 %.
 *Overtaken 2026-09-23 by the weak-signal plan below, and since 2026-09-24 by field testing of
 the daemon as it is.*
 
-Decided with the author after beta.14. **Aether FM and the phone are on the back burner**;
+Decided with the author after beta.14. **Aether FM and the phone are on the back burner** (Aether FM taken off it on 2026-11-13: Phase 10);
 the modem itself comes first, and the 500 Hz waveform comes first of all, because it is the
 bandwidth P2P contacts are made in — VarAC's calling frequencies are 500 Hz and it refuses
 anything else there — so on-air testing with other stations needs it before it needs
@@ -665,7 +667,7 @@ names); ~~**RMS Trimode with RMS Relay over `[sim]`**~~ (§7: a Winlink Express 
 a B2F session through an Aether-fed Trimode; ADR-0051 came out of it). Still true: a *public*
 RMS gateway on Aether is the Winlink Development Team's call, not ours — the bench proves the
 modem side; the policy conversation is separate. **Back burner:** Phase
-10 (Aether FM) and Phase 8 (the phone).
+8 (the phone); Phase 10 (Aether FM) until 2026-11-13.
 
 ### The weak-signal plan from 2026-09-23 — what is left, in order
 
@@ -794,14 +796,43 @@ reproduce with the tool; every adopted change has its curve committed and its AD
 
 ---
 
-### Phase 10 — Aether FM foundation (back burner, by decision on 2026-09-15)
+### Phase 10 — Aether FM (started 2026-11-13; off the back burner by the author's decision)
 
-Extract PHY trait boundaries proven in Phase 3; FM channel model; `aether-phy-fm` with a
-single-carrier QPSK/GMSK waveform; an AGW adapter beside the KISS port HF already has
-(ADR-0019); reuse everything else (§11).
-Acceptance: FM PHY passes the same harness contracts as HF; Pat/Winlink FM session via
-VARA-FM-style commands. Nothing here is scheduled until the HF modem's second rung is
-measured on the air.
+The plan is [`docs/research/aether-fm/00-proposal.md`](research/aether-fm/00-proposal.md),
+written 2026-11-13 at the author's request, with the scratch model's numbers in
+[`01-measurements.md`](research/aether-fm/01-measurements.md) (estimates, not committed
+benchmarks: Phase 10.2 replaces them). The author answered its eleven decisions the same day
+(its Decisions table): one repository and one application; HF's daemon reworked behind a PHY
+boundary now, proven unchanged; the voice path and the flat data port both simulated, the voice
+path first on the air; the callsign in the digital signal, no Morse; no relaying in the first
+release; the repeater profile off by default; legacy packet (1200 AFSK, 9600 G3RUH, FX.25, IL2P,
+AX.25 connected mode) from the start; comparisons with VARA FM against its published figures
+only. RadioPost's two spec changes it needed are merged there (the `aether-fm` modem name, FM
+channels, RP-7's VHF rows). What it chose: SC-FDE (one carrier, a known guard word,
+frequency-domain MMSE with ADR-0104's per-bin noise) over the NR LDPC of `aether-fec`; granted
+slots (ADR-0069) and the rate controller (ADR-0099) carried over with FM's numbers; the far
+station measuring the level in two stages; RadioPost through RPMI. It replaces this phase's
+first plan (a single-carrier QPSK/GMSK PHY and an AGW adapter, §11's sketch).
+
+Each step has a gate with a measurable criterion; a failing one stops the step and is explained
+before anything changes, as ADR-0069's steps were.
+
+| Step | Work | Gate |
+|---|---|---|
+| 10.1 | The ADRs below; Aether HF's daemon behind a `Phy` trait, no wire change | HF's suite and a harness A/B unchanged |
+| 10.2a, 10.2b | The FM channel model in `model/`, beside recordings of 5–10 radios (SNDR against drive, the band's response, turnaround, sound-card clocks) through a dummy load and an attenuator | The model reproduces the recordings within 2 dB |
+| 10.2c, 10.3 | The waveform decided (SC-FDE, CP-OFDM and a 4-FSK floor on the calibrated model, criteria registered first), beside calibration on the model (the ladder and the probe, both loops together) | FM-4 and FM-5 accepted on their criteria (the proposal's E.7 for FM-5) |
+| 10.4 | The Rust port bit-exact with the model; granted slots with FM's numbers; the daemon's FM air; legacy packet; RadioPost's conformance tester (A-01 to A-04) over two FM daemons | No radiated overlap on the harness; RadioPost conformance passes |
+| 10.5 | Real radios: the bench, simplex, then repeaters (with their owners' leave); three radio models, both audio profiles; packet against Dire Wolf and a NinoTNC | Calibration converges on radios as on the model |
+| 10.6 | RadioPost end to end on the air: client to gateway, station to station, intermittent links, a repeater | The proposal's J.2 criteria met |
+| 10.7, 10.8 | Performance against published figures (VARA FM by its published table only); release: installers, the manual, calibration diagnostics, the beta channel | — |
+
+The ADRs, written before any FM code and numbered from ADR-0112 as they are written (the
+proposal's §L has what each needs): FM-1 product structure, FM-2 the PHY boundary, FM-3 the FM
+channel model, FM-4 the waveform, FM-5 calibration, FM-6 learned profiles, FM-7 the FM link
+protocol, FM-8 channel access, FM-9 the repeater profile, FM-10 VHF/UHF rules, FM-11
+identification on FM, FM-12 host interfaces, FM-13 legacy packet. Bench equipment owed before
+10.2b: a dummy load and an attenuator (the proposal's risk R18).
 
 **Level tolerance** (added 2026-10-24 at the author's request). From the author's experience
 of VARA FM: a link fails unless both stations' audio levels are right, and getting them right
@@ -811,21 +842,25 @@ Aether FM is built so that a wrong level costs speed, not the contact, and so th
 station does the measuring. P10-7 and P10-8 are not FM-specific and can come to HF at any
 time.
 
-| ID | Task | Depends on |
-|---|---|---|
-| P10-1 | **An FM channel with the radio in it.** The simulator's FM channel models what makes levels matter: the transmitter's deviation limiter, the receiver's IF filter (12.5 and 25 kHz channels), pre-emphasis and de-emphasis at either end or neither (a flat 9600 data port against an emphasized 1200 one), a tone-squelch high-pass under 300 Hz, and sound-card clipping at both ends. Each station's level is a scenario key, so the harness can set it wrong on purpose | §11 item 6 |
-| P10-2 | **A level-tolerant ladder.** The robust rungs are constant envelope and continuous phase (GMSK, or multi-level FSK decoded by energy like HF's tone rungs), so a level error changes the deviation and leaves the limiter nothing to distort. Rungs whose constellation depends on amplitude, such as §11's 16-QAM, are used only once the link has shown it is linear (P10-4) | P10-1 |
-| P10-3 | **The far station says how it heard you.** The probe (ADR-0006), the connect acknowledgement and the session's control frames carry the receiver's reading of the sender's audio: its level against the receiver's clipping point, compression, and the tilt across the audio band in dB, both ways, as ADR-0021's reports are. The panel names the side at fault ("ND1J hears you compressed, about 4 dB"; "your receive audio is clipping") in place of one level bar | P10-2 |
-| P10-4 | **Level control in the loop.** The receiver tells distortion from noise: noise does not change with the sender's level, compression does (outer constellation points pulled in, the preamble's peaks flattened). It marks a burst compressed in its acknowledgement, and the sender steps its own level down 2 dB, or up when the signal is clean but weak, within a window the operator sets around the calibrated level. Backing off also keeps an over-deviated signal out of the next channel | P10-3 |
-| P10-5 | **A level check with another station.** A panel button and control-API method shaped like the Test session's ladder, stepping level instead of rung: a short burst at about eight levels 2 dB apart, each way. The other station reports where the signal became too weak and where it began to distort, and both stations keep the middle of the good range as their calibrated level | P10-3 |
-| P10-6 | **The audio band measured and matched.** The receiver estimates the band's response from the preamble (emphasis mismatch, a radio's voice filters, a tone-squelch high-pass) and equalizes it; the handshake tells the sender, which can tilt its own audio to match | P10-2 |
-| P10-7 | **The sound card guarded** (HF too). The daemon remembers each device's operating-system volume from the last good session and says when it changes (Windows resets a USB codec's level after an update or a replug), restoring it on the operator's OK. It recognises clipped receive audio (runs of full-scale samples) and says how far to turn it down | — |
-| P10-8 | **Radio presets** (HF too). Known-good settings per radio (the data port mode and its menu items, a starting level) shared as profiles (ADR-0011), beside Setup's interface presets | — |
+*2026-11-13: the items below are kept for their history; where each went is in the last column.*
+
+| ID | Task | Depends on | Since 2026-11-13 |
+|---|---|---|---|
+| P10-1 | **An FM channel with the radio in it.** The simulator's FM channel models what makes levels matter: the transmitter's deviation limiter, the receiver's IF filter (12.5 and 25 kHz channels), pre-emphasis and de-emphasis at either end or neither (a flat 9600 data port against an emphasized 1200 one), a tone-squelch high-pass under 300 Hz, and sound-card clipping at both ends. Each station's level is a scenario key, so the harness can set it wrong on purpose | §11 item 6 | FM-3, step 10.2a, calibrated by 10.2b's recordings; the harness's impairment keys (proposal J.2) |
+| P10-2 | **A level-tolerant ladder.** The robust rungs are constant envelope and continuous phase (GMSK, or multi-level FSK decoded by energy like HF's tone rungs), so a level error changes the deviation and leaves the limiter nothing to distort. Rungs whose constellation depends on amplitude, such as §11's 16-QAM, are used only once the link has shown it is linear (P10-4) | P10-1 | FM-4, step 10.2c. A constant envelope is no longer the premise: a single carrier's peaks sit 2.4–3.9 dB under OFDM's (01-measurements). The floor is π/2-BPSK, with a 4-FSK floor a candidate |
+| P10-3 | **The far station says how it heard you.** The probe (ADR-0006), the connect acknowledgement and the session's control frames carry the receiver's reading of the sender's audio: its level against the receiver's clipping point, compression, and the tilt across the audio band in dB, both ways, as ADR-0021's reports are. The panel names the side at fault ("ND1J hears you compressed, about 4 dB"; "your receive audio is clipping") in place of one level bar | P10-2 | FM-5, step 10.3: Stage 1, a level ladder in the call and in the acceptance, reported both ways with no extra transmission (proposal E.2) |
+| P10-4 | **Level control in the loop.** The receiver tells distortion from noise: noise does not change with the sender's level, compression does (outer constellation points pulled in, the preamble's peaks flattened). It marks a burst compressed in its acknowledgement, and the sender steps its own level down 2 dB, or up when the signal is clean but weak, within a window the operator sets around the calibrated level. Backing off also keeps an over-deviated signal out of the next channel | P10-3 | FM-5, step 10.3: Stage 2, a two-level probe on the data frames (proposal E.3); one transmission at one level does not tell clipping from noise (01-measurements) |
+| P10-5 | **A level check with another station.** A panel button and control-API method shaped like the Test session's ladder, stepping level instead of rung: a short burst at about eight levels 2 dB apart, each way. The other station reports where the signal became too weak and where it began to distort, and both stations keep the middle of the good range as their calibrated level | P10-3 | Folded into FM-5's Stage 1, which runs in every call; the Test session keeps a one-time pre-emphasis check per radio (proposal E.2) |
+| P10-6 | **The audio band measured and matched.** The receiver estimates the band's response from the preamble (emphasis mismatch, a radio's voice filters, a tone-squelch high-pass) and equalizes it; the handshake tells the sender, which can tilt its own audio to match | P10-2 | FM-4: the receiver's frequency-domain equaliser with ADR-0104's per-bin noise (proposal E.4); pre-compensation tried once per radio |
+| P10-7 | **The sound card guarded** (HF too). The daemon remembers each device's operating-system volume from the last good session and says when it changes (Windows resets a USB codec's level after an update or a replug), restoring it on the operator's OK. It recognises clipped receive audio (runs of full-scale samples) and says how far to turn it down | — | FM-6 and the proposal's E.1/E.5; HF too, at any time |
+| P10-8 | **Radio presets** (HF too). Known-good settings per radio (the data port mode and its menu items, a starting level) shared as profiles (ADR-0011), beside Setup's interface presets | — | The proposal's E.1 (a starting value, never moved by the loop); HF too, at any time |
 
 Acceptance (level tolerance): on P10-1's channel, a session completes with either station's
 transmit level, or both, 10 dB above or below its best setting, and with the two stations'
 data-port emphasis mismatched; the curve of session time against level error is committed
-under `bench/baselines/`, as every performance claim is.
+under `bench/baselines/`, as every performance claim is. Since 2026-11-13 step 10.3 also holds
+calibration to the proposal's E.7 (from −15 to +15 dB off, the call connects in 99 % of trials
+at 12 dB CNR or more, and a session started 10 dB off takes at most 1.15 times as long).
 
 ---
 

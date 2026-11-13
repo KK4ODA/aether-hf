@@ -366,8 +366,9 @@ P9-1 the A/B bench against the
 author's registered VARA (`tools/channel_cable.py`, to be written; runs are the author's),
 P9-3 pilots/prefix/2750 Hz, P9-5 time diversity — each only with a curve on Good, Moderate
 and Poor. The air (P6-6) runs alongside: cable → ground wave now at 2300 Hz, P2P after
-P7-0; twenty logged sessions in `field/LOG.md`. **Back burner by decision: Aether FM (now
-Phase 10) and the phone (Phase 8).** **P6-7, on-air crowdsourcing** (added 2026-09-16, order
+P7-0; twenty logged sessions in `field/LOG.md`. **Back burner by decision: the phone (Phase
+8); Aether FM (Phase 10) until 2026-11-13, when it started (see that day's paragraph).**
+**P6-7, on-air crowdsourcing** (added 2026-09-16, order
 open): a Test session (probe, 2 kB, 16 kB, a mode ladder pinned per mode) as a control-API
 method and panel button, sidecar fields for grid/rig/power/antenna/path, *Contribute this
 session* (GitHub issue or email; audio opt-in), `tools/field_ingest.py`, and
@@ -3043,6 +3044,22 @@ bench and the replay tool had been running their 500 Hz stations as 2300 Hz ones
 oracle's 500 Hz echo tests (AGC, Trimode) take another course between any two runs of one build
 (wall-clock steps), so their flags on a build that does not act there are noise; and two
 controllers' rungs per draw (`same data rungs`) tell a candidate's effect from the harness's.
+
+**Aether FM started (2026-11-13; Phase 10, the author's eleven decisions).** The plan is
+`docs/research/aether-fm/00-proposal.md` (the research, the alternatives, sections A–L and the
+Decisions table), its numbers from a scratch model in `01-measurements.md` with the frozen
+scripts in `scratch/` (estimates, not benchmarks: step 10.2 replaces them). Decided: this
+repository and one application (an `aether-phy-fm` crate, one daemon per radio); HF's daemon
+moves behind a `Phy` trait first, proven unchanged (step 10.1, ADR FM-2); SC-FDE with the NR
+LDPC; granted slots and the rate controller carried over; the far station calibrates the level
+(a ladder in the call and the acceptance, then a two-level probe on the data); the callsign in
+the digital signal, no Morse; legacy packet (1200 AFSK, 9600 G3RUH, FX.25, IL2P, AX.25
+connected mode) from the start, from public specifications only; VARA FM compared only against
+its published figures; RadioPost through RPMI. Thirteen ADRs (FM-1…FM-13, numbered from
+ADR-0112 as written) come before any FM code; the steps and gates are in `docs/ROADMAP.md`
+Phase 10. RadioPost's side is merged there (RP-0 §9.4's modem names with `aether-fm`, RP-5
+§4.4's FM channels, RP-7's VHF rows, design D39). Owed before the radio recordings (10.2b): a
+dummy load and an attenuator.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
