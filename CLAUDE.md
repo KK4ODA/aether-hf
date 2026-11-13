@@ -2899,8 +2899,15 @@ about 5 s; none fell in a session that day. Now no server here reads a socket wi
 `crate::polled::PolledStream` reads it from a thread of its own with plain blocking reads and hands
 the serving thread what came in, waiting at most the poll interval and then reporting `TimedOut`
 (the kind every loop already waited on), writes straight to the socket, and shuts it down when
-dropped, which ends the reading thread. The control API's WebSocket (`READ_WAIT`, 50 ms), the host
-program's command and data ports and the KISS port use it. rigctld and FLRig keep their request
+dropped. The control API's WebSocket (`READ_WAIT`, 50 ms), the host program's command and data
+ports and the KISS port use it. **A connection ended from another thread goes through its
+`Closer`** (`PolledStream::closer`): beta.154 shut a copy of the socket down instead, and on
+Windows that does not end a blocking read waiting on another copy, so the host port's takeover
+("the one attached would not let go") and the KISS port's `disconnect` never took — CI's Windows
+runners caught both tests after the release. The closer marks the connection ended, which the next
+read sees within its wait, and shuts the socket down for the other end; the accept loops build
+the `PolledStream` and keep its closer. A reading thread can outlive its connection on Windows
+until the other end closes; it holds a buffer and nothing else. rigctld and FLRig keep their request
 timeouts (a timeout there drops the connection, never reads it again), as does the channel link's
 120 s (any error ends it). RadioPost's adapter needs the same change in its own repository.
 

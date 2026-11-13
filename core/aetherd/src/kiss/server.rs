@@ -38,7 +38,7 @@ use crate::control::{
     methods::{from_base64, to_base64},
     protocol::{ControlHandle, Request},
 };
-use crate::polled::PolledStream;
+use crate::polled::{Closer, PolledStream};
 
 /// The default KISS port: VARA's (HF and FM), UZ7HO's, and what Winlink Express's help and
 /// `QtTermTCP` assume, so a client set up for VARA finds this one unchanged.
@@ -162,6 +162,9 @@ pub struct Note {
 struct Client {
     info: ClientInfo,
     writer: TcpStream,
+    /// What ends the connection from another thread (`polled.rs`): a bare shutdown on a copy of
+    /// the socket does not end the client's thread's read on Windows.
+    closer: Closer,
 }
 
 struct Shared {
@@ -375,7 +378,7 @@ impl KissServer {
             .iter()
             .filter(|c| id.is_none_or(|id| c.info.id == id))
         {
-            let _ = client.writer.shutdown(Shutdown::Both);
+            client.closer.close();
             closed += 1;
         }
         closed
@@ -416,14 +419,14 @@ fn spawn_accept(
                     return;
                 }
                 let Ok(stream) = stream else { continue };
-                admit(stream, &shared, &handle);
+                admit(&stream, &shared, &handle);
             }
         })
         .map_err(|e| format!("cannot start the KISS accept thread: {e}"))
 }
 
 /// Take a new connection, or turn it away when the port is full.
-fn admit(stream: TcpStream, shared: &Arc<Shared>, handle: &ControlHandle) {
+fn admit(stream: &TcpStream, shared: &Arc<Shared>, handle: &ControlHandle) {
     let peer = stream
         .peer_addr()
         .map_or_else(|_| "unknown".to_owned(), |a| a.to_string());
@@ -445,6 +448,11 @@ fn admit(stream: TcpStream, shared: &Arc<Shared>, handle: &ControlHandle) {
     let Ok(writer) = stream.try_clone() else {
         return;
     };
+    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
+    let Ok(reader) = PolledStream::new(stream, POLL, "aetherd-kiss-read") else {
+        return;
+    };
+    let closer = reader.closer();
     let _ = stream.set_nodelay(true);
     let id = shared.next_id.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut clients) = shared.clients.lock() {
@@ -459,6 +467,7 @@ fn admit(stream: TcpStream, shared: &Arc<Shared>, handle: &ControlHandle) {
                 dropped: 0,
             },
             writer,
+            closer,
         });
     }
     shared.note(false, format!("client {id} connected from {peer}"));
@@ -467,7 +476,7 @@ fn admit(stream: TcpStream, shared: &Arc<Shared>, handle: &ControlHandle) {
     let spawned = std::thread::Builder::new()
         .name("aetherd-kiss-client".to_owned())
         .spawn(move || {
-            serve_client(&stream, id, &for_thread, &handle);
+            serve_client(reader, id, &for_thread, &handle);
             forget(&for_thread, id);
         });
     if spawned.is_err() {
@@ -490,11 +499,7 @@ struct Access {
 }
 
 /// One client: frames in, until it goes or the port closes.
-fn serve_client(stream: &TcpStream, id: u64, shared: &Shared, handle: &ControlHandle) {
-    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
-    let Ok(mut reader) = PolledStream::new(stream, POLL, "aetherd-kiss-read") else {
-        return;
-    };
+fn serve_client(mut reader: PolledStream, id: u64, shared: &Shared, handle: &ControlHandle) {
     let mut decoder = Decoder::new(MAX_FRAME);
     let mut access = Access {
         persistence: DEFAULT_PERSISTENCE,
@@ -725,7 +730,7 @@ fn broadcast(shared: &Shared, wire: &[u8]) -> usize {
             client.info.frames_out += 1;
             sent += 1;
         } else {
-            let _ = client.writer.shutdown(Shutdown::Both);
+            client.closer.close();
         }
     }
     drop(clients);

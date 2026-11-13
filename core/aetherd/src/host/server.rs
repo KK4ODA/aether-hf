@@ -31,7 +31,7 @@ use crate::{
         protocol::{ConnectionKind, ControlHandle, Request},
     },
     host::vara::{DEFAULT_COMMAND_PORT, HostAction, HostState, Notification},
-    polled::PolledStream,
+    polled::{Closer, PolledStream},
 };
 
 /// How the host interface is exposed.
@@ -401,20 +401,29 @@ fn spawn_data_loop(
             // not — Trimode's restart of its "VARA program" does not — and a port that served
             // the old one alone would never have read a byte from the new (ADR-0096).
             let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let mut current: Option<TcpStream> = None;
+            let mut current: Option<Closer> = None;
             for stream in listener.incoming() {
                 if !running.load(Ordering::Relaxed) {
                     return;
                 }
                 let Ok(stream) = stream else { continue };
                 // counted first, so the old connection's thread knows it was let go, not
-                // closed, when the shutdown wakes it
+                // closed, when the close wakes it
                 let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
                 if let Some(old) = current.take() {
-                    let _ = old.shutdown(std::net::Shutdown::Both);
+                    old.close();
                 }
-                current = stream.try_clone().ok();
                 data_note(&notes, trace, mine, "opened by the program");
+                // each read waits at most `POLL`, never on a read timeout on the socket
+                // (`polled.rs`)
+                let reader = match PolledStream::new(&stream, POLL, "aetherd-host-data-read") {
+                    Ok(reader) => reader,
+                    Err(error) => {
+                        data_note(&notes, trace, mine, &format!("failed: {error}"));
+                        continue;
+                    }
+                };
+                current = Some(reader.closer());
                 let (pipe, running, generation, notes) = (
                     Arc::clone(&pipe),
                     Arc::clone(&running),
@@ -424,7 +433,7 @@ fn spawn_data_loop(
                 let _ = std::thread::Builder::new()
                     .name("aetherd-host-data-conn".to_owned())
                     .spawn(move || {
-                        let end = serve_data(&stream, &pipe, &running, &|| {
+                        let end = serve_data(&stream, reader, &pipe, &running, &|| {
                             generation.load(Ordering::SeqCst) == mine
                         });
                         match end {
@@ -474,15 +483,11 @@ enum DataEnd {
 /// Move payload bytes both ways for one data connection, while it is the current one.
 fn serve_data(
     stream: &TcpStream,
+    mut reader: PolledStream,
     pipe: &Arc<Mutex<DataPipe>>,
     running: &AtomicBool,
     current: &dyn Fn() -> bool,
 ) -> DataEnd {
-    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
-    let mut reader = match PolledStream::new(stream, POLL, "aetherd-host-data-read") {
-        Ok(reader) => reader,
-        Err(error) => return DataEnd::Failed(error.to_string()),
-    };
     let mut writer = stream;
     let mut buffer = [0u8; 8192];
     loop {
@@ -534,7 +539,7 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
         .name("aetherd-host-cmd".to_owned())
         .spawn(move || {
             // the connection attached now, and when its program last said anything
-            let mut current: Option<(TcpStream, Arc<Mutex<Instant>>)> = None;
+            let mut current: Option<(Closer, Arc<Mutex<Instant>>)> = None;
             for stream in listener.incoming() {
                 if !shared.running.load(Ordering::Relaxed) {
                     return;
@@ -555,7 +560,7 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                         .and_then(|(_, said)| said.lock().ok().map(|at| at.elapsed()))
                         .map_or(0, |quiet| quiet.as_secs());
                     if let Some((old, _)) = current.take() {
-                        let _ = old.shutdown(std::net::Shutdown::Both);
+                        old.close();
                     }
                     let deadline = Instant::now() + TAKEOVER_WAIT;
                     while taken.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -588,6 +593,12 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                         format!("a program attached from {peer}"),
                     );
                 }
+                // each read waits at most `POLL`, never on a read timeout on the socket
+                // (`polled.rs`)
+                let Ok(reader) = PolledStream::new(&stream, POLL, "aetherd-host-read") else {
+                    let _ = (&stream).write_all(b"WRONG\r");
+                    continue;
+                };
                 taken.store(true, Ordering::SeqCst);
                 // a newcomer starts with an empty pipe: what the last program wrote and was
                 // not sent, or was sent it and not read, was that program's
@@ -595,10 +606,7 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                     *pipe = DataPipe::default();
                 }
                 let said = Arc::new(Mutex::new(Instant::now()));
-                current = stream
-                    .try_clone()
-                    .ok()
-                    .map(|clone| (clone, Arc::clone(&said)));
+                current = Some((reader.closer(), Arc::clone(&said)));
                 // A connection is served on its own thread so the listener keeps accepting.
                 // Without that a second host would never be answered, which looks to its
                 // operator exactly like a hung radio.
@@ -606,7 +614,7 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                 let spawned = std::thread::Builder::new()
                     .name("aetherd-host-conn".to_owned())
                     .spawn(move || {
-                        serve_commands(&stream, &shared, &said);
+                        serve_commands(&stream, reader, &shared, &said);
                         note(
                             &shared.notes,
                             false,
@@ -635,7 +643,12 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
 /// One host connection: commands in, replies and notifications out. `said` is when the
 /// program last sent a line.
 #[allow(clippy::too_many_lines)]
-fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
+fn serve_commands(
+    stream: &TcpStream,
+    reader: PolledStream,
+    shared: &Shared,
+    said: &Mutex<Instant>,
+) {
     let Shared {
         handle,
         pipe,
@@ -648,17 +661,13 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     } = shared;
     let trace = *trace;
     let buffer_repeat = *buffer_repeat;
-    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
-    let Ok(reader_stream) = PolledStream::new(stream, POLL, "aetherd-host-read") else {
-        return;
-    };
     // This program's own connection to the modem: its requests carry it, the callsigns it
     // claims are held by it, and the sessions they bring up are its own — told it by the
     // `owner` of the state events. When it goes, its claim goes with it (ADR-0106).
     let program = handle.open(ConnectionKind::Host);
     let mine = program.id().id;
     let handle = program.handle();
-    let mut reader = BufReader::new(reader_stream);
+    let mut reader = BufReader::new(reader);
     let mut writer = stream;
     let mut host = HostState::default();
     // the bandwidth the station runs decides which `BW<n>` is accepted and what

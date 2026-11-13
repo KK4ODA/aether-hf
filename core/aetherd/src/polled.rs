@@ -17,11 +17,21 @@
 //! platform times out, and hands what it reads over a channel. [`PolledStream`] reads from that
 //! channel as the socket read with its timeout: what has come in at once, else
 //! [`std::io::ErrorKind::TimedOut`] after the wait, `Ok(0)` once the other end has closed. It
-//! writes straight to the socket, as before. Dropped, it shuts the socket down, which ends the
-//! reading thread's read.
+//! writes straight to the socket, as before.
+//!
+//! **Ending a connection from another thread goes through its [`Closer`]**, never a bare
+//! `shutdown` on a copy of the socket: on Windows a shutdown made on one copy of a socket does
+//! not end a blocking read waiting on another, so the reading thread would wait on, and the
+//! serving thread would never learn the connection had been let go (CI's Windows runners, on the
+//! host port's takeover and the KISS port's `disconnect`). The closer marks the connection ended,
+//! which the next read sees within its wait, and shuts the socket down so the other end sees it
+//! close. Dropped, a `PolledStream` closes itself the same way; its reading thread ends when its
+//! read does — at once on Linux, on Windows when the other end, told by the shutdown, closes.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
@@ -46,10 +56,26 @@ enum Ended {
     Failed(io::ErrorKind, String),
 }
 
+/// What ends a connection from another thread: see the module's note.
+#[derive(Debug, Clone)]
+pub struct Closer {
+    closed: Arc<AtomicBool>,
+    stream: Arc<TcpStream>,
+}
+
+impl Closer {
+    /// End the connection: its next read says so, and the other end sees it close.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        let _ = self.stream.shutdown(Shutdown::Both);
+    }
+}
+
 /// A TCP connection whose reads wait at most a set time, read by a thread of its own.
 pub struct PolledStream {
-    /// The socket, for writes and for the shutdown that ends the reading thread.
+    /// The socket, for writes.
     stream: TcpStream,
+    closer: Closer,
     input: Receiver<Input>,
     /// Bytes handed over and not read yet, from `at`.
     held: Vec<u8>,
@@ -69,18 +95,33 @@ impl PolledStream {
         // the socket (it is the clones' too) would bring back what this is here to remove
         reading.set_read_timeout(None)?;
         let writing = stream.try_clone()?;
+        let closer = Closer {
+            closed: Arc::new(AtomicBool::new(false)),
+            stream: Arc::new(stream.try_clone()?),
+        };
         let (hand, input) = mpsc::sync_channel(READ_AHEAD);
         std::thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || read_into(&mut reading, &hand))?;
         Ok(Self {
             stream: writing,
+            closer,
             input,
             held: Vec::new(),
             at: 0,
             wait,
             ended: None,
         })
+    }
+
+    /// What ends this connection from another thread.
+    #[must_use]
+    pub fn closer(&self) -> Closer {
+        self.closer.clone()
+    }
+
+    fn closed(&self) -> bool {
+        self.closer.closed.load(Ordering::SeqCst)
     }
 }
 
@@ -113,6 +154,12 @@ impl Read for PolledStream {
         if buf.is_empty() {
             return Ok(0);
         }
+        if self.closed() {
+            // let go from another thread: what it had not read yet goes with the connection
+            self.ended = Some(Ended::Closed);
+            self.held.clear();
+            self.at = 0;
+        }
         if self.at >= self.held.len() {
             match &self.ended {
                 Some(Ended::Closed) => return Ok(0),
@@ -131,6 +178,10 @@ impl Read for PolledStream {
                 Ok(Input::Failed(error)) => {
                     self.ended = Some(Ended::Failed(error.kind(), error.to_string()));
                     return Err(error);
+                }
+                Err(RecvTimeoutError::Timeout) if self.closed() => {
+                    self.ended = Some(Ended::Closed);
+                    return Ok(0);
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(io::Error::new(
@@ -159,9 +210,9 @@ impl Write for PolledStream {
 
 impl Drop for PolledStream {
     fn drop(&mut self) {
-        // the connection is over: the shutdown ends the reading thread's read, and its next
-        // hand-over finds nobody to take it
-        let _ = self.stream.shutdown(Shutdown::Both);
+        // the connection is over: the shutdown ends the reading thread's read (on Windows when
+        // the other end closes), and its next hand-over finds nobody to take it
+        self.closer.close();
     }
 }
 
@@ -233,6 +284,26 @@ mod tests {
         assert_eq!(got, b"BYE");
         // and the end again, at once
         assert_eq!(polled.read(&mut buf).expect("ended"), 0);
+    }
+
+    #[test]
+    fn a_closer_ends_the_reads_from_another_thread_while_the_other_end_holds_on() {
+        // the host port's takeover and the KISS port's disconnect: the other end keeps its
+        // socket open, and the serving thread must still learn the connection was let go
+        let (mut polled, _client) = pair(Duration::from_millis(10));
+        let closer = polled.closer();
+        let mut buf = [0u8; 8];
+        assert_eq!(
+            polled.read(&mut buf).expect_err("quiet").kind(),
+            io::ErrorKind::TimedOut
+        );
+        std::thread::spawn(move || closer.close())
+            .join()
+            .expect("closed");
+        let started = Instant::now();
+        assert_eq!(polled.read(&mut buf).expect("ended"), 0);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(polled.read(&mut buf).expect("ended again"), 0);
     }
 
     #[test]
