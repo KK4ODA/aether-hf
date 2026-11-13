@@ -177,3 +177,18 @@ nightly's baseline is refreshed and a few strong-path sessions on the air confir
    2026-11-12's is ideal), before the decision and on its build after.
 5. **The reading.** If Gate 0 finds the receiver's SNR reading runs low on steady paths, does the
    review widen to it, or stay with the guess and let the margin absorb it?
+
+### The author's answers (2026-11-13)
+
+1. **Field builds hold still** for rate controller changes until the decision ADR. Fixes outside
+   the controller still ship as betas.
+2. **The guard, case by case.** The rule stands as proposed: no scenario slower than today by more
+   than 10 %, and both NVIS echo tests inside their budgets. A candidate that misses it narrowly
+   goes to the author with its numbers and trace, and the author decides.
+3. **GitHub's runners** for the oracle and the A/B, as in the second review. Each run is asked for
+   first, with its cost, and keeps audio out of its artifacts.
+4. **No new field sessions until the decision.** Gate 0 works from the uploads in hand (the
+   two-sided sessions of 11-06, 11-07, 11-08 and 11-12, and 11-02's as a reading); long
+   steady-path sessions on the decision's build confirm it after.
+5. **The reading stays an input.** If Gate 0 finds it runs low on steady paths, the change to the
+   guess absorbs it; the receiver's SNR estimate is not part of this review.
