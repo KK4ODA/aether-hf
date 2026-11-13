@@ -1,9 +1,9 @@
 # ADR-0113: The daemon reaches its physical layer through one boundary
 
-**Status:** proposed, 2026-11-13. This is the Aether FM proposal's FM-2
-(`docs/research/aether-fm/00-proposal.md` §B, §I, §L). The author's decision 2 settled that it is
-done now, in HF first, and proven unchanged. This ADR is the design. It is accepted when the
-author agrees the boundary below, and done when step 10.1's gate (§4) passes. No wire change, no
+**Status:** accepted for building, 2026-11-13, the author's agreement to the boundary below. This
+is the Aether FM proposal's FM-2 (`docs/research/aether-fm/00-proposal.md` §B, §I, §L). The
+author's decision 2 settled that it is done now, in HF first, and proven unchanged. It is done
+when step 10.1's gate (§4) passes. No wire change, no
 model change, no configuration key, no vector regenerated.
 
 ## 1. Context
