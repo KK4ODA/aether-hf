@@ -774,21 +774,11 @@ impl<P: Ptt> Station<P> {
         let from = self.bandwidth_hz();
         self.config.params = params;
         // every part new; the new receiver counts its samples from here, the station's from its
-        // start
-        self.air = self.air.moved_to(params);
+        // start. The detector's floor was learned through the other band filter: it learns
+        // again; the radio's levels on quiet are the radio's, and stay (ADR-0078 §5)
+        self.air = self.air.moved_to(params, self.config.busy);
         // a move is between sessions: the new receiver starts on the dial (ADR-0079)
         self.front_end_rebuilt(now, false);
-        // the detector's floor was learned through the other band filter: it learns again; the
-        // radio's levels on quiet are the radio's, and stay (ADR-0078 §5)
-        let busy = crate::busy::BusyDetector::new(crate::busy::BusyConfig {
-            fs: params.fs_baseband,
-            passband_hz: params.occupied_bandwidth_hz(),
-            centre_hz: params.centre_hz,
-            threshold_db: self.busy.config().threshold_db,
-            ..self.config.busy
-        });
-        let before = std::mem::replace(&mut self.busy, busy);
-        self.busy.keep_levels_from(&before);
         self.was_busy = false;
         // the receive filter is the same radio's: its looks stay, judged at the new span
         self.passband.set_air(params);

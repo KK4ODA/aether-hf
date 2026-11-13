@@ -62,7 +62,7 @@ use aether_phy::{
 };
 
 use crate::{
-    air::HfAir,
+    air::hf::{HfAir, Listened, Listening},
     audio::OnsetGuard,
     busy::{BusyConfig, BusyDetector},
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
@@ -1073,7 +1073,6 @@ pub struct Station<P: Ptt> {
     /// Where the receive mixer is centred, and the station it follows (ADR-0079).
     centre: centre::Centre,
     ptt: PttWatchdog<P>,
-    busy: BusyDetector,
     /// How far the audio processed trails the air ([`CaptureLag`]).
     capture_lag: CaptureLag,
     /// The channel held by another session this station heard, which its own calls wait out.
@@ -1325,18 +1324,11 @@ impl<P: Ptt> Station<P> {
             ..config.link.clone()
         };
         let engine = GrantedEngine::new(&config.callsign, timing, link, seed);
-        let busy = BusyDetector::new(BusyConfig {
-            fs: params.fs_baseband,
-            passband_hz: params.occupied_bandwidth_hz(),
-            centre_hz: params.centre_hz,
-            ..config.busy
-        });
         let mut station = Self {
             engine,
-            air: HfAir::new(params),
+            air: HfAir::new(params, config.busy),
             centre: centre::Centre::default(),
             ptt: PttWatchdog::new(ptt, config.max_key_s),
-            busy,
             capture_lag: CaptureLag::default(),
             reservation: reserve::Reservation::default(),
             playback: VecDeque::new(),
@@ -1584,7 +1576,7 @@ impl<P: Ptt> Station<P> {
     /// Whether the channel is occupied.
     #[must_use]
     pub fn channel_busy(&self) -> bool {
-        self.busy.busy(self.now())
+        self.air.busy.busy(self.now())
     }
 
     /// The application's own bytes still to send: queued, or handed to the link and not yet
@@ -1780,7 +1772,7 @@ impl<P: Ptt> Station<P> {
             .value
             .is_some_and(|old| old.abs_diff(hz) >= DIAL_RETUNE_HZ)
         {
-            self.busy.retune(now);
+            self.air.busy.retune(now);
             self.note(
                 "dial",
                 &format!("moved to {hz} Hz: the busy detector learns the band again"),
@@ -1806,12 +1798,12 @@ impl<P: Ptt> Station<P> {
     /// The busy detector.
     #[must_use]
     pub fn busy_detector(&self) -> &BusyDetector {
-        &self.busy
+        &self.air.busy
     }
 
     /// Start a new interval for the detector's peak reading, once the last one has gone out.
     pub fn reset_busy_peak(&mut self) {
-        self.busy.reset_excess_peak();
+        self.air.busy.reset_excess_peak();
     }
 
     /// What the radio is keyed through.
@@ -2253,7 +2245,9 @@ impl<P: Ptt> Station<P> {
         self.bandwidth.home_hz = config.radio.bandwidth as usize;
         self.config.answer_only = config.radio.answer_only;
         self.ptt.max_key_s = config.radio.max_key_s;
-        self.busy.set_threshold_db(config.radio.busy_threshold_db);
+        self.air
+            .busy
+            .set_threshold_db(config.radio.busy_threshold_db);
         self.config.record_auto = config.record.auto;
         self.config.record_program_sessions = config.record.send_to_project;
         self.config.record_notes.clone_from(&config.record.notes);
@@ -2696,7 +2690,7 @@ impl<P: Ptt> Station<P> {
         if !(0.5..=10.0).contains(&seconds) {
             return Err("a tune tone lasts between 0.5 and 10 seconds");
         }
-        if self.config.wait_for_clear && !self.busy.settled() {
+        if self.config.wait_for_clear && !self.air.busy.settled() {
             return Err(
                 "the busy detector is still learning the noise floor; try again in a few seconds",
             );
@@ -2752,7 +2746,7 @@ impl<P: Ptt> Station<P> {
         if !(1..=10).contains(&bursts) {
             return Err("a drive check is between 1 and 10 bursts");
         }
-        if self.config.wait_for_clear && !self.busy.settled() {
+        if self.config.wait_for_clear && !self.air.busy.settled() {
             return Err(
                 "the busy detector is still learning the noise floor; try again in a few seconds",
             );
@@ -2923,7 +2917,7 @@ impl<P: Ptt> Station<P> {
             );
         }
         // where the busy detector stood, so a trace of the audio can carry on from it
-        recording.busy_state(self.busy.state(self.now()));
+        recording.busy_state(self.air.busy.state(self.now()));
         // and the receive filter's profile, which a trace of the audio starts without
         recording.passband_profile(false, self.passband.noise_profile(), self.passband.looks());
         let path = recording.path().to_path_buf();
@@ -3137,8 +3131,20 @@ impl<P: Ptt> Station<P> {
             self.note("error", &format!("recording stopped: {error}"));
             self.recording = None;
         }
-        let baseband = self.air.downconvert(audio);
         let now = self.now();
+        let how = if self.transmitting {
+            Listening::Transmitting {
+                past: self.played_past_transmission(),
+                playback_empty: self.playback.is_empty(),
+            }
+        } else {
+            // the busy detector is spared the tail of this station's own burst, which the card
+            // delivers a lead after the key is released
+            Listening::Hearing {
+                sense: now >= self.deaf_until,
+            }
+        };
+        let ended = self.air.take_block(audio, how, now);
 
         if self.transmitting {
             // Deaf while transmitting: what came in is our own sidetone, not the channel, so
@@ -3155,41 +3161,30 @@ impl<P: Ptt> Station<P> {
             // enough to bring in the end of our own tail and the start of the peer's reply
             // together used to mute the reply's start with the tail — the first frame of
             // the burst after every slow pass, on a loaded machine.
-            self.busy.skip(&baseband);
-            let after = self.captured_after_transmission(audio.len(), baseband.len());
-            if after == 0 || !self.playback.is_empty() {
-                let muted = vec![(0.0, 0.0); baseband.len()];
-                self.absorb(&muted, now);
-            } else {
-                let during = baseband.len() - after;
-                let ended = now - after as f64 * self.config.params.fs_baseband.recip();
-                let muted = vec![(0.0, 0.0); during];
-                self.absorb(&muted, ended);
+            let muted = self.air.listen_next();
+            if let Some(ended) = ended {
+                self.absorb(muted, ended);
                 self.finish_transmission(ended)?;
-                self.absorb(&baseband[during..], now);
+                let heard = self.air.listen_next();
+                self.absorb(heard, now);
+            } else {
+                self.absorb(muted, now);
             }
         } else {
-            // the receiver hears everything; the busy detector is spared the tail of this
-            // station's own burst, which the card delivers a lead after the key is released
-            if now < self.deaf_until {
-                self.busy.skip(&baseband);
-            } else {
-                // the whole passband first: the radio's gain, which the channel's own blocks
-                // are judged at (ADR-0078)
-                self.busy
-                    .hear_passband(audio, self.config.params.audio_rate as f64, now);
-                self.busy.push(&baseband, now);
+            // the receiver hears everything
+            if now >= self.deaf_until {
                 // what the radio delivers, not this station's own tail
                 self.clipping.hear(audio);
             }
-            self.absorb(&baseband, now);
+            let heard = self.air.listen_next();
+            self.absorb(heard, now);
         }
         self.note_busy_transition(now);
         if let Some(recording) = &mut self.recording {
-            recording.busy_reading(now, &self.busy.reading(now));
+            recording.busy_reading(now, &self.air.busy.reading(now));
         }
-        self.reservation.channel(now, self.busy.busy(now));
-        self.trace_after_release(&baseband, now);
+        self.reservation.channel(now, self.air.busy.busy(now));
+        self.trace_after_release(now);
         self.sample_passband(now);
 
         self.refresh_burst_cap(now);
@@ -3792,24 +3787,24 @@ impl<P: Ptt> Station<P> {
     /// it is busy and whether it is still deaf to this station's tail. What the receiver
     /// hears as the radio comes back to receive, against what the station made of it — the
     /// raw audio is in the WAV, the station's reading of it only here (ADR-0037).
-    fn trace_after_release(&mut self, baseband: &[Complex], now: f64) {
+    fn trace_after_release(&mut self, now: f64) {
         if self.recording.is_none()
             || now - self.released_at > RELEASE_TRACE_S
             || now - self.traced_at < RELEASE_TRACE_STEP_S
-            || baseband.is_empty()
         {
             return;
         }
+        let Some(power) = self.air.block_power() else {
+            return;
+        };
         self.traced_at = now;
-        let power =
-            baseband.iter().map(|&(i, q)| i * i + q * q).sum::<f64>() / baseband.len() as f64;
         let detail = format!(
             "after {:.3} power {:.1} level {:.1} floor {:.1} busy {} deaf {}",
             now - self.released_at,
             10.0 * power.max(1e-12).log10(),
-            self.busy.level_db,
-            self.busy.floor_db,
-            u8::from(self.busy.busy(now)),
+            self.air.busy.level_db,
+            self.air.busy.floor_db,
+            u8::from(self.air.busy.busy(now)),
             u8::from(now < self.deaf_until),
         );
         let state = format!("{:?}", self.engine.state());
@@ -3818,36 +3813,27 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// How many of the baseband samples of the block just captured came in after the
-    /// transmission now running had wholly left the sound card. The card's playback clock
-    /// and the capture run at one rate, so what the card has played past the transmission's
-    /// last sample is what the capture holds past it — near enough: a card captures its own
-    /// tail a little later still, and that is silence either way. `captured` audio samples
-    /// became `baseband` baseband ones.
-    fn captured_after_transmission(&self, captured: usize, baseband: usize) -> usize {
-        let past = self
-            .clock
+    /// How many audio samples the sound card has played past the last sample of the
+    /// transmission now running, on its own clock: what the capture holds past it, which the
+    /// air hears again (`HfAir::take_block`).
+    fn played_past_transmission(&self) -> usize {
+        self.clock
             .played_past_transmission()
-            .map_or(0, |past| usize::try_from(past).unwrap_or(usize::MAX));
-        if past == 0 || captured == 0 {
-            return 0;
-        }
-        let after = past.min(captured) as f64 * baseband as f64 / captured as f64;
-        (after.round() as usize).min(baseband)
+            .map_or(0, |past| usize::try_from(past).unwrap_or(usize::MAX))
     }
 
     // ── internals ─────────────────────────────────────────────────────
 
     /// Feed the streaming receiver and pass what it finds to the engine.
-    fn absorb(&mut self, baseband: &[Complex], now: f64) {
+    fn absorb(&mut self, listened: Listened, now: f64) {
         let fs = self.config.params.fs_baseband;
         // where this receiver's positions start: a move to the other bandwidth (ADR-0026)
         // builds another, but what this one found is placed by its own count
-        let crate::air::hf::Listened {
+        let Listened {
             origin,
             frames,
             preambles,
-        } = self.air.listen(baseband);
+        } = listened;
 
         // Completed frames first, then preambles. Both can come out of one block, and the
         // order matters: a preamble found in this block belongs to a frame that is *still
@@ -3871,7 +3857,7 @@ impl<P: Ptt> Station<P> {
             let span_start = (origin + decoded.frame.start()) as f64 / fs;
             let span_end = span_start + decoded.frame.samples(&air) as f64 / fs;
             // its blocks are a frame's, not the noise's (ADR-0076), and so is its spectrum
-            self.busy.explain(span_start, span_end);
+            self.air.busy.explain(span_start, span_end);
             self.passband.frame(span_start, span_end);
             let record = self.frame_record(&decoded, rung, (span_start, span_end), now);
             self.keep_frame(record, now);
@@ -3880,7 +3866,7 @@ impl<P: Ptt> Station<P> {
             // beacon drew a reply would be unusable.
             if let Some(caller) = beacon_callsign(&decoded) {
                 self.stats.beacons_heard += 1;
-                self.busy.mark_frame(now, detected);
+                self.air.busy.mark_frame(now, detected);
                 self.note(
                     "beacon",
                     &format!("heard {caller} at {:.1} dB", decoded.frame.snr_3k_db()),
@@ -3901,7 +3887,7 @@ impl<P: Ptt> Station<P> {
             // that did not decode is a soft frame the engine may still combine, and it says
             // nothing about the channel: a phantom gets this far too.
             if decoded_ok {
-                self.busy.mark_frame(now, detected);
+                self.air.busy.mark_frame(now, detected);
             }
             // a call or a probe to this station while the host program attached says not to
             // answer (`LISTEN OFF`, VARA's default until it says otherwise)
@@ -4540,7 +4526,7 @@ impl<P: Ptt> Station<P> {
         let waited_out = self
             .held_from
             .is_some_and(|from| now - from >= OTHER_ID_WAIT_MAX_S);
-        let busy_for_id = alone && self.busy.busy(now) && !waited_out;
+        let busy_for_id = alone && self.air.busy.busy(now) && !waited_out;
         // an identifier waits for a clear channel no longer than the wait above: §97.119 asks
         // for it at the end of the communication, and a host program waits for it
         let id_waited_out = alone && waited_out;
@@ -5070,7 +5056,7 @@ impl<P: Ptt> Station<P> {
             // a frame arriving: none of it is the noise floor, heeded or not (ADR-0076), nor
             // the noise the receive filter is read from (ADR-0105)
             let end_s = (origin + pending.end) as f64 / fs;
-            self.busy.explain(start_s, end_s);
+            self.air.busy.explain(start_s, end_s);
             self.passband.frame(start_s, end_s);
             // every announcement, heeded or not, so a frame can be placed against the key's
             // release and a phantom just after it seen (ADR-0037)
@@ -5169,17 +5155,17 @@ impl<P: Ptt> Station<P> {
     /// every transition says: the level and floor at that moment, the threshold, and the
     /// reason the hold was last extended.
     fn note_busy_transition(&mut self, now: f64) {
-        let busy = self.busy.busy(now);
+        let busy = self.air.busy.busy(now);
         if busy == self.was_busy {
             return;
         }
         self.was_busy = busy;
-        let margin = self.busy.config().threshold_db;
-        let (level, floor) = (self.busy.level_db, self.busy.floor_db);
+        let margin = self.air.busy.config().threshold_db;
+        let (level, floor) = (self.air.busy.level_db, self.air.busy.floor_db);
         // one line per transition, every quantity the decision used, in a fixed order:
         //   signal | floor | delta | margin | threshold | before -> after | reason
         let why = if busy {
-            match self.busy.reason() {
+            match self.air.busy.reason() {
                 Some(crate::busy::BusyReason::Level { .. }) => {
                     "energy over the threshold for the attack".to_owned()
                 }
@@ -5197,6 +5183,7 @@ impl<P: Ptt> Station<P> {
         // and the radio's gain, when its AGC holds it down: the floor follows it (ADR-0078),
         // and a reader of the log should know the noise moved for that reason
         let gain = self
+            .air
             .busy
             .gain_db()
             .filter(|&g| g <= -RADIO_GAIN_SHOWN_DB)
@@ -5941,7 +5928,7 @@ impl<P: Ptt> Station<P> {
         }
         // a session this station heard holds the channel through the quiet between its
         // transmissions, which the busy detector does not bridge (10-step-3.md §3.2)
-        self.busy.settled() && !self.busy.busy(now) && !self.reservation.holds(now)
+        self.air.busy.settled() && !self.air.busy.busy(now) && !self.reservation.holds(now)
     }
 
     /// A decoded frame of a session not this station's holds the channel ([`Self::other_session`]).
@@ -7456,7 +7443,8 @@ mod tests {
             station.device_played(card.played);
             // what the station hears of the block it is about to take: only what came in
             // after the last sample had left
-            let heard = station.captured_after_transmission(pass as usize, pass as usize);
+            // (with a block as long in baseband as in audio, the air's scaling is the identity)
+            let heard = station.played_past_transmission().min(pass as usize);
             heard_early =
                 heard_early.max((heard as u64).saturating_sub(card.played.saturating_sub(leaves)));
             station.capture(&silence).expect("capture");
@@ -8635,7 +8623,7 @@ mod tests {
         // the channel busy throughout, as the contest kept it
         for _ in 0..200 {
             let now = air.a.now();
-            air.a.busy.mark_frame(now, 3.0);
+            air.a.air.busy.mark_frame(now, 3.0);
             air.run(0.1, |_, _| false);
             sent_disc |= air.a.transmitting() && air.a.state() == State::Idle;
             if !air.b.connected() {
@@ -11991,7 +11979,7 @@ mod tests {
             NullPtt::default(),
             1,
         );
-        assert!(!station.busy.settled());
+        assert!(!station.air.busy.settled());
         assert!(
             station.tune(1.0).is_err(),
             "a tone went out before the channel was known to be clear"
@@ -12035,19 +12023,19 @@ mod tests {
             station.capture(&hiss(rate / 50)).expect("capture");
         }
         assert!(
-            station.busy.settled(),
+            station.air.busy.settled(),
             "four seconds of noise did not settle the detector"
         );
         let now = station.now();
         station.read_dial(7_074_000, now);
         station.read_dial(7_076_000, now);
         assert!(
-            station.busy.settled(),
+            station.air.busy.settled(),
             "a nudge of the dial started the detector over"
         );
         station.read_dial(3_590_000, now);
         assert!(
-            !station.busy.settled(),
+            !station.air.busy.settled(),
             "a move to another band kept what was learned"
         );
         assert_eq!(station.frequency.value, Some(3_590_000));
@@ -12062,7 +12050,7 @@ mod tests {
             station.capture(&hiss(rate / 50)).expect("capture");
         }
         assert!(
-            station.busy.settled(),
+            station.air.busy.settled(),
             "it did not listen again after the move"
         );
     }
@@ -12300,13 +12288,13 @@ mod tests {
         );
 
         // a decoded frame is the evidence, and it does
-        station.busy.mark_frame(now, 1.38);
+        station.air.busy.mark_frame(now, 1.38);
         assert!(
             station.channel_busy(),
             "a decoded frame marks the channel busy"
         );
         assert!(matches!(
-            station.busy.reason(),
+            station.air.busy.reason(),
             Some(crate::busy::BusyReason::Frame { .. })
         ));
     }
@@ -12494,7 +12482,7 @@ mod tests {
             station.capture(&quiet).expect("capture");
         }
         let now = station.now();
-        station.busy.mark_frame(now, 3.0);
+        station.air.busy.mark_frame(now, 3.0);
         assert!(station.channel_busy());
         assert!(
             !station.channel_clear(now),
