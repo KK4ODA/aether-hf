@@ -543,7 +543,8 @@ mod controller_traces {
             &frame_s,
             int(&trace["floor_modes"]),
             &echo_limit,
-        );
+        )
+        .for_air(trace["wide"].as_bool().expect("wide"));
         let control = floats(&trace["control_s"]);
         if let [floor, ordinary] = control[..] {
             c.price_exchanges(

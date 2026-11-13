@@ -199,43 +199,16 @@ pub fn decode_probability(snr_db: f64, threshold_db: f64, slope_db: f64) -> f64 
     1.0 / (1.0 + (-x).exp() / 9.0)
 }
 
-/// Bench only: the third rate review's candidate switches
-/// (`docs/research/rate-control-3/03-candidates.md` §2), all off in a station on the air. The
-/// model's `RateController` fields of the same names.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct RateReview {
-    /// G3: a rung's prior counts in full while the rung has no frames of its own and less as
-    /// they come in, until it counts for nothing once the rung has a whole try's worth.
-    pub prior_steps_aside: bool,
-    /// G4: a lost try none of whose frames failed does not double the wait before the next try
-    /// of its rung.
-    pub clean_try_keeps_wait: bool,
-    /// G5: while a rung is tried, its account is not aged by the air the other rungs send beside
-    /// it.
-    pub try_unaged: bool,
-    /// G1: the prior's margin under the reading, dB, in place of today's 3 (`None`: today's).
-    pub prior_margin_db: Option<f64>,
-    /// G2b: how far a frame moves its family's offset, dB, in place of today's 0.5 (`None`:
-    /// today's).
-    pub family_gain_db: Option<f64>,
-    /// The values and switches above apply on the 2 300 Hz air alone; a station on the 500 Hz
-    /// air runs today's controller (`rate-control-3/04-results.md` §5.3).
-    pub wide_only: bool,
-}
+/// How far under the reading the prior is read on the 2 300 Hz air (ADR-0111): there a rung's 10 %
+/// point arrives 0.2–0.8 dB over its AWGN point by the reading on a clean path, and 3 dB left a
+/// strong path a rung or two low for a whole short transfer. The 500 Hz air keeps the controller's
+/// 3: its rungs pay the larger fading penalty (the model's `WIDE_PRIOR_MARGIN_DB`).
+pub const WIDE_PRIOR_MARGIN_DB: f64 = 1.0;
 
-impl RateReview {
-    /// What applies on an air: all of it, or nothing on the 500 Hz air when
-    /// [`wide_only`](Self::wide_only) is set (the model's `GrantedEngine._rate_review`).
-    #[must_use]
-    pub fn for_air(self, wide: bool) -> Self {
-        if self.wide_only && !wide {
-            Self::default()
-        } else {
-            self
-        }
-    }
-}
+/// How far a frame moves its family's offset on the 2 300 Hz air (ADR-0111), twice the
+/// controller's 0.5: with the smaller margin a failing family is walked down twice as fast (the
+/// model's `WIDE_FAMILY_GAIN_DB`).
+pub const WIDE_FAMILY_GAIN_DB: f64 = 1.0;
 
 /// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -285,10 +258,6 @@ pub struct RateController {
     /// Frames at the rung being tried since the try began: a try is decided once they outweigh
     /// the prior ([`try_over`](Self::try_over)).
     try_frames: usize,
-    /// Of `try_frames`, those that did not decode ([`RateReview::clean_try_keeps_wait`]).
-    try_lost: usize,
-    /// The review's candidate switches, all off on the air.
-    review: RateReview,
     /// The rung the last transmission's frames went at, when every one of them there decoded
     /// alone ([`clean_climb`](Self::clean_climb)).
     clean_at: Option<usize>,
@@ -355,8 +324,6 @@ impl RateController {
             probing: None,
             probe_tries: 0,
             try_frames: 0,
-            try_lost: 0,
-            review: RateReview::default(),
             clean_at: None,
             half_life: 12.0,
             prior_frames: 2.0,
@@ -374,16 +341,15 @@ impl RateController {
         }
     }
 
-    /// The same controller with the review's candidate switches set (benches only).
+    /// The same controller with the guess's settings for its air (ADR-0111): on the 2 300 Hz air
+    /// [`WIDE_PRIOR_MARGIN_DB`] and [`WIDE_FAMILY_GAIN_DB`]; on the 500 Hz air its own (the
+    /// model's `GrantedEngine._air_guess`).
     #[must_use]
-    pub const fn with_review(mut self, review: RateReview) -> Self {
-        if let Some(margin) = review.prior_margin_db {
-            self.prior_margin_db = margin;
+    pub const fn for_air(mut self, wide: bool) -> Self {
+        if wide {
+            self.prior_margin_db = WIDE_PRIOR_MARGIN_DB;
+            self.family_gain_db = WIDE_FAMILY_GAIN_DB;
         }
-        if let Some(gain) = review.family_gain_db {
-            self.family_gain_db = gain;
-        }
-        self.review = review;
         self
     }
 
@@ -490,24 +456,8 @@ impl RateController {
         let air = self.frame_s.get(mode).copied().unwrap_or(1.0);
         let prior = snr_db.map_or(0.0, |snr| cap * self.prior_p(mode, snr));
         let acc = self.account(mode);
-        let w = self.prior_weight(&acc);
-        (acc.bytes + w * prior) / (acc.air_s + w * air)
-    }
-
-    /// How many frames the prior counts as beside a rung's own
-    /// ([`RateReview::prior_steps_aside`]; the model's `_prior_weight`).
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
-    fn prior_weight(&self, acc: &Account) -> f64 {
         let w = self.prior_frames;
-        if !self.review.prior_steps_aside {
-            return w;
-        }
-        let whole = (self.prior_frames as usize + 1) as f64;
-        w * (1.0 - acc.frames / whole).max(0.0)
+        (acc.bytes + w * prior) / (acc.air_s + w * air)
     }
 
     /// The prior's chance a frame at `mode` decodes at `snr_db`, its family's offset under the
@@ -661,13 +611,8 @@ impl RateController {
         let decay = 0.5_f64.powf(1.0 / self.half_life);
         #[allow(clippy::cast_precision_loss)]
         for f in frames {
-            let unaged = if self.review.try_unaged {
-                self.probing
-            } else {
-                None
-            };
             for (mode, old) in self.accounts.iter_mut().enumerate() {
-                if mode == f.mode || Some(mode) == unaged {
+                if mode == f.mode {
                     continue;
                 }
                 if let Some(old) = old {
@@ -709,17 +654,12 @@ impl RateController {
             // frames at a rung above, sent for another reason (a copy still at its first rung,
             // the Test's measurement): news of it, as a try would be
             if Some(mode) != self.probing && mode != here && mode > here {
-                let clean = frames.iter().filter(|f| f.mode == mode).all(|f| f.decoded);
-                self.judge_try(mode, clean);
+                self.judge_try(mode);
             }
         }
         if let Some(probe) = self.probing {
             self.probe_tries += 1;
             self.try_frames += frames.iter().filter(|f| f.mode == probe).count();
-            self.try_lost += frames
-                .iter()
-                .filter(|f| f.mode == probe && !f.decoded)
-                .count();
             if self.try_over() {
                 self.end_probe(self.try_frames > 0);
             }
@@ -740,19 +680,17 @@ impl RateController {
         self.probing = None;
         self.probe_tries = 0;
         self.try_frames = 0;
-        self.try_lost = 0;
     }
 
     fn end_probe(&mut self, measured: bool) {
         let Some(mode) = self.probing else {
             return;
         };
-        let clean = self.try_lost == 0;
         self.cancel_try();
         if !measured {
             return;
         }
-        if self.judge_try(mode, clean) {
+        if self.judge_try(mode) {
             self.index = self
                 .modes
                 .iter()
@@ -767,20 +705,15 @@ impl RateController {
     }
 
     /// What frames at `mode`, above the current rung, said: whether it now beats the current
-    /// rung. If not, the next try of it waits twice as long — unless every one of the frames
-    /// decoded and [`RateReview::clean_try_keeps_wait`] is on.
-    fn judge_try(&mut self, mode: usize, clean: bool) -> bool {
+    /// rung. If not, the next try of it waits twice as long.
+    fn judge_try(&mut self, mode: usize) -> bool {
         let here = self.modes[self.index];
         if self.value(mode) > self.value(here) {
             self.probe_wait[mode] = Some(self.probe_every);
             return true;
         }
         let wait = self.wait(mode);
-        self.probe_wait[mode] = Some(if self.review.clean_try_keeps_wait && clean {
-            wait
-        } else {
-            self.probe_wait_max.min(2 * wait)
-        });
+        self.probe_wait[mode] = Some(self.probe_wait_max.min(2 * wait));
         self.since_probe[mode] = Some(0.0);
         false
     }

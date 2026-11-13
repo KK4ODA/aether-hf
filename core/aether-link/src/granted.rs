@@ -57,7 +57,7 @@ use crate::{
         seq_distance, with_level,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
-    rate::{CONTROL_THRESHOLD_DB, FrameOutcome, RateController, RateReview},
+    rate::{CONTROL_THRESHOLD_DB, FrameOutcome, RateController},
 };
 
 // ── what the engine hands its driver ──────────────────────────────────
@@ -402,9 +402,6 @@ pub struct GrantConfig {
     pub on_time_to_lower: usize,
     /// Slots answered on time after which a slave asks for one level less.
     pub need_ease_after: usize,
-    /// Bench only: the third rate review's candidate switches for this station's rate
-    /// controller, all off on the air (the model's `GrantConfig.rate`).
-    pub rate_review: RateReview,
 }
 
 impl Default for GrantConfig {
@@ -452,7 +449,6 @@ impl Default for GrantConfig {
             hold_unknown: true,
             on_time_to_lower: 4,
             need_ease_after: 6,
-            rate_review: RateReview::default(),
         }
     }
 }
@@ -1078,11 +1074,10 @@ impl std::fmt::Debug for GrantedEngine {
 }
 
 /// The rate controller on an air's table (the model's `_rate_controller`).
-/// The rate review's bench switches for the air `config` states (the model's `_rate_review`).
-fn review_for(config: &GrantConfig) -> RateReview {
-    config
-        .rate_review
-        .for_air(bandwidth_hz_of(config.capabilities) != Some(500))
+/// Whether the air `config`'s capability byte states is the 2 300 Hz one, whose guess differs
+/// (ADR-0111; the model's `GrantedEngine._air_guess`).
+fn wide_air(config: &GrantConfig) -> bool {
+    bandwidth_hz_of(config.capabilities) != Some(500)
 }
 
 fn rate_for(timing: &PhyTiming) -> RateController {
@@ -1131,7 +1126,7 @@ impl GrantedEngine {
     #[allow(clippy::too_many_lines)] // the engine's state, a field a line
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
-        let rate = rate_for(&timing).with_review(review_for(&config));
+        let rate = rate_for(&timing).for_air(wide_air(&config));
         let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
@@ -1261,7 +1256,7 @@ impl GrantedEngine {
         self.measure_out = None;
         self.measure_unheard = false;
         self.measure_again = false;
-        self.rate = rate_for(&self.timing).with_review(review_for(&self.config));
+        self.rate = rate_for(&self.timing).for_air(wide_air(&self.config));
         self.last_rx_mode = None;
         self.missed = MISSED_UNKNOWN;
         self.price_controllers();
@@ -1935,7 +1930,7 @@ impl GrantedEngine {
         if let Some(rung) = max_mode {
             self.config.max_mode = rung;
         }
-        self.rate = rate_for(&self.timing).with_review(review_for(&self.config));
+        self.rate = rate_for(&self.timing).for_air(wide_air(&self.config));
         self.price_controllers();
     }
 

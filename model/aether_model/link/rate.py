@@ -169,6 +169,19 @@ middle kinds included, 34 symbols of 31 ms on the ordinary layout (the link laye
 the frames; tested against them)."""
 
 
+WIDE_PRIOR_MARGIN_DB = 1.0
+"""How far under the reading the prior is read on the 2 300 Hz air (ADR-0111): there a rung's 10 %
+point arrives 0.2-0.8 dB over its AWGN point by the reading on a clean path, and the 3 dB of
+:attr:`RateController.prior_margin_db` left a strong path one or two rungs low for the whole of a
+short transfer (``docs/research/rate-control-3/01-evidence.md`` §2-3). The 500 Hz air keeps the 3:
+its rungs pay the larger fading penalty, and with less caution a 7 ms NVIS echo kept a session
+going back to OFDM (``04-results.md`` §5.1-5.2)."""
+WIDE_FAMILY_GAIN_DB = 1.0
+"""How far a frame moves its family's offset on the 2 300 Hz air (ADR-0111), twice
+:attr:`RateController.family_gain_db`: with the smaller margin, a family that fails is walked
+down twice as fast (``04-results.md`` §5.2)."""
+
+
 def usable_modes(
     thresholds: Mapping[int, float] = AWGN_THRESHOLD_DB,
     payload: Mapping[int, float] = PAYLOAD_BYTES,
@@ -386,18 +399,6 @@ class RateController:
     keeps the optimistic prior whatever its family's rungs have shown: on the harness's NVIS
     paths C1 stepped down from a failing OFDM rung to the OFDM rung below, unmeasured, and the
     one below that (``04-results.md`` §3.4). ``0`` turns it off."""
-    prior_steps_aside: bool = False
-    """Bench only, the third rate review's G3 (``docs/research/rate-control-3/03-candidates.md``
-    §2): a rung's prior counts in full while the rung has no frames of its own and less as they
-    come in, until it counts for nothing once the rung has a whole try's worth
-    (:meth:`_prior_weight`). Off, it counts as :attr:`prior_frames` whatever the rung's own frames
-    say, and a try whose every frame decoded can lose its verdict to it (``01-evidence.md`` §1)."""
-    clean_try_keeps_wait: bool = False
-    """Bench only, G4: a lost try none of whose frames failed does not double the wait before the
-    next try of its rung (:meth:`_judge_try`)."""
-    try_unaged: bool = False
-    """Bench only, G5: while a rung is tried, its account is not aged by the air the other rungs
-    send beside it; the aging resumes at the verdict."""
     _family: dict[bool, float] = field(default_factory=dict)
     """The families' offsets, by whether the family is the floor's."""
     control_s: dict[bool, float] = field(default_factory=dict)
@@ -426,8 +427,6 @@ class RateController:
     _try_frames: int = 0
     """Frames at the rung being tried since the try began: a try is decided once they outweigh
     the prior (:meth:`_try_over`)."""
-    _try_lost: int = 0
-    """Of :attr:`_try_frames`, those that did not decode (:attr:`clean_try_keeps_wait`)."""
     _clean_at: int | None = None
     """The rung the last transmission's frames went at, when every one of them there decoded
     alone (:meth:`_clean_climb`)."""
@@ -465,7 +464,7 @@ class RateController:
         decay = 0.5 ** (1.0 / self.half_life)
         for f in frames:
             for mode, old in self._accounts.items():
-                if mode == f.mode or (self.try_unaged and mode == self._probing):
+                if mode == f.mode:
                     continue
                 # a rung's account ages with the air sent at any rung, in frames of its own:
                 # aged only by its own frames, three copies of one block sent two minutes
@@ -498,11 +497,10 @@ class RateController:
             # frames at a rung above, sent for another reason (a copy still at its first rung,
             # the Test's measurement): news of it, as a try would be
             if mode > here:
-                self._judge_try(mode, clean=all(f.decoded for f in frames if f.mode == mode))
+                self._judge_try(mode)
         if self._probing is not None:
             self._probe_tries += 1
             self._try_frames += sum(1 for f in frames if f.mode == self._probing)
-            self._try_lost += sum(1 for f in frames if f.mode == self._probing and not f.decoded)
             if self._try_over():
                 self._end_probe(self._try_frames > 0)
         self._decide()
@@ -537,15 +535,8 @@ class RateController:
         air = self.frame_air_s.get(mode, 1.0)
         prior = 0.0 if self.snr_db is None else cap * self._prior_p(mode, self.snr_db)
         acc = self._accounts.get(mode, _Account())
-        w = self._prior_weight(acc)
-        return (acc.bytes + w * prior) / (acc.air_s + w * air)
-
-    def _prior_weight(self, acc: _Account) -> float:
-        """How many frames the prior counts as beside a rung's own (:attr:`prior_steps_aside`)."""
         w = self.prior_frames
-        if self.prior_steps_aside:
-            w *= max(0.0, 1.0 - acc.frames / (int(self.prior_frames) + 1))
-        return w
+        return (acc.bytes + w * prior) / (acc.air_s + w * air)
 
     def value(self, mode: int) -> float:
         """What the rungs are ranked by: :meth:`estimate` per second of a full exchange at
@@ -597,16 +588,14 @@ class RateController:
         self._probing = None
         self._probe_tries = 0
         self._try_frames = 0
-        self._try_lost = 0
 
     def _end_probe(self, measured: bool) -> None:
         mode = self._probing
         assert mode is not None
-        clean = self._try_lost == 0
         self._cancel_try()
         if not measured:
             return
-        if self._judge_try(mode, clean=clean):
+        if self._judge_try(mode):
             self._index = self.modes.index(mode)
             if self._usable(self._index + 1):
                 # a climb that works goes on: the rung above is tried at the next transmission
@@ -622,18 +611,15 @@ class RateController:
         n = self.burst_frames.get(mode, 1)
         return self._probe_wait.get(mode, self.probe_every) * (n * self.frame_air_s.get(mode, 1.0))
 
-    def _judge_try(self, mode: int, *, clean: bool = False) -> bool:
+    def _judge_try(self, mode: int) -> bool:
         """What frames at ``mode``, above the current rung, said: whether it now beats the
-        current rung. If not, the next try of it waits twice as long — unless every one of the
-        frames decoded and :attr:`clean_try_keeps_wait` is on."""
+        current rung. If not, the next try of it waits twice as long."""
         here = self.modes[self._index]
         if self.value(mode) > self.value(here):
             self._probe_wait[mode] = self.probe_every
             return True
         wait = self._probe_wait.get(mode, self.probe_every)
-        if not (self.clean_try_keeps_wait and clean):
-            wait = min(self.probe_wait_max, 2 * wait)
-        self._probe_wait[mode] = wait
+        self._probe_wait[mode] = min(self.probe_wait_max, 2 * wait)
         self._since_probe[mode] = 0.0
         return False
 

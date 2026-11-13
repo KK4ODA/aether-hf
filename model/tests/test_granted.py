@@ -628,7 +628,12 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
     Measured, and held here, with the current controller choosing the rung. Under C1 at the
     sender (ADR-0094) the rule still pays at 500 Hz — 125 s to 88 s here, and on the PACTOR
     scenario 10 of 10 runs complete with it against 7 of 10 — but at 2 300 Hz this seed takes
-    44 s with it against 41 s without (``04-results.md`` §3.28): owed to the next review."""
+    44 s with it against 41 s without (``04-results.md`` §3.28): owed to the next review.
+
+    Under ADR-0111's guess on the 2 300 Hz air a 3 000-byte transfer ends in 30 s with one silent
+    slot either way, too short to show the rule; at 6 000 bytes it pays there too (5 silent slots
+    to 1, 120 s to 65 s), so the 2 300 Hz case sends that."""
+    size = 6000 if air == "2300" else 3000
 
     def run(memory: int) -> tuple[int, float]:
         a, b = _pair(AIRS[air], floor_answer_memory=memory, hold_unknown=False)
@@ -644,23 +649,18 @@ def test_answers_go_on_the_floor_while_recent_slots_went_silent(air: str) -> Non
 
         sim = TwoStationSim(a, b, snr_db=8.0, seed=7, frame_snr_offset=bursts)
         a.connect("KK4XYZ")
-        a.send(bytes(rng.randrange(256) for _ in range(3000)))
+        a.send(bytes(rng.randrange(256) for _ in range(size)))
         t = 0.0
-        while len(sim.st[1].delivered) < 3000 and t < 900.0:
+        while len(sim.st[1].delivered) < size and t < 900.0:
             t += 5.0
             sim.run(until=t)
-        assert len(sim.st[1].delivered) == 3000, "the transfer did not finish"
+        assert len(sim.st[1].delivered) == size, "the transfer did not finish"
         return a.stats.silent_slots, t
 
     silent_before, t_before = run(0)
     silent_after, t_after = run(4)
     assert silent_after < silent_before, (silent_before, silent_after)
-    # the time gain was measured with the old controller choosing the rung; under the one
-    # controller (ADR-0099 §5) it holds at 500 Hz and ties at 2 300 Hz (45 s both)
-    if air == "500":
-        assert t_after < t_before, (t_before, t_after)
-    else:
-        assert t_after <= t_before, (t_before, t_after)
+    assert t_after < t_before, (t_before, t_after)
 
 
 @pytest.mark.parametrize("air", ["2300", "500"])
@@ -1391,7 +1391,12 @@ def test_a_line_typed_at_an_idle_slave_goes_in_the_open_window() -> None:
 
 
 def test_a_bulk_transfer_leaves_out_headers_that_change_nothing() -> None:
+    """R7: a transmission of four data frames or fewer, all at the station's own choice, goes
+    without its header. The rung is pinned so that the test holds R7 and not where the rate
+    controller ends a transfer: under ADR-0111's guess this transfer's last transmission carried
+    a try's frame, which keeps the header (ADR-0076), and none was left out."""
     a, b = _pair(WIDE)
+    a.pin_mode(16)
     sim = TwoStationSim(a, b, snr_db=14.0, seed=10)
     done = _exchange(sim, a, b, b"e" * 30000, b"")
     assert done is not None

@@ -73,7 +73,7 @@ from aether_model.link.granted import (  # noqa: E402
     GrantConfig,
     GrantedEngine,
 )
-from aether_model.link.harness import phy_timing  # noqa: E402
+from aether_model.link.harness import bandwidth_capabilities, phy_timing  # noqa: E402
 from aether_model.link.rate import RateController  # noqa: E402
 from aether_model.phy.pipeline import MODE_RETRY_CONFIDENCE  # noqa: E402
 from aether_model.waveform import NARROW_500, WIDE_2300  # noqa: E402
@@ -993,7 +993,9 @@ def controller_for(
     only a tree before ADR-0099 has: from protocol 12 the engine's one controller is C1, and
     the advice a ``current`` replay compares against is in no control frame (run the replay of
     an older session with ``--tree`` at its build)."""
-    cfg = GrantConfig(rate=dict(rate or {}))
+    # the air's capability byte, as the daemon states it: the guess differs by air (ADR-0111)
+    params = NARROW_500 if air.params.bandwidth is NARROW.params.bandwidth else WIDE_2300
+    cfg = GrantConfig(capabilities=bandwidth_capabilities(params), rate=dict(rate or {}))
     if controller != "current" and hasattr(cfg, "controller"):
         cfg.controller = controller
     engine = GrantedEngine("TOOL", timing_of(air), cfg)

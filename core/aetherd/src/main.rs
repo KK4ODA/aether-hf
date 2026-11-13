@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 
-use aether_link::{GrantConfig, RateReview};
+use aether_link::GrantConfig;
 use aetherd::{
     audio::{AudioIo, DEVICE_LATENCY_S, Loopback, SoundCard, list_devices},
     config::{Config, EXAMPLE, PttConfig},
@@ -418,7 +418,7 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
-    say_debug_mode(&config, simulated, &mut daemon);
+    say_debug_mode(&config, &mut daemon);
 
     let mut audio = match &args.channel {
         Some(address) => harness_channel(address, &config, &mut daemon)?,
@@ -597,34 +597,6 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
     Ok(log)
 }
 
-/// Bench only: the third rate review's candidate switches a harness names in
-/// `AETHER_BENCH_LINK` (comma separated: `prior_steps_aside`, `clean_try_keeps_wait`,
-/// `try_unaged`, `prior_margin_db=<dB>`, `family_gain_db=<dB>`, `wide_only`), honoured only by a simulated daemon: a station on the
-/// air never runs a prototype. The oracle workflow sets it to judge a candidate on the same build
-/// as the shipping default (`docs/research/rate-control-3/03-candidates.md`).
-fn bench_rate_review(simulated: bool) -> RateReview {
-    let named = std::env::var("AETHER_BENCH_LINK").unwrap_or_default();
-    let names: Vec<&str> = if simulated {
-        named.split(',').map(str::trim).collect()
-    } else {
-        Vec::new()
-    };
-    let on = |name: &str| names.contains(&name);
-    let value = |name: &str| {
-        names
-            .iter()
-            .find_map(|n| n.strip_prefix(name)?.strip_prefix('=')?.parse::<f64>().ok())
-    };
-    RateReview {
-        prior_steps_aside: on("prior_steps_aside"),
-        clean_try_keeps_wait: on("clean_try_keeps_wait"),
-        try_unaged: on("try_unaged"),
-        prior_margin_db: value("prior_margin_db"),
-        family_gain_db: value("family_gain_db"),
-        wide_only: on("wide_only"),
-    }
-}
-
 /// What the station is told from the configuration file.
 fn station_config(
     config: &Config,
@@ -657,7 +629,6 @@ fn station_config(
         callsign: config.callsign.clone(),
         link: GrantConfig {
             max_mode: config.radio.fastest_mode(),
-            rate_review: bench_rate_review(simulated),
             ..GrantConfig::default()
         },
         // as set: it indexes the ladder of whichever bandwidth runs (ADR-0026)
@@ -1888,17 +1859,8 @@ fn report_frames(
 
 /// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
 /// every start, as the panel does once on screen.
-/// What debug mode does on this station, and any bench switch of the rate review it runs.
-fn say_debug_mode(config: &Config, simulated: bool, daemon: &mut DaemonState) {
-    let review = bench_rate_review(simulated);
-    if review != RateReview::default() {
-        daemon.log.record(
-            Level::Info,
-            "link",
-            &format!("bench: the rate review's switches are on (AETHER_BENCH_LINK): {review:?}"),
-            "Idle",
-        );
-    }
+/// What debug mode does on this station.
+fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
     if config.record.send_to_project && daemon.simulated {
         daemon.log.record(
             Level::Info,

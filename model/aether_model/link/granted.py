@@ -92,6 +92,8 @@ from aether_model.link.phy import Container, PhyTiming, SoftFrame, TxFrame
 from aether_model.link.rate import (
     CLASS_PENALTY_DB,
     CONTROL_THRESHOLD_DB,
+    WIDE_FAMILY_GAIN_DB,
+    WIDE_PRIOR_MARGIN_DB,
     FrameOutcome,
     RateController,
     usable_modes,
@@ -1580,17 +1582,18 @@ class GrantedEngine:
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
-            **{**floor, **priced, **self._rate_review()},  # type: ignore[arg-type]
+            **{**floor, **priced, **self._air_guess(), **self.cfg.rate},  # type: ignore[arg-type]
         )
 
-    def _rate_review(self) -> dict[str, float | int | None]:
-        """:attr:`GrantConfig.rate`, for this air: with ``wide_only`` set (a bench switch of the
-        third rate review, ``rate-control-3/04-results.md`` §5.3) the values apply on the 2 300 Hz
-        air alone, and a station on the 500 Hz air runs today's."""
-        rate = dict(self.cfg.rate)
-        if rate.pop("wide_only", False) and bandwidth_hz_of(self.cfg.capabilities) == 500:
+    def _air_guess(self) -> dict[str, float]:
+        """The guess's settings for this air (ADR-0111): on the 2 300 Hz air the prior is read
+        :data:`WIDE_PRIOR_MARGIN_DB` under the reading and its family's offset moves
+        :data:`WIDE_FAMILY_GAIN_DB` a frame; on the 500 Hz air, whose rungs pay the larger fading
+        penalty, the controller's own (3 dB and 0.5 dB). The air is the one this station's
+        capability byte states, so a station moving between airs (ADR-0026) takes them with it."""
+        if bandwidth_hz_of(self.cfg.capabilities) == 500:
             return {}
-        return rate
+        return {"prior_margin_db": WIDE_PRIOR_MARGIN_DB, "family_gain_db": WIDE_FAMILY_GAIN_DB}
 
     # ── keying ────────────────────────────────────────────────────────
 

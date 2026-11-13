@@ -5,9 +5,7 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && !inputs.confirm && 'Ra
 # and the nightly's two echo tests, run at every usable rung and at the controller's own choice,
 # ten draws each by default, one job per scenario in parallel (a long set goes in two runs, by
 # `draws`: a job has six hours). Started by hand; `controller_only` runs the controller's choice
-# alone, to judge a build against a baseline's best rungs; `bench_link` runs a candidate's rate
-# controller switches on the same build (AETHER_BENCH_LINK, honoured by a simulated daemon only;
-# docs/research/rate-control-3/03-candidates.md). A run in a cloud session stops when the session goes quiet; here the runs finish, and each job keeps
+# alone, to judge a build against a baseline's best rungs. A run in a cloud session stops when the session goes quiet; here the runs finish, and each job keeps
 # its rows and sidecars as an artifact (docs/research/rate-control-2/00-brief.md, Gate 0).
 
 # Started by hand, it runs only with "I need this answer" ticked: November's first week spent
@@ -36,9 +34,6 @@ on:
         default: ""
       rungs_2300:
         description: "2300 Hz rungs to pin, comma separated (empty: every usable rung)"
-        default: ""
-      bench_link:
-        description: "A candidate's rate controller switches (AETHER_BENCH_LINK, e.g. prior_steps_aside,clean_try_keeps_wait,try_unaged or prior_margin_db=1,family_gain_db=1,wide_only); empty runs the shipping default"
         default: ""
 
 jobs:
@@ -129,7 +124,6 @@ jobs:
         env:
           RUNGS_500: ${{ inputs.rungs_500 }}
           RUNGS_2300: ${{ inputs.rungs_2300 }}
-          AETHER_BENCH_LINK: ${{ inputs.bench_link }}
         run: |
           case "${{ matrix.scenario }}" in
             *-500|*-500-*) rungs="${RUNGS_500:-0,1,2,3,4,5,6,7,9,10,11,12,13,14}" ;;

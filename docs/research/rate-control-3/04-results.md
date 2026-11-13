@@ -246,3 +246,14 @@ cannot see sits on a rung (20 m DX Moderate 8 dB, the bench's 0 dB fading points
 contest). In each the mechanism is the same: with 1 dB of caution, a rung that keeps failing is
 rated good again as its failures age, and it is tried again. Three narrow misses (K2 on 20 m DX,
 K5 at two points, K4 on one RTTY draw) for the author.
+
+## 6. The decision
+
+The author adopted the 2 300 Hz-only change as it is, with its three narrow misses (2026-11-13):
+**ADR-0111**. Gates 5 and 6 in one change: the values became the 2 300 Hz air's defaults in the
+model (`WIDE_PRIOR_MARGIN_DB`, `WIDE_FAMILY_GAIN_DB`, `GrantedEngine._air_guess`) and the port
+(`RateController::for_air`); the try's switches, `RateReview`, `AETHER_BENCH_LINK`, the oracle's
+`bench_link` input and `candidate.yml` were deleted; the granted and link vectors were regenerated
+(the controller traces now state their air); two tests were made to hold their own rule rather than
+the controller's course (ADR-0111 §4). The link bench and the replay tool now state their stations'
+air in the capability byte, as a daemon does.

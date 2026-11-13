@@ -3019,6 +3019,31 @@ AGC held the noise ~14 dB down. The mobile's recordings show none in the gateway
 so it is in the mobile's transmit audio, not Aether's waveform. Cause not found (a live
 microphone or the interface's audio would do it).
 
+**The rate controller's third review: the 2300 Hz air guesses closer (2026-11-13, ADR-0111).** The
+author asked whether C1's guess for an unmeasured rung (the AWGN curve 3 dB under the reading,
+worth two frames) was too cautious. `docs/research/rate-control-3/`: Gate 0 (`tools/c1_replay.py`
+replays C1 on a two-sided session; a reading calibration; the oracle on the strong paths) found
+the prior 3 dB too cautious on clean paths and not cautious enough on fading ones, and the strong
+2300 Hz paths 22–23 % under the best rung held throughout, mostly where C1 starts and how slowly
+it climbs on a short transfer. Gate 3 on the oracle (ten draws of 26 scenarios, paired with today's
+on the same draws): the try candidate (the prior stepping aside, no doubled wait after a clean
+try, no aging during a try) fixed the 11-12 near miss but not the gap; a 1 dB margin closed the gap
+but lost the 500 Hz NVIS gateway tests (the client kept going back to OFDM under a 7 ms echo),
+with the family offset's gain doubled too. **Adopted:** 1 dB and a 1 dB family gain on the 2300 Hz
+air only (`WIDE_PRIOR_MARGIN_DB`, `WIDE_FAMILY_GAIN_DB`, `GrantedEngine._air_guess`,
+`RateController::for_air`, by the air the capability byte states), the 500 Hz air unchanged:
+strong 2300 Hz paths +6.5 % from the best rung, equatorial flutter 211 → 522 bit/s, VARA QRM
+719 → 928; three narrow misses accepted (20 m DX Moderate ~3 % slower, the link bench at 0 dB
+fading ×1.06–1.07, one RTTY-contest draw that kept returning to a rung the RTTY killed). The
+review's bench switches are deleted (`candidate.yml` lives at `1f847c0`); the oracle workflow
+keeps `rungs_500`/`rungs_2300` (pin only the rungs near a path's edge) and gained the steady-mail
+and start-pair scenarios. **Anything that builds a `GrantConfig` for a real air must state its
+capability byte** (`bandwidth_capabilities(params)`): the default reads as 2300 Hz, and the link
+bench and the replay tool had been running their 500 Hz stations as 2300 Hz ones. Learned: the
+oracle's 500 Hz echo tests (AGC, Trimode) take another course between any two runs of one build
+(wall-clock steps), so their flags on a build that does not act there are noise; and two
+controllers' rungs per draw (`same data rungs`) tell a candidate's effect from the harness's.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

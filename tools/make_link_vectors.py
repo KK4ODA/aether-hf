@@ -46,7 +46,7 @@ from aether_model.link.frames import (
     with_level,
 )
 from aether_model.link.granted import GrantConfig, GrantedEngine
-from aether_model.link.harness import phy_timing
+from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.rate import (
     AWGN_THRESHOLD_DB,
     CONTROL_THRESHOLD_DB,
@@ -320,7 +320,9 @@ def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str
     session's next transmission would hide one (an echo reading's choice is taken again at the
     next transmission's)."""
     timing = phy_timing(air.params)
-    ctl = GrantedEngine("TOOL", timing, GrantConfig()).rate
+    # the air stated in the capability byte, as a station's: the guess differs by air (ADR-0111)
+    caps = bandwidth_capabilities(air.params)
+    ctl = GrantedEngine("TOOL", timing, GrantConfig(capabilities=caps)).rate
     modes = sorted(ctl.thresholds)
     rng = random.Random(seed)
     snr = rng.uniform(-10.0, 20.0)
@@ -388,6 +390,7 @@ def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str
         "capacity": [data_capacity(timing.capacity(m)) for m in modes],
         "frame_s": [timing.data_frame_s_for(m) for m in modes],
         "floor_modes": timing.floor_modes,
+        "wide": air.params.bandwidth.hz != 500,
         "echo_limit": [(timing.echo_limit or {}).get(m) for m in modes],
         # C1 ranks per second of a whole exchange (control frames [floor, ordinary], the gaps,
         # a full transmission's frames by rung); its families stay the data's in a trace
