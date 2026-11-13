@@ -2969,17 +2969,26 @@ the mobile read the gateway about 5 dB higher. Timing was clean: no overlap, 0.5
 air, answers 64–165 ms into their slots, loop latency 57 ms each way, every call accepted at its
 first try (11–12 s on the floor), a single 28 ms capture skip in a session (the 11-07 losses at
 2300 Hz did not recur), receive filter clear at both ends, no clipping. Found, each the author's
-call: (1) **C1's prior holds the climb** (the rate controller rule applies: evidence for a review,
-no patch). The prior (the AWGN curve 3 dB under the peer's reading, 0.5 dB slope, worth two frames)
-gave 500 Hz rung 11 a 14–55 % chance at these readings and 2300 Hz rung 12 1–3 %, where the path
-decoded 171 of 174 and 4 of 4. A try ends after three frames, and three clean frames cannot outweigh
-a near-zero prior: at 2300 Hz rung 12 (+13 % a frame) would need about sixteen in a row, so the
-link stayed at rung 11. At 500 Hz rung 10 held for 100 s after a clean try of 11. (2) **The
+call: (1) **C1 holds the climb by a hair** (the rate controller rule applies: evidence for a
+review, no patch). C1 replayed on the sessions' frames (`docs/research/rate-control-3/00-brief.md`)
+repeats their choices, 21 of 21 transmissions at 2300 Hz and 50 of 54 at 500 Hz. At 2300 Hz the try
+of rung 12 decoded 4 of 4 and lost its verdict by 1.2 % (136.5 against rung 11's 138.2 bytes a
+second of exchange): the prior, worth two frames, still rated rung 12 at 0.77 though the family's
+offset had moved 2.5 dB over the session's successes, and the try's own frames had aged by half. The
+wait then doubled to twelve transmissions and the session ended first; rung 12 carries 12.7 % more.
+At 500 Hz the try of rung 11 lost by 1.4 %, and from 117 s C1 rated rung 11 above rung 10 but could
+not choose it, its frames under the prior's two and the doubled wait holding the next try until
+194 s. Its prior on 500 Hz rung 12 (0.01–0.03) was right: 1 of 9 decoded. (2) **The
 keyed-audio watch warned falsely at the mobile** ("may not be transmitting", 14:18:35). The
 TS-480's receive audio while keyed drops 16–25 dB in 1–2.8 kHz but only 2–4 dB below 600 Hz, where
 60/120/180/300 Hz hum from the interface stays. The watch's whole-band level put 11 of 62
 transmissions inside its 6 dB margin; read over 1–2.5 kHz, none, with at least 12.6 dB to spare.
-The FTDX10 drops about 60 dB either way. (3) The Windows 997 drops (above). Tool fixes the same
+The FTDX10 drops about 60 dB either way. **Fixed (the author's go):** the watch measures in
+`keyed_audio::BAND_HZ`, 1–2.5 kHz (a fourth-order Butterworth each side, its state run on from block
+to block, `KeyedAudio::level_db`); the causal filter on the same recordings: 0 of 62 unchanged, the
+least fall 11.9 dB, and the dead key of 2026-11-02 (KK4ODA keying RTS on the FTDX10's CAT port,
+`20261102-203126_KK4ODA_KK2ODA`) reads +1.4 dB in the band as over the whole audio, so it is still
+said. The log line says the levels are the band's. (3) The Windows 997 drops (above). Tool fixes the same
 day: `rung_reading.py` reads protocol 12's control frames, `two_sides.py` judges an open window
 by its length; `rung_reading.py` does not finish on a session over 256 data frames (the sequence
 number wraps; a task of its own).
