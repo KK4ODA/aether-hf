@@ -828,7 +828,8 @@ before anything changes, as ADR-0069's steps were.
 | 10.7, 10.8 | Performance against published figures (VARA FM by its published table only); release: installers, the manual, calibration diagnostics, the beta channel | — |
 
 The ADRs, written before any FM code and numbered from ADR-0112 as they are written (the
-proposal's §L has what each needs): FM-1 product structure, FM-2 the PHY boundary, FM-3 the FM
+proposal's §L has what each needs): FM-1 product structure (ADR-0112, accepted), FM-2 the PHY
+boundary (ADR-0113, proposed: step 10.1's design and gate), FM-3 the FM
 channel model, FM-4 the waveform, FM-5 calibration, FM-6 learned profiles, FM-7 the FM link
 protocol, FM-8 channel access, FM-9 the repeater profile, FM-10 VHF/UHF rules, FM-11
 identification on FM, FM-12 host interfaces, FM-13 legacy packet. Bench equipment owed before
