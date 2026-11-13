@@ -80,3 +80,37 @@ for where C1 starts. The port takes it as `RateReview.prior_margin_db`, a simula
 `AETHER_BENCH_LINK=prior_margin_db=1`; the granted vectors gain two sessions with it
 (`margin-good-wide`, `margin-moderate-narrow`), and a model test holds that it starts higher at the
 same reading. Its run is judged against run 24, today's, on the same draws and criteria.
+
+### 5.1 G1's run
+
+Oracle run 26 at `bc6a003` (`bench_link = prior_margin_db=1`), controller only, the 26 scenarios,
+the same ten draws; all 520 daemons logged `prior_margin_db: Some(1.0)`. Judged against run 24.
+Per draw in `data/gate3_g1.csv`. About two hours of runner time.
+
+| # | criterion | result | |
+|---|---|---|---|
+| K1 | the gap to the best single rung, +15 % or less | 40 m Good: today 2 246, G1 2 535, rung 17 2 695: **+6.3 %**. Steady mail: today 963, G1 1 104, rung 12 1 176: **+6.5 %** | **passes** |
+| K2 | no speed scenario slower | paired, nine scenarios have a range end at or over 1.10 (below); faster: equatorial flutter 0.54, 80 m flutter at 500 Hz 0.77, VARA QRM 0.85, steady mail 0.87, thunderstorm 0.90, 40 m Good 0.93 | to be rerun, but see K8 |
+| K3 | the start pair | 0 draws over one rung apart (today 1) | **passes** |
+| K8 | both echo tests inside their budgets | the Trimode test lost its reply in **3 draws of 10** (today none); the AGC test lost one, as today did | **fails** |
+
+The nine for K2's rerun (paired ratio, 90 % range): Trimode 1.74 (1.36–∞), the weak ladder path
+1.06 (1.00–1.29), 80 m weak 1.00 (1.00–1.26), the weak 2300 Hz Test path 1.01 (1.00–1.21), 20 m DX
+1.03 (0.88–1.20), RTTY crashes 1.06 (0.91–1.18), the AGC test 1.05 (0.95–1.18), NVIS evening 0.92
+(0.82–1.15), NVIS disturbed 1.07 (0.94–1.14). All but two are 500 Hz or weak paths.
+
+**Why Trimode fails.** The test is ITU NVIS at 500 Hz, where a 7 ms echo kills OFDM. In the lost
+draws (1, 3, 8) the client went out at OFDM rungs 6 and 7 and stayed on OFDM (draw 1: 7 ×4, 6 ×2,
+7 ×2, 6 ×2, 7, 6 ×2, 7, 6, then 5 ×8), delivering nothing the gateway could read, until the
+transfer ran out of its 400 s. Today's controller starts at rung 6 too, but with the prior 3 dB under
+the reading it gives OFDM up after a few failures and finishes on the floor's rungs 0–2. At 1 dB the
+prior still rates the next OFDM rung down above the floor after each failure, and the family offset
+(0.5 dB a failed frame) needs more failures to undo the extra 2 dB. This is the loss
+`03-candidates.md` §2 named for G1: a higher start on an NVIS path that the offset then has to walk
+back.
+
+**What it says.** The margin is the lever for the strong 2300 Hz paths, as Gate 0 said: K1 passes
+with room, and several fading 2300 Hz paths gain 7–46 %. What fails is the same 2 dB on the 500 Hz
+NVIS and weak paths, where today's caution is what gets the session off OFDM. Options that keep the
+first and not the second need a run each (§6 of the conversation's decision, recorded below when
+made).
