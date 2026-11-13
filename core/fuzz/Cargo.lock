@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aether-fec"
-version = "0.2.0-beta.154"
+version = "0.2.0-beta.155"
 dependencies = [
  "serde_json",
 ]
@@ -27,11 +27,11 @@ dependencies = [
 
 [[package]]
 name = "aether-link"
-version = "0.2.0-beta.154"
+version = "0.2.0-beta.155"
 
 [[package]]
 name = "aether-phy"
-version = "0.2.0-beta.154"
+version = "0.2.0-beta.155"
 dependencies = [
  "aether-fec",
  "rustfft",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "aetherd"
-version = "0.2.0-beta.154"
+version = "0.2.0-beta.155"
 dependencies = [
  "aether-fec",
  "aether-link",
