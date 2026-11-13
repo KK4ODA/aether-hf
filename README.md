@@ -601,12 +601,47 @@ describes. Protocol and DSP decisions go through short ADRs in `docs/adr/`. The
 
 ## Prior art and independence
 
-Aether HF is designed from public standards and open literature (3GPP TS 38.212 LDPC,
-IEEE 802.11 LDPC, ITU-R F.1487 channel models, MIL-STD-188-110, OFDM synchronization
-literature) and open implementations we can learn from (codec2/FreeDV data modes, FreeDATA,
-ARDOP). It does not copy or reverse-engineer VARA; the host-interface compatibility targets
-VARA's *published* TCP command set only, and Aether frames are not compatible with VARA's on
-the air.
+Aether HF is designed from public standards, open literature and the open modems it has
+learned from. Each decision record in [`docs/adr/`](docs/adr/) and each review in
+[`docs/research/`](docs/research/) cites what it drew on.
+
+* **The waveform.** OFDM with a Schmidl–Cox preamble. 3GPP TS 38.212 LDPC (base graph 2), with
+  its CRC and its circular-buffer rate matching, which gives HARQ its incremental redundancy.
+  Clip-and-filter peak reduction. The tone floor is M-FSK synchronised by Costas arrays
+  (J. P. Costas, 1984), the idea that also synchronises MIL-STD-188-141 ALE and the published
+  FT4/FT8 design. IEEE 802.11 LDPC, codec2/FreeDV's LDPC matrices and MIL-STD-188-110's serial
+  tone were weighed and not taken
+  ([ADR-0002](docs/adr/0002-waveform-parameters.md), [ADR-0003](docs/adr/0003-fec-family.md)).
+* **The channel.** ITU-R F.1487's fading conditions on the Watterson model.
+* **The link.** Granted slots came out of the counterexamples of a TLA+ model of the earlier
+  protocol. The review compared them with PACTOR (ITU-R M.1798), MIL-STD-188-141B's 3G-HDL,
+  STANAG 5066, Bluetooth's master/slave polling, 802.11's NAV and Mercury's carousel turns
+  ([`03-alternatives.md`](docs/research/link-architecture/03-alternatives.md)).
+* **Rate control.** Choosing each rung by measured delivery, with single-frame tries of the next
+  rung up, is the approach of Wi-Fi's SampleRate and Minstrel. Its survey also read cellular
+  outer-loop link adaptation, MIL-STD-188-110, STANAG 5066, ARDOP, FreeDATA and Mercury
+  ([`02-survey.md`](docs/research/rate-control/02-survey.md)).
+* **Open modems.** Mercury (Rhizomatica) is the one Aether learned from most directly: whole
+  bursts handed to the sound card and the key held to a deadline
+  ([ADR-0010](docs/adr/0010-whole-burst-to-the-card.md)), and `BUFFER` said again while it stands
+  still ([ADR-0109](docs/adr/0109-a-count-that-stands-still-is-said-again.md)). ARDOP, FreeDATA
+  and codec2/FreeDV's data modes were read for comparison.
+* **The interfaces.** KISS follows Chepponis and Karn's *The KISS TNC* (1987). Keying and the
+  dial follow the radio makers' CAT manuals, the CM108's data sheet, and the published protocols
+  of rigctld and FLRig. Pat's open VARA driver was read to see what a host program expects of
+  `BUFFER`. The closed host programs, Winlink Express, VarAC and RMS Trimode, are tested as
+  they ship.
+* **The rules.** FCC Part 97 from the e-CFR, and the band plan from the ARRL's. The calling
+  frequencies also follow the IARU Region 1, 2 and 3 band plans.
+
+**VARA is a black box.** Aether uses only VARA's published documents: the TNC command list,
+the KISS notes, the quick guide and the published specification. Nothing in Aether comes from
+VARA's signal, its timing on the air or a recording of it, and no design is argued from what
+VARA seems to do. Aether's frames are not compatible with VARA's on the air, and its `VERSION`
+answers with Aether's own name.
+
+Aether HF is not affiliated with or endorsed by the authors of VARA, Winlink (Winlink Express,
+RMS Trimode), Pat or VarAC. Their names are used only to say what Aether works with.
 
 <!-- tota-support:start -->
 ## Support
