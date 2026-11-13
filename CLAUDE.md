@@ -2938,6 +2938,15 @@ waits for its acknowledgement, up to two minutes on the tone floor (ADR-0033). I
 session a count above zero is now said again after 50 s unsaid (`BUFFER_REPEAT`, Mercury's figure;
 `HostConfig::buffer_repeat`, which tests shorten). Mercury found it on the air (its issue 397).
 
+**Fuzzing (2026-11-13, the author's go).** `core/fuzz/` holds cargo-fuzz targets for the parsers
+that take outside bytes: `air_frames` (every link decoder on one payload), `datagrams` (fragments
+through `read_fragment` and the `Reassembler`), `inflate` (the `Decompressor`), `kiss` (the KISS
+`Decoder`, `classify`, `guess_client`) and `vara_commands` (`HostState::command`). Its own workspace,
+not a member of `core/`: libFuzzer needs nightly (`cargo +nightly fuzz run <target>`, its README), so
+CI does not run it; what a fuzzer finds is fixed with a unit test in the crate it was found in. Not
+fuzzed yet: the granted engine fed frames in a session, and the PHY. The `Decompressor` has no cap
+on what it hands over (DEFLATE expands up to about a thousand times).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

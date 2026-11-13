@@ -1,0 +1,56 @@
+# Fuzzing for the parsers that take bytes from outside the station (`README.md`). Opt-in: libFuzzer
+# needs a nightly toolchain and CI builds on stable, so this is a workspace of its own and not a
+# member of the core one. What it finds is fixed with a unit test in the crate it was found in,
+# which CI does run.
+[package]
+name = "aether-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+aether-link = { path = "../aether-link" }
+aetherd = { path = "../aetherd" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "air_frames"
+path = "fuzz_targets/air_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "datagrams"
+path = "fuzz_targets/datagrams.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inflate"
+path = "fuzz_targets/inflate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kiss"
+path = "fuzz_targets/kiss.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vara_commands"
+path = "fuzz_targets/vara_commands.rs"
+test = false
+doc = false
+bench = false
