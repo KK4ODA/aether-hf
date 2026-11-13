@@ -94,11 +94,13 @@ def timing_doc(t: PhyTiming) -> dict[str, Any]:
 REVIEW_SWITCHES = ("prior_steps_aside", "clean_try_keeps_wait", "try_unaged")
 """The third rate review's candidate switches (``rate-control-3/03-candidates.md`` §2), the only
 rate controller settings a session may change: the port takes them as ``GrantConfig.rate_review``."""
+REVIEW_VALUES = ("prior_margin_db",)
+"""The review's candidate values (G1): the port takes them as ``RateReview`` fields too."""
 TRY_REVIEW = dict.fromkeys(REVIEW_SWITCHES, True)
 
 
 def config_doc(c: GrantConfig) -> dict[str, Any]:
-    if set(c.rate) - set(REVIEW_SWITCHES):
+    if set(c.rate) - set(REVIEW_SWITCHES) - set(REVIEW_VALUES):
         raise ValueError("the vectors use the rate controller's defaults, but for the review's")
     doc = {
         "max_data_frames": c.max_data_frames,
@@ -145,7 +147,9 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "need_ease_after": c.need_ease_after,
     }
     if c.rate:
-        doc["rate_review"] = {name: bool(c.rate.get(name)) for name in REVIEW_SWITCHES}
+        review: dict[str, Any] = {name: bool(c.rate.get(name)) for name in REVIEW_SWITCHES}
+        review.update({name: bits(c.rate.get(name)) for name in REVIEW_VALUES})
+        doc["rate_review"] = review
     return doc
 
 
@@ -1312,6 +1316,11 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "try-moderate-narrow": fading_field(NARROW, "moderate", 6.0, 64, 2000, TRY_REVIEW),
     # G4 alone: a weak steady path where a try that decoded every frame still loses
     "try-clean-wait-wide": steady(WIDE, 3.0, 61, 20000, {"clean_try_keeps_wait": True}),
+    # G1: the prior's margin at 1 dB
+    "margin-good-wide": fading_field(WIDE, "good", 12.0, 63, 12000, {"prior_margin_db": 1.0}),
+    "margin-moderate-narrow": fading_field(
+        NARROW, "moderate", 6.0, 64, 2000, {"prior_margin_db": 1.0}
+    ),
 }
 
 

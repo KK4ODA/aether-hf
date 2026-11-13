@@ -202,7 +202,7 @@ pub fn decode_probability(snr_db: f64, threshold_db: f64, slope_db: f64) -> f64 
 /// Bench only: the third rate review's candidate switches
 /// (`docs/research/rate-control-3/03-candidates.md` §2), all off in a station on the air. The
 /// model's `RateController` fields of the same names.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct RateReview {
     /// G3: a rung's prior counts in full while the rung has no frames of its own and less as
@@ -214,6 +214,8 @@ pub struct RateReview {
     /// G5: while a rung is tried, its account is not aged by the air the other rungs send beside
     /// it.
     pub try_unaged: bool,
+    /// G1: the prior's margin under the reading, dB, in place of today's 3 (`None`: today's).
+    pub prior_margin_db: Option<f64>,
 }
 
 /// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.
@@ -356,6 +358,9 @@ impl RateController {
     /// The same controller with the review's candidate switches set (benches only).
     #[must_use]
     pub const fn with_review(mut self, review: RateReview) -> Self {
+        if let Some(margin) = review.prior_margin_db {
+            self.prior_margin_db = margin;
+        }
         self.review = review;
         self
     }

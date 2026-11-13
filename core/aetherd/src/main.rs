@@ -599,16 +599,27 @@ fn open_log(config: &Config, path: &std::path::Path) -> Result<Log, String> {
 
 /// Bench only: the third rate review's candidate switches a harness names in
 /// `AETHER_BENCH_LINK` (comma separated: `prior_steps_aside`, `clean_try_keeps_wait`,
-/// `try_unaged`), honoured only by a simulated daemon: a station on the air never runs a
-/// prototype. The oracle workflow sets it to judge a candidate on the same build as the shipping
-/// default (`docs/research/rate-control-3/03-candidates.md`).
+/// `try_unaged`, `prior_margin_db=<dB>`), honoured only by a simulated daemon: a station on the
+/// air never runs a prototype. The oracle workflow sets it to judge a candidate on the same build
+/// as the shipping default (`docs/research/rate-control-3/03-candidates.md`).
 fn bench_rate_review(simulated: bool) -> RateReview {
     let named = std::env::var("AETHER_BENCH_LINK").unwrap_or_default();
-    let on = |name: &str| simulated && named.split(',').any(|n| n.trim() == name);
+    let names: Vec<&str> = if simulated {
+        named.split(',').map(str::trim).collect()
+    } else {
+        Vec::new()
+    };
+    let on = |name: &str| names.contains(&name);
+    let value = |name: &str| {
+        names
+            .iter()
+            .find_map(|n| n.strip_prefix(name)?.strip_prefix('=')?.parse::<f64>().ok())
+    };
     RateReview {
         prior_steps_aside: on("prior_steps_aside"),
         clean_try_keeps_wait: on("clean_try_keeps_wait"),
         try_unaged: on("try_unaged"),
+        prior_margin_db: value("prior_margin_db"),
     }
 }
 

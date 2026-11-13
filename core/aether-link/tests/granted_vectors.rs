@@ -174,6 +174,7 @@ fn rate_review(doc: &Value) -> RateReview {
         prior_steps_aside: on("prior_steps_aside"),
         clean_try_keeps_wait: on("clean_try_keeps_wait"),
         try_unaged: on("try_unaged"),
+        prior_margin_db: opt(&doc["prior_margin_db"]),
     }
 }
 

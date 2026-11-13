@@ -8,6 +8,7 @@ go by the station's own choice (D1)."""
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -283,6 +284,22 @@ def test_g5_a_tried_rung_is_not_aged_by_the_air_sent_beside_it() -> None:
     assert on._accounts[up].frames > off._accounts[up].frames
     decay = 0.5 ** (1.0 / on.half_life)
     assert math.isclose(on._accounts[up].frames, 1.0 + decay + decay**2)
+
+
+def test_g1_a_smaller_margin_starts_higher() -> None:
+    """G1 (``rate-control-3/03-candidates.md`` §2), set through ``GrantConfig.rate``: at 1 dB
+    under the reading the prior rates a rung higher at the same reading, so the start is higher
+    on a strong path (40 m Good: today rung 16, the best single rung 17)."""
+    timing = phy_timing(WIDE.params)
+    config = GrantConfig(
+        capabilities=bandwidth_capabilities(WIDE.params), max_mode=WIDE.n_rungs - 1
+    )
+    today = GrantedEngine("W4ODA", timing, config, seed=1).rate
+    smaller = GrantedEngine(
+        "W4ODA", timing, replace(config, rate={"prior_margin_db": 1.0}), seed=1
+    ).rate
+    assert smaller.prior_margin_db == 1.0 and today.prior_margin_db == 3.0
+    assert smaller.first_mode(19.0) > today.first_mode(19.0)
 
 
 def test_a_rungs_account_ages_with_the_air_sent_at_other_rungs() -> None:

@@ -72,3 +72,11 @@ draws instead of one.
   path's 4.5 %.
 
 No runs beyond these two. The next step is the author's (§5).
+
+## 5. The author's decision, and G1 (2026-11-13)
+
+The author chose to screen **G1 at 1 dB** next (`prior_margin_db` 1 against today's 3), the lever
+for where C1 starts. The port takes it as `RateReview.prior_margin_db`, a simulated daemon from
+`AETHER_BENCH_LINK=prior_margin_db=1`; the granted vectors gain two sessions with it
+(`margin-good-wide`, `margin-moderate-narrow`), and a model test holds that it starts higher at the
+same reading. Its run is judged against run 24, today's, on the same draws and criteria.
