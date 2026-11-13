@@ -2930,6 +2930,14 @@ client's `radiopost.log` and the gateway's `gateway.log`; RadioPost keeps corres
 and subjects out of those files (the author's choice), so they follow the rule that a log never
 holds what was said.
 
+**`BUFFER` said again (2026-11-13, ADR-0109; the author's go, from RadioPost's Mercury adapter).**
+Pat's VARA driver (Pat-Vara 1.2.0, `vara/conn.go`) waits on `BUFFER` lines alone while it waits for
+room and for its last bytes to go, and gives up after a minute with none ("write: buffer timeout");
+the VARA port said `BUFFER` only when the count changed, and the count stands still while a burst
+waits for its acknowledgement, up to two minutes on the tone floor (ADR-0033). In the program's own
+session a count above zero is now said again after 50 s unsaid (`BUFFER_REPEAT`, Mercury's figure;
+`HostConfig::buffer_repeat`, which tests shorten). Mercury found it on the air (its issue 397).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

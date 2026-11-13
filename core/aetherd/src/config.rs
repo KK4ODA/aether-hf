@@ -1483,6 +1483,7 @@ impl Config {
             enabled: self.host.enabled,
             bind: self.host.bind.clone(),
             trace: self.host.trace,
+            buffer_repeat: crate::host::BUFFER_REPEAT,
         }
     }
 

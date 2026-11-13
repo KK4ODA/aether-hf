@@ -113,3 +113,4 @@ context → decision → alternatives considered → consequences.
 | [0106](0106-each-program-answers-for-its-own-callsigns.md) | Each program answers for its own callsigns and owns the sessions under them | accepted |
 | [0107](0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md) | Under automatic control only a program answers calls, and a program's session goes with it | accepted |
 | [0108](0108-every-program-speaks-for-the-station-and-setup-says-whose-callsign-it-is.md) | Every program speaks for the station, and Setup says whose callsign it is | accepted |
+| [0109](0109-a-count-that-stands-still-is-said-again.md) | A count that stands still is said again | accepted |

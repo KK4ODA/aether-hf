@@ -11,5 +11,5 @@
 pub mod server;
 pub mod vara;
 
-pub use server::{HostConfig, HostError, HostServer};
+pub use server::{BUFFER_REPEAT, HostConfig, HostError, HostServer};
 pub use vara::{Compression, HostAction, HostState, Notification, SessionKind};

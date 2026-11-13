@@ -44,6 +44,9 @@ pub struct HostConfig {
     /// client differs a little in what it sends, and the first run against a new one is
     /// a conversation worth reading verbatim.
     pub trace: bool,
+    /// How long a count of bytes still to send goes unsaid before `BUFFER` says it again
+    /// (ADR-0109). Not a setting: [`BUFFER_REPEAT`], which the tests shorten.
+    pub buffer_repeat: Duration,
 }
 
 impl Default for HostConfig {
@@ -52,6 +55,7 @@ impl Default for HostConfig {
             enabled: false,
             bind: format!("127.0.0.1:{DEFAULT_COMMAND_PORT}"),
             trace: false,
+            buffer_repeat: BUFFER_REPEAT,
         }
     }
 }
@@ -75,6 +79,15 @@ impl core::error::Error for HostError {}
 
 /// How often to tell a quiet host that the modem is still there.
 const KEEPALIVE: Duration = Duration::from_secs(10);
+
+/// The longest a count of bytes still to send goes unsaid in a program's session (ADR-0109).
+/// Pat (its VARA driver, Pat-Vara 1.2.0, `vara/conn.go`) waits for room in the buffer, and for the
+/// last bytes to go, on `BUFFER` lines alone, and gives up after a minute with none: "write:
+/// buffer timeout". The count stands still while a burst goes unacknowledged, and the link holds
+/// through two minutes of that on the tone floor (ADR-0033). Mercury found it on the air (its
+/// issue 397: a Winlink upload dropped after 93 s near 0 dB) and says the count again after 50 s;
+/// so does this.
+pub const BUFFER_REPEAT: Duration = Duration::from_secs(50);
 /// How long the command reader blocks before giving the notification path a turn.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -214,6 +227,7 @@ impl HostServer {
                 flags,
                 notes: Arc::clone(&notes),
                 trace: config.trace,
+                buffer_repeat: config.buffer_repeat,
             },
         )?;
 
@@ -246,6 +260,7 @@ struct Shared {
     flags: crate::kiss::HostFlags,
     notes: Notes,
     trace: bool,
+    buffer_repeat: Duration,
 }
 
 /// Bind the command port and the data port beside it.
@@ -630,8 +645,10 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
         flags,
         notes,
         trace,
+        buffer_repeat,
     } = shared;
     let trace = *trace;
+    let buffer_repeat = *buffer_repeat;
     if stream.set_read_timeout(Some(POLL)).is_err() {
         return;
     }
@@ -665,6 +682,8 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     let mut last_mode: Option<usize> = None;
     let events = handle.subscribe();
     let mut last_keepalive = std::time::Instant::now();
+    // when a BUFFER line last went, whatever said it (ADR-0109)
+    let mut buffer_said = Instant::now();
     let mut connected_to: Option<String> = None;
     // a call this host placed that has neither come up nor been said to have ended: a host
     // waits for CONNECTED or DISCONNECTED after its CONNECT, and would wait for ever on neither
@@ -774,6 +793,9 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                 for reply in &outcome.replies {
                     if !say(&mut writer, reply) {
                         return;
+                    }
+                    if reply.starts_with("BUFFER") {
+                        buffer_said = Instant::now();
                     }
                 }
                 let own = connected_to.is_some() || calling;
@@ -1145,6 +1167,7 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
                         let queued = queued as usize;
                         if queued != host.buffer {
                             host.buffer = queued;
+                            buffer_said = Instant::now();
                             if !say(&mut writer, &Notification::Buffer(queued).line()) {
                                 return;
                             }
@@ -1177,6 +1200,18 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
         if disconnect_held.is_some_and(|since| since.elapsed() >= CLOSING_ID_WAIT) {
             disconnect_held = None;
             if !say(&mut writer, &Notification::Disconnected.line()) {
+                return;
+            }
+        }
+
+        // ── a count that has stood still ──────────────────────────────
+        // In the program's own session, bytes still to send are said again when no BUFFER line
+        // has gone for `buffer_repeat`: Pat waits on BUFFER lines alone and gives up after a
+        // minute, while a burst can wait unacknowledged for longer (ADR-0109). Only a count
+        // above zero: a program waiting for none waits for nothing.
+        if connected_to.is_some() && host.buffer > 0 && buffer_said.elapsed() >= buffer_repeat {
+            buffer_said = Instant::now();
+            if !say(&mut writer, &Notification::Buffer(host.buffer).line()) {
                 return;
             }
         }
@@ -1635,6 +1670,7 @@ mod tests {
                 enabled: true,
                 bind: "127.0.0.1:0".to_owned(),
                 trace: false,
+                buffer_repeat: BUFFER_REPEAT,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -1790,6 +1826,7 @@ mod tests {
                 enabled: true,
                 bind: "127.0.0.1:0".to_owned(),
                 trace: false,
+                buffer_repeat: BUFFER_REPEAT,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -2373,6 +2410,14 @@ mod tests {
         fn start(
             answer: impl Fn(&str, &ControlChannel) -> serde_json::Value + Send + 'static,
         ) -> (Self, HostServer) {
+            Self::start_repeating(answer, BUFFER_REPEAT)
+        }
+
+        /// [`Modem::start`], with `BUFFER` said again after `buffer_repeat` (ADR-0109).
+        fn start_repeating(
+            answer: impl Fn(&str, &ControlChannel) -> serde_json::Value + Send + 'static,
+            buffer_repeat: Duration,
+        ) -> (Self, HostServer) {
             let (handle, control) = channel();
             let control = Arc::new(Mutex::new(control));
             let stop = Arc::new(AtomicBool::new(false));
@@ -2431,6 +2476,7 @@ mod tests {
                     enabled: true,
                     bind: "127.0.0.1:0".to_owned(),
                     trace: false,
+                    buffer_repeat,
                 },
                 handle,
                 flags.clone(),
@@ -2693,6 +2739,7 @@ mod tests {
                 enabled: true,
                 bind: "127.0.0.1:0".to_owned(),
                 trace: false,
+                buffer_repeat: BUFFER_REPEAT,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -3061,6 +3108,69 @@ mod tests {
             seen.last().map(|(method, _)| method.as_str()),
             Some("closed")
         );
+    }
+
+    #[test]
+    fn a_count_that_stands_still_is_said_again() {
+        // Pat waits for room in the buffer, and for its last bytes to go, on BUFFER lines alone,
+        // and gives up after a minute with none: "write: buffer timeout" (Pat-Vara 1.2.0,
+        // `vara/conn.go`). The count stands still while a burst goes unacknowledged, which on
+        // the tone floor lasts longer than that (ADR-0109). Here 300 ms stands in for the 50 s.
+        let (modem, server) = Modem::start_repeating(|_, _| json!({}), Duration::from_millis(300));
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !modem.methods().iter().any(|m| m == "connect") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                modem.methods()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
+        );
+        assert!(
+            client
+                .expect(|l| l.starts_with("CONNECTED") || l.starts_with("BUFFER"))
+                .starts_with("CONNECTED")
+        );
+        let metrics = |queued: u64| {
+            json!({"queued_bytes": queued, "channel_busy": false, "mode": 4,
+                   "link": {"remote": "KK4XYZ", "seconds": 3.0}})
+        };
+        modem.publish("metrics", metrics(512));
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 512");
+        // the burst waits for its acknowledgement: the same count, said again and again
+        let since = std::time::Instant::now();
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 512");
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 512");
+        assert!(
+            since.elapsed() >= Duration::from_millis(500),
+            "said again sooner than the interval: {:?}",
+            since.elapsed()
+        );
+        // a count that moves is said as it moves, and restarts the interval
+        modem.publish("metrics", metrics(200));
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 200");
+        // all of it acknowledged: BUFFER 0 once, and a count of none is not said again
+        modem.publish("metrics", metrics(0));
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        std::thread::sleep(Duration::from_millis(800));
+        client.send("VERSION");
+        let next = client.expect(|l| l.starts_with("BUFFER") || l.starts_with("VERSION"));
+        assert!(
+            next.starts_with("VERSION"),
+            "a count of none was said again: {next}"
+        );
+        drop(client);
+        drop(modem);
     }
 
     #[test]

@@ -171,6 +171,10 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   * Nothing identifies a session between its call and its end. VarAC's *Call ID interval* sends
     `DE <your callsign>` as chat text, which Aether carries as data; Winlink sends the callsigns
     only at the start. See *FCC regulatory controls*, *What identifies a long session*.
+* **A transfer that waits.** While a session's bytes wait for the other station to acknowledge
+  them, Aether tells the program how many again (`BUFFER`) every 50 s, even when the count has
+  not moved. Pat gives up on a transfer after a minute with no word of the count ("write: buffer
+  timeout"), and on a weak path a burst can wait longer than that for its answer (ADR-0109).
 * **The keying check.** The first transmission after a program attaches is judged on its own:
   if the radio's receive audio does not change while it is keyed, the Log says the radio may not
   be transmitting. A program keying a port nothing is wired to is caught at its first try.

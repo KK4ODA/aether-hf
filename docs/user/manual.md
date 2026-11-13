@@ -300,7 +300,9 @@ the sound card's own noise.
   from the panel and Tests are not sent this way.
 - **Recording notes**: written into every recording that starts on its own.
 - **Host programs**: let Winlink Express, Pat or VarAC use this station on the VARA-compatible
-  interface. The command port is 8300 by default and the data port the next number up. The
+  interface. The command port is 8300 by default and the data port the next number up. While a
+  transfer waits for the other station, the program is told how much is left every 50 s, which
+  Pat needs ([host programs](host-programs.md), *A transfer that waits*). The
   RadioPost client and gateway do not use this port: they connect to the control port. Never
   give it 8515, or 8514, whose data port is 8515: that is Aether's control port, which this
   panel and RadioPost use. Setup refuses a port that would share a number with another of the
