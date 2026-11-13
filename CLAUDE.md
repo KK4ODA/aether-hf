@@ -2991,7 +2991,13 @@ least fall 11.9 dB, and the dead key of 2026-11-02 (KK4ODA keying RTS on the FTD
 said. The log line says the levels are the band's. (3) The Windows 997 drops (above). Tool fixes the same
 day: `rung_reading.py` reads protocol 12's control frames, `two_sides.py` judges an open window
 by its length; `rung_reading.py` does not finish on a session over 256 data frames (the sequence
-number wraps; a task of its own).
+number wraps; a task of its own). The README's *On the air* section (2026-11-13) is these
+sessions: `tools/air_figures.py` draws its three images from the gateway's two recordings
+(`uv run --with matplotlib`). Drawing them showed broadband energy at 300–650 Hz in every one of
+the mobile's transmissions, at 500 Hz 2–3 dB under the data's own density while the gateway's
+AGC held the noise ~14 dB down. The mobile's recordings show none in the gateway's transmissions,
+so it is in the mobile's transmit audio, not Aether's waveform. Cause not found (a live
+microphone or the interface's audio would do it).
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

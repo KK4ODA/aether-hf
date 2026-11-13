@@ -13,18 +13,45 @@ rules before the radio keys, and the same modem runs as a desktop application on
 Linux and macOS or headless on a Raspberry Pi gateway.
 
 > **Status: beta, on the air.** Signed builds ship from
-> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.146` at the time of
+> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.154` at the time of
 > writing): a Windows installer, Linux `.deb` and AppImage packages, an unsigned macOS build for
 > Apple Silicon, and the standalone `aetherd` daemon for gateways, with in-place updates on a
 > beta channel. Aether has been on the air with other stations on 80 m and 40 m since
-> 2026-09-23 — conversations, Test sessions and, since November, Winlink through an Aether
-> gateway — and each problem the air turns up becomes a scenario in the test harness before it
-> becomes a fix ([`field/LOG.md`](field/LOG.md),
+> 2026-09-23: conversations, Test sessions, Winlink through an Aether gateway since
+> 2026-11-06, and RadioPost mail since 2026-11-12. Each problem the air turns up becomes a
+> scenario in the test harness before it becomes a fix ([`field/LOG.md`](field/LOG.md),
 > [`docs/research/link-architecture/`](docs/research/link-architecture/README.md)).
 >
 > **Both stations of a contact need Aether, with the same link protocol** (protocol 12 at the
 > time of writing). When a release changes the protocol, the update window says *Update
 > required*, and the panel warns when a station calls in another one.
+
+## On the air
+
+On 2026-11-12, between 14:13 and 14:29Z, a mobile station sent the same RadioPost mail to the
+KK4ODA-1 gateway twice on 3.590 MHz: first at 500 Hz, then at 2300 Hz. The mobile ran a Kenwood
+TS-480 at 65 W into a screwdriver antenna; the gateway runs a Yaesu FTDX10 at 50 W into a T2D.
+The gateway read the mobile at +4 to +5 dB SNR (in 3 kHz) both times. At 2300 Hz all 119 data
+frames decoded on their own. At 500 Hz 11 of 316 failed, 8 of them tries of the next rung up. No
+transmission overlapped the other station's. These images are drawn from the gateway's own
+recording of the two sessions ([`field/LOG.md`](field/LOG.md), 2026-11-12).
+
+![The gateway's receive audio as a waterfall: three exchanges at 500 Hz and three at 2300 Hz](docs/images/air-80m-waterfall.png)
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/air-80m-delivery.png" alt="Data decoded at the gateway against time: the 2300 Hz session finishes in 180 s, the 500 Hz session in 459 s"></td>
+<td width="50%"><img src="docs/images/air-80m-constellation.png" alt="Constellations of frames off the air: 16-QAM 3/4 at 500 Hz and QPSK 2/3 at 2300 Hz"></td>
+</tr>
+<tr>
+<td><sub><b>The same mail at both bandwidths</b>, minutes apart: at the same SNR, 2300 Hz delivered
+it in 180 s, 2.5 times as fast as 500 Hz.</sub></td>
+<td><sub><b>Frames off the air</b>, decoded again by the reference model from the gateway's
+recording. The 500 Hz signal puts its power into a fifth of the band, about 13 dB a carrier,
+enough for 16-QAM. The 2300 Hz signal spreads the same power wider and runs QPSK, yet carries
+more.</sub></td>
+</tr>
+</table>
 
 ## Screenshots
 
@@ -154,8 +181,9 @@ cover everything else it does.
 * **★ One radio, several programs.** A Winlink gateway program on the host port and a RadioPost
   gateway on the control API can run on the same radio at once. Each program claims its own
   callsigns; a call is answered only while the program holding its callsign listens, and the
-  session is that program's alone
-  ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)).
+  session is that program's alone. Under automatic control only a program answers calls
+  ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md),
+  [ADR-0107](docs/adr/0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md)).
 * **★ Every number can be reproduced.** The Python reference model is the specification and
   the shipped Rust core is held bit-exact to it in CI. Every performance figure comes from a
   benchmark curve committed in [`bench/baselines/`](bench/baselines/). A scenario harness runs
@@ -257,7 +285,8 @@ cover everything else it does.
 * The receiver **follows a station off frequency** during a session and returns to the dial
   after.
 * The first transmission after a host program attaches is checked: if the receive audio does
-  not change while keyed, the log says the radio may not be transmitting.
+  not fall while keyed, the log says the radio may not be transmitting. The check listens in
+  1–2.5 kHz, clear of any interface's hum.
 
 ### The rules, built in
 
@@ -289,10 +318,17 @@ cover everything else it does.
 * ★ **Several programs on one station**: a program on the host port and programs on the control
   API each claim their own callsigns, with answering off until they say. A call is answered only
   while the program holding its callsign listens, the session is that program's alone, and the
-  others see the channel busy until it ends. A program that crashes stops being answered for.
-  While a host program is attached it speaks for the station: the station's own callsigns it
-  does not hold are not answered
-  ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)).
+  others see the channel busy until it ends. A program that crashes stops being answered for,
+  and its call or session ends with it
+  ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md),
+  [ADR-0107](docs/adr/0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md)).
+* While any program is attached it speaks for the station: the station's own callsigns no
+  program holds are not answered, and Setup step 1's callsign box names the program whose
+  callsign is in use
+  ([ADR-0108](docs/adr/0108-every-program-speaks-for-the-station-and-setup-says-whose-callsign-it-is.md)).
+* `BUFFER` is said again every 50 s while the count stands still, so a program that waits on it
+  (Pat's VARA driver gives up after a minute) does not drop a slow session
+  ([ADR-0109](docs/adr/0109-a-count-that-stands-still-is-said-again.md)).
 * A **KISS-over-TCP port** (127.0.0.1:8100) for APRS and packet programs and VarAC's broadcasts,
   several clients at once, with ACKMODE; each frame goes on the air as a datagram that any
   Aether station hears ([`docs/user/kiss.md`](docs/user/kiss.md)).
@@ -351,7 +387,8 @@ cover everything else it does.
   `--passband-trace` re-run the busy detector and the receive-filter estimate over one.
 * ★ **Send files…**: one zip of logs, the diagnostic bundle and chosen sessions, uploaded to the
   project with a progress bar, emailed, or **requested from the other station** by a link that
-  opens its form filled in; or a Test reported as a GitHub issue.
+  opens its form filled in; or a Test reported as a GitHub issue. A program's own log goes in
+  too when the program offers it (RadioPost's does).
 * **Debug mode** during the field trials: sessions a program runs (Winlink Express, Pat, VarAC,
   RadioPost) are sent to the project after they end, said once on the panel, with one switch to
   turn it off.
@@ -387,6 +424,9 @@ cover everything else it does.
   ([ADR-0042](docs/adr/0042-the-scenario-harness.md), [`bench/scenarios/`](bench/scenarios/)).
 * **Strict tests**: no threshold is ever relaxed to make a suite pass; a known defect is a
   strict `xfail` that names it.
+* **Fuzzing** of every parser that takes bytes from outside: frames off the air, datagram
+  fragments, the decompressor, the KISS port and the host program's commands
+  ([`core/fuzz/`](core/fuzz/README.md)).
 
 ## Getting it
 
@@ -431,8 +471,14 @@ maps one to one onto Aether's control API
 ([RP-4 §9.1](https://github.com/KK4ODA/RadioPost/blob/main/spec/rp-0004-modem-interface.md#91-aether)).
 From `0.2.0-beta.146` the two systems can share a station: a RadioPost gateway claims callsigns of
 its own (`N1CALL-10`, say) beside RMS Trimode's `MYCALL` (`N1CALL-1`), and each answers only for
-its own ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)). One Aether
-serves both; there is no separate RadioPost build of the modem.
+its own ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md)). A gateway
+under automatic control answers only through its programs, and since `0.2.0-beta.149` Setup
+names the program whose callsign the station is using, so nothing has to be typed twice
+([ADR-0107](docs/adr/0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md),
+[ADR-0108](docs/adr/0108-every-program-speaks-for-the-station-and-setup-says-whose-callsign-it-is.md)).
+One Aether serves both; there is no separate RadioPost build of the modem. RadioPost mail has
+crossed the air through an Aether gateway since 2026-11-12; [On the air](#on-the-air) shows two of
+that day's sessions.
 
 ## Where things stand
 
@@ -454,8 +500,8 @@ distilled from how the community has received other open HF modems are in
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, host interface, gateway kit | done; Winlink Express, Pat, VarAC and RMS Trimode pass the bench |
 | 4 — Desktop application | station panel, Tauri shell, setup, diagnostics, accessibility | done; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.146` |
-| 6 — Field validation | recordings, replay, simulated channel, field protocol, the air, on-air crowdsourcing (the Test session) | **in progress**: on the air with other stations since 2026-09-23, Winlink through an Aether gateway since 2026-11-06; granted slots (link protocol 8 onwards), the scenario harness and the rate controller's two reviews came from those sessions |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.154` |
+| 6 — Field validation | recordings, replay, simulated channel, field protocol, the air, on-air crowdsourcing (the Test session) | **in progress**: on the air with other stations since 2026-09-23, Winlink through an Aether gateway since 2026-11-06, RadioPost mail since 2026-11-12; granted slots (link protocol 8 onwards), the scenario harness and the rate controller's reviews came from those sessions |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth peer-to-peer contacts use, the bandwidth in the handshake, answer-only, a two-way probe | done |
 | 9 — The modem's second rung | a faster start, the tone floor and the middle tone kinds, fading and NVIS receivers, an A/B bench against another modem, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: the tone floor, fast tones and four-tone kinds, fast-fading and echo-aware receivers, stuck frames in pieces done; the A/B runs and P9-3 open; time diversity paused |
 | 8 — Aether on a phone | the modem in a Pi-sized box the phone talks to, then a phone app, then the modem in the phone | back burner |
@@ -493,8 +539,9 @@ deploy/        systemd unit for a gateway
 tools/         benchmarks (bench_phy, bench_link, bench_tone, bench_calls …) · vector
                generators · release.py · the scenario harness (channel_server.py,
                session_matrix.py, soak.py) · field tools (field_ingest.py, two_sides.py,
-               rung_reading.py, floor_trace.py) · kiss_test_client.py · make_occupancy.py ·
-               make_spec.py · drive_upload/ (the upload script for files from other stations)
+               rung_reading.py, floor_trace.py, air_figures.py) · kiss_test_client.py ·
+               make_occupancy.py · make_spec.py · drive_upload/ (the upload script for files
+               from other stations)
 bench/         committed baseline curves, including the release gate's; ab/ (the A/B bench);
                scenarios/ (the scenario harness's band conditions)
 research/      frozen research code: the link review's simulator and TLA+ models
