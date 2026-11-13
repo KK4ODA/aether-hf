@@ -2944,8 +2944,10 @@ through `read_fragment` and the `Reassembler`), `inflate` (the `Decompressor`), 
 `Decoder`, `classify`, `guess_client`) and `vara_commands` (`HostState::command`). Its own workspace,
 not a member of `core/`: libFuzzer needs nightly (`cargo +nightly fuzz run <target>`, its README), so
 CI does not run it; what a fuzzer finds is fixed with a unit test in the crate it was found in. Not
-fuzzed yet: the granted engine fed frames in a session, and the PHY. The `Decompressor` has no cap
-on what it hands over (DEFLATE expands up to about a thousand times).
+fuzzed yet: the granted engine fed frames in a session, and the PHY. Writing `inflate` found that
+the `Decompressor` had no bound on what it handed over: a stream may now grow to 100 times what came
+off the air and 1 MiB more (`MAX_EXPANSION`, `GROWTH_SLACK`, ADR-0110), past which it is refused as
+a malformed one is.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
