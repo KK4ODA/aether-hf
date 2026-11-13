@@ -15,6 +15,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 aether-link = { path = "../aether-link" }
+aether-phy = { path = "../aether-phy" }
 aetherd = { path = "../aetherd" }
 
 [workspace]
@@ -44,6 +45,20 @@ bench = false
 [[bin]]
 name = "kiss"
 path = "fuzz_targets/kiss.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_engine"
+path = "fuzz_targets/link_engine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "phy_receive"
+path = "fuzz_targets/phy_receive.rs"
 test = false
 doc = false
 bench = false

@@ -2947,8 +2947,15 @@ that take outside bytes: `air_frames` (every link decoder on one payload), `data
 through `read_fragment` and the `Reassembler`), `inflate` (the `Decompressor`), `kiss` (the KISS
 `Decoder`, `classify`, `guess_client`) and `vara_commands` (`HostState::command`). Its own workspace,
 not a member of `core/`: libFuzzer needs nightly (`cargo +nightly fuzz run <target>`, its README), so
-CI does not run it; what a fuzzer finds is fixed with a unit test in the crate it was found in. Not
-fuzzed yet: the granted engine fed frames in a session, and the PHY. Writing `inflate` found that
+CI does not run it; what a fuzzer finds is fixed with a unit test in the crate it was found in.
+`link_engine` runs two granted engines in a session over an air the input steers (frames lost,
+altered, put on the air by anyone, time passing, aborts; each frame one the PHY could hand over)
+and checks that while frames are only lost what each delivers is the start of what the other
+sent; `phy_receive` damages a rendered control frame and data frame and feeds them to a
+`StreamingReceiver` (slow: `-s none`, `-fork=N`), and checks that undamaged they come back whole
+however the audio is cut (the receiver hands a frame over up to 0.2 s after its end, by the cut:
+the signal ends 0.3 s after it). Each check was shown to fail on a planted fault (a missing block
+skipped; a block's audio past 2,048 samples dropped). Writing `inflate` found that
 the `Decompressor` had no bound on what it handed over: a stream may now grow to 100 times what came
 off the air and 1 MiB more (`MAX_EXPANSION`, `GROWTH_SLACK`, ADR-0110), past which it is refused as
 a malformed one is.
