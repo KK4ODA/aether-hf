@@ -27,6 +27,11 @@ use std::{
 use serde_json::json;
 
 use crate::control::protocol::{ApiError, ControlHandle, Request, Response};
+use crate::polled::PolledStream;
+
+/// The longest a WebSocket's thread waits for the client's next request before it pushes the
+/// events that have come meanwhile.
+const READ_WAIT: Duration = Duration::from_millis(50);
 
 /// How the control interface is exposed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,8 +400,9 @@ fn serve_file(stream: &TcpStream, dir: &std::path::Path, path: &str) -> bool {
 /// A WebSocket session: requests in, replies and events out.
 ///
 /// Events are pushed from the same thread between reads, so a client that stops reading
-/// slows only itself down. The read timeout is what makes that possible without a second
-/// thread per connection.
+/// slows only itself down. Each read waits at most [`READ_WAIT`] for the client's next
+/// request, on a [`PolledStream`]: never a read timeout on the socket, which Windows can fail
+/// as `ERROR_IO_PENDING` and end the connection (`polled.rs`).
 fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, running: &AtomicBool) {
     // The request line and headers have already been read off the socket, so the upgrade is
     // completed here rather than by tungstenite's own handshake: all that is left of it is
@@ -410,17 +416,11 @@ fn serve_websocket(stream: &TcpStream, key: &str, handle: &ControlHandle, runnin
         return;
     }
 
-    let Ok(cloned) = stream.try_clone() else {
+    let Ok(polled) = PolledStream::new(stream, READ_WAIT, "aetherd-ctl-read") else {
         return;
     };
-    if cloned
-        .set_read_timeout(Some(Duration::from_millis(50)))
-        .is_err()
-    {
-        return;
-    }
     let mut socket =
-        tungstenite::WebSocket::from_raw_socket(cloned, tungstenite::protocol::Role::Server, None);
+        tungstenite::WebSocket::from_raw_socket(polled, tungstenite::protocol::Role::Server, None);
 
     // this client's identity: what it claims goes when the connection does (ADR-0106)
     let mut connection = handle.open(crate::control::protocol::ConnectionKind::Control);
@@ -464,8 +464,8 @@ fn carry_websocket<S: Read + Write>(
                     return Some(format!("a reply could not be written: {error}"));
                 }
             }
-            // a read timeout is how this thread gets a turn to push events; anything else
-            // that goes wrong on the socket ends the connection
+            // a read that waited its time is how this thread gets a turn to push events;
+            // anything else that goes wrong on the socket ends the connection
             Err(tungstenite::Error::Io(error))
                 if error.kind() == std::io::ErrorKind::WouldBlock
                     || error.kind() == std::io::ErrorKind::TimedOut => {}

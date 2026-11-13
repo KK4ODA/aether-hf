@@ -31,6 +31,7 @@ use crate::{
         protocol::{ConnectionKind, ControlHandle, Request},
     },
     host::vara::{DEFAULT_COMMAND_PORT, HostAction, HostState, Notification},
+    polled::PolledStream,
 };
 
 /// How the host interface is exposed.
@@ -88,7 +89,7 @@ const KEEPALIVE: Duration = Duration::from_secs(10);
 /// issue 397: a Winlink upload dropped after 93 s near 0 dB) and says the count again after 50 s;
 /// so does this.
 pub const BUFFER_REPEAT: Duration = Duration::from_secs(50);
-/// How long the command reader blocks before giving the notification path a turn.
+/// How long a read waits for the program before the notification path gets a turn.
 const POLL: Duration = Duration::from_millis(50);
 
 /// The longest a host's `DISCONNECTED` waits for the station's closing identifier (ADR-0075):
@@ -477,14 +478,12 @@ fn serve_data(
     running: &AtomicBool,
     current: &dyn Fn() -> bool,
 ) -> DataEnd {
-    if let Err(error) = stream.set_read_timeout(Some(POLL)) {
-        return DataEnd::Failed(error.to_string());
-    }
-    let mut writer = match stream.try_clone() {
-        Ok(writer) => writer,
+    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
+    let mut reader = match PolledStream::new(stream, POLL, "aetherd-host-data-read") {
+        Ok(reader) => reader,
         Err(error) => return DataEnd::Failed(error.to_string()),
     };
-    let mut reader = stream;
+    let mut writer = stream;
     let mut buffer = [0u8; 8192];
     loop {
         if !running.load(Ordering::Relaxed) {
@@ -649,10 +648,8 @@ fn serve_commands(stream: &TcpStream, shared: &Shared, said: &Mutex<Instant>) {
     } = shared;
     let trace = *trace;
     let buffer_repeat = *buffer_repeat;
-    if stream.set_read_timeout(Some(POLL)).is_err() {
-        return;
-    }
-    let Ok(reader_stream) = stream.try_clone() else {
+    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
+    let Ok(reader_stream) = PolledStream::new(stream, POLL, "aetherd-host-read") else {
         return;
     };
     // This program's own connection to the modem: its requests carry it, the callsigns it
@@ -1506,7 +1503,7 @@ enum LineResult {
 }
 
 /// Read one command, which the published interface terminates with a carriage return.
-fn read_line(reader: &mut BufReader<TcpStream>, out: &mut Vec<u8>) -> LineResult {
+fn read_line(reader: &mut BufReader<PolledStream>, out: &mut Vec<u8>) -> LineResult {
     match reader.read_until(b'\r', out) {
         Ok(0) => LineResult::Closed,
         Ok(_) => {

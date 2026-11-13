@@ -27,6 +27,7 @@ pub mod log;
 pub mod memories;
 pub mod passband;
 pub mod passband_trace;
+pub mod polled;
 pub mod profile;
 pub mod ptt;
 pub mod record;

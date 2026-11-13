@@ -2890,7 +2890,19 @@ ended (`Connection::ended_because`, `carry_websocket`: the client's close says n
 read or write says how, the modem stopping says so), on the claim's *has gone* line or a `control:`
 line of its own; RadioPost keeps `radiopost.log`/`gateway.log` and its Aether adapter says why its
 WebSocket ended. The suspect, unproven: the short socket read timeouts on Windows (10 ms in
-RadioPost's adapter, 50 ms here), which Microsoft documents can lose data.
+RadioPost's adapter, 50 ms here), which Microsoft documents can lose data. **Proven by the next
+day's logs (the gateway's upload of 2026-11-12 23:55Z):** a read whose timeout runs out on Windows
+can fail with `ERROR_IO_PENDING` — "Overlapped I/O operation is in progress. (os error 997)" — not as
+a timeout. Aether's control server ended five connections on it (20:29 twice, 22:56, 23:06 and 23:53),
+RadioPost Gateway's adapter four (14:00, 17:26, 17:30, 19:48), each costing the gateway its claim for
+about 5 s; none fell in a session that day. Now no server here reads a socket with a timeout:
+`crate::polled::PolledStream` reads it from a thread of its own with plain blocking reads and hands
+the serving thread what came in, waiting at most the poll interval and then reporting `TimedOut`
+(the kind every loop already waited on), writes straight to the socket, and shuts it down when
+dropped, which ends the reading thread. The control API's WebSocket (`READ_WAIT`, 50 ms), the host
+program's command and data ports and the KISS port use it. rigctld and FLRig keep their request
+timeouts (a timeout there drops the connection, never reads it again), as does the channel link's
+120 s (any error ends it). RadioPost's adapter needs the same change in its own repository.
 
 **Callsigns, made plain (2026-11-12, ADR-0108; the author: "whatever simplifies things the
 most").** An audit found:

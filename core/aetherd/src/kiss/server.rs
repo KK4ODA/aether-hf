@@ -38,6 +38,7 @@ use crate::control::{
     methods::{from_base64, to_base64},
     protocol::{ControlHandle, Request},
 };
+use crate::polled::PolledStream;
 
 /// The default KISS port: VARA's (HF and FM), UZ7HO's, and what Winlink Express's help and
 /// `QtTermTCP` assume, so a client set up for VARA finds this one unchanged.
@@ -490,10 +491,10 @@ struct Access {
 
 /// One client: frames in, until it goes or the port closes.
 fn serve_client(stream: &TcpStream, id: u64, shared: &Shared, handle: &ControlHandle) {
-    if stream.set_read_timeout(Some(POLL)).is_err() {
+    // each read waits at most `POLL`, never on a read timeout on the socket (`polled.rs`)
+    let Ok(mut reader) = PolledStream::new(stream, POLL, "aetherd-kiss-read") else {
         return;
-    }
-    let mut reader = stream;
+    };
     let mut decoder = Decoder::new(MAX_FRAME);
     let mut access = Access {
         persistence: DEFAULT_PERSISTENCE,
