@@ -107,34 +107,43 @@ changed since by ADR-0104, so a reference, not the baseline):
 | `40m-good-throughput-2300` | +24.0 % | 17 (4), 18 (4), 19 (2) |
 | `quick-awgn-2300` (3 kB) | +0.0 % | 16 (8), 17, 18 |
 
-**Today's C1 on the same draws** (the oracle workflow's run 22 on GitHub's runners, 2026-11-13,
-beta.156's daemon, C1 only, beta.127's ten seeds; `data/oracle_strong_beta156.csv`). The fixed
-rungs were not run again. So the regret below is against beta.127's best fixed rung. The receivers
-have changed since (ADR-0104), so today's best fixed rung may be faster and the true regret larger.
+**Today's C1 and today's fixed rungs on the same draws** (the oracle workflow on GitHub's
+runners, 2026-11-13, beta.156's daemon, beta.127's ten seeds: run 22 ran C1 alone, run 23 ran C1
+again and the rungs near each air's edge, 9–14 at 500 Hz and 14–19 at 2300 Hz;
+`data/oracle_strong_beta156.csv`, `data/oracle_strong_rungs_beta156.csv`). Two measures of what C1
+leaves: against the best fixed rung of each draw (hindsight, which no controller has), and
+against the best single rung held on every draw (one a controller could settle on).
 
-| scenario | C1 today, median (range), bit/s | C1 on beta.127 | regret today | on beta.127 |
-|---|---|---|---|---|
-| `80m-strong-moderate-500` | 318 (272–393) | 302 (264–349) | **+12.3 %** (−4 … +34) | +21.8 % |
-| `40m-good-throughput-2300` | 2 247 (1 829–2 560) | 2 247 (1 829–2 909) | **+28.2 %** (+6 … +67) | +24.0 % |
-| `quick-awgn-2300` | 2 400 (2 000–2 400) | 2 182 (2 000–2 182) | −9.1 % | +0.0 % |
+| scenario | C1, median bit/s (run 22 / 23) | best rung of each draw, median | regret | best single rung, median | over C1, paired |
+|---|---|---|---|---|---|
+| `80m-strong-moderate-500` | 318 / 310 | 371 (10, 12, 13, 14) | **+15 % / +18 %** | 12: 357 | **+4 % / +8 %** |
+| `40m-good-throughput-2300` | 2 247 / 2 247 | 2 784 (17, 18, 19) | **+28 %** | 17: 2 695 | **+23 %** |
+| `quick-awgn-2300` | 2 400 / 2 400 | 2 400 (16; 17 once) | 0 | 16: 2 400 | 0 |
 
-* **40 m Good at +20 dB: unchanged.** Six draws of ten deliver exactly what beta.127's did (the
-  measure is whole seconds of a 16 kB message and a 4 kB reply), and the regret is a quarter. The
-  replay (`tools/c1_replay.py` on each run's two sidecars; it chose as the run sent in 67 of 73
-  of the master's data transmissions) shows why. C1 starts at rung 16 (15 in two draws), the
-  message takes 51–71 s of exchanges, and in that time it tries the rung above once or twice.
-  Rung 17 was taken in 5 of its 8 decided tries. Rung 18 was never taken: two tries lost, three
-  still running when the message ended, 4 of 6 frames decoded. Yet 18 or 19 was the best fixed
-  rung in six of beta.127's ten draws. The best rungs are two or three above where C1 starts, and
-  a short transfer ends before one try a rung gets there.
-* **80 m Moderate at 500 Hz: a little faster, within the noise.** Paired by draw, C1 delivers
-  ×1.03 of beta.127's (median). The drop from +21.8 to +12.3 % is inside the ten points a ten-draw
-  median regret moves between runs (ROADMAP P9-18). C1 sits on rungs 10–11 where 12 was the best
-  fixed rung in six draws. Its tries of rung 12 were taken 5 times and lost 6 (22 of 31 frames
-  decoded), and rung 13 lost every decided try (4 of 15 frames decoded). On this path the
-  rung above is a real gamble, unlike the steady path's.
-* **AWGN, 3 kB: no regret.** C1 finishes a second sooner than beta.127's best fixed rung in nine
-  draws of ten. The transfer is too short and the measure too coarse to say more.
+* **The harness's own noise.** At 2300 Hz C1 repeated itself to the bit per second on all twenty
+  draws of the two runs. At 500 Hz the two runs agree on 2 draws of 10 and part by up to 14 % on
+  one (median −1 %): the Test's own start lands blocks apart from run to run (ROADMAP P9-18). A
+  few points of the 500 Hz regret are that noise.
+* **beta.127's caveat did not hold.** Today's fixed rungs on 40 m Good deliver what beta.127's
+  did, draw for draw within a few per cent, and the regret is the same +28 %. At 500 Hz they
+  deliver ±10 % of beta.127's by draw, and the regret is +15–18 % against today's rungs where it
+  was +12 % against beta.127's.
+* **40 m Good at +20 dB: a quarter left, most of it reachable.** Rung 17 held on every draw
+  delivers 23 % more than C1 (median, paired), and 17 or 18 is the best rung on eight draws of
+  ten. The replay (`tools/c1_replay.py` on each run's two sidecars; it chose as the run sent in 67
+  of 73 of the master's data transmissions) shows why C1 does not get there. It starts at rung 16
+  (15 in two draws), the message takes 51–71 s of exchanges, and in that time it tries the rung
+  above once or twice. Rung 17 was taken in 5 of its 8 decided tries. Rung 18 was never taken: two
+  tries lost, three still running when the message ended, 4 of 6 frames decoded. The best rungs
+  are one or two above where C1 starts, and a short transfer ends before one try a rung gets there.
+* **80 m Moderate at 500 Hz: little left that a controller could take.** The best rung moves from
+  draw to draw (10 twice, 12 three times, 13 three times, 14 twice), and rungs 11–14 lie within
+  about 10 % of each other on the median. Rung 12 held on every draw delivers 4–8 % more than C1.
+  C1 sits on rungs 10–11. Its tries of rung 12 were taken 5 times and lost 6 (22 of 31 frames
+  decoded), and rung 13 lost every decided try (4 of 15 frames decoded). On this path the rung
+  above is a real gamble, unlike the steady path's.
+* **AWGN, 3 kB: nothing left.** C1 delivers what rung 16, the best rung, does on nine draws of
+  ten; on the tenth it took a second longer, and rung 17 happened to finish in 7 s.
 
 ## 4. The count
 
@@ -149,8 +158,9 @@ transmissions) and the doubling of a lost try's wait. The controller is 710 line
 
 1. **Where the speed is.** On a steady strong path at 2300 Hz C1 leaves about a fifth of the
    throughput unused (harness +22 %, field +15 %), at 500 Hz very little (+3 %, +4 %). On the
-   regret set's strong fading paths today's C1 leaves +28 % at 2300 Hz (Good, +20 dB) and +12 %
-   at 500 Hz (Moderate), against beta.127's best fixed rungs (§3).
+   regret set's strong fading paths, against today's fixed rungs, C1 leaves +28 % at 2300 Hz
+   (Good, +20 dB; +23 % against the best single rung) and +15–18 % at 500 Hz (Moderate; +4–8 %
+   against the best single rung, the rest being which rung a draw happens to favour) (§3).
 2. **Why, at 2300 Hz.** The try of the rung above decoded every frame and lost its verdict by
    under 2 %, and the doubled wait then outlasted the session. The prior is three decibels too
    cautious on a clean path (§2) and counts as two frames against a try of three; the family's
@@ -165,12 +175,13 @@ transmissions) and the doubling of a lost try's wait. The controller is 710 line
    the verdict), and G2 or the family offset's gain (the guess corrected faster by frames that keep
    decoding). G1 only as a margin learned per family, if at all.
 5. **The start and the pace of the climb matter as much as the verdict.** On the 2300 Hz Good
-   path the best rung is two or three above C1's first choice, and a 16 kB message ends after one
+   path the best rung is one to three above C1's first choice, and a 16 kB message ends after one
    or two tries (§3). A candidate that only fixes near misses (G3, G4) will not get there in that
    time. The prior's margin (G1) or the family offset's gain (G2) sets where C1 starts, so those
    two count here too, checked against the 500 Hz Moderate path, where the rung above loses about
    half its tries. Gate 2's criteria should hold a short transfer on a strong path as well as a
    long one.
-6. **Today's best fixed rungs were not run** (the author chose C1 alone, about 45 minutes of
-   runners). If Gate 2 needs the regret exactly rather than against beta.127's rungs, the fixed
-   rungs of these three scenarios are the next oracle run, with the author's go and its cost.
+6. **The bar for Gate 2.** Against hindsight a controller cannot reach zero: at 500 Hz the best
+   rung moves from draw to draw by more than the rungs differ. The best single rung held on every
+   draw is the fairer bar, and on it the 2300 Hz Good path has 23 % to win and the 500 Hz
+   Moderate path 4–8 %, about as much as C1's two runs of that path differ.
