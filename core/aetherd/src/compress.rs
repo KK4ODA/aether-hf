@@ -40,10 +40,27 @@
 //! The connect handshake carries a capability byte in both directions. Compression is used
 //! only if **both** stations offered it, so a station that does not implement it, or has it
 //! switched off, is never sent a stream it cannot read.
+//!
+//! # How far a stream may grow
+//!
+//! Deflate expands up to about a thousand times, and the other station chooses what it sends: a
+//! few kilobytes off the air could ask for megabytes here, a session's worth for a gigabyte. A
+//! stream may grow to [`MAX_EXPANSION`] times what has come off the air, and [`GROWTH_SLACK`]
+//! more; past that it is refused as a malformed one is, and nothing more of it is delivered
+//! (ADR-0110). The text this module measures comes out under twice its size on the air.
 
 use std::io::Write;
 
 use flate2::{Compression as Level, write::DeflateDecoder, write::DeflateEncoder};
+
+/// How many times what has come off the air a decompressed stream may grow to (ADR-0110). Text
+/// grows by under two (this module's tests), a Winlink message, already compressed, by about one;
+/// deflate's own limit is about a thousand.
+pub const MAX_EXPANSION: usize = 100;
+
+/// What a stream may grow to beyond [`MAX_EXPANSION`] times what has come off the air, so that a
+/// short opening that compresses unusually well is not refused (ADR-0110).
+pub const GROWTH_SLACK: usize = 1 << 20;
 
 /// Capability bit for stream compression, in the connect handshake's `caps` byte.
 pub const CAP_DEFLATE: u8 = 0x01;
@@ -137,15 +154,43 @@ impl Compressor {
     }
 }
 
+/// What a decompressor writes into: the bytes for the application, and how many more it may
+/// take before the stream has grown past its bound (ADR-0110).
+#[derive(Debug, Default)]
+struct Bounded {
+    out: Vec<u8>,
+    room: usize,
+    /// A write found no room: the stream grew past its bound.
+    overflowed: bool,
+}
+
+impl Write for Bounded {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() > self.room {
+            self.overflowed = true;
+            return Err(std::io::Error::other("the stream grew past its bound"));
+        }
+        self.room -= buf.len();
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// The other direction.
 pub struct Decompressor {
-    decoder: Option<DeflateDecoder<Vec<u8>>>,
+    decoder: Option<DeflateDecoder<Bounded>>,
     /// Bytes taken off the air since the session started.
     pub bytes_in: usize,
     /// Bytes handed to the application since the session started.
     pub bytes_out: usize,
     /// Set once the stream has been found to be malformed; nothing more is delivered.
     failed: bool,
+    /// Set when what failed it was growing past its bound (ADR-0110).
+    too_large: bool,
 }
 
 impl std::fmt::Debug for Decompressor {
@@ -155,6 +200,7 @@ impl std::fmt::Debug for Decompressor {
             .field("bytes_in", &self.bytes_in)
             .field("bytes_out", &self.bytes_out)
             .field("failed", &self.failed)
+            .field("too_large", &self.too_large)
             .finish()
     }
 }
@@ -164,10 +210,11 @@ impl Decompressor {
     #[must_use]
     pub fn new(active: bool) -> Self {
         Self {
-            decoder: active.then(|| DeflateDecoder::new(Vec::new())),
+            decoder: active.then(|| DeflateDecoder::new(Bounded::default())),
             bytes_in: 0,
             bytes_out: 0,
             failed: false,
+            too_large: false,
         }
     }
 
@@ -187,6 +234,13 @@ impl Decompressor {
         self.failed
     }
 
+    /// Whether the stream failed by growing past [`MAX_EXPANSION`] times what came off the air
+    /// (ADR-0110), rather than by being malformed.
+    #[must_use]
+    pub fn too_large(&self) -> bool {
+        self.too_large
+    }
+
     /// Take bytes off the air and return what the application should see.
     pub fn push(&mut self, data: &[u8]) -> Vec<u8> {
         self.bytes_in += data.len();
@@ -197,11 +251,19 @@ impl Decompressor {
         if self.failed {
             return Vec::new();
         }
+        let bound = self
+            .bytes_in
+            .saturating_mul(MAX_EXPANSION)
+            .saturating_add(GROWTH_SLACK);
+        decoder.get_mut().room = bound.saturating_sub(self.bytes_out);
         if decoder.write_all(data).is_err() || decoder.flush().is_err() {
             self.failed = true;
+            self.too_large = decoder.get_ref().overflowed;
+            // what was decoded of a stream refused is not the application's either
+            decoder.get_mut().out.clear();
             return Vec::new();
         }
-        let out = std::mem::take(decoder.get_mut());
+        let out = std::mem::take(&mut decoder.get_mut().out);
         self.bytes_out += out.len();
         out
     }
@@ -409,6 +471,53 @@ alternate is the usual one if the band is unusable.\r\n\
         assert!(rx.failed(), "it kept trying to read a stream it had lost");
         let unexpected = rx.push(b"and more");
         assert!(unexpected.is_empty(), "{unexpected:?}");
+    }
+
+    #[test]
+    fn a_stream_that_grows_past_its_bound_is_refused() {
+        // deflate expands up to about a thousand times: 8 MiB of zeros goes on the air in a few
+        // kilobytes, and what it may grow to here is a hundred times those and a megabyte
+        let bomb = Compressor::new(true).push(&vec![0u8; 8 << 20]);
+        assert!(bomb.len() < 16 << 10, "{} bytes", bomb.len());
+        let mut rx = Decompressor::new(true);
+        let mut delivered = 0usize;
+        for piece in bomb.chunks(200) {
+            delivered += rx.push(piece).len();
+        }
+        assert!(rx.failed() && rx.too_large());
+        let bound = bomb.len() * MAX_EXPANSION + GROWTH_SLACK;
+        assert!(delivered <= bound, "{delivered} delivered past {bound}");
+        assert!(delivered < 8 << 20, "the whole of it was delivered");
+        assert_eq!(rx.push(b"more"), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn a_long_stream_well_within_its_bound_is_untouched() {
+        // a long, repetitive text compresses far better than a real message, and still comes
+        // through whole: the slack covers a stream's opening, the expansion its run
+        let text: Vec<u8> = message().repeat(600);
+        let mut tx = Compressor::new(true);
+        let mut rx = Decompressor::new(true);
+        let mut out = Vec::new();
+        for piece in text.chunks(4096) {
+            out.extend(rx.push(&tx.push(piece)));
+        }
+        assert!(
+            !rx.failed(),
+            "refused at {} of {} bytes",
+            out.len(),
+            text.len()
+        );
+        assert_eq!(out, text);
+        assert!(rx.bytes_out < rx.bytes_in * MAX_EXPANSION + GROWTH_SLACK);
+    }
+
+    #[test]
+    fn a_malformed_stream_is_not_called_too_large() {
+        let mut rx = Decompressor::new(true);
+        let _ = rx.push(&[0xFF; 64]);
+        let _ = rx.push(b"more");
+        assert!(rx.failed() && !rx.too_large());
     }
 
     #[test]

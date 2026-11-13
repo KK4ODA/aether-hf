@@ -3088,6 +3088,30 @@ impl<P: Ptt> Station<P> {
         notes.clone_into(&mut self.config.record_notes);
     }
 
+    /// Bytes the link delivered in order: decompressed when the session agreed to it, counted,
+    /// and kept for the program. A stream refused is said once, when it is given up on, and why
+    /// (ADR-0110): nothing more of it is delivered.
+    fn deliver(&mut self, bytes: &[u8]) {
+        let already = self.decompressor.failed();
+        let plain = self.decompressor.push(bytes);
+        if self.decompressor.failed() && !already {
+            let why = if self.decompressor.too_large() {
+                format!(
+                    "the peer's compressed stream grew past {} times what came off the air; \
+                     nothing more of it is delivered (ADR-0110)",
+                    crate::compress::MAX_EXPANSION
+                )
+            } else {
+                "the peer sent a compressed stream this station cannot read".to_owned()
+            };
+            self.note("error", &why);
+        }
+        if let Some(link) = &mut self.link {
+            link.bytes_received += plain.len();
+        }
+        self.delivered.extend_from_slice(&plain);
+    }
+
     /// Report something: to whoever drains the events, and to the recording.
     fn note(&mut self, event: &str, detail: &str) {
         self.events.push(format!("{event}:{detail}"));
@@ -4398,19 +4422,7 @@ impl<P: Ptt> Station<P> {
                         listen_first,
                     }));
                 }
-                Action::Deliver(bytes) => {
-                    let plain = self.decompressor.push(&bytes);
-                    if self.decompressor.failed() {
-                        self.note(
-                            "error",
-                            "the peer sent a compressed stream this station cannot read",
-                        );
-                    }
-                    if let Some(link) = &mut self.link {
-                        link.bytes_received += plain.len();
-                    }
-                    self.delivered.extend_from_slice(&plain);
-                }
+                Action::Deliver(bytes) => self.deliver(&bytes),
                 Action::Event { name, detail } => {
                     // A session is where compression is agreed, so both coders are built the
                     // moment one comes up and thrown away when it ends: their state is the

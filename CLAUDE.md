@@ -2956,8 +2956,10 @@ through `read_fragment` and the `Reassembler`), `inflate` (the `Decompressor`), 
 `Decoder`, `classify`, `guess_client`) and `vara_commands` (`HostState::command`). Its own workspace,
 not a member of `core/`: libFuzzer needs nightly (`cargo +nightly fuzz run <target>`, its README), so
 CI does not run it; what a fuzzer finds is fixed with a unit test in the crate it was found in. Not
-fuzzed yet: the granted engine fed frames in a session, and the PHY. The `Decompressor` has no cap
-on what it hands over (DEFLATE expands up to about a thousand times).
+fuzzed yet: the granted engine fed frames in a session, and the PHY. Writing `inflate` found that
+the `Decompressor` had no bound on what it handed over: a stream may now grow to 100 times what came
+off the air and 1 MiB more (`MAX_EXPANSION`, `GROWTH_SLACK`, ADR-0110), past which it is refused as
+a malformed one is.
 
 **RadioPost mail on a steady 80 m path (2026-11-12 14:08–14:29Z, read 11-13).** Four sessions
 from the mobile (KK4ODA: RadioPost client, TS-480 at 65 W into a screwdriver, keyed by RTS) to the
