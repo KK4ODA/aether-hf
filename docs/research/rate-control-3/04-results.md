@@ -114,3 +114,40 @@ with room, and several fading 2300 Hz paths gain 7–46 %. What fails is the sam
 NVIS and weak paths, where today's caution is what gets the session off OFDM. Options that keep the
 first and not the second need a run each (§6 of the conversation's decision, recorded below when
 made).
+
+### 5.2 G1 at 1 dB with G2b
+
+The author's next choice: the 1 dB margin with the family offset's gain doubled (`family_gain_db`
+1.0), so that a path that fails a family's frames walks the guess off it twice as fast. Oracle run
+27 at `12308ea` (`bench_link = prior_margin_db=1,family_gain_db=1`), the same 26 scenarios and ten
+draws; all 520 daemons logged both values. Per draw in `data/gate3_g1g2.csv`. Before it, a local
+check on Trimode draws 1 and 3 (both lost by run 26): 1 dB alone lost draw 3 again, with G2b both
+delivered. Two draws, a hint only, and the runners then lost draw 1.
+
+| # | criterion | G1 alone (run 26) | G1 + G2b (run 27) |
+|---|---|---|---|
+| K1 | gap to the best single rung | +6.3 % / +6.5 %, **passes** | the same: +6.3 % / +6.5 %, **passes** |
+| K3 | start pair over one rung apart | 0, **passes** | 0, **passes** |
+| K8 | Trimode delivered | 7 of 10, **fails** | 8 of 10, **fails** (today 10) |
+| K8 | AGC test delivered | 9 of 10 (as today) | 8 of 10 (today 9) |
+| K2 | paired range end at or over 1.10 | nine scenarios | seven: Trimode 1.28 (1.02–∞), AGC 1.07 (0.87–∞), 80 m weak 1.00 (1.00–1.26), 20 m DX 1.02 (0.93–1.17), NVIS evening 0.94 (0.81–1.15), the weak ladder path 1.06 (1.00–1.14), NVIS disturbed 1.01 (0.94–1.13) |
+
+G2b moved the 2300 Hz paths little (the strong ones not at all) and the weak ones the right way:
+RTTY crashes 1.06 → 0.97, the weak 2300 Hz Test path's range end 1.21 → 1.02, the weak ladder
+path's 1.29 → 1.14, Trimode 1.74 → 1.28. The VARA QRM path went 0.85 → 0.81, 80 m flutter at
+500 Hz 0.77 → 0.88.
+
+**Why NVIS still fails.** The traces of the lost draws are the same shape as run 26's, and worse
+at the start: the client opens at OFDM rungs 6–9 (today 5–7) and keeps going back to OFDM after
+dropping to the floor. Trimode draw 5: 6, 5, 6, 5, 6, 5, then 1, 2; and in the session after it
+9, 6, 9, 6, 9, 6, 5 ×9. The AGC test's draw 8: 6 ×11, 5, 6 ×4, 5, 0 ×4, **6 ×9**, 5 ×2, 2 ×2,
+**5 ×6**, 0 ×2, **6 ×3**, 0 ×4, **6 ×8**, 1, 2. Faster learning pulls the offset down after each
+run of failures, but with only 1 dB of caution the prior climbs back over the floor within a few
+transmissions, and a 7 ms echo kills every OFDM frame. Today's 3 dB keeps OFDM under the floor
+long enough for the session to finish there.
+
+**What it says.** Both losing tests are 500 Hz NVIS, and most of the K2 flags are 500 Hz or weak
+paths; the gains are mostly on 2300 Hz paths. Gate 0 §2 measured the 500 Hz rungs' fading
+penalty as the larger (their 10 % points 5.8–9.7 dB over AWGN by the reading at 500 Hz, against
+2.6–6.3 at 2300 Hz), which fits: the narrow air, with a fifth of the frequency diversity, needs
+the caution the wide one does not. The next step is the author's.
