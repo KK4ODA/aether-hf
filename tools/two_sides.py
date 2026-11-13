@@ -27,6 +27,8 @@ measures what protocol 8's timing rests on, on real hardware (11-step-4-first-ai
 * **Each answer against its slot**: the master's transmission ending at E grants a slot starting
   ``E + D + KEY + GUARD + LEVEL`` (no declared turnaround); the answer's lateness is its first
   frame less that, and its margin is what is left of ``SLACK`` — the keying gate's ``not_after``.
+  A header with its flag set grants an open window instead (ADR-0069 §2.1): the slave may start
+  anywhere in it when it has something to say, and the margin is what is left of the window.
 * **The offset from the loops** (``--from-loops``), for a session with no signal both stations
   heard — on 80 m by day the band is quiet between the two stations' transmissions
   (12-two-paths-80m.md §2): at each change of hands the offset at which the two stations' loop
@@ -68,6 +70,7 @@ from aether_model.link.granted import (  # noqa: E402
     GUARD_S,
     KEY_S,
     LEVELS_S,
+    OPEN_WINDOW_S,
     SLACK_S,
 )
 
@@ -435,7 +438,11 @@ def answers(master: Side, slave: Side, offset_slave: Offset) -> list[dict[str, f
     gap = DECODE_BUDGET_S[0] + KEY_S + GUARD_S
     out = []
     headers = [
-        (float(f["start_s"]) + offset_of(offset_slave, float(f["start_s"])), f.get("control") or "")
+        (
+            float(f["start_s"]) + offset_of(offset_slave, float(f["start_s"])),
+            f.get("control") or "",
+            float(f["end_s"]) - float(f["start_s"]) > 1.0,  # a tone frame: on the floor
+        )
         for f in slave.doc.get("frames") or []
         if f.get("kind") == "control" and f.get("decoded")
     ]
@@ -455,13 +462,25 @@ def answers(master: Side, slave: Side, offset_slave: Offset) -> list[dict[str, f
         ]
         if not reply:
             continue
-        header = next((h for t, h in headers if abs(t - k.rf_start) < 0.3), "")
+        header, floor = next(
+            ((h, fl) for t, h, fl in headers if abs(t - k.rf_start) < 0.3), ("", False)
+        )
         level = re.search(r"level (\d)", header)
         at = int(level[1]) if level else tries.get(id(k), 0)
         start = end + gap + LEVELS_S[at]
         late = float(reply[0].rf_start or 0.0) - start
+        # an open window (a header's flag; its n is the window's doublings) is the slave's to
+        # start in whenever it has work, not a slot it answers at its start
+        window = re.search(r"^Header .* n (\d+)\b.* flag\b", header)
+        open_s = OPEN_WINDOW_S[int(floor)] * (1 << int(window[1])) if window else None
         out.append(
-            {"master_key": k.key, "slot_start": start, "late": late, "margin": SLACK_S - late}
+            {
+                "master_key": k.key,
+                "slot_start": start,
+                "late": late,
+                "margin": (SLACK_S if open_s is None else open_s) - late,
+                "window": 0.0 if open_s is None else open_s,
+            }
         )
     return out
 
@@ -705,16 +724,24 @@ def main() -> int:
     master, slave = (a, b) if role(a) == "master" or role(b) == "slave" else (b, a)
     rows = answers(master, slave, offset if slave is b else 0.0)
     for row in rows:
+        what = f"open window {row['window']:.0f} s" if row["window"] else "slot"
         print(
-            f"  master key {row['master_key']:8.2f}: slot {row['slot_start']:8.2f}, late "
+            f"  master key {row['master_key']:8.2f}: {what} {row['slot_start']:8.2f}, late "
             f"{1000 * row['late']:4.0f} ms, margin {1000 * row['margin']:4.0f} ms"
         )
-    if rows:
-        late = [r["late"] for r in rows]
+    slots = [r for r in rows if not r["window"]]
+    if slots:
+        late = [r["late"] for r in slots]
         print(
-            f"\n{slave.name}'s answers against their slots: {len(rows)}, late "
+            f"\n{slave.name}'s answers against their slots: {len(slots)}, late "
             f"{1000 * min(late):.0f}-{1000 * max(late):.0f} ms (median {1000 * statistics.median(late):.0f}), "
-            f"least margin to not_after {1000 * min(r['margin'] for r in rows):.0f} ms"
+            f"least margin to not_after {1000 * min(r['margin'] for r in slots):.0f} ms"
+        )
+    windows = [r for r in rows if r["window"]]
+    if windows:
+        print(
+            f"{slave.name} started in {len(windows)} open window(s), "
+            + ", ".join(f"{r['late']:.2f} s of {r['window']:.0f} s" for r in windows)
         )
     return 0
 

@@ -319,6 +319,44 @@ def test_an_answer_belongs_to_the_last_transmission_before_it() -> None:
     assert row["master_key"] == 6.3 and row["late"] == pytest.approx(0.09)
 
 
+def test_an_open_window_is_judged_against_its_own_length() -> None:
+    def keying(who: str, key: float, rf: float, frames: float) -> two_sides.Keying:
+        return two_sides.Keying(
+            who, key, key + frames + 0.3, frames, TAIL, LATENCY, 0.0, rf_start=rf
+        )
+
+    # the gateway session of 2026-11-12 14:08Z: the master's empty header set its flag, and the
+    # slave started 1.5 s in, when its program's reply came — the window's to allow, not late
+    master = two_sides.Side(
+        "M", {"frames": []}, np.zeros(1), FS, two_sides.NARROW, [keying("M", 0.0, 0.25, 0.43)]
+    )
+    header = {
+        "kind": "control",
+        "decoded": True,
+        "start_s": 0.25,
+        "end_s": 0.68,
+        "control": "Header session 55 count 0 level 0 base 0 bitmap 0x0000 missed 0 n 0 snr 8 flag",
+    }
+    gap = two_sides.DECODE_BUDGET_S[0] + two_sides.KEY_S + two_sides.GUARD_S
+    started = 0.68 + gap + 1.5
+    slave = two_sides.Side(
+        "S",
+        {"frames": [header]},
+        np.zeros(1),
+        FS,
+        two_sides.NARROW,
+        [keying("S", started - 0.3, started, 1.49)],
+    )
+    [row] = two_sides.answers(master, slave, 0.0)
+    assert row["late"] == pytest.approx(1.5)
+    assert row["window"] == two_sides.OPEN_WINDOW_S[0]
+    assert row["margin"] == pytest.approx(two_sides.OPEN_WINDOW_S[0] - 1.5)
+    # the same header without its flag grants an answer's slot, judged against SLACK
+    header["control"] = header["control"].removesuffix(" flag")
+    [plain] = two_sides.answers(master, slave, 0.0)
+    assert plain["window"] == 0.0 and plain["margin"] == pytest.approx(two_sides.SLACK_S - 1.5)
+
+
 def test_a_call_s_acceptance_is_judged_at_the_level_its_try_granted() -> None:
     def keying(key: float, rf: float | None, frames: float, state: str) -> two_sides.Keying:
         return two_sides.Keying(

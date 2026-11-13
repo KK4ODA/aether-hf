@@ -358,6 +358,23 @@ def test_a_control_frame_is_read_as_the_daemon_spells_it() -> None:
     assert rr.parse_control("nothing like it") is None
 
 
+def test_a_protocol_12_control_frame_is_read_too() -> None:
+    """From protocol 12 (ADR-0099) the five rung bits count the frames the receiver never
+    detected: an acknowledgement read as protocol 11's would be no acknowledgement at all, and
+    every block would count as lost (the gateway sessions of 2026-11-12 read that way)."""
+    ack = rr.parse_control(
+        "Answer session 38 count 0 level 0 base 16 bitmap 0x0000 missed 0 n 0 snr 5", 2.0
+    )
+    assert ack is not None
+    assert (ack.kind, ack.base, ack.rung, ack.missed, ack.snr) == ("Answer", 16, None, 0, 5.0)
+    assert ack.received(15) and not ack.received(16)
+    header = rr.parse_control(
+        "Header session 38 count 6 level 1 base 3 bitmap 0x0002 missed - n 6 slot floor snr -"
+    )
+    assert header is not None and header.missed is None and header.n == 6 and header.snr is None
+    assert header.received(4) and not header.received(3)
+
+
 def _numbered(master: Path, slave: Path) -> None:
     """Give the session's sidecars what beta.122 records: the sender's sequence number on every
     data frame it sends, and on every one the receiver hears the number its engine filed it under

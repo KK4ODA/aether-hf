@@ -113,10 +113,14 @@ at either bandwidth): the family of a station's control frames, which its record
 name."""
 CONTROL = re.compile(
     r"(?P<kind>\w+) session (?P<session>\d+) count (?P<count>\d+)(?P<data_floor> on the floor)? "
-    r"level (?P<level>\d+) base (?P<base>\d+) bitmap 0x(?P<bitmap>[0-9a-fA-F]+) rung (?P<rung>\d+) "
-    r"n (?P<n>\d+) snr (?P<snr>-?\d+|-)(?P<flags>.*)"
+    r"level (?P<level>\d+) base (?P<base>\d+) bitmap 0x(?P<bitmap>[0-9a-fA-F]+) "
+    r"(?:rung (?P<rung>\d+)|missed (?P<missed>\d+|-)) "
+    r"n (?P<n>\d+)(?P<slot_floor> slot floor)? snr (?P<snr>-?\d+|-)(?P<flags>.*)"
 )
-"""A decoded control frame as the daemon spells it in a sidecar (``record::describe_control``)."""
+"""A decoded control frame as the daemon spells it in a sidecar (``record::describe_control``).
+Up to protocol 11 its five rung bits were the receiver's recommendation (``rung N``); from
+protocol 12 (ADR-0099) each station chooses its own rung, and those bits count the frames of the
+other's last transmission the receiver never detected (``missed N``, ``-`` for no count)."""
 
 
 # ── the sidecars ──────────────────────────────────────────────────────
@@ -359,7 +363,10 @@ class Ack:
     kind: str
     base: int
     bitmap: int
-    rung: int
+    rung: int | None
+    """The receiver's recommendation, up to protocol 11; ``None`` from protocol 12."""
+    missed: int | None
+    """Frames of the sender's last transmission the receiver never detected (protocol 12)."""
     snr: float | None
     measure: bool
     count: int
@@ -384,12 +391,14 @@ def parse_control(text: str, t: float = 0.0) -> Ack | None:
     if m is None:
         return None
     snr = m["snr"]
+    missed = m["missed"]
     return Ack(
         t=t,
         kind=m["kind"],
         base=int(m["base"]),
         bitmap=int(m["bitmap"], 16),
-        rung=int(m["rung"]),
+        rung=None if m["rung"] is None else int(m["rung"]),
+        missed=None if missed is None or missed == "-" else int(missed),
         snr=None if snr == "-" else float(snr),
         measure=" measure" in m["flags"],
         count=int(m["count"]),
@@ -1618,7 +1627,11 @@ def read_session(
         accounts = account(sender.air, txs, blocks)
         if role == "master":
             ladder_report(master, accounts)
-        recs = [(tx.ack.t, tx.ack.rung, tx.ack.snr) for tx in txs if tx.ack is not None]
+        recs = [
+            (tx.ack.t, tx.ack.rung, tx.ack.snr)
+            for tx in txs
+            if tx.ack is not None and tx.ack.rung is not None
+        ]
         d = Direction(
             sender.name,
             receiver.name,
@@ -1719,9 +1732,13 @@ def timeline(d: Direction) -> list[str]:
                 frames.append(f"r{f.rung}/rv{f.rv}{who}{mark}")
         ack = "-"
         if tx.ack is not None:
-            ack = (
-                f"{tx.ack.kind} base {tx.ack.base} bitmap {tx.ack.bitmap:#06x} rung {tx.ack.rung}"
-                + (" report" if tx.ack.reports else "")
+            said = (
+                f"rung {tx.ack.rung}"
+                if tx.ack.rung is not None
+                else f"missed {'-' if tx.ack.missed is None else tx.ack.missed}"
+            )
+            ack = f"{tx.ack.kind} base {tx.ack.base} bitmap {tx.ack.bitmap:#06x} {said}" + (
+                " report" if tx.ack.reports else ""
             )
         exch = "" if tx.exchange_s is None else f" exch {tx.exchange_s:.1f}s"
         out.append(
