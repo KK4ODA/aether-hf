@@ -161,3 +161,30 @@ by the air the station's capability byte states, so a station that moves between
 (ADR-0026) takes them on and off with it. The granted vectors gain `wide-only-good-wide` (the
 same session as the 1 dB margin with G2b) and `wide-only-moderate-narrow` (the same session as
 today's); a planted fault in the air check fails the replay.
+
+**Run 28** at `0c0504f` (`bench_link = prior_margin_db=1,family_gain_db=1,wide_only`), the 26
+scenarios, ten draws; all 520 daemons logged the values. Per draw in `data/gate3_wide_only.csv`.
+
+| # | criterion | result | |
+|---|---|---|---|
+| K1 | the gap to the best single rung, +15 % or less | 40 m Good 2 535 bit/s, **+6.3 %**; steady mail 1 104, **+6.5 %** | **passes** |
+| K3 | the start pair, no more draws over one rung apart than today | 1 (draw 0, 7 against 10, as today) | **passes** |
+| K8 | both echo tests inside their budgets | Trimode 10 of 10, the AGC test 10 of 10 (today 10 and 9) | **passes** |
+| K2 | no speed scenario slower (paired 90 % range end under 1.10) | three flags: 20 m DX at 2300 Hz 1.02 (0.93–1.17), the AGC test 1.00 (0.78–1.20), Trimode 1.04 (0.93–1.20) | **fresh draws owed** |
+
+Faster, paired: equatorial flutter 0.54 (211 → 522 bit/s), VARA QRM 0.81 (719 → 928), steady mail
+at 2300 Hz 0.87, thunderstorm 0.88, 40 m Good 0.93, the polar path 0.97. Every 500 Hz scenario
+reads 1.00 paired; seven of them sent the same data rungs as today in all ten draws (20 m DX at
+500 Hz, NVIS disturbed, PACTOR, QSB, 80 m weak, steady mail at 500 Hz, and eight or more of ten on
+the lopsided and weak ladder paths).
+
+**The two 500 Hz flags are the harness's.** On the 500 Hz air this build runs today's controller:
+the station's engine is built with its air's capability byte, and the vectors' narrow session is
+today's step for step. The AGC and Trimode tests sent the same data rungs as run 24 in one draw of
+ten, but they do the same between any two runs: run 24 against run 25 (whose switches barely act
+there) one and none of ten. Both have steps timed on the wall clock (a host program's, a clear
+channel's), so a run lands a few blocks apart and takes another course (ROADMAP P9-18). K2's rule
+still asks for their fresh draws, and they cost little.
+
+**20 m DX at 2300 Hz** is the one real question: the candidate acts there in every draw (0 of 10
+the same), at a median 1.02 with a range to 1.17. Its fresh draws (10–19, both builds) decide it.
