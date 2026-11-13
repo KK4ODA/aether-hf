@@ -29,6 +29,12 @@ on:
         description: "Run the controller's choice alone, no pinned rungs (a candidate against a baseline's best rungs)"
         type: boolean
         default: false
+      rungs_500:
+        description: "500 Hz rungs to pin, comma separated (empty: every usable rung)"
+        default: ""
+      rungs_2300:
+        description: "2300 Hz rungs to pin, comma separated (empty: every usable rung)"
+        default: ""
 
 jobs:
   build:
@@ -104,13 +110,18 @@ jobs:
       - if: steps.pick.outputs.run == 'true'
         run: uv sync --locked
       # every usable rung of the scenario's air (the 500 Hz ladder has no rung 8; the 2300 Hz
-      # one none at 6 or 13), so the best fixed rung is found, not guessed from a coarse set
+      # one none at 6 or 13), so the best fixed rung is found, not guessed from a coarse set;
+      # `rungs_500`/`rungs_2300` narrow it to the rungs near a strong path's edge, where the
+      # tone floor's rungs cannot win and take most of the runner time
       - name: Oracle
         if: steps.pick.outputs.run == 'true'
+        env:
+          RUNGS_500: ${{ inputs.rungs_500 }}
+          RUNGS_2300: ${{ inputs.rungs_2300 }}
         run: |
           case "${{ matrix.scenario }}" in
-            *-500|*-500-*) rungs="0,1,2,3,4,5,6,7,9,10,11,12,13,14" ;;
-            *) rungs="0,1,2,3,4,5,7,8,9,10,11,12,14,15,16,17,18,19" ;;
+            *-500|*-500-*) rungs="${RUNGS_500:-0,1,2,3,4,5,6,7,9,10,11,12,13,14}" ;;
+            *) rungs="${RUNGS_2300:-0,1,2,3,4,5,7,8,9,10,11,12,14,15,16,17,18,19}" ;;
           esac
           # a pinned rung ignores the controller: a candidate's runs need only its own choice
           if [ "${{ inputs.controller_only }}" = "true" ]; then rungs=""; fi
