@@ -188,3 +188,21 @@ still asks for their fresh draws, and they cost little.
 
 **20 m DX at 2300 Hz** is the one real question: the candidate acts there in every draw (0 of 10
 the same), at a median 1.02 with a range to 1.17. Its fresh draws (10–19, both builds) decide it.
+
+**K2's fresh draws** (runs 29 and 30 at `ce1a165`: today's build and the candidate on draws
+10–19 of the three flagged scenarios; per draw in `data/gate3_wide_only_fresh.csv`):
+
+| scenario | today, median | candidate | paired ratio (90 % range) | |
+|---|---|---|---|---|
+| 20 m DX at 2300 Hz | 800 bit/s | 775 | 1.06 (0.99–1.13) | **fails again** |
+| the AGC test (500 Hz) | 34 | 36 | 0.99 (0.90–1.31); unpaired 0.97 (0.87–1.08) | today's controller: noise |
+| Trimode (500 Hz) | 38 | 38 | 1.03 (0.96–1.11) | today's controller: noise |
+
+**20 m DX at 2300 Hz, over all twenty draws:** the candidate is slower in 10, faster in 7 and the
+same in 3; the median time ratio is 1.03 and the geometric mean 1.04, spread 0.79–1.47. The
+scenario is a long one (probe, call, four exchanges, a disconnect, then a Test on ITU Moderate at
+8 dB with a DX offset), measured by the Test's file rate, and its worst draw shows the two builds
+choosing much alike (both on rung 11 for most of the session, the ladder at the end), the file
+rate set by where the fades fell. By K2's rule it fails: its range ends over 1.10 on both sets of
+draws. By size it is a few per cent, inside the 10 % the guard allows for a median. A narrow miss,
+the author's call (`00-brief.md` §6, answer 2).
