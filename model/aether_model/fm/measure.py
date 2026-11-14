@@ -126,5 +126,7 @@ def response(
 
 
 def level_db(x: FloatArray, reference_rms: float = 1.0 / math.sqrt(2.0)) -> float:
-    """RMS of ``x`` in dB against ``reference_rms`` (by default a full-scale sine)."""
-    return 10.0 * math.log10(float(np.mean(np.asarray(x) ** 2)) / reference_rms**2)
+    """RMS of ``x`` in dB against ``reference_rms`` (by default a full-scale sine); silence, a
+    squelch closed, reads −200 dB."""
+    power = float(np.mean(np.asarray(x) ** 2))
+    return -200.0 if power <= 0.0 else 10.0 * math.log10(power / reference_rms**2)

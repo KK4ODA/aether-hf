@@ -139,10 +139,13 @@ repeaters (risk R9).
 - **The effective SNDR over a band:** the flat SNDR that gives the same information rate,
   log2(1 + SNDR(f)) integrated over the band. This is the scratch model's measure.
 - **The band's response:** the linear response, S_xy/S_xx, normalised at 1 kHz.
-- **The audio floor:** the level heard with the key up, the radio receiving its own idle carrier,
-  against a full-deviation 1 kHz tone.
-- **Timing:** from the key to the first audio, and from the release to the squelch closing, read
-  from the recorded envelope against the keying times.
+- **The audio floor:** the level heard while the transmitter sends a carrier with no audio,
+  against the level heard at the curve's peak. A bench has no deviation meter, so the floor is
+  read against something both the recording and the model have.
+- **Timing:** from the key to the audio (the squelch opening, or with the squelch open the noise
+  quieting), from the release to the carrier gone (the discriminator's noise rising), and from the
+  release to silence (the squelch closing). Each is read from the recorded envelope against the
+  keying times.
 
 ## 3. Calibration, the gate
 
@@ -204,7 +207,64 @@ It adds no configuration key, nothing in the daemon and nothing on the air.
   between or beyond them: not another CNR, not fading, not a repeater. The stage model fits
   the same parameters and keeps their physics.
 
-## 7. Built (step 10.2a)
+## 7. Built (step 10.2a, 2026-11-14)
 
-To be filled when the model is built: what was built, how it was checked, and what it measured
-uncalibrated.
+**What was built.**
+- `model/aether_model/fm/channel.py`: every stage of §2.3 except the repeater, with three presets:
+  `wide_voice`, `narrow_voice` and `flat_port`.
+- `measure.py`: §2.5's measure.
+- `signals.py`: the known signals, a single carrier of QAM symbols and chirp markers.
+- `tools/fm_bench.py`: the bench for step 10.2b, with five commands:
+  - `make`, the test sequence and its manifest;
+  - `play`, play one sound card and record another, keying by VOX, RTS or DTR;
+  - `analyse`, the recording through `measure.py`;
+  - `model`, the same sequence through the model, analysed the same way;
+  - `baseline`.
+- `docs/research/aether-fm/02-recording-plan.md`: the procedure for 10.2b.
+
+**How it was checked.** `model/tests/test_fm_channel.py` holds the model to its conventions and its
+physics:
+- every stage and the whole link block-exact;
+- the CNR in 16 kHz;
+- a tone at its deviation on both ports;
+- emphasis 6 dB an octave, and undone by de-emphasis;
+- the limiter holding the voice path, and the flat port having none;
+- the FM threshold arising by itself: 14.7 dB of audio SNR for the 15 dB from CNR 30 to 15, about
+  3 dB per dB below CNR 8, clicks from CNR 8 down and none at 12 or above;
+- squelch times;
+- unit-power Rician and Clarke fading;
+- the clocks;
+- the measure itself.
+
+It reproduces the proposal's scratch point (24.6 dB at CNR 18 in its IF) at 24.9 dB.
+`model/tests/test_fm_bench.py` checks the bench end to end on the model. The model was run with
+its sound cards 60 ppm fast and 90 ppm slow and a recording 0.37 s early. The analysis found
+−150 ppm and 0.37 s, and read back the curve, the band, the squelch and its times.
+
+**Found on the way.** The coherence measure is fragile at a key-up. One Welch segment with no
+carrier, among 140, caps an estimate near 18 dB however good the rest is. So every measurement
+leaves the key-up out: the bench starts each transmission's audio 0.75 s after the key, and skips
+the first 0.5 s of each drive step.
+
+**What the uncalibrated model gives** (`bench/baselines/fm_model_uncalibrated.csv`, from
+`fm_bench.py baseline`). Peak SNDR over the 24 drive steps, against the proposal's §D.5 range for
+CNR 9 to 30:
+
+| Preset | CNR 9 | CNR 12 | CNR 18 | CNR 30 | Proposal §D.5 |
+|---|---|---|---|---|---|
+| 25 kHz voice path, ±5 kHz | 17.8 dB | 20.6 dB | 25.3 dB | 29.6 dB | 17.6–29.5 dB |
+| 12.5 kHz voice path, ±2.5 kHz | 13.5 dB | 15.9 dB | 20.6 dB | 28.1 dB | 10.7–27.1 dB |
+| 25 kHz flat port, ±3 kHz | 11.3 dB | 13.7 dB | 18.5 dB | 27.9 dB | 13.1–30.6 dB |
+
+- **The voice path agrees.**
+- **The narrow path reads 1–3 dB higher** because CNR is now in 16 kHz: at the same CNR its IF
+  admits 2.7 dB less noise than the scratch model's did.
+- **The flat port reads 2–3 dB lower** because the model's receiver keeps the radio's −42 dB floor
+  on the data port, which the scratch model left out.
+
+All of these are uncalibrated (§5). The recordings settle them.
+
+**Not built yet.**
+- The repeater, after the simplex chain is calibrated.
+- The radio profiles, one per recorded radio.
+- The harness's FM radios (step 10.4).
