@@ -122,3 +122,11 @@ context → decision → alternatives considered → consequences.
 | [0115](0115-the-fm-channel-model.md) | The FM channel model, a radio at each end, calibrated against recordings (FM-3) | proposed |
 | [0116](0116-the-fm-waveform.md) | The FM waveform, chosen on the calibrated model by criteria set now (FM-4) | proposed |
 | [0117](0117-the-far-station-calibrates-the-level.md) | The far station calibrates the level, in the call and on the data (FM-5) | proposed |
+| [0118](0118-fm-learned-profiles.md) | What an FM station learns and keeps, per radio and per peer (FM-6) | proposed |
+| [0119](0119-the-fm-link-protocol.md) | The FM link protocol is granted slots with FM's numbers (FM-7) | proposed |
+| [0120](0120-fm-channel-access.md) | FM channel access is the squelch, a slot time and a reservation (FM-8) | proposed |
+| [0121](0121-the-fm-repeater-profile.md) | The repeater profile is off by default and learns each repeater (FM-9) | proposed |
+| [0122](0122-vhf-and-uhf-rules.md) | The regulatory gate learns 2 m, 1.25 m and 70 cm (FM-10) | proposed |
+| [0123](0123-fm-identification.md) | On FM a station identifies with its callsign in the digital signal (FM-11) | proposed |
+| [0124](0124-fm-host-interfaces.md) | Aether FM's host interfaces are HF's, with the air named (FM-12) | proposed |
+| [0125](0125-legacy-packet-beside-aether-fm.md) | Legacy packet runs beside Aether FM, built from public specifications (FM-13) | proposed |
