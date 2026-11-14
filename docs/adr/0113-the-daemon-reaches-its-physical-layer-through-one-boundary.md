@@ -1,10 +1,10 @@
 # ADR-0113: The daemon reaches its physical layer through one boundary
 
-**Status:** accepted for building, 2026-11-13, the author's agreement to the boundary below. This
-is the Aether FM proposal's FM-2 (`docs/research/aether-fm/00-proposal.md` §B, §I, §L). The
-author's decision 2 settled that it is done now, in HF first, and proven unchanged. It is done
-when step 10.1's gate (§4) passes. No wire change, no
-model change, no configuration key, no vector regenerated.
+**Status:** accepted, 2026-11-13, the author's agreement to the boundary below; built, and step
+10.1's gate passed, 2026-11-14 (§7, which also records what changed in the gate before it ran).
+This is the Aether FM proposal's FM-2 (`docs/research/aether-fm/00-proposal.md` §B, §I, §L). The
+author's decision 2 settled that it is done now, in HF first, and proven unchanged. No wire
+change, no model change, no configuration key, no vector regenerated.
 
 ## 1. Context
 
@@ -175,3 +175,54 @@ changes, as ADR-0069's steps were.
   change to the station is needed beyond refusing what the new air cannot do.
 - The model has no daemon, so this step is port only. Model first still holds for everything
   the step does not touch.
+
+## 7. As built (step 10.1, 2026-11-13/14)
+
+Built in three commits on the working branch: HF's parts gathered into `HfAir`; the block taken by
+the air and the busy detector moved into it; the station on `Box<dyn Air>`. The split is §2.2's.
+What differs from §2–§4, and why:
+
+1. **The gate's decisive check was replaced before it ran.** §4.3 as registered replayed a corpus
+   through `aetherd --replay`, `--busy-trace` and `--passband-trace`. Those tools drive HF's
+   physical-layer parts directly and never run the `Station`, so they would have passed whatever
+   the refactor did. This step changed none of them, nor anything they call (`replay.rs`,
+   `busy_trace.rs`, `passband_trace.rs`, `busy.rs`, `passband.rs` and the three library crates
+   are byte for byte as on `master`, and so are the two items of `station.rs` they use,
+   `reported_cfo` and `CAPTURE_LAG_ALLOWANCE_S`), so their outputs are identical by construction. The check
+   that does see the station is `core/aetherd/examples/air_identity.rs`: two real stations through
+   a seeded channel in ten sessions (clean, weak and under the OFDM rungs on both airs; a 500 Hz
+   call that moves a 2 300 Hz station; a 60 Hz offset the receiver follows; an abort; a probe and a
+   beacon; a Test), printing every event, frame report, keying tag, delivery and received byte and
+   a running hash of all audio played. It uses only the public interface both trees share.
+   **Result:** `master` repeats itself byte for byte; `master` and this tree print identical
+   output at 4 096-sample blocks (660 lines) and at the daemon's 960 (915 lines).
+2. **§4.5's cost check measured the wrong thing for the same reason** (the replay never runs the
+   station). It was taken on the identity driver instead, at the daemon's 960-sample blocks,
+   the two builds run in turn three times on an idle machine: `master` 66.62, 66.27 and 65.95 s,
+   this tree 66.40, 65.88 and 65.24 s (×0.993).
+3. **The offline tools and `capabilities` stay HF's (§2.5).** They read HF recordings and report
+   HF's ladder, and they are the referee the identity of everything below the station rests on.
+   They get an air when there is an FM recording to read and an FM ladder to report (step 10.4).
+4. **What is still HF's in the station:** `StationConfig.params` remains the configuration's choice
+   of HF waveform (which air to build, and a bandwidth move's target), and the two confidence
+   gates the station applies to a heard frame (`DETECT_CONFIDENCE_TRUSTED`,
+   `MODE_RETRY_CONFIDENCE`) are HF's constants. The FM air states its own when FM-4 fixes its
+   acquisition; they then move into `AirInfo`. Every other read of HF's numbers goes through the
+   air (`info`, `timing`, `ladder`). Outside its tests `station.rs` now names `aether_phy` on
+   these three lines; it named it on 14 before.
+5. **One placement changed in a case the corpus never produced.** A frame is now placed and judged
+   by the receiver that heard it. Before, when a narrower call moved the station to 500 Hz in the
+   middle of a block, a later frame finished by the old receiver in that same block was placed
+   by the new receiver's origin and judged against the new air's tables. That needs two frames
+   to finish in one 20 ms block, the first a call that moves the station; the identity runs move
+   a station and saw no difference.
+6. **The harness (§4.4).** Every scenario at three draws on this tree's daemon, two jobs, as the
+   nightly runs them: 192 runs, no radiated overlap. `scenario_trend.py` against
+   `bench/baselines/scenarios.csv` flags no scenario slower, and 63 of 64 pass all three draws.
+   The 64th is `80m-agc-carrier-outside-500`, a 1 000-byte message in 300 s at 500 Hz on ITU NVIS,
+   which the notes keep at its budget's edge: it passed draw 31 and missed 1031 and 2031. Each
+   missed draw was run twice more on each build. On draw 1031 both builds failed once and passed
+   once, the passing runs identical (372.1 s of air, the message in 275 s). On draw 2031 the same,
+   the passing runs identical (274.1 s, 177 s). The harness takes its steps on the wall clock, so
+   one draw has two courses here, and `master` takes both as this tree does. The scenario
+   behaves as on `master`.

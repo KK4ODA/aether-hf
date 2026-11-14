@@ -3061,6 +3061,23 @@ Phase 10. RadioPost's side is merged there (RP-0 §9.4's modem names with `aethe
 §4.4's FM channels, RP-7's VHF rows, design D39). Owed before the radio recordings (10.2b): a
 dummy load and an attenuator.
 
+**The PHY boundary (step 10.1, ADR-0113, 2026-11-13).** The station holds one `Box<dyn Air>`
+(`core/aetherd/src/air/`): `info` (audio rate, bandwidth, the ordinary data frame, rungs),
+`timing` (the engine's `PhyTiming`), `ladder`, `take_block`/`listen_next` (the air takes a captured
+block and the station feeds the receiver its pieces in today's order: the muted part, the end of
+the transmission, the rest), `render`, `sense`/`sense_mut` (`ChannelSense`: the busy detector on
+HF), and HF's optional abilities (`moved_to` a bandwidth, `receive_offset_hz`). A frame reaches the
+station as a `HeardFrame` (times on the station's clock, the air's own frame kept for
+`FrameDecoder`) and an announcement as an `Arrival`. HF's air is `HfAir` (`air/hf.rs`, with
+`phy_timing`); the panel's busy readings come through `Station::channel_sense`. The offline tools
+(`--replay`, `--busy-trace`, `--passband-trace`) and `capabilities` still use HF's parts. **A
+refactor of the station is proven by `core/aetherd/examples/air_identity.rs`**: two real stations
+through a seeded channel in ten sessions, every event, frame report, keying tag, delivery and
+received byte and a hash of all audio printed; build it against a worktree of the commit before
+(`CARGO_TARGET_DIR` of its own, the file copied in) and against the change, run both
+(`AIR_IDENTITY_SAMPLES=960` for the daemon's block), and `cmp` the outputs. The replay tools never
+run the station, so they cannot prove such a change.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

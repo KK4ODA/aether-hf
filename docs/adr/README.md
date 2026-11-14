@@ -117,4 +117,4 @@ context → decision → alternatives considered → consequences.
 | [0110](0110-a-decompressed-stream-grows-at-most-a-hundred-times.md) | A decompressed stream grows at most a hundred times what came off the air | accepted |
 | [0111](0111-the-2300-hz-air-guesses-closer-and-learns-faster.md) | The 2300 Hz air guesses closer and learns faster | accepted |
 | [0112](0112-aether-fm-is-a-second-air-in-this-repository.md) | Aether FM is a second air in this repository (the FM proposal's FM-1) | accepted |
-| [0113](0113-the-daemon-reaches-its-physical-layer-through-one-boundary.md) | The daemon reaches its physical layer through one boundary (FM-2) | accepted for building |
+| [0113](0113-the-daemon-reaches-its-physical-layer-through-one-boundary.md) | The daemon reaches its physical layer through one boundary (FM-2) | accepted; built (step 10.1) |
