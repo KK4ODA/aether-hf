@@ -3101,7 +3101,7 @@ ADR-0115 §2.2:
 `docs/research/aether-fm/02-recording-plan.md` is step 10.2b's procedure, and
 `bench/baselines/fm_model_uncalibrated.csv` the model before Gate 2. **Measure SNDR only after a
 key-up has settled:** one Welch segment with no carrier among 140 caps a coherence estimate near
-18 dB. Regulatory readings wait on the author: ADR-0122 §4 and ADR-0123 §3. ADR-0122: an audio
+18 dB. Regulatory readings confirmed by the author (2026-11-14): ADR-0122 §4 and ADR-0123 §3. ADR-0122: an audio
 modem through FM is F2D, authorized by §97.307(f)(8), not by Part 97's definition of data. ADR-0123:
 an ASCII callsign inside the data emission as §97.119(b)(3)'s identification; on FM a Morse tone is
 MCW, not CW. Gate 2 waits on a dummy load and an attenuator (risk R18).

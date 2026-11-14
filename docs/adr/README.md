@@ -126,7 +126,7 @@ context → decision → alternatives considered → consequences.
 | [0119](0119-the-fm-link-protocol.md) | The FM link protocol is granted slots with FM's numbers (FM-7) | proposed |
 | [0120](0120-fm-channel-access.md) | FM channel access is the squelch, a slot time and a reservation (FM-8) | proposed |
 | [0121](0121-the-fm-repeater-profile.md) | The repeater profile is off by default and learns each repeater (FM-9) | proposed |
-| [0122](0122-vhf-and-uhf-rules.md) | The regulatory gate learns 2 m, 1.25 m and 70 cm (FM-10) | proposed |
-| [0123](0123-fm-identification.md) | On FM a station identifies with its callsign in the digital signal (FM-11) | proposed |
+| [0122](0122-vhf-and-uhf-rules.md) | The regulatory gate learns 2 m, 1.25 m and 70 cm (FM-10) | proposed; its readings confirmed |
+| [0123](0123-fm-identification.md) | On FM a station identifies with its callsign in the digital signal (FM-11) | proposed; its reading confirmed |
 | [0124](0124-fm-host-interfaces.md) | Aether FM's host interfaces are HF's, with the air named (FM-12) | proposed |
 | [0125](0125-legacy-packet-beside-aether-fm.md) | Legacy packet runs beside Aether FM, built from public specifications (FM-13) | proposed |

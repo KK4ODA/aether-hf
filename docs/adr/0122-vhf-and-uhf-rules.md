@@ -3,8 +3,8 @@
 **Status:** proposed, 2026-11-14. This is the Aether FM proposal's FM-10
 (`docs/research/aether-fm/00-proposal.md` §L). The rule text is the e-CFR's, read on 2026-11-14
 from the version of 2026-11-12 (title 47 last amended that day; Part 97 last amended by 91 FR
-1431, 14 January 2026). It is built with the FM air in step 10.4. §4 holds three readings for the
-author, as the licensee, to confirm.
+1431, 14 January 2026). It is built with the FM air in step 10.4. §4's three readings were
+confirmed by the author, as the licensee, on 2026-11-14.
 
 ## 1. Context
 
@@ -97,7 +97,7 @@ The same as on HF:
 - automatic control's segments;
 - the power where the radio reports it.
 
-## 4. Readings for the author to confirm
+## 4. Readings, confirmed by the author (2026-11-14)
 
 1. **§97.307(f)(2)'s "same modulation type"** is read as FM phone on the same channel spacing. A
    flat-port signal at 4 000 Bd, ±3 kHz deviation, is measured against 16 kHz. If the occupancy

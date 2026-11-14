@@ -2,8 +2,8 @@
 
 **Status:** proposed, 2026-11-14. This is the Aether FM proposal's FM-11
 (`docs/research/aether-fm/00-proposal.md` §L), with the author's decision 4 (the callsign in the
-digital signal, no Morse). The rule text is the e-CFR's of 2026-11-12, read on 2026-11-14. §3 is a
-regulatory reading the author, as the licensee, confirms before this is accepted.
+digital signal, no Morse). The rule text is the e-CFR's of 2026-11-12, read on 2026-11-14. §3's
+regulatory reading was confirmed by the author, as the licensee, on 2026-11-14.
 
 ## 1. The rule
 
@@ -52,7 +52,7 @@ carries the callsign of the station it is licensed to, before keying.
 By decision 4. Each session is 5–7 s shorter than with a Morse identifier at each end (ADR-0075's
 closing), and nothing beeps on a channel others may be listening to by voice.
 
-## 3. The reading, for the author to confirm
+## 3. The reading, confirmed by the author (2026-11-14)
 
 **The reading.** A callsign in ASCII, a specified code (§97.309(a)(3)), inside a data emission
 whose format is published (`docs/spec/` will hold Aether FM's air interface, as
