@@ -13,12 +13,17 @@ release calling this build (``--daemon`` / ``--daemon-b``; a gateway scenario's 
 
 When the link protocol changed since that release (``tools/protocol_notice.py``), the two
 cannot connect by design and the release notes say *Update required*; nothing is run, and
-``note.md`` says why. Exit status 1 when any run failed.
+``note.md`` says why.
+
+The exit status is 1 only for what is serious, which ``serious.md`` lists: a run that broke an
+invariant (``session_matrix.py --fail-on invariants``), or a scenario that failed both ways
+round. One direction missing its time budget is one draw of a hard path, and stays a warning.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import subprocess
 import sys
@@ -65,10 +70,22 @@ def run(caller: Path, called: Path, out: Path) -> int:
     out.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
         [sys.executable, str(ROOT / "tools" / "session_matrix.py"), "--tag", "mixed",
-         "--jobs", "2", "--drop-passing-audio", "--daemon", str(caller),
-         "--daemon-b", str(called), "--out", str(out), "--csv", str(out / "results.csv")],
+         "--jobs", "2", "--drop-passing-audio", "--fail-on", "invariants",
+         "--daemon", str(caller), "--daemon-b", str(called),
+         "--out", str(out), "--csv", str(out / "results.csv")],
         check=False,
     ).returncode  # fmt: skip
+
+
+def failed_both_ways(*results: Path) -> list[str]:
+    """The scenarios that failed in every direction's ``results.csv``."""
+    failing: list[set[str]] = []
+    for path in results:
+        if not path.exists():
+            return []
+        with path.open(newline="", encoding="utf-8") as f:
+            failing.append({r["scenario"] for r in csv.DictReader(f) if r.get("pass") != "True"})
+    return sorted(set.intersection(*failing)) if failing else []
 
 
 def main() -> int:
@@ -103,7 +120,20 @@ def main() -> int:
     print(f"this build against {tag} ({old})", flush=True)
     calling = run(args.daemon, old, args.out / f"this-calls-{short}")
     called = run(old, args.daemon, args.out / f"{short}-calls-this")
-    return 1 if calling or called else 0
+    grave = []
+    if calling or called:
+        grave.append("a run broke an invariant, or the runner itself failed (the job's log)")
+    grave += [
+        f"`{name}` failed both ways round"
+        for name in failed_both_ways(
+            args.out / f"this-calls-{short}" / "results.csv",
+            args.out / f"{short}-calls-this" / "results.csv",
+        )
+    ]
+    if grave:
+        (args.out / "serious.md").write_text("; ".join(grave) + ".\n", encoding="utf-8")
+        print("serious: " + "; ".join(grave))
+    return 1 if grave else 0
 
 
 if __name__ == "__main__":

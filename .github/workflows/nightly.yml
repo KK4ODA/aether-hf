@@ -97,7 +97,9 @@ jobs:
   # switching, slow computers — judged on connecting, delivering, the Test's outcome, a clean
   # end and collisions (ADR-0042, bench/scenarios/). Three draws of each scenario, side by
   # side: the scenario's own seed and two more (`--variant`), so one unlucky fade is told from
-  # a build that broke something.
+  # a build that broke something. A job fails only on a run that broke an invariant
+  # (`--fail-on invariants`); a draw that missed what its scenario expects is a warning, and
+  # the trend job below fails a scenario that missed on every draw.
   scenarios:
     needs: build
     runs-on: ubuntu-latest
@@ -119,7 +121,7 @@ jobs:
       - name: Scenarios
         run: >-
           uv run python tools/session_matrix.py --jobs 2 --variant ${{ matrix.variant }}
-          --drop-passing-audio --daemon bin/aetherd
+          --drop-passing-audio --fail-on invariants --daemon bin/aetherd
           --out "${{ runner.temp }}/scenarios" --csv "${{ runner.temp }}/scenarios/results.csv"
       - name: Keep the runs
         if: always()
@@ -131,7 +133,9 @@ jobs:
 
   # How fast the sessions were against the committed baseline (tools/scenario_trend.py,
   # bench/baselines/scenarios.csv): a change that makes every session a third slower passes
-  # every judgement above, and this is where it shows. The table goes in the run's summary.
+  # every judgement above, and this is where it shows. The table goes in the run's summary;
+  # the job fails only for a scenario that failed all its draws or a quarter of them slower
+  # or failing at once — one or two flagged are warnings.
   trend:
     needs: scenarios
     if: ${{ !cancelled() && needs.scenarios.result != 'skipped' }}
@@ -190,7 +194,8 @@ jobs:
   # The stations on the air run the last release, not this tree: this build calls the newest
   # v* release's daemon and is called by it (tools/mixed_pair.py). Skipped, and said so, when
   # the link protocol changed since that release — the two cannot connect by design, and the
-  # release notes will say "Update required".
+  # release notes will say "Update required". Fails on a broken invariant or a scenario that
+  # failed both ways round.
   mixed:
     needs: build
     runs-on: ubuntu-latest
@@ -217,11 +222,13 @@ jobs:
           path: ${{ runner.temp }}/mixed
           retention-days: 5
 
-  # A failing night opens an issue labelled `nightly` — or comments on the one already open —
-  # with what failed and why; a passing night closes it. The email GitHub sends says only
-  # that the run failed.
+  # Every job above fails only for what is serious (tools/nightly_report.py lists it), so a
+  # red run — and GitHub's email for it — means something broke; the author is not emailed
+  # for one hard draw (2026-11-14). A failing night opens an issue labelled `nightly` — or
+  # comments on the one already open — with what failed and why; a night with nothing serious
+  # closes it.
   report:
-    needs: [full, scenarios, trend, soak, mixed]
+    needs: [build, full, scenarios, trend, soak, mixed]
     # a night the guard skipped says nothing: the issue stays as the last night left it
     if: ${{ always() && github.event_name == 'schedule' && needs.full.result != 'skipped' }}
     runs-on: ubuntu-latest
@@ -238,6 +245,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESULTS: >-
+            build=${{ needs.build.result }}
             full=${{ needs.full.result }}
             scenarios=${{ needs.scenarios.result }}
             trend=${{ needs.trend.result }}

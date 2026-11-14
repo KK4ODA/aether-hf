@@ -4,6 +4,7 @@
                                    [--daemon core/target/release/aetherd] [--daemon-b PATH]
                                    [--out runs/] [--csv results.csv] [--seeds 1]
                                    [--variant K] [--drop-passing-audio]
+                                   [--fail-on any|invariants]
 
 Every scenario (``bench/scenarios/*.toml`` unless named; the format is the README there) is
 one on-air situation: the path, the other signals and the static each station hears, the
@@ -23,6 +24,12 @@ or the build. The CSV's ``base`` column names the scenario a variant came from
 
 ``--daemon-b`` runs the called station on another build: an old release against this tree is
 how a change is checked for working with the stations already on the air.
+
+The exit status is 1 when any run failed (``--fail-on any``, the default) or only when a run
+broke an invariant (``--fail-on invariants``: a daemon that exited or panicked, a stuck key, a
+harness fault, a host told what it must not be, an identifier out of place — the CSV's
+``invariants`` column). The nightly uses the second: a single draw that misses its time budget
+on a hard path is a warning on a green run, not an email.
 
 The stations' clock is the audio's, and the channel hands it out as fast as the daemons can
 take it, so a twenty-minute session takes a few minutes. Each run keeps both daemons' logs and
@@ -1065,12 +1072,13 @@ def judge(run: Run, ends: list[str]) -> dict:
         longest = max((iv[1] - iv[0] for iv in keyed.get("keyed", [])), default=0.0)
         if longest > STUCK_KEY_S:
             invariants.append(f"{name} keyed {longest:.0f} s at once")
+    for host in run.hosts.values():
+        invariants += host.problems
+    invariants += identifier_faults(run, report, last=bool(expect.get("identifiers_last")))
     clean = all("timeout" not in e and e not in ("none", "unknown") for e in ends)
     idle = all(s == "idle" for s in run.final_states)
-    failures = invariants
-    for host in run.hosts.values():
-        failures += host.problems
-    failures += identifier_faults(run, report, last=bool(expect.get("identifiers_last")))
+    # then what this scenario expects of its path, which one unlucky draw can miss
+    failures = list(invariants)
     if expect.get("connected") and not run.connected:
         failures.append("did not connect")
     if expect.get("delivered") and not run.delivered_ok:
@@ -1116,6 +1124,8 @@ def judge(run: Run, ends: list[str]) -> dict:
         "why": "; ".join(failures + run.notes) or "",
         # the judgements that failed, without the notes `why` adds
         "failures": "; ".join(failures),
+        # those of them no path excuses (`--fail-on invariants`)
+        "invariants": "; ".join(invariants),
         "air_s": round(report.get("seconds", run.air_s()), 1),
         "collisions": collisions,
         "both_keyed_s": report.get("both_keyed_s"),
@@ -1278,6 +1288,12 @@ def main() -> int:
         type=int,
         help="pin every station's own data at this rung (the rate controller's oracle)",
     )
+    ap.add_argument(
+        "--fail-on",
+        choices=("any", "invariants"),
+        default="any",
+        help="exit 1 when any run failed, or only when one broke an invariant (the nightly)",
+    )
     args = ap.parse_args()
     paths = args.scenarios or sorted(SCENARIOS.glob("*.toml"))
     if args.tag:
@@ -1327,6 +1343,19 @@ def main() -> int:
             if new:
                 w.writeheader()
             w.writerows(results)
+    if os.environ.get("GITHUB_ACTIONS"):
+        for r in results:
+            if r.get("invariants"):
+                print(f"::error title={r['scenario']}::{r['invariants']}")
+            elif not r["pass"]:
+                print(f"::warning title={r['scenario']}::{r['failures']}")
+    return exit_status(results, args.fail_on)
+
+
+def exit_status(results: list[dict], fail_on: str = "any") -> int:
+    """1 when a run failed — any judgement, or with ``invariants`` only what no path excuses."""
+    if fail_on == "invariants":
+        return 1 if any(r.get("invariants") for r in results) else 0
     return 0 if all(r["pass"] for r in results) else 1
 
 

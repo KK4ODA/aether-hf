@@ -1421,7 +1421,13 @@ change — `rtty-crashes` alone runs 226–364 s on one daemon) — `--update` r
 the nightly's `mixed` job runs the scenarios tagged `mixed` between this build and the newest
 release's daemon both ways round (`tools/mixed_pair.py`, downloaded from the public release page;
 skipped with a note when the link protocol differs); a failing night opens or comments on the
-issue labelled `nightly` and a passing one closes it (`tools/nightly_report.py`). The channel
+issue labelled `nightly` and a passing one closes it (`tools/nightly_report.py`). **The nightly
+fails only for what is serious** (the author's rule, 2026-11-14: no email for one hard draw):
+the build or full tests, a run that broke an invariant (`session_matrix.py --fail-on
+invariants`, the CSV's `invariants` column), a scenario failing all its draws or a quarter of
+them slower or failing (`scenario_trend.serious`), a soak failure, or the last release
+breaking an invariant or failing a scenario both ways (`mixed_pair.py`'s `serious.md`); one
+draw missing its budget is a warning on a green run. The channel
 server models a slow computer (`[stations.<who>.machine]`: `stall_every_s`, `stall_s`,
 `backlog_s`; the step `stall WHO S`): the station neither hears nor answers, its queued audio
 plays on, the newest 2 s it heard are kept and it catches up after — `80m-slow-machine-500`

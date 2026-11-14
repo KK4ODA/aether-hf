@@ -223,8 +223,15 @@ variant.
 `--variant K` only the K-th; the nightly runs variants 0–2 side by side. `--drop-passing-audio`
 deletes a passing run's recordings. `tools/scenario_trend.py` compares a night's CSVs with
 `bench/baselines/scenarios.csv` — each scenario's median air time and Test rates over its
-passing runs, and its pass count — against the *range* of the baseline's own runs, and fails
-on a step (15 % and 30 s past the longest baseline run, a rate 15 % under the slowest, a third
+passing runs, and its pass count — against the *range* of the baseline's own runs, and flags
+a step (15 % and 30 s past the longest baseline run, a rate 15 % under the slowest, a third
 fewer passing): one build's three seeds of a scenario can differ by half; `--update` rewrites the baseline when a change is meant to alter the
-timing. A failing night opens or comments on the issue labelled `nightly`
-(`tools/nightly_report.py`); a passing one closes it.
+timing.
+
+The nightly fails, and so emails the author, only for what is serious: the build or the full
+tests failing, a run that broke an invariant (`--fail-on invariants`; the CSV's `invariants`
+column), a scenario that failed all its draws, a quarter of the scenarios slower or failing
+at once, a soak run that failed, or this build against the last release breaking an
+invariant or failing a scenario both ways round. One draw missing its budget on a hard path
+is a warning on a green run. A serious night opens or comments on the issue labelled
+`nightly` (`tools/nightly_report.py`); a night with nothing serious closes it.

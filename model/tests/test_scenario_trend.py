@@ -105,9 +105,11 @@ def test_the_nightly_issue_names_what_failed(tmp_path: Path) -> None:
 
     (tmp_path / "scenarios-1").mkdir()
     with (tmp_path / "scenarios-1" / "results.csv").open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["scenario", "pass", "why"])
+        w = csv.DictWriter(f, fieldnames=["scenario", "pass", "why", "invariants"])
         w.writeheader()
-        w.writerow({"scenario": "x-s1009", "pass": "False", "why": "did not connect"})
+        w.writerow({"scenario": "x-s1009", "pass": "False", "why": "b exited (1)",
+                    "invariants": "b exited (1)"})  # fmt: skip
+        w.writerow({"scenario": "z-s2031", "pass": "False", "why": "message 1000: not within"})
         w.writerow({"scenario": "y-s1004", "pass": "True", "why": ""})
     (tmp_path / "soak").mkdir()
     (tmp_path / "soak" / "soak.json").write_text(
@@ -115,13 +117,80 @@ def test_the_nightly_issue_names_what_failed(tmp_path: Path) -> None:
     )
     (tmp_path / "mixed").mkdir()
     (tmp_path / "mixed" / "note.md").write_text("skipped: protocol 8 against 7", encoding="utf-8")
-    results = nr.parse_results("full=success scenarios=failure trend=skipped soak=failure")
+    results = nr.parse_results(
+        "build=success full=success scenarios=failure trend=skipped soak=failure"
+    )
     text = nr.body(tmp_path, results, "https://run", "0123456789", "2026-10-12")
     assert "scenarios, soak failed" in text
-    assert "`x-s1009`: did not connect" in text
+    serious, _, minor = text.partition("not serious on its own (1)")
+    assert "broke an invariant:**\n- `x-s1009`: b exited (1)" in serious
+    assert "z-s2031" not in serious
+    assert "`z-s2031`: message 1000: not within" in minor
     assert "y-s1004" not in text
     assert "`soak-7`: b panicked" in text
     assert "protocol 8 against 7" in text
+    # a night with nothing serious closes the issue and counts what stayed a warning
+    quiet = nr.quiet(tmp_path, "https://run", "0123456789", "2026-10-13")
+    assert quiet.startswith("Nothing serious on 2026-10-13 at `0123456`")
+    assert "1 single-draw miss stayed a warning" in quiet
+
+
+def test_a_scenario_that_misses_on_one_draw_is_not_serious() -> None:
+    # the nightly of 2026-11-14: one draw of a hard NVIS path missed its message's budget
+    def runs(name: str, passed: int, of: int = 3, air: float = 200.0) -> list[dict[str, str]]:
+        return [row(f"{name}-s{k}", name, k < passed, air) for k in range(of)]
+
+    others = [f"ok{k}" for k in range(6)]
+
+    def night(**odd: list[dict[str, str]]) -> dict[str, st.Night]:
+        rows = odd.get("agc", runs("agc", 3)) + odd.get("ok0", runs("ok0", 3)) + runs("hard", 0)
+        return st.summarise(rows + [r for n in others[1:] for r in runs(n, 3)])
+
+    base = night()
+    for n in base.values():
+        n.air_s_lo, n.air_s_hi = 180.0, 220.0
+    now = night(agc=runs("agc", 2))
+    _, flagged = st.report(now, base, 0.15, 30)
+    assert [f[:2] for f in flagged] == [("agc", "failing")]
+    assert st.serious(now, base, flagged) == []
+    # every draw failing is the build, unless the baseline never passed it either ("hard")
+    now = night(agc=runs("agc", 0))
+    _, flagged = st.report(now, base, 0.15, 30)
+    assert st.serious(now, base, flagged) == ["`agc` passed none of its 3 runs"]
+    # and so is a quarter of the scenarios slower or failing at once
+    now = night(agc=runs("agc", 2), ok0=runs("ok0", 3, air=400.0))
+    _, flagged = st.report(now, base, 0.15, 30)
+    assert st.serious(now, base, flagged) == [
+        "2 of 8 scenarios slower or failing more than the baseline"
+    ]
+
+
+def test_the_runner_fails_on_invariants_alone_when_asked() -> None:
+    missed = {"scenario": "a", "pass": False, "invariants": ""}
+    broke = {"scenario": "b", "pass": False, "invariants": "b panicked"}
+    passed = {"scenario": "c", "pass": True, "invariants": ""}
+    assert sm.exit_status([passed, missed]) == 1
+    assert sm.exit_status([passed, missed], "invariants") == 0
+    assert sm.exit_status([passed, missed, broke], "invariants") == 1
+    assert sm.exit_status([passed], "invariants") == 0
+
+
+def test_the_last_release_fails_a_scenario_only_both_ways_round(tmp_path: Path) -> None:
+    import mixed_pair as mp
+
+    def results(name: str, failing: list[str]) -> Path:
+        path = tmp_path / name / "results.csv"
+        path.parent.mkdir()
+        with path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["scenario", "pass"])
+            w.writeheader()
+            for s in ("p", "q", "r"):
+                w.writerow({"scenario": s, "pass": str(s not in failing)})
+        return path
+
+    calling, called = results("calling", ["p", "q"]), results("called", ["q", "r"])
+    assert mp.failed_both_ways(calling, called) == ["q"]
+    assert mp.failed_both_ways(calling, tmp_path / "missing.csv") == []
 
 
 def test_a_runs_folder_reads_like_its_csv(tmp_path: Path) -> None:

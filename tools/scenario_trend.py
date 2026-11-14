@@ -26,8 +26,13 @@ and a median of three swings across that range from night to night. Each scenari
 is therefore the yardstick — the baseline keeps the range of its runs (``*_lo``, ``*_hi``), and
 a night is judged against the range, not the median (the first night, 2026-10-12, flagged one
 scenario slower and four faster on a build with no daemon change). What this catches is a
-step, not a drift. The summary is Markdown (``--summary``, the job summary in CI); the exit status is 1
-when anything is failing or slower.
+step, not a drift. The summary is Markdown (``--summary``, the job summary in CI).
+
+Most flags are one hard draw, and a night that raises only those stays green: the exit status is
+1 only for what is **serious** (``serious``) — a scenario that passed none of its runs where the
+baseline passed some, which no single draw explains, or a quarter or more of the scenarios
+slower or failing at once (``SLOWER_SHARE``), which is the build, not the paths. The rest are
+warnings.
 
 ``--update`` writes the baseline from the runs given (the commit's short hash with
 ``--build``). Refresh it when a change is meant to alter the timing (an engine default, a new
@@ -66,6 +71,10 @@ COLUMNS = [
     "build",
 ]
 VARIANT = re.compile(r"-s\d+$")
+SLOWER_SHARE = 0.25
+"""The share of the scenarios slower or failing in one night that makes it serious: one or two
+is a hard draw or a known path (the nightly flagged up to four for weeks on a build whose
+slowdowns were already owed to a review); a quarter of them is the build."""
 
 
 @dataclass
@@ -266,6 +275,8 @@ def report(
     head = ["## Scenarios against the baseline", ""]
     bad = [f for f in flagged if f[1] in ("failing", "slower")]
     good = [f for f in flagged if f[1] == "faster"]
+    for why in serious(nights, baseline, flagged):
+        head.append(f"- **serious**: {why}")
     if not bad:
         head.append(f"Nothing slower or failing more than the baseline ({len(nights)} scenarios).")
     for name, kind, why in bad:
@@ -276,6 +287,27 @@ def report(
         head.append(f"- not run tonight: {', '.join(missing)}")
     head += ["", "<details><summary>Every scenario</summary>", "", *lines, "", "</details>", ""]
     return "\n".join(head), flagged
+
+
+def serious(
+    nights: dict[str, Night],
+    baseline: dict[str, Night],
+    flagged: list[tuple[str, str, list[str]]],
+) -> list[str]:
+    """What no single draw explains: a scenario that passed none of its runs (unless the
+    baseline's never passed either), or ``SLOWER_SHARE`` of the scenarios slower or failing."""
+    out = []
+    for name, now in nights.items():
+        base = baseline.get(name)
+        if now.runs and now.passed == 0 and not (base and base.runs and base.passed == 0):
+            out.append(f"`{name}` passed none of its {now.runs} runs")
+    compared = [name for name in nights if name in baseline]
+    worse = [name for name, kind, _ in flagged if kind in ("slower", "failing")]
+    if compared and len(worse) >= SLOWER_SHARE * len(compared):
+        out.append(
+            f"{len(worse)} of {len(compared)} scenarios slower or failing more than the baseline"
+        )
+    return out
 
 
 def main() -> int:
@@ -311,10 +343,13 @@ def main() -> int:
         with args.summary.open("a", encoding="utf-8") as f:
             f.write(text + "\n")
     bad = [f for f in flagged if f[1] in ("failing", "slower")]
+    grave = serious(nights, read_baseline(args.baseline), flagged)
     if os.environ.get("GITHUB_ACTIONS"):
         for name, kind, why in bad:
             print(f"::warning title={kind}: {name}::{'; '.join(why)}")
-    return 1 if bad else 0
+        for why in grave:
+            print(f"::error title=serious::{why}")
+    return 1 if grave else 0
 
 
 if __name__ == "__main__":
