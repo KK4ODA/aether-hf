@@ -820,7 +820,7 @@ before anything changes, as ADR-0069's steps were.
 | Step | Work | Gate |
 |---|---|---|
 | 10.1 | The ADRs below; Aether HF's daemon behind a `Phy` trait, no wire change. *The boundary done 2026-11-14 (ADR-0113 §7): the station holds one `Air`, proven unchanged by `core/aetherd/examples/air_identity.rs`* | HF's suite and a harness A/B unchanged |
-| 10.2a, 10.2b | The FM channel model in `model/`, beside recordings of 5–10 radios (SNDR against drive, the band's response, turnaround, sound-card clocks) through a dummy load and an attenuator | The model reproduces the recordings within 2 dB |
+| 10.2a, 10.2b | The FM channel model in `model/`, beside recordings of 5–10 radios (SNDR against drive, the band's response, turnaround, sound-card clocks) through a dummy load and an attenuator. *The model and the bench (`tools/fm_bench.py`, `docs/research/aether-fm/02-recording-plan.md`) built 2026-11-14, ADR-0115 §7; the recordings wait for the dummy load and the attenuator* | The model reproduces the recordings within 2 dB |
 | 10.2c, 10.3 | The waveform decided (SC-FDE, CP-OFDM and a 4-FSK floor on the calibrated model, criteria registered first), beside calibration on the model (the ladder and the probe, both loops together) | FM-4 and FM-5 accepted on their criteria (the proposal's E.7 for FM-5) |
 | 10.4 | The Rust port bit-exact with the model; granted slots with FM's numbers; the daemon's FM air; legacy packet; RadioPost's conformance tester (A-01 to A-04) over two FM daemons | No radiated overlap on the harness; RadioPost conformance passes |
 | 10.5 | Real radios: the bench, simplex, then repeaters (with their owners' leave); three radio models, both audio profiles; packet against Dire Wolf and a NinoTNC | Calibration converges on radios as on the model |
@@ -830,7 +830,8 @@ before anything changes, as ADR-0069's steps were.
 The ADRs, written before any FM code and numbered from ADR-0112 as they are written (the
 proposal's §L has what each needs): FM-1 product structure (ADR-0112, accepted), FM-2 the PHY
 boundary (ADR-0113, built 2026-11-14), FM-3 the FM
-channel model (ADR-0115, proposed), FM-4 the waveform, FM-5 calibration, FM-6 learned profiles, FM-7 the FM link
+channel model (ADR-0115, proposed; its model built, step 10.2a), FM-4 the waveform (ADR-0116,
+proposed), FM-5 calibration (ADR-0117, proposed), FM-6 learned profiles, FM-7 the FM link
 protocol, FM-8 channel access, FM-9 the repeater profile, FM-10 VHF/UHF rules, FM-11
 identification on FM, FM-12 host interfaces, FM-13 legacy packet. Bench equipment owed before
 10.2b: a dummy load and an attenuator (the proposal's risk R18).

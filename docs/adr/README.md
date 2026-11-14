@@ -120,3 +120,5 @@ context → decision → alternatives considered → consequences.
 | [0113](0113-the-daemon-reaches-its-physical-layer-through-one-boundary.md) | The daemon reaches its physical layer through one boundary (FM-2) | accepted; built (step 10.1) |
 | [0114](0114-a-program-may-say-who-it-is-without-claiming-a-callsign.md) | A program may say who it is without claiming a callsign | accepted |
 | [0115](0115-the-fm-channel-model.md) | The FM channel model, a radio at each end, calibrated against recordings (FM-3) | proposed |
+| [0116](0116-the-fm-waveform.md) | The FM waveform, chosen on the calibrated model by criteria set now (FM-4) | proposed |
+| [0117](0117-the-far-station-calibrates-the-level.md) | The far station calibrates the level, in the call and on the data (FM-5) | proposed |
