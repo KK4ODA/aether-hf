@@ -48,6 +48,7 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt as _;
+use tauri_plugin_window_state::StateFlags;
 
 /// Where the daemon listens by default. The shell does not currently offer to change it;
 /// an operator who has moved it can run the daemon themselves and the shell will attach.
@@ -167,6 +168,17 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // where the operator left the panel's window, and the undocked card's, comes back at
+        // the next start, so Aether arranged once beside RadioPost's windows opens that way
+        // again (KK4ODA, 2026-11-14); a place on a screen no longer there is left to the
+        // system. The panel sizes its own window, one size a view (`app.js`), so the place
+        // and a maximized window are all the shell keeps. The updates window opens centred.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .with_denylist(&[update::WINDOW])
+                .build(),
+        )
         .manage(Daemon {
             child: Mutex::new(started),
             adopted: AtomicBool::new(adopted),

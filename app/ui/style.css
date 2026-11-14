@@ -370,39 +370,58 @@ header.bar {
   white-space: nowrap;
 }
 
+/* The right-hand group gives way before the display well, and of its parts only the chips
+ * shorten. It starts from its least width (the chips at their shortest) and grows, a
+ * thousand times faster than the well, up to its full width: the well takes room only once
+ * the chips are whole, and is squeezed only when the group is at its least. A group that
+ * shrank alongside the well, however much faster, took a fraction of a pixel from it, and
+ * the state read "I…". With RadioPost's two programs named, the group had crushed the well
+ * to "Idl" in a window 1100 px wide (KK4ODA, 2026-11-14). */
 .head-right {
   margin-left: auto;
   display: flex;
   align-items: center;
   gap: var(--s2) var(--s3);
-  flex: none;
+  flex: 1000 1 auto;
+  width: min-content;
+  max-width: max-content;
 }
 
-/* the programs using this station now: a host program, KISS programs */
+/* The programs using this station now (a host program, a RadioPost program, KISS programs),
+ * and the bandwidth when it is not the station's own. A chip is as wide as its words, and
+ * shortens with an ellipsis when the header is short of room; its tooltip says all of it.
+ * The one-column grid is what lets it shorten: its least width is its padding (the column
+ * is `minmax(0, max-content)`), where a box of unbroken words is never narrower than they
+ * are. */
 .apps-chip {
   font: 500 var(--fs-sm) / 1 var(--face);
   color: var(--text);
   padding: 0 8px;
   height: var(--control-h-sm);
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content);
   align-items: center;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 4.5em;
 }
 
 .apps-chip[hidden] {
   display: none;
 }
 
+.chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* a program connected and using the station: a green check and its name */
 .apps-chip .app-on {
   color: var(--status-rx);
-}
-
-/* the name and its separators keep their spaces in the chip's flex row */
-.apps-chip > span {
-  white-space: pre;
 }
 
 /* ── lamps: an LED and its legend; the legend lights with it ──────── */
@@ -4109,16 +4128,37 @@ body.compact .strip-who {
   font-size: var(--fs-lg);
 }
 
-/* the header's right-hand group shares the mark's row and wraps there, right-aligned, in the
-   small views: with the programs and bandwidth chips showing it was 780 px wide in a 640 px
-   window, it went to a row of its own under the mark, and the view switch, Light and the
-   callsign went off its edge */
+/* The header's right-hand group shares the mark's row, right-aligned, in the small views, and
+   keeps to that one row: the chips shorten first. Each starts from nothing and grows to its
+   words (`flex: 1 1 0`, `max-width: max-content`), so the row breaks only when the chips at
+   their least do not fit; a chip as wide as its words wrapped the row before it shortened,
+   and the callsign went to a second line under the chips (KK4ODA, 2026-11-14). Wrapping
+   stays the last resort: with the programs and bandwidth chips showing, the group was once
+   780 px wide in a 640 px window, and the view switch, Light and the callsign went off its
+   edge. The Modem lamp says nothing while the panel is connected, so the small views show
+   it only when it is red, as the undocked window's do. */
 body.compact .head-right {
   gap: 6px var(--s2);
   flex: 1 1 0;
   min-width: 0;
+  max-width: none;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+body.compact .apps-chip {
+  flex: 1 1 0;
+  max-width: max-content;
+}
+
+body.compact .modem-lamp.on {
+  display: none;
+}
+
+/* the mark sits on the first row, at the chips' height, whatever is under it */
+body.compact .brand {
+  align-self: flex-start;
+  height: var(--control-h-sm);
 }
 
 body.compact main {
@@ -4295,6 +4335,12 @@ body.compact.fitting:not(.mini) #history-card canvas {
 @media (max-width: 960px) {
   #strip-snr,
   header.bar .dial {
+    display: none;
+  }
+
+  /* the Modem lamp says nothing while the panel is connected: in a narrow window the well
+     has the room, and the lamp comes back red when the connection drops */
+  header.bar .modem-lamp.on {
     display: none;
   }
 }

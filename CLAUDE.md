@@ -2546,7 +2546,22 @@ History card takes the spare height. Compact shows both of the History card's pl
 and side by side (the ten-minute one is whichever Full shows, Speed or SNR), stacked under
 470 px; a legend is laid out by `legendLayout` (a group — an item and the ones after it that
 carry their own gap — wraps whole), every chart hands its legend to `chartFrame` so a second
-row pushes the plot down, and a speed plot too short for its 1-2-5 labels marks decades only. **The receive-filter estimate, replaced (beta.131, its
+row pushes the plot down, and a speed plot too short for its 1-2-5 labels marks decades only.
+**The header's chips shorten, the windows keep their place (2026-11-14, the author's
+screenshot of Aether in Compact over the RadioPost client, beside RadioPost Gateway):** a
+chip's words are one `.chip-text` span (`chipText` in `app.js`) in a one-column grid
+(`minmax(0, max-content)`), so the chip's least width is its padding and it ends in an
+ellipsis; `.head-right` starts at `width: min-content` and grows (`flex: 1000 1 auto`, up to
+`max-width: max-content`) before the well takes any room — a group that *shrank* alongside the
+well, however much faster, took a fraction of a pixel from it and the state read "I…". In the
+small views the chips start from nothing and grow (`flex: 1 1 0`), so the row breaks only when
+they are at their least; the quiet Modem lamp hides there and under 960 px; the mark sits on
+the first row. Compact and Mini each keep the size the operator gives them
+(`aether.window.compact`/`.mini`; the panel's own fit, `fittedSize`, is not kept), and the shell
+keeps the windows' place and maximized state (`tauri-plugin-window-state`, `POSITION |
+MAXIMIZED`, the updates window left out); RadioPost's two shells keep size, place and maximized
+the same way. Check a header change with a fresh page a width (a page resized in place measured
+stale). **The receive-filter estimate, replaced (beta.131, its
 second fix after d1b0992):** on 7.074 MHz FT8 through a 3 kHz filter the panel said "about
 850 Hz wide" — the monitor averaged its quiet spectra, and FT8 fills the passband's middle in
 every period. `PassbandMonitor` now keeps the last 120 quiet spectra and takes each bin's 10th

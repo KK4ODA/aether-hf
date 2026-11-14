@@ -32,6 +32,9 @@ tauri-plugin-opener = "2"
 # one window: a host program that launches the modem path (VarAC, Winlink Express) while the
 # station runs brings up the window already there instead of a second one on the same modem
 tauri-plugin-single-instance = "2"
+# where the operator left the windows, kept from one start to the next (the panel keeps the
+# sizes, one a view)
+tauri-plugin-window-state = "2"
 # the `[update]` section of the station's configuration, and version ordering
 toml = "1"
 semver = "1"

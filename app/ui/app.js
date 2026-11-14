@@ -2336,17 +2336,22 @@ function renderFrames() {
 // what the radio hears; the readings alone. Compact and Mini share `body.compact`, and Mini
 // adds `mini`.
 const VIEWS = ["full", "compact", "mini"];
-// how wide each small view's window is at most, in logical pixels
+// how wide each small view's window is at most, in logical pixels, until the operator sizes it
 const VIEW_WIDTH = { compact: 640, mini: 520 };
 let currentView = "full";
 let sizeBeforeCompact = null;
+// The size the panel last gave a small view's window itself, in logical pixels: a window still
+// at that size has not been sized by the operator, and is not kept (`rememberWindowSize`).
+let fittedSize = null;
 // The full view's size, owed to a window that went to Full while maximized: on Windows any
 // size the panel sets (the least size too) restores a maximized window, so it is set when the
 // operator restores the window instead.
 let sizeOnRestore = null;
 
-// In the desktop shell the window follows the view: a small view fits the state strip, the
-// four readings and, in Compact, the two plots; coming back restores what the operator had. In a browser tab there is no window to size; the layout still compacts.
+// In the desktop shell the window follows the view: a small view takes the size the operator
+// last gave it, or else fits the state strip, the four readings and, in Compact, the two plots;
+// coming back restores what the operator had. In a browser tab there is no window to size; the
+// layout still compacts.
 async function fitShellWindow(view) {
   const tauri = window.__TAURI__;
   const getWindow = tauri?.window?.getCurrentWindow;
@@ -2366,6 +2371,15 @@ async function fitShellWindow(view) {
         }
       }
       sizeOnRestore = null;
+      await win.setMinSize(new LogicalSize(360, 120));
+      // the size the operator gave this view, kept from one launch to the next; otherwise the
+      // fit to the page
+      const kept = savedViewSize(view);
+      if (kept) {
+        await win.setSize(new LogicalSize(kept.width, kept.height));
+        fittedSize = null;
+        return;
+      }
       // let the small layout settle before measuring what it needs: in Compact the page is the
       // window's height and its plots take what is left, so it is measured with the plots at
       // their usual height (`fitting`), not at whatever the window happens to be now
@@ -2377,10 +2391,9 @@ async function fitShellWindow(view) {
       } finally {
         document.body.classList.remove("fitting");
       }
-      await win.setMinSize(new LogicalSize(360, 120));
-      await win.setSize(
-        new LogicalSize(Math.min(sizeBeforeCompact.width, VIEW_WIDTH[view]), height),
-      );
+      const width = Math.min(sizeBeforeCompact.width, VIEW_WIDTH[view]);
+      fittedSize = { width, height };
+      await win.setSize(new LogicalSize(width, height));
     } else if (sizeBeforeCompact) {
       if (await win.isMaximized()) {
         // the window stays as the operator made it; Full's size waits for its restore
@@ -2427,19 +2440,40 @@ function followMaximize() {
 // it the window opened at its first size and grew to fit the Status tab's plots at every start,
 // which on a laptop's screen was most of the screen (KK4ODA, 2026-10-25).
 const WINDOW_KEY = "aether.window";
+// The small views' windows too, each its own, once the operator has sized one: Compact
+// stretched to the width of RadioPost's window under it stays that wide (KK4ODA, 2026-11-14).
+// Until then a small view fits the page each time it opens. Where the window is on the screen
+// is the shell's to keep.
+const VIEW_WINDOW_KEY = { compact: "aether.window.compact", mini: "aether.window.mini" };
 let windowSaveTimer = null;
 
 function rememberWindowSize() {
   if (!window.__TAURI__) return;
   clearTimeout(windowSaveTimer);
   windowSaveTimer = setTimeout(async () => {
-    if (currentView !== "full") return;
     try {
-      if (await window.__TAURI__.window.getCurrentWindow().isMaximized()) return;
-      localStorage.setItem(
-        WINDOW_KEY,
-        JSON.stringify({ width: window.innerWidth, height: window.innerHeight }),
-      );
+      const win = window.__TAURI__.window.getCurrentWindow();
+      if (await win.isMaximized()) return;
+      if (currentView === "full") {
+        localStorage.setItem(
+          WINDOW_KEY,
+          JSON.stringify({ width: window.innerWidth, height: window.innerHeight }),
+        );
+        return;
+      }
+      // a small view: kept only once the operator has sized it, not at the panel's own fit
+      const scale = await win.scaleFactor();
+      const inner = await win.innerSize();
+      const size = { width: Math.round(inner.width / scale), height: Math.round(inner.height / scale) };
+      if (
+        fittedSize &&
+        Math.abs(size.width - fittedSize.width) <= 2 &&
+        Math.abs(size.height - fittedSize.height) <= 2
+      ) {
+        return;
+      }
+      localStorage.setItem(VIEW_WINDOW_KEY[currentView], JSON.stringify(size));
+      fittedSize = null;
     } catch {
       // nothing kept: the next start fits the window as the first did
     }
@@ -2450,6 +2484,23 @@ function savedWindowSize() {
   try {
     const saved = JSON.parse(localStorage.getItem(WINDOW_KEY) || "null");
     if (saved && saved.width >= 420 && saved.height >= 300) return saved;
+  } catch {
+    // nothing kept, or something unreadable
+  }
+  return null;
+}
+
+// The size the operator gave a small view, never larger than the screen; null when none was
+// kept.
+function savedViewSize(view) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VIEW_WINDOW_KEY[view]) || "null");
+    if (!saved || !(saved.width >= 360) || !(saved.height >= 120)) return null;
+    const chrome = Math.max(0, window.outerHeight - window.innerHeight);
+    return {
+      width: Math.min(saved.width, window.screen?.availWidth || saved.width),
+      height: Math.min(saved.height, (window.screen?.availHeight || 10000) - chrome),
+    };
   } catch {
     // nothing kept, or something unreadable
   }
@@ -4902,14 +4953,22 @@ function applyKiss(kiss, host, datagrams) {
     parts.push(part);
   }
   chip.hidden = parts.length === 0;
-  // the separators are spans too: a bare text node in the chip's flex row loses its spaces
   const separator = () => Object.assign(document.createElement("span"), { textContent: " · " });
-  chip.replaceChildren(...parts.flatMap((part, i) => (i ? [separator(), part] : [part])));
+  chip.replaceChildren(chipText(...parts.flatMap((part, i) => (i ? [separator(), part] : [part]))));
   const who = clients.map((c) => `${c.app} (${c.peer})`);
   chip.title = [
     ...said,
     who.length ? `KISS: ${who.join(", ")}` : "",
   ].filter(Boolean).join(". ") || "Programs using this station now";
+}
+
+// A header chip's words, in the one span that shortens with an ellipsis when the header is
+// short of room: the chip's tooltip says the whole of it.
+function chipText(...parts) {
+  const text = document.createElement("span");
+  text.className = "chip-text";
+  text.append(...parts);
+  return text;
 }
 
 // A program's name for the header chip: the name it gave, without the version at its end
@@ -4934,13 +4993,13 @@ function renderBandwidth(bandwidth) {
   chip.hidden = false;
   const hz = bandwidth.bandwidth_hz;
   if (bandwidth.why === "call") {
-    chip.textContent = `${hz} Hz · ${bandwidth.caller ?? "a call"}`;
+    chip.replaceChildren(chipText(`${hz} Hz · ${bandwidth.caller ?? "a call"}`));
     chip.title = `${bandwidth.caller ?? "A station"} called in ${hz} Hz, and the station answered in it; it goes back to its own ${bandwidth.home_hz} Hz after the session`;
   } else if (bandwidth.why === "calling") {
-    chip.textContent = `${hz} Hz · calling ${bandwidth.callee ?? "a station"}`;
+    chip.replaceChildren(chipText(`${hz} Hz · calling ${bandwidth.callee ?? "a station"}`));
     chip.title = `${bandwidth.callee ?? "The station called"} was last heard running ${hz} Hz, so the call went out in it; the station goes back to its own ${bandwidth.home_hz} Hz after the session`;
   } else {
-    chip.textContent = `${hz} Hz · host program`;
+    chip.replaceChildren(chipText(`${hz} Hz · host program`));
     chip.title = `The host program asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
   }
 }

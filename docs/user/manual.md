@@ -89,7 +89,8 @@ To the right:
 
 - **The rules badge** says *Legal*, *Warning* or *TX blocked* for your widest signal where the
   dial is now. Click it for the reasoning.
-- **Modem** is quiet when the panel is talking to the daemon and red when it is not.
+- **Modem** is quiet when the panel is talking to the daemon and red when it is not. In Compact
+  and Mini, and in a narrow Full window, it shows only when it is red.
 - **Your callsign**, the one the station is using now: the session's while one is up; while a
   program answers for the station, the program's (section 12); otherwise Setup step 1's.
 - **Full**, **Compact** and **Mini** choose how much of the panel to show. **Full** is every
@@ -101,11 +102,14 @@ To the right:
   time span is changed in Full. The plots take whatever height the window has left: when a
   banner comes up during a session, or the header needs a second row, they get shorter for as
   long as it shows, and they never go below the window's edge. Make the window taller for
-  taller plots; it keeps that size while you stay in Compact.
+  taller plots.
   **Mini** is the state and the four readings alone, for a corner of the screen. **Full**
-  brings the window back to its size. Maximizing the window in Compact or Mini switches it
-  to Full; restored, it goes back to Full's size. Aether remembers the view, and the size of
-  the window in Full, for the next start.
+  brings the window back to its size. Compact and Mini each keep the size you give them, apart
+  from Full's: stretch Compact once to the width of the window under it, and it opens that wide
+  every time. Until you size one, it fits what it shows. Maximizing the window in Compact or
+  Mini switches it to Full; restored, it goes back to Full's size. Aether remembers the view,
+  each view's size and where the window is on the screen, for the next start (see *Arranging
+  the windows* below).
 - **Light** turns the panel black on white, for a screen in daylight or sunlight. The lit
   lamps are filled with their colour so they show in glare. Press it again for the dark
   panel. The undocked signal window and the updates window follow, and Aether remembers the
@@ -123,6 +127,8 @@ To the right:
   and the tooltip still says why the station's own callsign is not answered.
   Another chip shows the **bandwidth** when the station is running one that is not its own
   setting.
+  When the header is short of room, the chips shorten and end in *…*; the tooltip says all of
+  it. Widen the window to see them whole.
 
 ### Banners
 
@@ -141,6 +147,19 @@ A banner across every tab tells you about something that needs attention:
 
 The receive filter and clipping banners show in Compact too. Aether tells a host program
 nothing of either.
+
+### Arranging the windows
+
+Aether's window opens where you left it, in the view you left it in, at that view's size. The
+undocked signal window opens where you left it too. RadioPost's client and RadioPost Gateway do
+the same, so a station that runs them beside Aether is arranged once. One layout that fits a
+single screen:
+
+- RadioPost Gateway on the left, as tall as the screen.
+- Aether in **Compact** at the top right. Stretch it to the width you want.
+- The RadioPost client under Aether, as wide as Aether.
+
+A window left on a screen that is no longer connected opens where the system puts it.
 
 A **chime** plays when a session comes up and when it ends. Untick **Chime** on the Session tab
 to silence it.

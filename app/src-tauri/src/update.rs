@@ -38,7 +38,7 @@ use tauri_plugin_updater::{Update, UpdaterExt as _};
 pub const REPOSITORY: &str = "https://github.com/KK4ODA/aether-hf";
 
 /// The window's label, which its capability names.
-const WINDOW: &str = "updater";
+pub const WINDOW: &str = "updater";
 
 /// The panel's window, whose About card shows the same view (`capabilities/panel.json`).
 const PANEL: &str = "main";
