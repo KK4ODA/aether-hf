@@ -146,6 +146,11 @@ their power that way round only.
 A push-button unit loses up to about 3 dB even at 0, and each button is accurate to a decibel or
 so. That is fine: the analysis needs the levels roughly, and the weak one is set by ear.
 
+**Check the fixed pad when it arrives** (one buyer of a "30 dB" pad found it was 10 dB). Set the
+chain to a medium level and note the receiving radio's S-meter. Take the 30 dB pad out (the
+barrel joins the chain without it), add 30 dB on the step attenuator, and key again. The S-meter
+should read the same. Start every session with the step attenuator at its maximum, and work down.
+
 ### Your station: the TM-D710 and the IC-9700 on the mini PC
 
 A good setup as it is:
