@@ -98,7 +98,7 @@ check_untyped_defs = true
 ignore_missing_imports = true
 # New code (post-audit) is typed strictly; legacy modules are checked loosely until rewritten.
 [[tool.mypy.overrides]]
-module = ["aether_model.channel", "aether_model.waveform", "aether_model.phy.*", "aether_model.fec.*", "aether_model.frame.*", "aether_model.hal.*"]
+module = ["aether_model.channel", "aether_model.fm.*", "aether_model.waveform", "aether_model.phy.*", "aether_model.fec.*", "aether_model.frame.*", "aether_model.hal.*"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 [[tool.mypy.overrides]]
