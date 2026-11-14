@@ -107,7 +107,8 @@ To the right:
   brings the window back to its size. Compact and Mini each keep the size you give them, apart
   from Full's: stretch Compact once to the width of the window under it, and it opens that wide
   every time. Until you size one, it fits what it shows. Maximizing the window in Compact or
-  Mini switches it to Full; restored, it goes back to Full's size. Aether remembers the view,
+  Mini switches it to Full; restored, it goes back to Full's size. A banner's button that opens
+  another tab, such as **Open Setup**, switches to Full too. Aether remembers the view,
   each view's size and where the window is on the screen, for the next start (see *Arranging
   the windows* below).
 - **Light** turns the panel black on white, for a screen in daylight or sunlight. The lit

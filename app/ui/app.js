@@ -6193,6 +6193,9 @@ function applyAboutFromStatus(status) {
 // ── actions ─────────────────────────────────────────────────────────
 
 function selectTab(tab, focus = false) {
+  // the small views show the Status tab alone: a banner's Open Setup, or the first run's
+  // wizard, opened in one goes to Full first, or nothing on screen changed (2026-11-14)
+  if (currentView !== "full" && tab.dataset.panel !== "status") setView("full");
   for (const other of document.querySelectorAll(".tab")) {
     const selected = other === tab;
     other.setAttribute("aria-selected", String(selected));
