@@ -116,6 +116,33 @@ For the weak run, go by ear as well: the step where the receiver's audio first g
    For 70 cm later, the IC-9700's 70 cm jack is N, so an N jumper goes straight to it.
 5. **Optional:** an inline wattmeter, to check each radio's lowest power once.
 
+### The all-N kit (the parts that are easy to buy new)
+
+New step attenuators sold to hobbyists are push-button units that stop at 90 dB. That is not
+enough after 40 dB alone, so a fixed 30 dB pad goes between them. Everything is N, so only three
+adapters are needed:
+
+```
+sending radio ─ PL-259 patch cable ─ [N female to SO-239 adapter]
+  ─ 40 dB, 100 W (N male in, N female out)
+  ─ 30 dB, 10 W  (N male in, N female out)
+  ─ [N male to N male barrel]
+  ─ 0–90 dB push-button step attenuator (N female both sides)
+  ─ [N male to SO-239 adapter] ─ PL-259 patch cable ─ receiving radio
+```
+
+The fixed attenuators' male end is their input: it faces the sending radio. Many are made to take
+their power that way round only.
+
+| Level | At the receiver | Step setting, TM-D710 sending at 5 W | Step setting, IC-9700 sending at 0.5 W |
+|---|---|---|---|
+| Strong | about −63 dBm | 30 dB | 20 dB |
+| Medium | about −103 dBm | 70 dB | 60 dB |
+| Weak | about −113 dBm | 80 dB | 70 dB |
+
+A push-button unit loses up to about 3 dB even at 0, and each button is accurate to a decibel or
+so. That is fine: the analysis needs the levels roughly, and the weak one is set by ear.
+
 ### Your station: the TM-D710 and the IC-9700 on the mini PC
 
 A good setup as it is:
