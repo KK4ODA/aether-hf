@@ -105,14 +105,20 @@ For the weak run, go by ear as well: the step where the receiver's audio first g
    - BNC connectors.
 
    Its sibling, the 355C (0–12 dB in 1 dB steps), is a nice extra for fine steps, not needed.
-3. **Or, cheaper than a step attenuator: fixed attenuator pads**, BNC or SMA, rated 2 W, a few
-   dollars each. Three 30 dB, one 20 dB and one 10 dB cover every level, after the power
-   attenuator:
-   - 60 dB: 30 + 20 + 10;
-   - 100 dB: 30 + 30 + 30 + 10;
-   - 110 dB: 30 + 30 + 30 + 20.
+3. **Or, cheaper than a step attenuator: fixed attenuator pads**, N male to N female, rated 10 W.
+   They chain straight into each other and into the 40 dB attenuator, with no adapters. Three
+   30 dB, one 20 dB and one 10 dB cover every level, after the power attenuator:
 
-   You swap pads instead of turning a knob.
+   | Level | TM-D710 sending at 5 W | IC-9700 sending at 0.5 W |
+   |---|---|---|
+   | Strong, about −63 dBm | 30 + 30 | 30 + 20 |
+   | Medium, about −103 dBm | 30 + 30 + 30 + 10 | 30 + 30 + 30 |
+   | Weak, about −113 dBm | 30 + 30 + 30 + 20 | 30 + 30 + 30 + 10 |
+
+   You swap pads instead of turning a knob. **Check them against each other when they arrive**
+   (one buyer of a "30 dB" pad found it was 10 dB). At a medium level, swap each 30 dB pad into
+   the same place in turn. The receiving radio's S-meter should read the same with each. A pad
+   that reads stronger is short.
 4. **Adapters.** From your PL-259 patch cable into the power attenuator (UHF to N), from the power
    attenuator to the step attenuator (N to BNC, and a short BNC jumper), and from the step
    attenuator to the receiving radio's jack (BNC to UHF). Check the genders against what you buy.
