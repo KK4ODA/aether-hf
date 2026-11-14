@@ -119,3 +119,4 @@ context → decision → alternatives considered → consequences.
 | [0112](0112-aether-fm-is-a-second-air-in-this-repository.md) | Aether FM is a second air in this repository (the FM proposal's FM-1) | accepted |
 | [0113](0113-the-daemon-reaches-its-physical-layer-through-one-boundary.md) | The daemon reaches its physical layer through one boundary (FM-2) | accepted; built (step 10.1) |
 | [0114](0114-a-program-may-say-who-it-is-without-claiming-a-callsign.md) | A program may say who it is without claiming a callsign | accepted |
+| [0115](0115-the-fm-channel-model.md) | The FM channel model, a radio at each end, calibrated against recordings (FM-3) | proposed |

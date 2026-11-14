@@ -830,7 +830,7 @@ before anything changes, as ADR-0069's steps were.
 The ADRs, written before any FM code and numbered from ADR-0112 as they are written (the
 proposal's §L has what each needs): FM-1 product structure (ADR-0112, accepted), FM-2 the PHY
 boundary (ADR-0113, built 2026-11-14), FM-3 the FM
-channel model, FM-4 the waveform, FM-5 calibration, FM-6 learned profiles, FM-7 the FM link
+channel model (ADR-0115, proposed), FM-4 the waveform, FM-5 calibration, FM-6 learned profiles, FM-7 the FM link
 protocol, FM-8 channel access, FM-9 the repeater profile, FM-10 VHF/UHF rules, FM-11
 identification on FM, FM-12 host interfaces, FM-13 legacy packet. Bench equipment owed before
 10.2b: a dummy load and an attenuator (the proposal's risk R18).
