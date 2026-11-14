@@ -94,8 +94,11 @@ For the weak run, go by ear as well: the step where the receiver's audio first g
    (50 W on the TM-D710, 100 W on the IC-9700's 2 m), it survives. Its output is then still under
    the step attenuator's half watt. 1 GHz covers 2 m and 70 cm. Generic ones are sold widely;
    used Bird, Narda, Weinschel or JFW units are as good.
-2. **A step attenuator, 0–110 dB or more, 50 Ω, good to at least 500 MHz.** The classic is the
-   HP (later Agilent) 355D, common used:
+2. **A step attenuator, 0–110 dB or more, 50 Ω, good to at least 500 MHz.** The best fit is a
+   used HP (later Agilent) 8496A: 0–110 dB in 10 dB steps, DC to 4 GHz, with N connectors, so it
+   joins the all-N chain below with no BNC adapters. Like every lab step attenuator it takes only
+   low power, so it always goes after the 40 dB attenuator. Buy one listed as tested. The other
+   classic is the HP 355D, also common used:
    - 0–120 dB in 10 dB steps;
    - DC to 1 GHz;
    - half a watt at most;
