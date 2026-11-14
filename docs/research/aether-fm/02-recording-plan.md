@@ -107,13 +107,13 @@ For the weak run, go by ear as well: the step where the receiver's audio first g
    Its sibling, the 355C (0–12 dB in 1 dB steps), is a nice extra for fine steps, not needed.
 3. **Or, cheaper than a step attenuator: fixed attenuator pads**, N male to N female, rated 10 W.
    They chain straight into each other and into the 40 dB attenuator, with no adapters. Three
-   30 dB, one 20 dB and one 10 dB cover every level, after the power attenuator:
+   30 dB and two 10 dB pads cover every level, after the power attenuator:
 
    | Level | TM-D710 sending at 5 W | IC-9700 sending at 0.5 W |
    |---|---|---|
-   | Strong, about −63 dBm | 30 + 30 | 30 + 20 |
+   | Strong, about −63 dBm | 30 + 30 | 30 + 10 + 10 |
    | Medium, about −103 dBm | 30 + 30 + 30 + 10 | 30 + 30 + 30 |
-   | Weak, about −113 dBm | 30 + 30 + 30 + 20 | 30 + 30 + 30 + 10 |
+   | Weak, about −113 dBm | 30 + 30 + 30 + 10 + 10 | 30 + 30 + 30 + 10 |
 
    You swap pads instead of turning a knob. **Check them against each other when they arrive**
    (one buyer of a "30 dB" pad found it was 10 dB). At a medium level, swap each 30 dB pad into
