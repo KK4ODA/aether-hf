@@ -20,6 +20,11 @@
 //! * Under automatic control only a program answers calls (ADR-0107): a call to a callsign no
 //!   program holds is not answered, because nobody is at the station to carry the session the
 //!   call would bring up. Probes are still answered: they bring up nothing.
+//! * A program may also just say who it is (`hello`, ADR-0114) and hold no callsign: the panel
+//!   names it among the programs using the station while its connection lasts, and nothing
+//!   about what is answered changes. The `RadioPost` app connects for a call or to listen; between
+//!   them it was invisible, and the panel said the station's callsign went unanswered as if
+//!   nothing were there.
 
 use serde_json::{Value, json};
 
@@ -72,6 +77,20 @@ impl Claim {
     }
 }
 
+/// A program that said who it is (`hello`): using the station, answering for nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Present {
+    /// The connection it said it on.
+    connection: ConnectionId,
+    /// The name it gave.
+    app: String,
+    /// When it first said it, milliseconds since the epoch.
+    since_ms: u64,
+}
+
+/// The longest name a program may give itself, in characters: a name and a version fit.
+const APP_NAME_MAX: usize = 64;
+
 /// What a claim came to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claimed {
@@ -95,6 +114,8 @@ pub(super) struct Claims {
     /// Each callsign a program has held since the daemon started, and the program that held it
     /// last: a call to one nobody holds now is said to be that program's (ADR-0108).
     held_before: Vec<(String, String)>,
+    /// The programs that said who they are (`hello`), in the order they said it.
+    present: Vec<Present>,
 }
 
 impl Claims {
@@ -105,7 +126,16 @@ impl Claims {
             list: Vec::new(),
             owner: None,
             held_before: Vec::new(),
+            present: Vec::new(),
         }
+    }
+
+    /// The name a connection gave itself with `hello`.
+    fn named(&self, connection: ConnectionId) -> Option<&str> {
+        self.present
+            .iter()
+            .find(|present| present.connection == connection)
+            .map(|present| present.app.as_str())
     }
 
     /// The claim that holds a callsign.
@@ -176,6 +206,63 @@ impl<P: Ptt> Station<P> {
     #[must_use]
     pub fn claims_json(&self) -> Value {
         Value::Array(self.claims.list.iter().map(Claim::json).collect())
+    }
+
+    /// The programs that said who they are (`hello`), for `status.programs`: each one's
+    /// connection, name and kind, and since when. A program that also claims callsigns is in
+    /// `status.claims` as well.
+    #[must_use]
+    pub fn programs_json(&self) -> Value {
+        Value::Array(
+            self.claims
+                .present
+                .iter()
+                .map(|present| {
+                    json!({
+                        "id": present.connection.id,
+                        "app": present.app,
+                        "kind": present.connection.kind.name(),
+                        "since_ms": present.since_ms,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// A connection's program says who it is (ADR-0114): the panel names it among the programs
+    /// using the station for as long as the connection lasts. It claims no callsign, so what
+    /// the station answers does not change. Said again, the new name replaces the old. Whether
+    /// it is news.
+    ///
+    /// # Errors
+    /// If the name is empty or longer than [`APP_NAME_MAX`] characters.
+    pub fn hello(&mut self, connection: ConnectionId, app: &str) -> Result<bool, &'static str> {
+        let app = app.trim();
+        if app.is_empty() {
+            return Err("a program says its name");
+        }
+        if app.chars().count() > APP_NAME_MAX {
+            return Err("a program's name is at most 64 characters");
+        }
+        if let Some(present) = self
+            .claims
+            .present
+            .iter_mut()
+            .find(|present| present.connection == connection)
+        {
+            if present.app == app {
+                return Ok(false);
+            }
+            app.clone_into(&mut present.app);
+        } else {
+            self.claims.present.push(Present {
+                connection,
+                app: app.to_owned(),
+                since_ms: super::beacons::unix_ms(),
+            });
+        }
+        self.note("claims", &format!("{app} is using the station"));
+        Ok(true)
     }
 
     /// The claim a connection holds.
@@ -272,13 +359,16 @@ impl<P: Ptt> Station<P> {
             }
             claim.listening
         } else {
-            let app = app.unwrap_or_else(|| {
-                match connection.kind {
-                    ConnectionKind::Host => "the host program",
-                    ConnectionKind::Control => "a program",
-                }
-                .to_owned()
-            });
+            // a program that said hello first is known by that name
+            let app = app
+                .or_else(|| self.claims.named(connection).map(str::to_owned))
+                .unwrap_or_else(|| {
+                    match connection.kind {
+                        ConnectionKind::Host => "the host program",
+                        ConnectionKind::Control => "a program",
+                    }
+                    .to_owned()
+                });
             self.claims.list.push(Claim {
                 connection,
                 app,
@@ -396,9 +486,26 @@ impl<P: Ptt> Station<P> {
             .list
             .iter()
             .position(|claim| claim.connection == connection);
+        let present = self
+            .claims
+            .present
+            .iter()
+            .position(|present| present.connection == connection)
+            .map(|at| self.claims.present.remove(at));
         // a program that let its callsigns go still owns the session it brought up
         let owned = self.claims.owner == Some(connection);
         if index.is_none() && !owned {
+            // a program that only said who it is held nothing: its going is all there is to say
+            if let Some(present) = present {
+                self.note(
+                    "claims",
+                    &format!(
+                        "{} has gone{}",
+                        present.app,
+                        why.map(|why| format!(" ({why})")).unwrap_or_default()
+                    ),
+                );
+            }
             return;
         }
         let answering = self.answering();
@@ -407,7 +514,10 @@ impl<P: Ptt> Station<P> {
                 let _ = self.apply_callsigns();
                 (claim.app, claim.callsigns)
             }
-            None => ("the program".to_owned(), Vec::new()),
+            None => (
+                present.map_or_else(|| "the program".to_owned(), |present| present.app),
+                Vec::new(),
+            ),
         };
         let remote = self.engine.remote_call.clone();
         let (ended, end) = match self.engine.state() {

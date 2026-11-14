@@ -110,15 +110,17 @@ To the right:
   lamps are filled with their colour so they show in glare. Press it again for the dark
   panel. The undocked signal window and the updates window follow, and Aether remembers the
   choice for the next start. The waterfall keeps its own colours.
-- A chip shows the **programs using the station**: a host program, a program on the control
-  API that answers for callsigns of its own (a RadioPost gateway, for example), and KISS
-  programs. A program that listens for calls shows *listening*. A program shown by its name
+- A chip shows the **programs using the station**, each as a green check and its name: a host
+  program, a program on the control API (the RadioPost app or a RadioPost gateway, for
+  example), and KISS programs. A program that listens for calls shows *listening*. A program shown by its name
   alone can call out, but calls to its callsigns go unanswered until it listens: that is normal
   for a program that only calls, such as the RadioPost client. A program that scans, as RMS
   Trimode does, stays *listening* through its short gaps. The chip's tooltip names the callsigns
   each program uses. When no program is there and calls to the station's own callsign are not
   answered, the chip says *calls to* the callsign *not answered*, and its tooltip says why:
-  under automatic control only a program answers calls (section 12).
+  under automatic control only a program answers calls (section 12). While a program is there
+  that holds no callsign, such as the RadioPost app between calls, the chip names the program
+  and the tooltip still says why the station's own callsign is not answered.
   Another chip shows the **bandwidth** when the station is running one that is not its own
   setting.
 

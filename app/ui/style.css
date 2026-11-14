@@ -395,6 +395,16 @@ header.bar {
   display: none;
 }
 
+/* a program connected and using the station: a green check and its name */
+.apps-chip .app-on {
+  color: var(--status-rx);
+}
+
+/* the name and its separators keep their spaces in the chip's flex row */
+.apps-chip > span {
+  white-space: pre;
+}
+
 /* ── lamps: an LED and its legend; the legend lights with it ──────── */
 
 .indicators {

@@ -4845,19 +4845,23 @@ function applyKiss(kiss, host, datagrams) {
     ? `${k.frames_in ?? 0} in · ${k.frames_out ?? 0} out · ${waiting} waiting`
     : "turn on KISS programs in Setup";
 
-  // the header: which programs are using this station now (ADR-0106), and which of them
-  // listen for calls. A program that only calls out (the RadioPost client) is named alone: a
-  // mark of what it is not doing read as a fault. A program that scans (RMS Trimode turns
-  // LISTEN off for half a second every few seconds) stays "listening" through its gaps.
+  // the header: which programs are using this station now (ADR-0106), each a green check and
+  // its name, and which of them listen for calls. A program that only calls out (the RadioPost
+  // client) is named alone: a mark of what it is not doing read as a fault. A program that
+  // scans (RMS Trimode turns LISTEN off for half a second every few seconds) stays "listening"
+  // through its gaps. A program that said who it is and holds no callsign (ADR-0114: the
+  // RadioPost app between calls) is named too; one that does both is named once.
   const claims = lastStatus?.claims ?? [];
-  const using = [];
+  const named = lastStatus?.programs ?? [];
+  const using = new Map();
   const said = [];
   const now = Date.now();
   for (const claim of claims) {
     if (claim.listening) listenedAt.set(claim.id, now);
     const listening = now - (listenedAt.get(claim.id) ?? -Infinity) < LISTEN_HOLD_MS;
     const name = programName(claim);
-    using.push(listening ? `${name} · listening` : name);
+    const shown = chipName(name);
+    using.set(shown, (using.get(shown) ?? false) || listening);
     const calls = (claim.callsigns ?? []).join(", ") || "no callsign";
     said.push(listening
       ? `${name} answers calls to ${calls}`
@@ -4866,26 +4870,52 @@ function applyKiss(kiss, host, datagrams) {
   for (const id of listenedAt.keys()) {
     if (!claims.some((c) => c.id === id)) listenedAt.delete(id);
   }
-  // a host program from before its claim reaches the status
-  if (host?.connected && !claims.some((c) => c.kind === "host")) using.push("host program");
-  // the station's own callsign unanswered with no program there: under automatic control only
-  // a program answers calls (ADR-0107). A program that is there speaks for the station
-  // (ADR-0108): its own callsigns resting then is no news, and Setup shows whose they are
-  const first = (lastStatus?.own_callsigns ?? [])[0];
-  if (first && lastStatus?.answering === false && lastStatus?.not_answering && claims.length === 0
-      && !host?.connected) {
-    using.push(`calls to ${first} not answered`);
-    said.push(`Calls to ${first} are not answered: ${lastStatus.not_answering}`);
+  for (const program of named) {
+    if (claims.some((c) => c.id === program.id)) continue;
+    const shown = chipName(program.app);
+    if (!using.has(shown)) using.set(shown, false);
+    said.push(`${program.app} is using the station and answers for no callsign of its own now`);
   }
-  if (count > 0) using.push(`${count} KISS`);
+  // a host program from before its claim reaches the status
+  if (host?.connected && !claims.some((c) => c.kind === "host")) using.set("host program", false);
+  if (count > 0) using.set(`${count} KISS`, false);
+  // the station's own callsign unanswered with no program holding a callsign: under automatic
+  // control only a program answers calls (ADR-0107). A program that holds one speaks for the
+  // station (ADR-0108): its own callsigns resting then is no news, and Setup shows whose they
+  // are. With a program there that holds none, it is said in the tooltip only: the program is
+  // what the operator is looking for
+  const first = (lastStatus?.own_callsigns ?? [])[0];
+  const unanswered = first && lastStatus?.answering === false && lastStatus?.not_answering
+    && claims.length === 0 && !host?.connected;
+  if (unanswered) said.push(`Calls to ${first} are not answered: ${lastStatus.not_answering}`);
+
   const chip = $("apps-chip");
-  chip.hidden = using.length === 0;
-  chip.textContent = using.join(" · ");
+  const parts = [...using].map(([name, listening]) => {
+    const part = document.createElement("span");
+    part.className = "app-on";
+    part.textContent = `✓ ${listening ? `${name} · listening` : name}`;
+    return part;
+  });
+  if (unanswered && parts.length === 0) {
+    const part = document.createElement("span");
+    part.textContent = `calls to ${first} not answered`;
+    parts.push(part);
+  }
+  chip.hidden = parts.length === 0;
+  // the separators are spans too: a bare text node in the chip's flex row loses its spaces
+  const separator = () => Object.assign(document.createElement("span"), { textContent: " · " });
+  chip.replaceChildren(...parts.flatMap((part, i) => (i ? [separator(), part] : [part])));
   const who = clients.map((c) => `${c.app} (${c.peer})`);
   chip.title = [
     ...said,
     who.length ? `KISS: ${who.join(", ")}` : "",
   ].filter(Boolean).join(". ") || "Programs using this station now";
+}
+
+// A program's name for the header chip: the name it gave, without the version at its end
+// ("RadioPost client 0.2.1" → "RadioPost client"); the tooltip keeps the whole of it.
+function chipName(name) {
+  return name.replace(/\s+v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "") || name;
 }
 
 // The bandwidth the station runs, in the header, when it is not its own (ADR-0026): a host

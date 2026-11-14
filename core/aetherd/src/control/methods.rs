@@ -73,6 +73,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "send"
             | "listen"
             | "claim"
+            | "hello"
             | "callsigns.set"
             | "beacon"
             | "beacon.every"
@@ -1216,6 +1217,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "test.abort" => Response::ok(id, json!({ "aborted": station.abort_test() })),
         "callsigns.set" => set_callsigns(station, params, id),
         "claim" => claim(station, request),
+        "hello" => hello(station, request),
         "regulatory.check" => Response::ok(id, regulatory_check(station, params)),
         // the identifier for a callsign, by the station's one rule (ADR-0075)
         "identifier.check" => {
@@ -1389,6 +1391,41 @@ fn claim<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
         Err(reason) => Response::failed(
             id,
             ApiError::new("bad_params", format!("Cannot claim: {reason}."), false),
+        ),
+    }
+}
+
+/// `hello {app}`: the program on this connection says who it is (ADR-0114). The panel names it
+/// among the programs using the station while the connection lasts; it claims no callsign, so
+/// what the station answers does not change. Like a claim it ends with the connection, so over
+/// `POST` it is refused.
+fn hello<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let Some(connection) = request.connection else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "unsupported",
+                "A program is named for as long as the connection it said hello on: say it over \
+                 a WebSocket connection, not a one-shot POST.",
+                false,
+            ),
+        );
+    };
+    let app = request
+        .params
+        .get("app")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match station.hello(connection, app) {
+        Ok(_) => Response::ok(id, json!({ "id": connection.id, "app": app.trim() })),
+        Err(reason) => Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                format!("Cannot say hello: {reason}: {{\"app\": \"RadioPost\"}}."),
+                false,
+            ),
         ),
     }
 }
@@ -2117,6 +2154,8 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         // (ADR-0106)
         "own_callsigns": station.own_callsigns(),
         "claims": station.claims_json(),
+        // the programs that said who they are, holding a callsign or not (ADR-0114)
+        "programs": station.programs_json(),
         // whose call or session is under way: a claim's id, or null for the station's own
         "owner": (station.state() != aether_link::State::Idle)
             .then(|| station.owner().map(|owner| owner.id))
@@ -3687,6 +3726,112 @@ mod tests {
         assert_eq!(status["callsigns"], json!(["W4ODA"]));
         // the callsign in use is Trimode's now, not the gateway's last call (ADR-0108)
         assert_eq!(status["callsign"], "W4ODA");
+    }
+
+    #[test]
+    fn a_program_that_says_hello_is_named_and_changes_nothing_answered() {
+        // ADR-0114: the RadioPost app between calls. Under automatic control nothing answers the
+        // station's own callsign whether or not the app is there; the app says who it is, holds
+        // no callsign, and is named until its connection ends.
+        use crate::control::protocol::{ConnectionId, ConnectionKind};
+        let mut station = station();
+        station.set_regulatory(crate::regulatory::Settings {
+            control: Some(crate::regulatory::ControlMode::Automatic),
+            ..crate::regulatory::Settings::unchecked()
+        });
+        let app = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        let ask = |station: &mut Station<NullPtt>,
+                   method: &str,
+                   params: Value,
+                   connection: Option<ConnectionId>| {
+            dispatch(
+                station,
+                &Request {
+                    id: Some("1".into()),
+                    method: method.to_owned(),
+                    params,
+                    connection,
+                },
+            )
+        };
+        let status = |station: &mut Station<NullPtt>| {
+            ask(station, "status", json!({}), None)
+                .result
+                .expect("status")
+        };
+        let before = status(&mut station);
+        assert_eq!(before["programs"], json!([]));
+
+        // a one-shot POST names nobody, and a name is required
+        let response = ask(&mut station, "hello", json!({"app": "RadioPost"}), None);
+        assert_eq!(
+            response.error.map(|e| e.code).as_deref(),
+            Some("unsupported")
+        );
+        let response = ask(&mut station, "hello", json!({"app": "  "}), Some(app));
+        assert_eq!(
+            response.error.map(|e| e.code).as_deref(),
+            Some("bad_params")
+        );
+
+        let result = ask(
+            &mut station,
+            "hello",
+            json!({"app": " RadioPost "}),
+            Some(app),
+        )
+        .result
+        .expect("hello");
+        assert_eq!(result, json!({"id": 7, "app": "RadioPost"}));
+        let now = status(&mut station);
+        assert_eq!(now["programs"][0]["app"], "RadioPost");
+        assert_eq!(now["programs"][0]["kind"], "control");
+        assert_eq!(now["programs"][0]["id"], 7);
+        assert_eq!(now["claims"], json!([]), "a hello claims nothing");
+        for key in ["answering", "not_answering", "callsigns", "callsign"] {
+            assert_eq!(
+                now[key], before[key],
+                "{key}: a hello changes nothing answered"
+            );
+        }
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e == "claims:RadioPost is using the station"),
+            "the log says it, and the panel refreshes on it"
+        );
+
+        // a claim on the same connection, naming nobody, goes by the hello's name
+        let result = ask(
+            &mut station,
+            "claim",
+            json!({"callsigns": ["W4ODA-7"]}),
+            Some(app),
+        )
+        .result
+        .expect("claimed");
+        assert_eq!(result["callsigns"], json!(["W4ODA-7"]));
+        assert_eq!(status(&mut station)["claims"][0]["app"], "RadioPost");
+        // letting the callsigns go leaves the program there, by name
+        assert!(ask(&mut station, "claim", json!({"callsigns": []}), Some(app)).ok);
+        let now = status(&mut station);
+        assert_eq!(now["claims"], json!([]));
+        assert_eq!(now["programs"][0]["app"], "RadioPost");
+
+        // the connection ends: the program is gone, and said to be
+        station.take_events();
+        station.connection_closed(app);
+        assert_eq!(status(&mut station)["programs"], json!([]));
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e == "claims:RadioPost has gone"),
+        );
     }
 
     #[test]
