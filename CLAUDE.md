@@ -3078,6 +3078,28 @@ received byte and a hash of all audio printed; build it against a worktree of th
 (`AIR_IDENTITY_SAMPLES=960` for the daemon's block), and `cmp` the outputs. The replay tools never
 run the station, so they cannot prove such a change.
 
+**Aether FM's model, bench and ADRs (2026-11-14, the author asleep: "work alone").** FM-3 to
+FM-13 are ADR-0115 to ADR-0125, all proposed, each with what it removes and its criteria set before
+any run (FM-4's W1–W5 and the floor's 2 dB, FM-5's C1–C8 with C8 an ablation: a part that fails
+nothing when taken out goes). The FM channel model is `model/aether_model/fm/`: `channel.py`,
+`measure.py` (the one measure for recordings and the model) and `signals.py`. Its conventions are
+ADR-0115 §2.2:
+- 48 kHz real audio;
+- CNR in a fixed 16 kHz whatever the IF;
+- modulation in units of the rated deviation;
+- every stage block-exact, positions taken from absolute sample counts (the clocks, the squelch's
+  1 ms decisions, the RF offset), never accumulated per block;
+- one `SeedSequence` spawned per random stage.
+
+`tools/fm_bench.py` makes, plays (VOX, RTS or DTR), analyses and models a 117 s test sequence.
+`docs/research/aether-fm/02-recording-plan.md` is step 10.2b's procedure, and
+`bench/baselines/fm_model_uncalibrated.csv` the model before Gate 2. **Measure SNDR only after a
+key-up has settled:** one Welch segment with no carrier among 140 caps a coherence estimate near
+18 dB. Regulatory readings wait on the author: ADR-0122 §4 and ADR-0123 §3. ADR-0122: an audio
+modem through FM is F2D, authorized by §97.307(f)(8), not by Part 97's definition of data. ADR-0123:
+an ASCII callsign inside the data emission as §97.119(b)(3)'s identification; on FM a Morse tone is
+MCW, not CW. Gate 2 waits on a dummy load and an attenuator (risk R18).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

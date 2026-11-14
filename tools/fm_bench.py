@@ -432,7 +432,9 @@ def baseline(out: Path) -> None:
                 f"{r.peak_level_dbfs:6.1f} dBFS, floor {r.floor_db:6.1f} dB"
             )
     with out.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["preset", "cnr_db", "what", "level_dbfs", "sndr_db"])
+        w = csv.DictWriter(
+            f, fieldnames=["preset", "cnr_db", "what", "level_dbfs", "sndr_db"], lineterminator="\n"
+        )
         w.writeheader()
         w.writerows(rows)
 
