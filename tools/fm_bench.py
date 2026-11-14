@@ -452,6 +452,8 @@ def play(
 ) -> None:  # pragma: no cover - needs sound cards and a radio
     import sounddevice as sd
 
+    # made before the run, not after: a missing folder would lose two minutes of recording
+    out.parent.mkdir(parents=True, exist_ok=True)
     rate, data = wavfile.read(wav)
     if rate != FS:
         raise SystemExit(f"{wav} is {rate} Hz, not {FS}")
