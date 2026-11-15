@@ -1,0 +1,225 @@
+# ADR-0126: The capped call — a call in control frames, chosen by what was heard, over in 20 s
+
+**Status:** proposed, 2026-11-15, at the author's request ("write the ADR for the capped call and
+bench it"). Link protocol 13. Built in the model behind a bench switch (`GrantConfig.capped_call`)
+and judged there by the criteria of §5, registered before the runs; the results are
+`docs/research/calling/02-capped-call.md` and §6. **On the model bench it passes R1 (a call nobody
+answers ends in 15.6–16.5 s) and fails R2 and R3**: the details step costs more than the call
+saves on a weak path, and two tries are too few on a slowly fading one. A revision is the
+author's call (§6). Not ported: the port, the harness and the air come after that decision. It would supersede ADR-0016 §2.1 (the alternating tries), ADR-0056 §2.1
+(the floor acceptance of a weak ordinary call) and the call's random wait (`07-protocol-8.md`
+§5.1).
+
+## 1. Context
+
+The calling bench (`docs/research/calling/00-plan.md`, `01-results.md`) began with the author's
+question whether Aether's call was slow. It is, in two ways:
+
+* **A good path connects in 11.8 s.** The first try and its acceptance are both floor data frames
+  of 5.36 s (ADR-0016). An ordinary try listens 6.8 s for an acceptance that may come on the floor
+  (ADR-0056).
+* **A call nobody answers holds the channel for 205 s** on average: eight tries, about 87 s of
+  tries and listening and 118 s of random wait. Other stations that hear it hold their own calls.
+  The author: the operator, or the program, can always call again; a call that nobody answers
+  should give the channel back within about 20 s.
+
+What the harness showed (`01-results.md` §3): the random wait matters only when two stations that
+cannot hear each other start calling one station within about one try's length of each other, and
+a wait shorter than a floor try does not separate floor tries anyway. The ordinary tries are what
+reach a station tuned 150–300 Hz off (the tone detector searches ±150 Hz) and survive a carrier on
+the floor's 400 Hz.
+
+The control frames reach as far as the frames the call uses, and are shorter. Measured, 2 300 Hz:
+
+| frame | length | 90 % decoded, AWGN | holds |
+|---|---|---|---|
+| OFDM control | 0.43 s | −5 dB (threshold −5.1; 500 Hz −4.5) | 7 bytes |
+| OFDM data, robust (today's ordinary call) | 1.05 s | about −5 dB | 19 bytes and more |
+| floor control (tone-control) | 3.2 s | −19 dB (threshold −19.5) | 7 bytes |
+| floor data (tone-24, today's floor call) | 5.36 s | −19 dB (threshold −19.0) | 24 bytes |
+
+On the fading channels the floor control frame decodes 1–2 dB deeper than tone-24
+(`bench/baselines/tone_floor.csv`). Its cost is room: seven bytes, against the call's nineteen.
+
+## 2. Decision
+
+### 2.1 The call is a control frame
+
+A **call** is a control frame whose session field is 0 and whose kind is HEADER; an
+**acceptance** is one whose session field is 0 and whose kind is ANSWER. No session's control frame
+has a session field of 0 (`_new_session_number`), so the two are told apart from every other
+control frame by that field alone.
+
+```
+CALL        0: kind HEADER (2) | count (3) | data_floor (1) | level (2)
+            1: 0 (7) | fam (1)
+            2: bandwidth (2) | turnaround (4) | called code bits 18–17 (2)
+            3–4: called code bits 16–1
+            5: called code bit 0 (1) | caller code (7)
+            6: session (8)
+
+ACCEPT      0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
+            1: 0 (7) | 0 (1)
+            2: 0 (1) | 0 (1) | SNR (6)
+            3: bandwidth (2) | version (6)
+            4: caller code (7) | 0 (1)
+            5: session (8)
+            6: turnaround (4) | identifier (4)
+```
+
+* **count**, **data_floor**: frames that follow this one in its transmission, and their family
+  (a both-ways try's OFDM part says 1, floor). As in every control frame, with them a receiver
+  that reads this frame and nothing after it still knows where the transmission ends.
+* **level**: in a call, the gap level of the acceptance's slot (it rises every second try, as
+  today); in an acceptance, the level the called station needs.
+* **fam**: the caller listens for an acceptance on the floor after this try. Clear: OFDM only.
+* **bandwidth**: the sender's air (the capability byte's bits 1–2, ADR-0026).
+* **turnaround**: the sender's declared turnaround, 0–1.5 s in 0.1 s steps (`[radio]
+  turnaround_ms`).
+* **called code**, **caller code**: the low 19 bits, and bits 19–25, of the CRC-32 of the packed
+  callsign (`pack_callsign`). A station answers a call whose called code is one of its callsigns'
+  (it computes one for each it answers to). A station hears a call meant for another and takes it
+  for its own about once in 524 288 calls it hears; §2.4 catches it.
+* **session**: the whole session number, 1–255.
+* **SNR**: how the called station read the call, as every control frame says it (ADR-0021).
+* **version**: the called station's link protocol. A caller that reads another version gives the
+  call up and says so.
+* **identifier**: the called station's closing Morse identifier, 0–7.5 s in 0.5 s steps
+  (ADR-0075).
+
+A protocol-12 station reads a call as a control frame of no session of its own and ignores it; a
+protocol-13 station that hears a protocol-12 call (a CONNECT_REQ data frame) ignores it and says
+"calls with link protocol 12", as for any other version today.
+
+### 2.2 Three kinds of try
+
+| try | sent | length | the caller listens for | the called station answers |
+|---|---|---|---|---|
+| **quick** (C) | one OFDM control frame | 0.43 s | an OFDM acceptance | in OFDM |
+| **floor** (S) | one floor control frame | 3.2 s | a floor acceptance | on the floor |
+| **both** (H) | an OFDM control frame and a floor control frame, back to back | 3.6 s | either | in OFDM if it read the OFDM part at least `call_answer_margin_db` (6 dB) over the OFDM control threshold, on the floor otherwise |
+
+A called station that reads both parts of a both-ways try answers once. It answers in the slot the
+try grants, after the try's last frame, as every answer does. The 6 dB rule replaces ADR-0056's
+12 dB, which was set for a 1.05 s data acceptance; at the threshold an OFDM acceptance is often lost
+on the way back, and the floor one is not.
+
+### 2.3 The plan: by what was heard, and no more than two tries that reach a weak path
+
+The caller chooses the call's tries from the last time it heard the station it calls (the daemon's
+heard list, `heard.rs`: the SNR of the last frame read from that callsign, if within 15 minutes):
+
+| last heard | tries | a call nobody answers ends |
+|---|---|---|
+| not in the last 15 minutes | H H | 16.5 s |
+| at least 6 dB over the OFDM control threshold | C C C S | 15.6 s |
+| weaker | S S | 15.6 s |
+
+There is **no random wait** between tries: the next try goes when the last one's slot can no longer
+be in use. When two stations call each other at once, the higher callsign keeps calling, as today.
+A call that goes unanswered ends after its last try's slot (`no answer`), and the operator or the
+program calls again.
+
+### 2.4 The call's details cross at the head of the session
+
+A call carries codes, not callsigns. The caller's details — today's connect body
+(`ConnectBody`: both callsigns, capabilities, version, turnaround, identifier length, 19 bytes) —
+are the first 19 bytes of the caller's data stream in the session, sent, acknowledged and repeated
+like any data. The called station takes them off the stream before it delivers anything:
+
+* the called callsign is one of its own, and both codes match: the session goes on, and the host
+  program is told `CONNECTED` now;
+* otherwise the session ends at once ("a call for another station").
+
+The details cost the session its first exchange before the callsigns are known: estimated at one
+data frame, measured on the model bench at a median 1.9 s on a good path, 8.9 s on a weak AWGN
+path and 18.5 s on a weak fading one, where the first data frame often goes at a rung the path
+refuses and goes again (§6).
+
+### 2.5 What stays
+
+Probes, beacons and datagrams are as today. The slot rules (ADR-0069), the levels, a caller waiting
+past a frame it hears arriving, "called again" (ADR-0056 §4: a call from the session's own peer
+under a new session ends the session and is answered; under its own number, the acceptance is sent
+again) and the identifier after a call that came to nothing (ADR-0055, ADR-0075) are unchanged.
+
+## 3. Alternatives considered
+
+* **Today's call with a shorter wait (W1).** Passed the bench's contention test; changes nothing
+  on a good path (11.8 s) and leaves a call nobody answers at about 108 s (`01-results.md`).
+* **Every try on the floor (F1).** Failed the contention test: 5.36 s tries with at most 5.36 s
+  between them keep meeting.
+* **A quick start without a protocol change (B, E).** Data-frame tries: good path 3.2 s, nobody
+  answers 84–97 s (the fast-start candidates shown to the author on 2026-11-15). The control
+  frames do the same in less air.
+* **Every try both ways, eight of them (H).** Reaches every path on every try; 73 s unanswered.
+  The cap keeps two of them.
+* **Quick tries, then the floor (G).** The fastest good path (1.9 s) when nothing is known, but a
+  weak path waits for the quick tries first. Kept as the opening when the station was heard strong.
+* **A new tone frame of about 12 bytes for a call with full callsigns.** Would spare the details'
+  frame, at about 4 s a floor try; a new tone kind, its sync patterns and its own false-detection
+  run. Not taken: the details ride in the session for one frame.
+* **Shorter codes, or no caller code.** The acceptance must name the call it answers among others on
+  the channel: session number and caller code together (15 bits).
+
+## 4. Consequences
+
+* Link protocol 13. Protocol-12 stations cannot connect to it and do not hear its calls.
+* A good path connects in about 2 s (heard strong) or 5 s (not heard); a weak path in about 8 s;
+  a call nobody answers gives the channel back in 15.6–16.5 s, against 205 s.
+* At the very edge of the floor (about −16 dB and below on a fading path) one call reaches less
+  often than today's eight tries; a second call reaches more often than today's one (§5, R2).
+* A called station knows who called only after the first data frame; a host program hears
+  `CONNECTED` that much later. A `PENDING` it hears when the acceptance keys, as today (ADR-0103).
+* Two stations that cannot hear each other and start calling one station within about one try's
+  length (3.2–3.6 s) of each other on a weak path can both fail; each calls again later.
+* **Removed:** the random wait (`call_wait_frames`, `_call_jitter`), the alternation
+  (`_connect_floor`), ADR-0056's 12 dB floor acceptance (`floor_answer_margin_db`), the eight tries
+  (`connect_retries`), and the connect request and acceptance as frames on the air (DataKind
+  CONNECT_ACK is free; CONNECT_REQ's body is the details' format).
+* **Added:** the call and acceptance layouts (§2.1), three kinds of try, the plan from the heard
+  list, `call_answer_margin_db`, the details at the head of the stream.
+
+## 5. How it is judged (registered before the runs)
+
+On the model bench, `tools/bench_calls.py` (the fading pipe: AWGN, Good, Moderate, Poor; both airs;
+−20 … +8 dB; 30 calls a cell), against today's call (`--wait growing`, alternating tries). A call
+counts as connected once both stations are in the session and, for the capped call, the called
+station has the details.
+
+* **R1, nobody answers.** A capped call that nobody hears ends within 20 s of its first try, for
+  each plan, on both airs.
+* **R2, reach.** (a) From −14 dB up, in every cell, one capped call with nothing heard (H H)
+  connects at least as often as today's call, less two calls of 30. (b) In every cell, two capped
+  calls (the second after the first gives up) connect at least as often as today's one.
+* **R3, speed.** In every cell where both connect at least 25 calls of 30, the capped call's median
+  time to connect is lower than today's.
+* **R4, the informed openings.** With the station heard at the path's SNR, C C C S (where that
+  reading is strong) and S S (where weak) each connect at least as often as H H less two calls, and
+  no slower at the median, in every cell from −14 dB up.
+* **Reported, not judged:** a station heard strong (+10 dB) on a path that has gone weak (C C C S
+  at −8 … −20 dB); each plan's keyed time.
+
+A narrow miss goes to the author with its trace. Owed after the decision: the port (frames, engine,
+vectors), the daemon's heard list feeding the plan and `CONNECTED` after the details, the host
+adapter, the harness's contention and offset tests, and the air.
+
+## 6. What the model bench found (2026-11-15)
+
+`docs/research/calling/02-capped-call.md`, 2 880 calls an arm, both airs:
+
+| criterion | result |
+|---|---|
+| R1 | passes: 16.5 s (H H), 15.6 s (S S), 15.7 s (C C C S); today 135–253 s |
+| R2 (a) | fails: Good −14 dB, 24 of 30 against 30 |
+| R2 (b) | fails: Good −16 … −12 dB, by 1–2 calls |
+| R3 | fails in 50 cells: callsigns known at 16.5 s (AWGN) to 26.1 s (fading) under 0 dB, against today's 11.5 s |
+| R4 | narrow miss: one cell 0.2 s slower |
+
+The call alone is faster than today's in every cell (both stations in the session at a median
+7.6 s, 4.8 s on a good path, 1.6 s when heard strong; today 11.5 s) and reaches more often at the
+floor's edge on Moderate and Poor. What fails is the details step (§2.4) and, on Good's slow fades,
+two tries in 16 s. The results note proposes, unbuilt: the callsigns kept in the call (a both-ways
+try of today's two call frames, answered by §2.1's short acceptance: estimated 7.9 s good path,
+10.7 s weak path, 22 s unanswered), the details at the most robust rung if they stay in the session,
+and a silent pause between the two tries on slow fades.

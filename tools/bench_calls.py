@@ -19,6 +19,13 @@ Step 5; a tree run now needs the granted engine (2026-10-13 on).
 `--wait` sets the random wait after a call's try (`docs/research/calling/`): `growing` (today's,
 `1 + tries` floor frames), `short` (one floor frame), `none`, or a number of floor frames;
 `--calls floor` puts every try of a call on the tone floor (today's: `alternate`).
+
+`--calls capped` is the capped call (ADR-0126, proposed): its tries chosen by `--heard` — `none`
+(not heard lately: two both-ways tries), `true` (heard at the cell's SNR) or a number of dB — and
+a call counts as connected once the called station has the caller's details too. `--again`
+calls a second time when the first call gives up, and records the pair's outcome beside the
+first's. `--step` is the bench's clock (1 s by default); `--what call` leaves the probes out;
+`ended` is when a call that did not connect gave up, `up` when both stations were in the session.
 """
 
 from __future__ import annotations
@@ -40,10 +47,12 @@ WAITS = {"growing": None, "short": 1.0, "none": 0.0}
 
 
 def point(
-    job: tuple[str, int, str, float, int, float | None, bool],
+    job: tuple[str, int, str, float, int, float | None, str, str, bool, float, str],
 ) -> list[dict[str, object]]:
     """Every trial of one (air, class, SNR): a call and a probe, each on a fresh pair."""
-    tree, bandwidth, channel, snr, trials, wait, floor_only = job
+    tree, bandwidth, channel, snr, trials, wait, calls, heard, again, step, what_ = job
+    floor_only = calls == "floor"
+    capped = calls == "capped"
     sys.path.insert(0, str(Path(tree) / "model"))
     sys.path.insert(0, str(Path(tree) / "tools"))
     import bench_link as bench
@@ -64,11 +73,18 @@ def point(
             cfg.call_wait_frames = wait
         if floor_only:
             cfg.call_floor_only = True
+        if capped:
+            cfg.capped_call = True
         return cfg
+
+    heard_db = None if heard == "none" else (snr if heard == "true" else float(heard))
+
+    def keyed(sim: TwoStationSim, until: float) -> float:
+        return sum(max(0.0, min(b, until) - a) for a, b in sim.radiated(0) if a < until)
 
     for trial in range(trials):
         seed = 1000 * trial + 17
-        for what in ("call", "probe"):
+        for what in ("call", "probe") if what_ == "both" else (what_,):
             a = GrantedEngine("W4ODA", timing, config(), seed=seed)
             b = GrantedEngine("KK4XYZ", timing, config(), seed=seed + 1)
             sim = TwoStationSim(
@@ -81,14 +97,38 @@ def point(
                 fading=bench.fading_pipe(CALIBRATION, air, channel, seed),
             )
             ok, took, tries = False, None, None
+            ended = up = ok2 = took2 = plan = None
+            spent = 0.0
             if what == "call":
-                a.connect("KK4XYZ")
-                for t in range(1, CALL_S + 1):
-                    sim.run(until=float(t))
-                    if a.connected and b.connected:
-                        ok, took, tries = True, float(t), a._connect_tries
+                if capped:
+                    a.connect("KK4XYZ", heard_db=heard_db)
+                else:
+                    a.connect("KK4XYZ")
+                plan = a._call_plan or None
+                calls_made = 1
+                for k in range(1, round(CALL_S / step) + 1):
+                    t = round(k * step, 6)
+                    sim.run(until=t)
+                    if up is None and a.connected and b.connected:
+                        up = t
+                    if a.connected and b.connected and b.identified:
+                        if calls_made == 1:
+                            ok, took, tries = True, t, a._connect_tries
+                            spent = keyed(sim, t)
+                        ok2, took2 = True, t
                         break
                     if not a.connected and a.state.name == "IDLE":
+                        if calls_made == 1:
+                            ended = t
+                            spent = keyed(sim, t)
+                        if again and calls_made == 1:
+                            calls_made = 2
+                            up = None
+                            if capped:
+                                a.connect("KK4XYZ", heard_db=heard_db)
+                            else:
+                                a.connect("KK4XYZ")
+                            continue
                         break
             else:
                 a.probe("KK4XYZ")
@@ -108,6 +148,18 @@ def point(
                     "ok": int(ok),
                     "seconds": "" if took is None else took,
                     "tries": "" if tries is None else tries,
+                    **(
+                        {
+                            "plan": plan or "",
+                            "up": "" if up is None or not ok else up,
+                            "ended": "" if ended is None else ended,
+                            "keyed_s": round(spent, 2),
+                            "ok2": int(bool(ok2)) if again else "",
+                            "seconds2": "" if took2 is None or not again else took2,
+                        }
+                        if what == "call" and (capped or again or step != 1.0)
+                        else {}
+                    ),
                 }
             )
     return rows
@@ -124,11 +176,27 @@ def main() -> int:
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--wait", default="growing", help="growing, short, none, or floor frames")
-    ap.add_argument("--calls", default="alternate", choices=("alternate", "floor"))
+    ap.add_argument("--calls", default="alternate", choices=("alternate", "floor", "capped"))
+    ap.add_argument("--heard", default="none", help="capped: none, true, or dB")
+    ap.add_argument("--again", action="store_true", help="a second call when the first fails")
+    ap.add_argument("--step", type=float, default=1.0, help="the bench's clock, seconds")
+    ap.add_argument("--what", default="both", choices=("both", "call", "probe"))
     args = ap.parse_args()
     wait = WAITS[args.wait] if args.wait in WAITS else float(args.wait)
     jobs = [
-        (args.tree, int(bw), channel, float(snr), args.trials, wait, args.calls == "floor")
+        (
+            args.tree,
+            int(bw),
+            channel,
+            float(snr),
+            args.trials,
+            wait,
+            args.calls,
+            args.heard,
+            args.again,
+            args.step,
+            args.what,
+        )
         for bw in args.bandwidth.split(",")
         for channel in args.channels.split(",")
         for snr in args.snr.split(",")
@@ -144,12 +212,13 @@ def main() -> int:
             median = statistics.median(took) if took else float("nan")
             print(
                 f"{first['bandwidth_hz']:>4} {first['channel']:8s} {float(str(first['snr_db'])):+5.0f}"
-                f"  call {len(took):2d}/{len(calls)} median {median:4.0f} s"
+                f"  call {len(took):2d}/{len(calls)} median {median:5.1f} s"
                 f"  probe {answered:2d}/{len(calls)}",
                 flush=True,
             )
+    fields = list(dict.fromkeys(k for row in out for k in row))
     with Path(args.out).open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(out[0]), lineterminator="\n")
+        writer = csv.DictWriter(f, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(out)
     return 0

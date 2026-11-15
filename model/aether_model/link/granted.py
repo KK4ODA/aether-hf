@@ -59,7 +59,9 @@ from enum import Enum
 from typing import TypedDict
 
 from aether_model.link.frames import (
+    CALL_DETAILS_BYTES,
     CAP_LEVEL_MASK,
+    CAPPED_VERSION,
     CONNECT_BODY_8_BYTES,
     FRAGMENT_HEADER,
     MAX_BURST,
@@ -68,6 +70,8 @@ from aether_model.link.frames import (
     PROTOCOL_VERSION,
     REPORT,
     WINDOW,
+    AcceptFrame,
+    CallFrame,
     ConnectBody,
     DataFlags,
     DataHeader,
@@ -77,6 +81,8 @@ from aether_model.link.frames import (
     ProbeBody,
     bandwidth_code,
     bandwidth_hz_of,
+    call_codes,
+    call_family,
     data_capacity,
     decode_data,
     encode_data,
@@ -333,6 +339,15 @@ class GrantConfig:
     call_floor_only: bool = False
     """Bench only (``docs/research/calling/``): every try of a call on the tone floor, none in
     the ordinary family. Unset, the families alternate, the floor first (ADR-0016)."""
+    capped_call: bool = False
+    """Bench only (ADR-0126, proposed): the capped call, link protocol 13 — a call in control
+    frames, its tries chosen by what was heard (:meth:`GrantedEngine.connect`'s ``heard_db``),
+    no random wait, given up after at most two tries that reach a weak path, and the caller's
+    connect body at the head of its data. Only a station with it hears another's call."""
+    call_answer_margin_db: float = 6.0
+    """The capped call: a both-ways try is accepted in OFDM only when its OFDM part was read this
+    much over the OFDM control frame's threshold, on the floor otherwise; a station last heard
+    this much over it is called with quick tries first (ADR-0126 §2.2, §2.3)."""
     disc_retries: int = 3
     """DISCs a leaving master sends, unanswered, before it leaves without the DISC_ACK."""
     disc_patience_exchanges: float = 2.0
@@ -702,6 +717,18 @@ class GrantedEngine:
         self._pinned: int | None = None
         self._pin_body: int | None = None
         self._connect_tries = 0
+        self._call_plan = ""
+        """The capped call's tries, one letter a try: ``C`` quick, ``S`` floor, ``H`` both ways
+        (ADR-0126 §2.2); empty for today's call."""
+        self._call_answered: tuple[int, float] | None = None
+        """The capped call's try this station has answered: its session and where it ends — a
+        both-ways try's two parts are answered once."""
+        self._peer_caller_code = -1
+        """The capped call: the caller code of the session's caller, until its details arrive."""
+        self._details_pending = False
+        """The capped call: this station took a call and has not yet read the caller's connect
+        body at the head of its data (ADR-0126 §2.4)."""
+        self._details_buf = bytearray()
         self._tx_queue = bytearray()
         """What :meth:`send` was given and no frame carries yet. Kept across the start of a
         session — what an idle station is handed goes in the next one — and cleared at its end:
@@ -711,6 +738,9 @@ class GrantedEngine:
     # ── per-session state ─────────────────────────────────────────────
 
     def _reset_session(self) -> None:
+        self._details_pending = False
+        self._details_buf = bytearray()
+        self._call_answered = None
         self.top_acked_mode: int | None = None
         self._records: dict[int, _TxRecord] = {}
         self._tx_base = self._tx_next = 0
@@ -872,9 +902,13 @@ class GrantedEngine:
         else:
             raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
 
-    def connect(self, remote_call: str, as_call: str | None = None) -> None:
+    def connect(
+        self, remote_call: str, as_call: str | None = None, heard_db: float | None = None
+    ) -> None:
         """Call a station; the caller is the session's master once it reads the acceptance.
-        The first try goes once the last slot this station granted can no longer be in use."""
+        The first try goes once the last slot this station granted can no longer be in use.
+        ``heard_db``: the capped call's — the SNR this station last read the one it calls at, if
+        lately (the daemon's heard list); it chooses the call's tries (ADR-0126 §2.3)."""
         if self.state is not State.IDLE:
             raise RuntimeError("already in a session")
         self._calling_as(as_call)
@@ -891,6 +925,7 @@ class GrantedEngine:
         self.state = State.CONNECTING
         self.role = Role.NONE
         self._connect_tries = 0
+        self._call_plan = self._plan_for(heard_db) if self.cfg.capped_call else ""
         self._left = None
         self._disarm("leave")
         self._reset_session()
@@ -1082,6 +1117,12 @@ class GrantedEngine:
     @property
     def connected(self) -> bool:
         return self.state is State.CONNECTED
+
+    @property
+    def identified(self) -> bool:
+        """Whether this station knows who it is in a session with: always, but for a station
+        that took a capped call and has not read the caller's details yet (ADR-0126 §2.4)."""
+        return not self._details_pending
 
     @property
     def current_mode(self) -> int:
@@ -1279,6 +1320,8 @@ class GrantedEngine:
         if frame.container is Container.CONTROL:
             if payload is None:
                 return  # a control frame not read changes nothing
+            if self.cfg.capped_call and self._capped_control(payload, frame):
+                return
             ctl = None
             with contextlib.suppress(ValueError):
                 ctl = GrantFrame.decode(payload)
@@ -1306,6 +1349,14 @@ class GrantedEngine:
         except ValueError:
             return False
         if header.kind in (DataKind.CONNECT_REQ, DataKind.CONNECT_ACK):
+            if self.cfg.capped_call:
+                with contextlib.suppress(ValueError):
+                    cb = ConnectBody.decode(body)
+                    if cb.dst in self.callsigns:
+                        self.actions.append(
+                            Event("ignored", f"{cb.src} calls with link protocol {cb.version}")
+                        )
+                return False
             self._on_connect(header, body, frame)
             return False
         if header.kind in (DataKind.PROBE, DataKind.PROBE_ACK):
@@ -1714,6 +1765,9 @@ class GrantedEngine:
         acceptance's slot at the try's level; the next try once that slot can no longer be in
         use, and a random part of a floor frame per try later, so that two stations calling
         each other fall apart."""
+        if self.cfg.capped_call:
+            self._send_capped_try()
+            return
         floor = self._connect_floor()
         level = self._call_level()
         body = ConnectBody(
@@ -1751,10 +1805,267 @@ class GrantedEngine:
     def _retry_connect(self) -> None:
         if self.state is not State.CONNECTING:
             return
-        if self._connect_tries >= self.cfg.connect_retries:
+        tries = len(self._call_plan) if self.cfg.capped_call else self.cfg.connect_retries
+        if self._connect_tries >= tries:
             self._end_session("no answer")
             return
         self._send_connect()
+
+    # ── the capped call (ADR-0126, proposed) ──────────────────────────
+
+    def _plan_for(self, heard_db: float | None) -> str:
+        """The capped call's tries (ADR-0126 §2.3): two both-ways tries when the station called
+        was not heard lately; three quick tries and a floor try when it was heard strong; two
+        floor tries when it was heard weak."""
+        if self.timing.floor_modes <= 0:
+            return "CC"
+        if self._floor_only():
+            return "SS"
+        if heard_db is None:
+            return "HH"
+        if heard_db >= self._ctl_threshold() + self.cfg.call_answer_margin_db:
+            return "CCCS"
+        return "SS"
+
+    def _call_frame(
+        self, *, fam: bool = False, count: int = 0, data_floor: bool = False
+    ) -> CallFrame:
+        return CallFrame(
+            called=call_codes(self.remote_call)[0],
+            caller=call_codes(self.my_call)[1],
+            session=self.session,
+            level=self._call_level(),
+            count=count,
+            data_floor=data_floor,
+            fam=fam,
+            bandwidth=bandwidth_code(self.cfg.capabilities),
+            turnaround_s=self.cfg.turnaround_s,
+        )
+
+    def _send_capped_try(self) -> None:
+        """A try of the capped call (ADR-0126 §2.2): a quick try (an OFDM control frame, an OFDM
+        acceptance), a floor try (a floor control frame, a floor acceptance) or both ways (the
+        two back to back, either acceptance); its slot sized for the longest acceptance it
+        allows; no random wait after it."""
+        kind = self._call_plan[self._connect_tries]
+        level = self._call_level()
+        frames: list[TxFrame]
+        if kind == "C":
+            frames = [self._raw_control(self._call_frame(), False)]
+            families = frozenset({False})
+        elif kind == "S":
+            frames = [self._raw_control(self._call_frame(fam=True), True)]
+            families = frozenset({True})
+        else:
+            frames = [
+                self._raw_control(self._call_frame(fam=True, count=1, data_floor=True), False),
+                self._raw_control(self._call_frame(fam=True), True),
+            ]
+            families = frozenset({False, True})
+        turnaround = CallFrame.decode(frames[-1].payload).turnaround_s
+        self._connect_tries += 1
+        self._call_jitter = 0.0
+        self._key_granting(
+            _Slot(
+                kind="connect",
+                grant_s=max(self._ctl_s(f) for f in families),
+                last_floor=kind != "C",
+                answer_floors=families,
+                level=level,
+                granter_turnaround_s=turnaround,
+            ),
+            frames,
+        )
+
+    def _raw_control(self, frame: CallFrame | AcceptFrame, floor: bool) -> TxFrame:
+        return TxFrame(Container.CONTROL, frame.encode(), floor=floor)
+
+    def _capped_answer_floor(self, call: CallFrame, frame: SoftFrame) -> bool:
+        """The acceptance's family (ADR-0126 §2.2): a quick try's in OFDM, the only one its
+        caller listens for; a floor try's, or a both-ways try read only on the floor, on the
+        floor; a both-ways try's OFDM part read well, in OFDM."""
+        if self.timing.floor_modes <= 0 or not call.fam:
+            return False
+        if frame.floor or self._floor_only():
+            return True
+        return frame.snr_db < self._ctl_threshold() + self.cfg.call_answer_margin_db
+
+    def _capped_control(self, payload: bytes, frame: SoftFrame) -> bool:
+        """A call or an acceptance of the capped call, handled; ``False`` for any other
+        control frame."""
+        family = call_family(payload)
+        if family == "call":
+            self._on_capped_call(CallFrame.decode(payload), frame)
+        elif family == "accept":
+            self._on_capped_accept(AcceptFrame.decode(payload), frame)
+        return family is not None
+
+    def _on_capped_call(self, call: CallFrame, frame: SoftFrame) -> None:
+        matched = [c for c in self.callsigns if call_codes(c)[0] == call.called]
+        if not matched:
+            return
+        if call.bandwidth != bandwidth_code(self.cfg.capabilities):
+            self.actions.append(Event("ignored", "a call in another bandwidth"))
+            return
+        # where the try ends: the frames its own count says follow it, back to back
+        end = frame.t_end + call.count * self._ctl_s(call.data_floor)
+        last_floor = call.data_floor if call.count else frame.floor
+        start = self._slot_start(end, last_floor, call.level, call.turnaround_s)
+        floor = self._capped_answer_floor(call, frame)
+        if self.state in (State.CONNECTED, State.DISCONNECTING):
+            if self.role is not Role.SLAVE or call.caller != self._peer_caller_code:
+                return  # another station's call: this one is in a session
+            if call.session == self.session:
+                # a try whose acceptance was not read: answered again, once a try
+                if self._m_end is None and self._grant is None:
+                    self._heard(frame)
+                    self._schedule_capped_accept(call, frame, start, end, floor)
+                return
+            self._end_session("called again")
+        if start < self._hold_until - 1e-9 or self._probing is not None:
+            return  # its slot would fall in one this station granted, still open
+        if self.state is State.CONNECTING:
+            if call.caller == call_codes(self.remote_call)[1] and self.my_call > self.remote_call:
+                return  # simultaneous calls: the higher callsign keeps calling
+            self._disarm("connect")
+        self._drop_identifier()
+        self.my_call = matched[0]
+        self.remote_call = ""
+        self.session = call.session
+        self._left = None
+        self._disarm("leave")
+        self._reset_session()
+        self._my_ident_s = self._ident_for(self.my_call)
+        self.peer_capabilities = self.cfg.capabilities & ~CAP_LEVEL_MASK & 0xFF
+        self._peer_turnaround_s = call.turnaround_s
+        self._peer_identifier_s = 0.0
+        self._peer_caller_code = call.caller
+        self._details_pending = True
+        self._details_buf = bytearray()
+        self.state = State.CONNECTED
+        self.role = Role.SLAVE
+        self._heard(frame)
+        self._measure_lateness(frame)
+        self._ans_sticky = floor
+        self.actions.append(Event("role", "slave"))
+        self._schedule_capped_accept(call, frame, start, end, floor)
+
+    def _schedule_capped_accept(
+        self, call: CallFrame, frame: SoftFrame, start: float, end: float, floor: bool
+    ) -> None:
+        key = (call.session, round(end, 2))
+        if self._call_answered == key:
+            return  # the other part of a both-ways try already answered
+        self._call_answered = key
+        self._schedule(
+            _Answer(
+                what="capped_ack",
+                start=start,
+                not_after=start + self.cfg.slack_s,
+                floor=floor,
+                session=self.session,
+                anchor=end,
+                snr_db=frame.snr_db,
+            )
+        )
+
+    def _send_capped_acceptance(self, answer: _Answer) -> None:
+        if self.session != answer.session or self.role is not Role.SLAVE:
+            return
+        ctl = AcceptFrame(
+            caller=self._peer_caller_code,
+            session=self.session,
+            level=self._asked_level(),
+            snr_db=answer.snr_db,
+            bandwidth=bandwidth_code(self.cfg.capabilities),
+            version=CAPPED_VERSION,
+            turnaround_s=self.cfg.turnaround_s,
+            identifier_s=self._my_ident_s,
+        )
+        self._transmit(
+            [self._raw_control(ctl, answer.floor)],
+            not_after=answer.not_after,
+            not_before=answer.start,
+        )
+
+    def _on_capped_accept(self, acc: AcceptFrame, frame: SoftFrame) -> None:
+        if self.state is not State.CONNECTING or acc.session != self.session:
+            return
+        if acc.caller != call_codes(self.my_call)[1]:
+            return
+        if acc.bandwidth != bandwidth_code(self.cfg.capabilities):
+            self.actions.append(
+                Event("ignored", f"{self.remote_call} answers in another bandwidth")
+            )
+            return
+        if acc.version != CAPPED_VERSION:
+            self.actions.append(
+                Event("ignored", f"{self.remote_call} answers with link protocol {acc.version}")
+            )
+            return
+        self._disarm("connect")
+        self.peer_capabilities = self.cfg.capabilities & ~CAP_LEVEL_MASK & 0xFF
+        self._peer_turnaround_s = acc.turnaround_s
+        self._peer_identifier_s = acc.identifier_s
+        self._level_asked = acc.level
+        self.state = State.CONNECTED
+        self.role = Role.MASTER
+        self._heard(frame)
+        if acc.snr_db is not None:
+            self.peer_snr_db = acc.snr_db
+            self.rate.seed(acc.snr_db)
+            if self.timing.floor_modes > 0:
+                self._hdr_floor = self._floor_only() or (
+                    acc.snr_db < self._ctl_threshold() + self.cfg.answer_floor_margin_db
+                )
+        self._possible = {frame.floor}
+        self.actions.append(Event("connected", f"{self.remote_call} (master)"))
+        self.actions.append(Event("role", "master"))
+        # the call carried codes: the callsigns go first in this station's data (ADR-0126 §2.4)
+        details = ConnectBody(
+            self.my_call,
+            self.remote_call,
+            caps=self.cfg.capabilities & ~CAP_LEVEL_MASK & 0xFF,
+            version=CAPPED_VERSION,
+            turnaround_s=self.cfg.turnaround_s,
+            identifier_s=self._my_ident_s,
+        ).encode()
+        self._tx_queue[:0] = details
+        if self._slot is not None and self._in_slot(frame):
+            self._state_end(frame.t_end, frame.floor)
+        else:
+            self._arm_wait()
+
+    def _take_details(self, data: bytes) -> bytes | None:
+        """The capped call: the caller's connect body, the first bytes of its data (ADR-0126
+        §2.4). What follows it is delivered; ``None`` when it shows the call was for another
+        station, and the session has ended."""
+        if not self._details_pending:
+            return data
+        need = CALL_DETAILS_BYTES - len(self._details_buf)
+        self._details_buf += data[:need]
+        rest = data[need:]
+        if len(self._details_buf) < CALL_DETAILS_BYTES:
+            return rest
+        self._details_pending = False
+        cb: ConnectBody | None = None
+        with contextlib.suppress(ValueError):
+            cb = ConnectBody.decode(bytes(self._details_buf))
+        if (
+            cb is None
+            or cb.version != CAPPED_VERSION
+            or cb.dst not in self.callsigns
+            or call_codes(cb.src)[1] != self._peer_caller_code
+        ):
+            self._end_session("a call for another station")
+            return None
+        self.remote_call = cb.src
+        self.my_call = cb.dst
+        self.peer_capabilities = cb.caps & ~CAP_LEVEL_MASK & 0xFF
+        self._peer_turnaround_s = cb.turnaround_s
+        self._peer_identifier_s = cb.identifier_s
+        self.actions.append(Event("connected", f"{self.remote_call} (slave)"))
+        return rest
 
     def _send_probe(self) -> None:
         """The probe goes on the tone floor (ADR-0016). It carries no turnaround: its level
@@ -2536,6 +2847,8 @@ class GrantedEngine:
             return
         if answer.what == "connect_ack":
             self._send_acceptance(answer)
+        elif answer.what == "capped_ack":
+            self._send_capped_acceptance(answer)
         elif answer.what == "probe_ack":
             self._send_probe_answer(answer)
         elif answer.what in ("disc", "disc_ack"):
@@ -3214,6 +3527,10 @@ class GrantedEngine:
                 self._harq.pop(self._rx_base, None)
                 self._pieces.pop(self._rx_base, None)
                 self._rx_base = seq_after(self._rx_base)
+                taken = self._take_details(data)
+                if taken is None:
+                    break  # the call was another station's: the session is over
+                data = taken
                 self.stats.bytes_delivered += len(data)
                 if data:
                     self.actions.append(Deliver(data))

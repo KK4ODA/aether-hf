@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import math
 import struct
+import zlib
 from dataclasses import dataclass
 from enum import Enum, IntFlag
 
@@ -564,3 +565,163 @@ def seq_distance(seq: int, base: int) -> int:
 
 def in_window(seq: int, base: int, width: int = WINDOW) -> bool:
     return seq_distance(seq, base) < width
+
+
+# ── the capped call (ADR-0126, proposed: a bench switch, ``GrantConfig.capped_call``) ──────────
+
+CAPPED_VERSION = 13
+"""The link protocol of the capped call (ADR-0126): the call and its acceptance are control frames
+(:class:`CallFrame`, :class:`AcceptFrame`), and the caller's connect body travels at the head of
+its data in the session. Only a station with ``GrantConfig.capped_call`` speaks it."""
+
+CALL_CODE_BITS = 19
+CALLER_CODE_BITS = 7
+CALL_DETAILS_BYTES = CONNECT_BODY_8_BYTES
+"""The caller's details at the head of its data stream: a protocol-8 connect body."""
+
+
+def call_codes(call: str) -> tuple[int, int]:
+    """A callsign's called code (19 bits) and caller code (7 bits): the low bits, and bits
+    19–25, of the CRC-32 of the packed callsign. A call carries codes, not callsigns."""
+    crc = zlib.crc32(pack_callsign(call))
+    return crc & ((1 << CALL_CODE_BITS) - 1), (crc >> CALL_CODE_BITS) & (
+        (1 << CALLER_CODE_BITS) - 1
+    )
+
+
+def call_family(payload: bytes) -> str | None:
+    """``call`` or ``accept`` for a control frame of the capped call — a HEADER or an ANSWER
+    whose session field is 0, which no session's control frame has — and ``None`` otherwise."""
+    if len(payload) < CONTROL_BYTES or payload[1] >> 1:
+        return None
+    kind = payload[0] >> 6
+    if kind == GrantKind.HEADER.value:
+        return "call"
+    if kind == GrantKind.ANSWER.value:
+        return "accept"
+    return None
+
+
+def _tenths(seconds: float) -> int:
+    return max(0, min(15, math.ceil(seconds * 10 - 1e-9)))
+
+
+def _halves(seconds: float) -> int:
+    return max(0, min(15, math.ceil(seconds * 2 - 1e-9)))
+
+
+@dataclass(frozen=True)
+class CallFrame:
+    """A try of the capped call: a HEADER with session field 0 (ADR-0126 §2.1)::
+
+        0: kind HEADER (2) | count (3) | data_floor (1) | level (2)
+        1: 0 (7) | fam (1)
+        2: bandwidth (2) | turnaround (4) | called code bits 18–17 (2)
+        3–4: called code bits 16–1
+        5: called code bit 0 (1) | caller code (7)
+        6: session (8)
+
+    ``count``/``data_floor``: frames after this one in its transmission and their family (a
+    both-ways try's OFDM part: 1, floor). ``fam``: the caller listens for a floor acceptance."""
+
+    called: int
+    caller: int
+    session: int
+    level: int = 0
+    count: int = 0
+    data_floor: bool = False
+    fam: bool = False
+    bandwidth: int = 0
+    turnaround_s: float = 0.0
+
+    def encode(self) -> bytes:
+        code = self.called & ((1 << CALL_CODE_BITS) - 1)
+        return bytes(
+            [
+                (GrantKind.HEADER.value << 6)
+                | (min(self.count, 7) << 3)
+                | (int(self.data_floor) << 2)
+                | (self.level & 0x03),
+                int(self.fam),
+                ((self.bandwidth & 0x03) << 6) | (_tenths(self.turnaround_s) << 2) | (code >> 17),
+                (code >> 9) & 0xFF,
+                (code >> 1) & 0xFF,
+                ((code & 1) << 7) | (self.caller & 0x7F),
+                self.session & 0xFF,
+            ]
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes) -> CallFrame:
+        if call_family(payload) != "call":
+            raise ValueError("not a call")
+        code = (
+            ((payload[2] & 0x03) << 17) | (payload[3] << 9) | (payload[4] << 1) | (payload[5] >> 7)
+        )
+        return cls(
+            called=code,
+            caller=payload[5] & 0x7F,
+            session=payload[6],
+            level=payload[0] & 0x03,
+            count=(payload[0] >> 3) & 0x07,
+            data_floor=bool(payload[0] & 0x04),
+            fam=bool(payload[1] & 0x01),
+            bandwidth=payload[2] >> 6,
+            turnaround_s=((payload[2] >> 2) & 0x0F) / 10,
+        )
+
+
+@dataclass(frozen=True)
+class AcceptFrame:
+    """The acceptance of the capped call: an ANSWER with session field 0 (ADR-0126 §2.1)::
+
+    0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
+    1: 0 (8)
+    2: 0 (2) | SNR (6)
+    3: bandwidth (2) | version (6)
+    4: caller code (7) | 0 (1)
+    5: session (8)
+    6: turnaround (4) | identifier (4)"""
+
+    caller: int
+    session: int
+    level: int = 0
+    snr_db: float | None = None
+    bandwidth: int = 0
+    version: int = CAPPED_VERSION
+    turnaround_s: float = 0.0
+    identifier_s: float = 0.0
+
+    def encode(self) -> bytes:
+        snr = (
+            GRANT_SNR_UNKNOWN
+            if self.snr_db is None
+            else max(-31, min(31, round(self.snr_db))) & 0x3F
+        )
+        return bytes(
+            [
+                (GrantKind.ANSWER.value << 6) | (self.level & 0x03),
+                0,
+                snr,
+                ((self.bandwidth & 0x03) << 6) | (self.version & 0x3F),
+                (self.caller & 0x7F) << 1,
+                self.session & 0xFF,
+                (_tenths(self.turnaround_s) << 4) | _halves(self.identifier_s),
+            ]
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes) -> AcceptFrame:
+        if call_family(payload) != "accept":
+            raise ValueError("not an acceptance")
+        raw = payload[2] & 0x3F
+        return cls(
+            caller=payload[4] >> 1,
+            session=payload[5],
+            level=payload[0] & 0x03,
+            snr_db=None if raw == GRANT_SNR_UNKNOWN else float(raw - 64 if raw >= 32 else raw),
+            bandwidth=payload[3] >> 6,
+            version=payload[3] & 0x3F,
+            turnaround_s=(payload[6] >> 4) / 10,
+            identifier_s=(payload[6] & 0x0F) / 2,
+        )
