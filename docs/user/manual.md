@@ -720,6 +720,11 @@ Winlink Express, VarAC) and a RadioPost program (RadioPost Gateway, or the Radio
 - When a program has left, a station calling its callsign brings up the mismatch banner, which
   names the program to start again. Aether never offers to answer that callsign itself.
 
+**RadioPost's own manual.** How to send and receive email with the RadioPost client, and how to
+run RadioPost Gateway, is in the
+[RadioPost user's manual](https://github.com/KK4ODA/RadioPost/blob/main/docs/manual/manual.md).
+This manual covers only what Aether does for them.
+
 **Two programs on one station.** A program on the host port and a program on the control API
 (a RadioPost gateway beside RMS Trimode, for example) can share one radio. Each answers for its
 own callsigns: give them different ones, such as KK4ODA-1 for Trimode and KK4ODA-10 for
@@ -963,6 +968,7 @@ what happened in an issue on GitHub or by email.
 | The rules Aether checks | [fcc-regulatory-controls.md](fcc-regulatory-controls.md) |
 | Where to operate | [frequency-plan.md](frequency-plan.md) |
 | Running a gateway | [gateway-kit.md](gateway-kit.md) |
+| Email by radio with RadioPost, and RadioPost Gateway | [The RadioPost user's manual](https://github.com/KK4ODA/RadioPost/blob/main/docs/manual/manual.md) |
 | A Winlink gateway with RMS Trimode, and its client | [winlink-gateway.md](winlink-gateway.md) |
 | Field testing and the bench | [field-test.md](field-test.md) |
 | The signal on the air | [air-interface.md](../spec/air-interface.md) |
