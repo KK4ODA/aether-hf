@@ -223,3 +223,58 @@ two tries in 16 s. The results note proposes, unbuilt: the callsigns kept in the
 try of today's two call frames, answered by §2.1's short acceptance: estimated 7.9 s good path,
 10.7 s weak path, 22 s unanswered), the details at the most robust rung if they stay in the session,
 and a silent pause between the two tries on slow fades.
+
+## 7. Revision: the callsigns in the call, and a pause (registered 2026-11-15, before its runs)
+
+The author's decision on §6: build and bench the revision that keeps the callsigns in the call, with
+the pause between tries. It changes §2.1, §2.2, §2.3 and §2.4; the rest stands.
+
+### 7.1 What changes
+
+* **The call is today's connect request, in data frames.** Each try carries the full connect body
+  (19 bytes, version 13) in the frames today's call uses: the robust OFDM data frame (1.05 s) and
+  tone-24 (5.36 s). There are no codes and no details step: the called station knows who called
+  from the call, and tells its host program `CONNECTED` at the acceptance, as today.
+* **The acceptance stays §2.1's control frame** (ACCEPT: 0.43 s in OFDM, 3.2 s on the floor),
+  matched by session number and caller code as in §2.1.
+* **The three kinds of try**, now in data frames:
+
+  | try | sent | length | the caller listens for | the called station answers |
+  |---|---|---|---|---|
+  | quick (C) | the OFDM data frame | 1.05 s | an OFDM acceptance | in OFDM |
+  | floor (S) | tone-24 | 5.36 s | a floor acceptance | on the floor |
+  | both (H) | the OFDM data frame, then tone-24, back to back | 6.4 s | either | in OFDM if it read the OFDM part 6 dB over the OFDM control threshold, on the floor otherwise |
+
+  The OFDM part of a both-ways try states one frame to follow (its count, ADR-0041); a call frame
+  that states one to follow is followed by tone-24, so a station that reads only the OFDM part
+  knows where the try ends.
+* **The plans are §2.3's** (H H; C C C S; S S), with **a silent pause of 15 s before the plan's
+  last try** (`call_pause_s`). The caller neither keys nor holds a slot during it; it is there so
+  that two tries do not fall in one slow fade.
+
+Estimated from the engine's timing (no random wait, the pause left out of channel time):
+
+| plan | good path | weak path | channel time, nobody answers | ends |
+|---|---|---|---|---|
+| H H | 7.9 s | 10.7 s | 22.0 s | 37.0 s |
+| C C C S | 2.6 s | 9.6 s + 8.7 s of quick tries | 19.6 s | 34.6 s |
+| S S | 9.6 s | 9.6 s | 19.9 s | 34.9 s |
+
+H H's channel time is 2 s over the author's 20 s. A shorter both-ways try needs a shorter call
+message, which is what §2 tried and §6 measured.
+
+### 7.2 How it is judged
+
+The same bench and arms as §5 (`tools/bench_calls.py`, both airs, AWGN/Good/Moderate/Poor,
+−20 … +8 dB and a cell nobody hears, 30 calls a cell, a second call after a failed one), against the
+same `today` runs. A call counts as connected once both stations are in the session: the callsigns
+are in the call.
+
+* **R1′, nobody answers.** In the cell nobody hears, every call's channel time — from its first
+  try to the end of its last try's listening, the pause left out — is at most 22.5 s, and the call
+  ends within 40 s of its start, for each plan, on both airs.
+* **R2, R3, R4** exactly as §5.
+* **Reported, not judged:** the pause at 0 s and at 30 s on the arm with nothing heard (R2 on Good
+  is what the pause is for); the stale arm (heard strong at +10 dB on any path).
+
+A narrow miss goes to the author with its trace.
