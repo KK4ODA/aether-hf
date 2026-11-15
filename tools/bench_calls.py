@@ -20,14 +20,12 @@ Step 5; a tree run now needs the granted engine (2026-10-13 on).
 `1 + tries` floor frames), `short` (one floor frame), `none`, or a number of floor frames;
 `--calls floor` puts every try of a call on the tone floor (today's: `alternate`).
 
-`--calls capped` is the capped call (ADR-0126, proposed): its tries chosen by `--heard` — `none`
-(not heard lately: two both-ways tries), `true` (heard at the cell's SNR) or a number of dB — and
-a call counts as connected once the called station has the caller's details too. `--again`
+`--calls capped` is the capped call (ADR-0126): its tries chosen by `--heard` — `none` (not heard
+lately: two both-ways tries), `true` (heard at the cell's SNR) or a number of dB. `--again`
 calls a second time when the first call gives up, and records the pair's outcome beside the
 first's. `--step` is the bench's clock (1 s by default); `--what call` leaves the probes out;
 `ended` is when a call that did not connect gave up, `up` when both stations were in the session.
-`--details-in-call` is the capped call's revision (ADR-0126 §7: the callsigns in the call's data
-frames), `--pause` its silent pause before the plan's last try, in seconds.
+`--pause` is the capped call's silent pause before its plan's last try, in seconds (15).
 """
 
 from __future__ import annotations
@@ -49,7 +47,7 @@ WAITS = {"growing": None, "short": 1.0, "none": 0.0}
 
 
 def point(
-    job: tuple[str, int, str, float, int, float | None, str, str, bool, float, str, bool, float],
+    job: tuple[str, int, str, float, int, float | None, str, str, bool, float, str, float],
 ) -> list[dict[str, object]]:
     """Every trial of one (air, class, SNR): a call and a probe, each on a fresh pair."""
     (
@@ -64,7 +62,6 @@ def point(
         again,
         step,
         what_,
-        revised,
         pause,
     ) = job
     floor_only = calls == "floor"
@@ -91,7 +88,6 @@ def point(
             cfg.call_floor_only = True
         if capped:
             cfg.capped_call = True
-            cfg.call_details_in_call = revised
             cfg.call_pause_s = pause
         return cfg
 
@@ -129,7 +125,7 @@ def point(
                     sim.run(until=t)
                     if up is None and a.connected and b.connected:
                         up = t
-                    if a.connected and b.connected and b.identified:
+                    if a.connected and b.connected:
                         if calls_made == 1:
                             ok, took, tries = True, t, a._connect_tries
                             spent = keyed(sim, t)
@@ -200,8 +196,7 @@ def main() -> int:
     ap.add_argument("--again", action="store_true", help="a second call when the first fails")
     ap.add_argument("--step", type=float, default=1.0, help="the bench's clock, seconds")
     ap.add_argument("--what", default="both", choices=("both", "call", "probe"))
-    ap.add_argument("--details-in-call", action="store_true", help="capped: ADR-0126 §7")
-    ap.add_argument("--pause", type=float, default=0.0, help="capped: pause before the last try")
+    ap.add_argument("--pause", type=float, default=15.0, help="capped: pause before the last try")
     args = ap.parse_args()
     wait = WAITS[args.wait] if args.wait in WAITS else float(args.wait)
     jobs = [
@@ -217,7 +212,6 @@ def main() -> int:
             args.again,
             args.step,
             args.what,
-            args.details_in_call,
             args.pause,
         )
         for bw in args.bandwidth.split(",")

@@ -567,39 +567,30 @@ def in_window(seq: int, base: int, width: int = WINDOW) -> bool:
     return seq_distance(seq, base) < width
 
 
-# ── the capped call (ADR-0126, proposed: a bench switch, ``GrantConfig.capped_call``) ──────────
+# ── the capped call (ADR-0126) ─────────────────────────────────────
 
 CAPPED_VERSION = 13
-"""The link protocol of the capped call (ADR-0126): the call and its acceptance are control frames
-(:class:`CallFrame`, :class:`AcceptFrame`), and the caller's connect body travels at the head of
-its data in the session. Only a station with ``GrantConfig.capped_call`` speaks it."""
+"""The link protocol of the capped call (ADR-0126 §7): a call is today's connect request, at most
+two tries that reach a weak path, chosen by what was heard; its acceptance is the control frame
+:class:`AcceptFrame`. Only a station with ``GrantConfig.capped_call`` speaks it."""
 
-CALL_CODE_BITS = 19
 CALLER_CODE_BITS = 7
-CALL_DETAILS_BYTES = CONNECT_BODY_8_BYTES
-"""The caller's details at the head of its data stream: a protocol-8 connect body."""
 
 
-def call_codes(call: str) -> tuple[int, int]:
-    """A callsign's called code (19 bits) and caller code (7 bits): the low bits, and bits
-    19–25, of the CRC-32 of the packed callsign. A call carries codes, not callsigns."""
-    crc = zlib.crc32(pack_callsign(call))
-    return crc & ((1 << CALL_CODE_BITS) - 1), (crc >> CALL_CODE_BITS) & (
-        (1 << CALLER_CODE_BITS) - 1
+def caller_code(call: str) -> int:
+    """A caller's code: the low seven bits of the CRC-32 of its packed callsign. An acceptance
+    names the call it answers by the session number and this."""
+    return zlib.crc32(pack_callsign(call)) & ((1 << CALLER_CODE_BITS) - 1)
+
+
+def is_acceptance(payload: bytes) -> bool:
+    """An acceptance of the capped call: an ANSWER whose session field is 0, which no session's
+    control frame has (session numbers keep their low seven bits set)."""
+    return (
+        len(payload) >= CONTROL_BYTES
+        and not payload[1] >> 1
+        and payload[0] >> 6 == GrantKind.ANSWER.value
     )
-
-
-def call_family(payload: bytes) -> str | None:
-    """``call`` or ``accept`` for a control frame of the capped call — a HEADER or an ANSWER
-    whose session field is 0, which no session's control frame has — and ``None`` otherwise."""
-    if len(payload) < CONTROL_BYTES or payload[1] >> 1:
-        return None
-    kind = payload[0] >> 6
-    if kind == GrantKind.HEADER.value:
-        return "call"
-    if kind == GrantKind.ANSWER.value:
-        return "accept"
-    return None
 
 
 def _tenths(seconds: float) -> int:
@@ -611,77 +602,20 @@ def _halves(seconds: float) -> int:
 
 
 @dataclass(frozen=True)
-class CallFrame:
-    """A try of the capped call: a HEADER with session field 0 (ADR-0126 §2.1)::
-
-        0: kind HEADER (2) | count (3) | data_floor (1) | level (2)
-        1: 0 (7) | fam (1)
-        2: bandwidth (2) | turnaround (4) | called code bits 18–17 (2)
-        3–4: called code bits 16–1
-        5: called code bit 0 (1) | caller code (7)
-        6: session (8)
-
-    ``count``/``data_floor``: frames after this one in its transmission and their family (a
-    both-ways try's OFDM part: 1, floor). ``fam``: the caller listens for a floor acceptance."""
-
-    called: int
-    caller: int
-    session: int
-    level: int = 0
-    count: int = 0
-    data_floor: bool = False
-    fam: bool = False
-    bandwidth: int = 0
-    turnaround_s: float = 0.0
-
-    def encode(self) -> bytes:
-        code = self.called & ((1 << CALL_CODE_BITS) - 1)
-        return bytes(
-            [
-                (GrantKind.HEADER.value << 6)
-                | (min(self.count, 7) << 3)
-                | (int(self.data_floor) << 2)
-                | (self.level & 0x03),
-                int(self.fam),
-                ((self.bandwidth & 0x03) << 6) | (_tenths(self.turnaround_s) << 2) | (code >> 17),
-                (code >> 9) & 0xFF,
-                (code >> 1) & 0xFF,
-                ((code & 1) << 7) | (self.caller & 0x7F),
-                self.session & 0xFF,
-            ]
-        )
-
-    @classmethod
-    def decode(cls, payload: bytes) -> CallFrame:
-        if call_family(payload) != "call":
-            raise ValueError("not a call")
-        code = (
-            ((payload[2] & 0x03) << 17) | (payload[3] << 9) | (payload[4] << 1) | (payload[5] >> 7)
-        )
-        return cls(
-            called=code,
-            caller=payload[5] & 0x7F,
-            session=payload[6],
-            level=payload[0] & 0x03,
-            count=(payload[0] >> 3) & 0x07,
-            data_floor=bool(payload[0] & 0x04),
-            fam=bool(payload[1] & 0x01),
-            bandwidth=payload[2] >> 6,
-            turnaround_s=((payload[2] >> 2) & 0x0F) / 10,
-        )
-
-
-@dataclass(frozen=True)
 class AcceptFrame:
-    """The acceptance of the capped call: an ANSWER with session field 0 (ADR-0126 §2.1)::
+    """The capped call's acceptance: an ANSWER with session field 0 (ADR-0126 §2.1)::
 
-    0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
-    1: 0 (8)
-    2: 0 (2) | SNR (6)
-    3: bandwidth (2) | version (6)
-    4: caller code (7) | 0 (1)
-    5: session (8)
-    6: turnaround (4) | identifier (4)"""
+        0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
+        1: 0 (8)
+        2: 0 (2) | SNR (6)
+        3: bandwidth (2) | version (6)
+        4: caller code (7) | 0 (1)
+        5: session (8)
+        6: turnaround (4) | identifier (4)
+
+    ``level``: the gap level the called station needs; ``SNR``: how it read the call;
+    ``turnaround``: 0–1.5 s in 0.1 s steps; ``identifier``: its closing Morse identifier, 0–7.5 s
+    in 0.5 s steps."""
 
     caller: int
     session: int
@@ -712,7 +646,7 @@ class AcceptFrame:
 
     @classmethod
     def decode(cls, payload: bytes) -> AcceptFrame:
-        if call_family(payload) != "accept":
+        if not is_acceptance(payload):
             raise ValueError("not an acceptance")
         raw = payload[2] & 0x3F
         return cls(

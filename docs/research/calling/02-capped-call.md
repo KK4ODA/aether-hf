@@ -1,8 +1,10 @@
 # The capped call on the model bench
 
-*ADR-0126 (proposed), judged by its §5, the criteria registered before these runs. Run
-2026-11-15 in a cloud container, on the model only: the port, the harness and the air have not
-seen it.*
+*ADR-0126, judged by its §5 and §7.2, the criteria registered before the runs. Run 2026-11-15 in
+a cloud container, on the model only. The author accepted §5's results and the revision went on to
+the port. The first design (§1–§4) is removed from the model since; it is at `343be84`, where these
+commands run. The revision's commands below take `--calls capped` alone now: `--details-in-call`
+was folded in and the pause defaults to 15 s.*
 
 ## 1. What was run
 

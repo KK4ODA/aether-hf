@@ -1,16 +1,12 @@
 # ADR-0126: The capped call — a call in control frames, chosen by what was heard, over in 20 s
 
-**Status:** proposed, 2026-11-15, at the author's request ("write the ADR for the capped call and
-bench it"). Link protocol 13. Built in the model behind a bench switch (`GrantConfig.capped_call`)
-and judged there by the criteria of §5, registered before the runs; the results are
-`docs/research/calling/02-capped-call.md` and §6. **On the model bench it passes R1 (a call nobody
-answers ends in 15.6–16.5 s) and fails R2 and R3**: the details step costs more than the call
-saves on a weak path, and two tries are too few on a slowly fading one. **The revision of §7**
-(the callsigns in the call, a 15 s pause before the last try), registered before its runs, passes
-R1′, R2 (a), R3 and R4 and misses R2 (b) narrowly (one cell, Good −16 dB, 27 against 29: §7.3).
-Not ported: the port, the harness and the air come after the author's decision. It would supersede ADR-0016 §2.1 (the alternating tries), ADR-0056 §2.1
-(the floor acceptance of a weak ordinary call) and the call's random wait (`07-protocol-8.md`
-§5.1).
+**Status:** accepted for building, 2026-11-15 — the revision of §7, the author's decision on its
+model bench ("results accepted, go ahead"), its one narrow miss (§7.3) accepted. Link protocol 13.
+Its first design (§2.1's call frame, the codes, the details at the head of the data: §2–§6) was
+benched and failed R2 and R3 (§6); it is removed from the model and lives in the history at
+`343be84`. The capped call is in the model behind `GrantConfig.capped_call`, off by default; next
+are the port, the harness's A/B (§8) and the air, before it becomes the default and link protocol
+13 ships.
 
 ## 1. Context
 
