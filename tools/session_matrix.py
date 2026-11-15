@@ -45,6 +45,7 @@ import csv
 import functools
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -596,12 +597,20 @@ class Host:
 
     def _scan(self) -> None:
         """Trimode's scan: dwell 3 s, deaf 0.5 s, in air time; it stops while connected and
-        holds — no LISTEN said — while a call is pending."""
+        holds — no LISTEN said — while a call is pending. Its first dwell, up to a whole cycle,
+        is drawn from the scenario's seed: a script places its first call a fixed time after the
+        program attaches, and with the scan always starting the same way that call's first try
+        was decoded at the same point of the scan on every draw (inside a deaf window on all of
+        them while the air clock moved in whole seconds, inside a listening one after). Drawn,
+        it meets the scan where a real client's would, deaf on one draw in seven."""
+        seed = f"{self.run.scenario.get('seed', 1)}:{self.station.who}:scan"
+        dwell = random.Random(seed).uniform(0.0, 3.5)
         while not self.closed:
             began = self.run.air_s()
             began_wall = time.monotonic()
-            while not self.closed and self.run.air_s() < began + 3.0:
+            while not self.closed and self.run.air_s() < began + dwell:
                 time.sleep(POLL_S)
+            dwell = 3.0
             # the step was decided before a PENDING that came in the window's last quarter
             pending_wall = self.pending_wall
             ended_wall = time.monotonic()
