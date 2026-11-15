@@ -130,7 +130,9 @@ capture skip audio: what fell in a skip never arrives. A build that greets the c
 **Host programs** (`host = true` at a station): `host a client` attaches a Winlink Express-like
 program to a's host port (its opening line as the bench recorded it), `host b trimode` an RMS
 Trimode-like gateway that scans — `LISTEN` off half a second in every three and a half of air,
-and a `CONNECTED` it is told while not listening is a failure (ADR-0051), and `host a varac` a
+from a phase drawn from the seed, so a call placed a fixed time into the script meets the scan
+where a real client's would — and a `CONNECTED` it is told while not listening is a failure
+(ADR-0051), and `host a varac` a
 VarAC-like program (`CHAT ON`, its `-T` alias in `MYCALL`, no `CWID`), and `host a pat` Pat's VARA
 driver (Pat-Vara 1.2.0): `LISTEN OFF` unless it is b, the call's `BW` and `WINLINK SESSION` before
 its `CONNECT`, and its wait on the count — connected, holding bytes, and a minute of wall clock
