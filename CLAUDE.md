@@ -3130,6 +3130,19 @@ modem through FM is F2D, authorized by §97.307(f)(8), not by Part 97's definiti
 an ASCII callsign inside the data emission as §97.119(b)(3)'s identification; on FM a Morse tone is
 MCW, not CW. Gate 2 waits on a dummy load and an attenuator (risk R18).
 
+**The harness's air clock (2026-11-15).** `channel.progress`, the clock `session_matrix.py` takes
+every step by, moved once a second of air: the RMS Trimode stand-in's half second deaf lasted to
+the next whole second (deaf 1 s in every 4, each window from a whole second), and every call into
+an idle stand-in had its first try decoded inside one (13 of 18 calls on ten draws; the calling
+bench saw 47 of 48). It moves every 0.1 s now (`PROGRESS_EVERY` in `channel_server.py`;
+commands are still read once a second); the stand-in is deaf 0.5 s in every 3.5 and draws its
+first dwell from the seed, so a call placed a fixed time into a script meets the scan at another
+phase on each draw; a first call takes 12 s where it took 18–50, and `transfers` times are to the
+tenth. Left for the calling bench: in the 2300 Hz gateway scenarios a call's next decoded try
+comes 10.5 s after a lost one, three of the stand-in's cycles exactly, and is lost too (calls of
+41 s); the real Trimode's cycle is about 3.6 s. `bench/baselines/scenarios.csv` is all 64
+scenarios × 3 draws on this runner.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
