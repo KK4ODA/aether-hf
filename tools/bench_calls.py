@@ -15,6 +15,10 @@ Step 5; a tree run now needs the granted engine (2026-10-13 on).
 
     python tools/bench_calls.py --variant "calls on the floor" --out calls.csv
     python tools/bench_calls.py --tree C:/Dev/aether-before --variant beta.54 --out before.csv
+
+`--wait` sets the random wait after a call's try (`docs/research/calling/`): `growing` (today's,
+`1 + tries` floor frames), `short` (one floor frame), `none`, or a number of floor frames;
+`--calls floor` puts every try of a call on the tone floor (today's: `alternate`).
 """
 
 from __future__ import annotations
@@ -32,26 +36,41 @@ CALL_S = 400
 PROBE_S = 120
 
 
-def point(job: tuple[str, int, str, float, int]) -> list[dict[str, object]]:
+WAITS = {"growing": None, "short": 1.0, "none": 0.0}
+
+
+def point(
+    job: tuple[str, int, str, float, int, float | None, bool],
+) -> list[dict[str, object]]:
     """Every trial of one (air, class, SNR): a call and a probe, each on a fresh pair."""
-    tree, bandwidth, channel, snr, trials = job
+    tree, bandwidth, channel, snr, trials, wait, floor_only = job
     sys.path.insert(0, str(Path(tree) / "model"))
     sys.path.insert(0, str(Path(tree) / "tools"))
     import bench_link as bench
     from aether_model.frame.modes import NARROW, WIDE
     from aether_model.link.granted import GrantConfig, GrantedEngine
-    from aether_model.link.harness import phy_timing
+    from aether_model.link.harness import bandwidth_capabilities, phy_timing
     from aether_model.link.sim import TwoStationSim, control_thresholds_for
 
     air = WIDE if bandwidth == 2300 else NARROW
     timing = phy_timing(air.params)
     rows: list[dict[str, object]] = []
+
+    def config() -> GrantConfig:
+        """Each station its own, stating its air's capability byte: the default reads as
+        2300 Hz, and both stations of a 500 Hz point had run as such."""
+        cfg = GrantConfig(max_mode=air.n_rungs - 1, capabilities=bandwidth_capabilities(air.params))
+        if wait is not None:
+            cfg.call_wait_frames = wait
+        if floor_only:
+            cfg.call_floor_only = True
+        return cfg
+
     for trial in range(trials):
         seed = 1000 * trial + 17
         for what in ("call", "probe"):
-            cfg = GrantConfig(max_mode=air.n_rungs - 1)
-            a = GrantedEngine("W4ODA", timing, cfg, seed=seed)
-            b = GrantedEngine("KK4XYZ", timing, cfg, seed=seed + 1)
+            a = GrantedEngine("W4ODA", timing, config(), seed=seed)
+            b = GrantedEngine("KK4XYZ", timing, config(), seed=seed + 1)
             sim = TwoStationSim(
                 a,
                 b,
@@ -104,9 +123,12 @@ def main() -> int:
     ap.add_argument("--snr", default="-16,-12,-8,-4,0,4,8")
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--jobs", type=int, default=2)
+    ap.add_argument("--wait", default="growing", help="growing, short, none, or floor frames")
+    ap.add_argument("--calls", default="alternate", choices=("alternate", "floor"))
     args = ap.parse_args()
+    wait = WAITS[args.wait] if args.wait in WAITS else float(args.wait)
     jobs = [
-        (args.tree, int(bw), channel, float(snr), args.trials)
+        (args.tree, int(bw), channel, float(snr), args.trials, wait, args.calls == "floor")
         for bw in args.bandwidth.split(",")
         for channel in args.channels.split(",")
         for snr in args.snr.split(",")

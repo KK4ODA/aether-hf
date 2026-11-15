@@ -327,6 +327,12 @@ class GrantConfig:
     max_retries: int = 8
     """Silent slots in a row before a master gives the session up ("no response")."""
     connect_retries: int = 8
+    call_wait_frames: float | None = None
+    """Bench only (``docs/research/calling/``): the span of the random wait after a try of a
+    call, in floor frames. Unset, ``1 + tries`` (07-protocol-8.md §5.1)."""
+    call_floor_only: bool = False
+    """Bench only (``docs/research/calling/``): every try of a call on the tone floor, none in
+    the ordinary family. Unset, the families alternate, the floor first (ADR-0016)."""
     disc_retries: int = 3
     """DISCs a leaving master sends, unanswered, before it leaves without the DISC_ACK."""
     disc_patience_exchanges: float = 2.0
@@ -1694,7 +1700,7 @@ class GrantedEngine:
     # ── the call and the probe ────────────────────────────────────────
 
     def _connect_floor(self) -> bool:
-        if self.timing.floor_modes > 0 and self._floor_only():
+        if self.timing.floor_modes > 0 and (self._floor_only() or self.cfg.call_floor_only):
             return True
         return self.timing.floor_modes > 0 and self._connect_tries % 2 == 0
 
@@ -1723,9 +1729,10 @@ class GrantedEngine:
             DataHeader(DataKind.CONNECT_REQ, 0, self.session), body, self.timing.capacity(mode)
         )
         self._connect_tries += 1
-        self._call_jitter = self.rng.uniform(
-            0.0, (1 + self._connect_tries) * self._robust_frame_s(True)
-        )
+        span = self.cfg.call_wait_frames
+        if span is None:
+            span = 1 + self._connect_tries
+        self._call_jitter = self.rng.uniform(0.0, span * self._robust_frame_s(True))
         # the acceptance comes in the request's family, or on the floor when the call arrived
         # weak (ADR-0056) or the rules allow only the floor
         families = frozenset({True, False}) if self.timing.floor_modes > 0 else frozenset({False})

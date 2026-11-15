@@ -1,0 +1,29 @@
+name = "40m-offset-200-2300"
+description = """40 m at 2300 Hz, the called station tuned 200 Hz off: a dial typed wrong, or a rig
+far off. The tone detector searches ±150 Hz and the OFDM one ±300 Hz, so only a call's ordinary
+tries can be heard (docs/research/calling/00-plan.md §4a, K4): what a call with every try on the
+floor gives up. A call, a kilobyte, a disconnect on a Good path at +10 dB."""
+tags = ["40m", "calling"]
+bandwidth = 2300
+seconds = 600
+seed = 65
+
+[stations.a]
+callsign = "W4ODA"
+[stations.b]
+callsign = "KK4XYZ"
+
+[path]
+profile = "good"
+snr_db = 10.0
+[path.a_to_b]
+cfo_hz = 200.0
+[path.b_to_a]
+cfo_hz = -200.0
+
+[script]
+steps = ["connect", "message 1000", "disconnect"]
+
+[expect]
+connected = true
+delivered = true

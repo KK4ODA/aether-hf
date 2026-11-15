@@ -291,6 +291,16 @@ class Run:
             self.air_read = max(self.air_read, float(self.progress.read_text(encoding="utf-8")))
         return self.air_read
 
+    def note_call(self, who: str, began: float, ended: float | None = None) -> None:
+        """How long a call took, from its ``CONNECT`` to its session up, in ``transfers``
+        (``call a 12 s``, or ``call a lost``): what a call's own timing changes
+        (``docs/research/calling/``)."""
+        if not self.connected:
+            self.transfers.append(f"call {who} lost")
+            return
+        end = self.air_s() if ended is None else ended
+        self.transfers.append(f"call {who} {max(end - began, 0.0):.1f} s")
+
     def wait(self, what: str, done: object, air_s: float, *, note: bool = True) -> bool:
         """Poll ``done()`` until it holds or ``air_s`` more seconds of air have passed; a
         wait that runs out is noted unless ``note`` is false (a plain pause). Air that stands
@@ -375,6 +385,8 @@ class Host:
         self.log: list[tuple[float, str, str]] = []
         self.received = 0
         self.calls_from = 0  # CONNECTEDs heard before a `host-call`
+        self.dialled_at = 0.0  # the air time of the program's last CONNECT
+        self.connected_at = 0.0  # and of the last CONNECTED it heard
         self.listening = False
         # Trimode's own scan state, which is not always what it last said: deaf for the half
         # second after its LISTEN OFF, listening again after it even while a held scan keeps it
@@ -448,6 +460,7 @@ class Host:
         if self.kind == "pat":
             self.send("BW500" if self.run.scenario.get("bandwidth") == 500 else "BW2300")
             self.send("WINLINK SESSION")
+        self.dialled_at = self.run.air_s()
         self.send(f"CONNECT {self.station.callsign} {called}")
 
     def write(self, payload: bytes) -> None:
@@ -518,6 +531,7 @@ class Host:
                     self.pending_at = None
                     self.pending_wall = None
                     self.connected = True
+                    self.connected_at = self.run.air_s()
                 elif line.startswith("DISCONNECTED"):
                     self.connected = False
                     self._check_identified()
@@ -748,12 +762,14 @@ def step(run: Run, text: str) -> bool:
         run.probe = "answered" if answered else "unanswered"
         return True  # a probe is one frame and no retry: reported, not required
     if word == "connect":
+        began = run.air_s()
         call(a.control, "connect", {"remote": b.callsign})
         run.connected = run.wait(
             "connected",
             lambda: a.status()["state"] == "connected" and b.status()["state"] == "connected",
             float(run.scenario.get("connect_within_s", 180)),
         )
+        run.note_call("a", began)
         return run.connected
     if word in ("message", "reply"):
         sender, receiver = (a, b) if word == "message" else (b, a)
@@ -806,6 +822,7 @@ def step(run: Run, text: str) -> bool:
             lambda: ha.heard("CONNECTED") > was_a and hb.heard("CONNECTED") > was_b,
             float(run.scenario.get("connect_within_s", 180)),
         )
+        run.note_call(who, ha.dialled_at)
         return run.connected
     if word == "host-ping":
         # `host-ping [c]`: VarAC's ping — a CONNECT to the other program's `-T` alias, its one
@@ -853,6 +870,7 @@ def step(run: Run, text: str) -> bool:
             lambda: ha.heard("CONNECTED") > ha.calls_from,
             float(run.scenario.get("connect_within_s", 180)),
         )
+        run.note_call(arg, ha.dialled_at, ha.connected_at)
         return run.connected
     if word in ("host-send", "host-reply"):
         # `host-send N [c]`: the client (a unless named) to the gateway; host-reply back
