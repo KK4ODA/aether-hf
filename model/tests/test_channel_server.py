@@ -203,6 +203,14 @@ def test_the_peer_arriving_while_deaf_is_counted_by_why() -> None:
     assert abs(hits["recovering"] - 0.20) < 0.03 and hits["transmitting"] == 0.0
 
 
+def test_the_progress_file_moves_in_tenths_of_a_second_of_air() -> None:
+    # the runner's Trimode stand-in goes deaf for half a second by it: written once a second,
+    # the half second lasted a whole one, always on a whole second (calling bench §3)
+    assert cs.PROGRESS_EVERY <= RATE // 10
+    assert cs.PROGRESS_EVERY % cs.TICK == 0  # written on a tick, every one alike
+    assert RATE % cs.PROGRESS_EVERY == 0  # and on every whole second as well
+
+
 def test_the_level_follows_its_schedule_and_holds_its_ends() -> None:
     t = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
     got = cs.level_at([[5.0, 0.0], [15.0, -20.0]], t)

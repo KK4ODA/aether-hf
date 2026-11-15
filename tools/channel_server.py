@@ -107,6 +107,14 @@ from channel_cable import AUDIO_RATE, BASEBAND_RATE, CENTRE_HZ, CableChannel
 
 TICK = 960
 """Samples a tick: 20 ms at 48 kHz, a sound card's block."""
+PROGRESS_EVERY = AUDIO_RATE // 10
+"""Samples between writes of ``--progress-file``: a tenth of a second of air, five ticks. The
+runner times its steps by that file, and its RMS Trimode stand-in its scan (``LISTEN`` off half
+a second in every three and a half). Written once a second, the half second lasted to the next
+whole second: the stand-in was deaf a second in every four, each time from a whole second, and a
+call dialled on a whole second had its first try decoded inside one of them, unanswered, in 47 of
+48 runs (the calling bench, ``docs/research/calling/``). Every tick would be a file write per
+20 ms of air, which a Windows runner feels."""
 DEVICE_LATENCY_S = 0.25
 """From the daemon (``audio::DEVICE_LATENCY_S``): played to on the air."""
 
@@ -993,7 +1001,9 @@ def main() -> int:
     ap.add_argument("--report", type=Path, help="where to write the air's account")
     ap.add_argument("--max-seconds", type=float, help="stop after this much air time")
     ap.add_argument(
-        "--progress-file", type=Path, help="kept at the air time reached, every second of it"
+        "--progress-file",
+        type=Path,
+        help="kept at the air time reached, every tenth of a second of it",
     )
     ap.add_argument(
         "--command-file",
@@ -1044,13 +1054,13 @@ def main() -> int:
                 ahead = server.t / AUDIO_RATE - (time.monotonic() - began)
                 if ahead > 0:
                     time.sleep(ahead)
+            if args.progress_file and server.t % PROGRESS_EVERY < TICK:
+                # written in place: a reader can catch it empty or half written, and keeps its
+                # last reading then (session_matrix's Run.air_s). Replacing it whole fails on
+                # Windows while the reader has it open.
+                args.progress_file.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
             if server.t % AUDIO_RATE < TICK:
                 faulthandler.dump_traceback_later(2 * STALL_REPORT_S, file=sys.stdout)
-                if args.progress_file:
-                    # written in place: a reader can catch it empty or half written, and keeps
-                    # its last reading then (session_matrix's Run.air_s). Replacing it whole
-                    # fails on Windows while the reader has it open.
-                    args.progress_file.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
                 if args.command_file and args.command_file.exists():
                     lines = args.command_file.read_text(encoding="utf-8").splitlines()
                     for line in lines[commands_done:]:
