@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 196" width="1000" height="196" role="img" aria-label="Six steps from installing Aether to a first contact">
+<defs><marker id="ah-radio" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c2410c"/></marker><marker id="ah-audio" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/></marker><marker id="ah-key" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309"/></marker><marker id="ah-local" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker><marker id="ah-internet" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker><marker id="ah-cable" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker><marker id="ah-fail" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b91c1c"/></marker><marker id="ah-plan" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker></defs>
+<rect x="0" y="0" width="1000" height="196" fill="#ffffff"/>
+<rect x="24" y="24" width="146" height="148" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+<circle cx="46" cy="48" r="11" fill="#0f766e" stroke="#ffffff" stroke-width="2"/>
+<text xml:space="preserve" x="46" y="52.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.54" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+<g fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="141.0" y="44" width="12" height="8" rx="2"/><path d="M 144.5 44 L 144.5 39 M 149.5 44 L 149.5 39 M 147.0 52 L 147.0 56"/></g>
+<text xml:space="preserve" x="40" y="92" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1e293b" text-anchor="start">Install</text>
+<text xml:space="preserve" x="40" y="118" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Download, run</text>
+<text xml:space="preserve" x="40" y="136.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">the installer</text>
+<path d="M 172.0 92 L 183.2 98 L 172.0 104" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="185.2" y="24" width="146" height="148" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+<circle cx="207.2" cy="48" r="11" fill="#0f766e" stroke="#ffffff" stroke-width="2"/>
+<text xml:space="preserve" x="207.2" y="52.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.54" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+<g fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="299.2" y="39" width="18" height="15" rx="2"/><path d="M 299.2 43.5 L 317.2 43.5"/><path d="M 302.2 50 L 305.2 47 L 308.2 49 L 314.2 46"/></g>
+<text xml:space="preserve" x="201.2" y="92" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1e293b" text-anchor="start">Setup</text>
+<text xml:space="preserve" x="201.2" y="118" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Six steps, then</text>
+<text xml:space="preserve" x="201.2" y="136.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Save</text>
+<path d="M 333.2 92 L 344.4 98 L 333.2 104" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="346.4" y="24" width="146" height="148" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+<circle cx="368.4" cy="48" r="11" fill="#0f766e" stroke="#ffffff" stroke-width="2"/>
+<text xml:space="preserve" x="368.4" y="52.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.54" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+<g fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="460.4" y="43" width="18" height="12" rx="2"/><circle cx="472.9" cy="49" r="3"/><path d="M 463.4 47 L 467.4 47 M 463.4 50 L 467.4 50 M 464.4 43 L 469.4 38"/></g>
+<text xml:space="preserve" x="362.4" y="92" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1e293b" text-anchor="start">Set drive</text>
+<text xml:space="preserve" x="362.4" y="118" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">ALC just moving,</text>
+<text xml:space="preserve" x="362.4" y="136.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">then back off</text>
+<path d="M 494.4 92 L 505.6 98 L 494.4 104" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="507.6" y="24" width="146" height="148" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+<circle cx="529.6" cy="48" r="11" fill="#0f766e" stroke="#ffffff" stroke-width="2"/>
+<text xml:space="preserve" x="529.6" y="52.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.54" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+<g fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round"><path d="M 630.5999999999999 44 L 630.5999999999999 56 M 626.5999999999999 56 L 634.5999999999999 56"/><circle cx="630.5999999999999" cy="43" r="1.6" fill="#0f766e"/><path d="M 626.5999999999999 39.5 Q 624.0999999999999 43 626.5999999999999 46.5"/><path d="M 634.5999999999999 39.5 Q 637.0999999999999 43 634.5999999999999 46.5"/><path d="M 623.0999999999999 37 Q 619.5999999999999 43 623.0999999999999 49"/><path d="M 638.0999999999999 37 Q 641.5999999999999 43 638.0999999999999 49"/></g>
+<text xml:space="preserve" x="523.6" y="92" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1e293b" text-anchor="start">Listen</text>
+<text xml:space="preserve" x="523.6" y="118" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Is the channel</text>
+<text xml:space="preserve" x="523.6" y="136.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">clear?</text>
+<path d="M 655.6 92 L 666.8 98 L 655.6 104" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="668.8" y="24" width="146" height="148" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+<circle cx="690.8" cy="48" r="11" fill="#0f766e" stroke="#ffffff" stroke-width="2"/>
+<text xml:space="preserve" x="690.8" y="52.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.54" font-weight="700" fill="#ffffff" text-anchor="middle">5</text>
+<g fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round"><path d="M 782.8 47 Q 785.05 40 787.3 47 T 791.8 47 T 796.3 47 T 800.8 47"/></g>
+<text xml:space="preserve" x="684.8" y="92" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1e293b" text-anchor="start">Probe</text>
+<text xml:space="preserve" x="684.8" y="118" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Do you hear each</text>
+<text xml:space="preserve" x="684.8" y="136.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">other? How well?</text>
+<path d="M 816.8 92 L 828.0 98 L 816.8 104" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="830" y="24" width="146" height="148" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.3"/>
+<circle cx="852" cy="48" r="11" fill="#0f766e" stroke="#ffffff" stroke-width="2"/>
+<text xml:space="preserve" x="852" y="52.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.54" font-weight="700" fill="#ffffff" text-anchor="middle">6</text>
+<g fill="none" stroke="#0f766e" stroke-width="1.6" stroke-linecap="round"><circle cx="953.0" cy="43.5" r="4"/><path d="M 945.5 56 Q 946.0 49 953.0 49 Q 960.0 49 960.5 56"/></g>
+<text xml:space="preserve" x="846" y="92" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#1e293b" text-anchor="start">Connect</text>
+<text xml:space="preserve" x="846" y="118" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Call, type, send</text>
+<text xml:space="preserve" x="846" y="136.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">files, Disconnect</text>
+</svg>

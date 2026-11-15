@@ -432,8 +432,9 @@ cover everything else it does.
 
 * **Desktop:** download the installer for Windows, Linux or macOS from
   [Releases](https://github.com/KK4ODA/aether-hf/releases) and follow
-  [`docs/user/install.md`](docs/user/install.md); [`docs/user/manual.md`](docs/user/manual.md) is
-  the operator's manual, tab by tab. On first start the panel opens on Setup: the callsign and
+  [`docs/user/install.md`](docs/user/install.md). [The operator's manual](docs/manual/manual.md)
+  covers the whole application, with schematics and screenshots, and every release carries it as
+  a PDF. On first start the panel opens on Setup: the callsign and
   the rules, the radio interface (sound card, keying and CAT), the receive level and the
   modem's settings; the Session tab's *Set drive* sets the transmit level against the rig's ALC.
   The Windows installer is not yet Authenticode-signed, so SmartScreen will ask, and the macOS
@@ -526,7 +527,8 @@ Diagrams and rationale:
 ```
 docs/          AUDIT.md · ROADMAP.md · COMMUNITY-CONCERNS.md · MAINTAINING.md ·
                adr/ (decisions) · spec/ (public air interface, control API, host interfaces) ·
-               user/ (manual, install, tester guide, gateway kit, Winlink gateway, frequency
+               manual/ (the operator's manual, its schematics and screenshots) ·
+               user/ (install, tester guide, gateway kit, Winlink gateway, frequency
                plan, FCC regulatory controls, host programs, KISS programs, field-test protocol) ·
                research/ (the reviews behind the larger decisions) · images/
 model/         Python reference model: aether_model/{channel,waveform,fec,phy,frame,link,hal} + tests/

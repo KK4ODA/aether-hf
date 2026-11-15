@@ -86,11 +86,20 @@ run's cost, and pass `confirm: true` only after the author says yes.
   to the next `-beta.N`, commit, tag, push `master` and the tag (see *Cutting a release* below).
   Checks green first, always.
 - **The manual is part of the application (the author's rule, 2026-10-11).**
-  `docs/user/manual.md` is the operator's manual, tab by tab. Any change to what an operator
-  sees or sets — a tab, a box, a button, a setting or its default, a banner, a reading, what a
-  host program is told — updates the manual (and the `docs/user/` guide covering it) in the
-  same commit; the version it names is a `tools/release.py` site, so `bump` moves it and
-  `check` (CI) holds it. Write user-facing prose plainly: short sentences, no filler, the operator's words.
+  `docs/manual/manual.md` is the operator's manual (since 2026-11-15: illustrated, in Parts,
+  RadioPost's manual's twin; `docs/user/manual.md` is now only the page that says where each old
+  section went, kept for old links). Any change to what an operator sees or sets — a tab, a box,
+  a button, a setting or its default, a banner, a reading, what a host program is told — updates
+  the manual (and the `docs/user/` guide covering it) in the same commit: its words, a change-log
+  row with the header's Version and Updated, and the screenshot (`node tools/manual/screens.mjs`,
+  the real panel fed made-up data) or schematic (`tools/manual/figures.py`) that shows it.
+  `python -m uv run python tools/manual/build.py update` rewrites its contents and the rung
+  tables (read from the model); `model/tests/test_manual.py` (CI) holds contents, tables,
+  figures, pictures, links and versions; `build.py xref` checks the links to and from RadioPost's
+  manual (network, not CI); `build.py pdf` prints it through Chrome and the release attaches it.
+  The version it names (the header's **Describes** row) is a `tools/release.py` site, so `bump`
+  moves it and `check` (CI) holds it. Write user-facing prose plainly: short sentences, no
+  filler, the operator's words.
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through

@@ -57,8 +57,8 @@ SITES: list[tuple[Path, str]] = [
     # the operator's manual names the release it describes, and moves with every release
     # (CONTRIBUTING rule 12): a bump that left it behind would describe the last one
     (
-        ROOT / "docs" / "user" / "manual.md",
-        r"(?m)^(?P<pre>It describes \*\*)(?P<v>[^*]+)(?P<post>\*\*)",
+        ROOT / "docs" / "manual" / "manual.md",
+        r"(?m)^(?P<pre>\| \*\*Describes\*\* \| Aether HF )(?P<v>[^ |]+)(?P<post> \|)",
     ),
 ]
 

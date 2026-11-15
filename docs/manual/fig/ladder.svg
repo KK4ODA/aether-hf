@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 516" width="1000" height="516" role="img" aria-label="Each rung's data rate against the signal it needs, for both bandwidths">
+<defs><marker id="ah-radio" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c2410c"/></marker><marker id="ah-audio" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/></marker><marker id="ah-key" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309"/></marker><marker id="ah-local" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker><marker id="ah-internet" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker><marker id="ah-cable" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker><marker id="ah-fail" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b91c1c"/></marker><marker id="ah-plan" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker></defs>
+<rect x="0" y="0" width="1000" height="516" fill="#ffffff"/>
+<rect x="112" y="24" width="255.6" height="408" rx="0" fill="#fff7ed" fill-opacity="0.7" stroke="none" stroke-width="0"/>
+<text xml:space="preserve" x="122" y="46" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#c2410c" text-anchor="start">Tone rungs</text>
+<text xml:space="preserve" x="122" y="64" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">one tone at a time:</text>
+<text xml:space="preserve" x="122" y="80.2" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">they get through</text>
+<text xml:space="preserve" x="122" y="96.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">under the noise</text>
+<text xml:space="preserve" x="420.2" y="46" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0f766e" text-anchor="start">OFDM rungs</text>
+<text xml:space="preserve" x="420.2" y="64" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">many tones at once:</text>
+<text xml:space="preserve" x="420.2" y="80.2" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">fast on a good path</text>
+<line x1="112" y1="24" x2="112" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="112" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">−20</text>
+<line x1="218.5" y1="24" x2="218.5" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="218.5" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">−15</text>
+<line x1="325" y1="24" x2="325" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="325" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">−10</text>
+<line x1="431.5" y1="24" x2="431.5" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="431.5" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">−5</text>
+<line x1="538" y1="24" x2="538" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="538" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">0</text>
+<line x1="644.5" y1="24" x2="644.5" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="644.5" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">+5</text>
+<line x1="751" y1="24" x2="751" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="751" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">+10</text>
+<line x1="857.5" y1="24" x2="857.5" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="857.5" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">+15</text>
+<line x1="964" y1="24" x2="964" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="964" y="450" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">+20</text>
+<line x1="112" y1="432" x2="964" y2="432" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="436" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">20</text>
+<line x1="112" y1="369.6" x2="964" y2="369.6" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="373.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">50</text>
+<line x1="112" y1="322.4" x2="964" y2="322.4" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="326.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">100</text>
+<line x1="112" y1="275.2" x2="964" y2="275.2" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="279.2" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">200</text>
+<line x1="112" y1="212.8" x2="964" y2="212.8" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="216.8" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">500</text>
+<line x1="112" y1="165.6" x2="964" y2="165.6" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="169.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">1,000</text>
+<line x1="112" y1="118.4" x2="964" y2="118.4" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="122.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">2,000</text>
+<line x1="112" y1="56" x2="964" y2="56" stroke="#cbd5e1" stroke-width="0.8"/>
+<text xml:space="preserve" x="104" y="60" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="end">5,000</text>
+<rect x="112" y="24" width="852" height="408" rx="0" fill="none" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="538" y="472" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1e293b" text-anchor="middle">Signal-to-noise ratio it needs, dB in 3 kHz (9 frames in 10 through, steady path)</text>
+<text x="54" y="228" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1e293b" text-anchor="middle" transform="rotate(-90 54 228)">Data rate, bit/s</text>
+<line x1="538" y1="24" x2="538" y2="432" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 4"/>
+<text xml:space="preserve" x="544" y="422" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">0 dB: signal as strong as the noise</text>
+<path d="M 133.3 401.4 L 169.5 370.6 L 197.2 345.1 L 235.5 317.5 L 259 293.8 L 299.4 267.5 L 469.8 241.9 L 499.7 211.7 L 529.5 190.1 L 567.8 161 L 599.8 140.7 L 638.1 132.6 L 665.8 112.3 L 727.6 92.4 L 748.9 84.3 L 834.1 64.4 L 870.3 56.4 L 898 49.1" fill="none" stroke="#0f766e" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="133.3" cy="401.4" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="132.3" y="391.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">0</text>
+<circle cx="169.5" cy="370.6" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="168.5" y="360.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">1</text>
+<circle cx="197.2" cy="345.1" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="196.2" y="335.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">2</text>
+<circle cx="235.5" cy="317.5" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="234.5" y="307.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">3</text>
+<circle cx="259" cy="293.8" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="258" y="283.8" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">4</text>
+<circle cx="299.4" cy="267.5" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="298.4" y="257.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">5</text>
+<circle cx="429.4" cy="284.5" r="5" fill="#ffffff" stroke="#0f766e" stroke-width="1.8"/>
+<text xml:space="preserve" x="428.4" y="274.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">6</text>
+<circle cx="469.8" cy="241.9" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="468.8" y="231.9" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">7</text>
+<circle cx="499.7" cy="211.7" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="498.7" y="201.7" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">8</text>
+<circle cx="529.5" cy="190.1" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="528.5" y="180.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">9</text>
+<circle cx="567.8" cy="161" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="566.8" y="151" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">10</text>
+<circle cx="599.8" cy="140.7" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="598.8" y="130.7" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">11</text>
+<circle cx="638.1" cy="132.6" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="637.1" y="122.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">12</text>
+<circle cx="685" cy="112.3" r="5" fill="#ffffff" stroke="#0f766e" stroke-width="1.8"/>
+<text xml:space="preserve" x="684" y="102.3" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">13</text>
+<circle cx="665.8" cy="112.3" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="664.8" y="102.3" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">14</text>
+<circle cx="727.6" cy="92.4" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="726.6" y="82.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">15</text>
+<circle cx="748.9" cy="84.3" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="747.9" y="74.3" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">16</text>
+<circle cx="834.1" cy="64.4" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="833.1" y="54.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">17</text>
+<circle cx="870.3" cy="56.4" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="869.3" y="46.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">18</text>
+<circle cx="898" cy="49.1" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="897" y="39.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">19</text>
+<text xml:space="preserve" x="908" y="53.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0f766e" text-anchor="start" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">2300 Hz</text>
+<path d="M 133.3 401.4 L 169.5 370.6 L 233.4 345.1 L 261.1 317.5 L 301.6 302.3 L 427.2 287.5 L 461.3 264.1 L 493.3 254 L 535.9 231.6 L 580.6 210.6 L 612.5 201.3 L 685 180.4 L 725.4 172 L 759.5 164.5" fill="none" stroke="#b45309" stroke-width="2.0" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="133.3" cy="401.4" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="133.3" y="418.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">0</text>
+<circle cx="169.5" cy="370.6" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="169.5" y="387.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">1</text>
+<circle cx="233.4" cy="345.1" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="233.4" y="362.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">2</text>
+<circle cx="261.1" cy="317.5" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="261.1" y="334.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">3</text>
+<circle cx="301.6" cy="302.3" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="301.6" y="319.3" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">4</text>
+<circle cx="427.2" cy="287.5" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="427.2" y="304.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">5</text>
+<circle cx="461.3" cy="264.1" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="461.3" y="281.1" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">6</text>
+<circle cx="493.3" cy="254" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="493.3" y="271" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">7</text>
+<circle cx="548.6" cy="231.6" r="5" fill="#ffffff" stroke="#b45309" stroke-width="1.8"/>
+<text xml:space="preserve" x="548.6" y="248.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">8</text>
+<circle cx="535.9" cy="231.6" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="535.9" y="248.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">9</text>
+<circle cx="580.6" cy="210.6" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="580.6" y="227.6" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">10</text>
+<circle cx="612.5" cy="201.3" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="612.5" y="218.3" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">11</text>
+<circle cx="685" cy="180.4" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="685" y="197.4" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">12</text>
+<circle cx="725.4" cy="172" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="725.4" y="189" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">13</text>
+<circle cx="759.5" cy="164.5" r="5.5" fill="#b45309" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="759.5" y="181.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="650" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">14</text>
+<text xml:space="preserve" x="769.5" y="168.5" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#b45309" text-anchor="start" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">500 Hz</text>
+<circle cx="130" cy="500" r="5.5" fill="#1e293b" stroke="#ffffff" stroke-width="1.5"/>
+<text xml:space="preserve" x="142" y="504" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">a rung the link uses (its number beside it)</text>
+<circle cx="470" cy="500" r="5" fill="#ffffff" stroke="#1e293b" stroke-width="1.8"/>
+<text xml:space="preserve" x="482" y="504" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" font-weight="400" fill="#475569" text-anchor="start">a rung never asked for: another carries more from less signal</text>
+</svg>

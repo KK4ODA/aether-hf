@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 352" width="1000" height="352" role="img" aria-label="Where Aether's two signals sit in the radio's receive audio">
+<defs><marker id="ah-radio" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c2410c"/></marker><marker id="ah-audio" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/></marker><marker id="ah-key" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b45309"/></marker><marker id="ah-local" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker><marker id="ah-internet" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker><marker id="ah-cable" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/></marker><marker id="ah-fail" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b91c1c"/></marker><marker id="ah-plan" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker></defs>
+<rect x="0" y="0" width="1000" height="352" fill="#ffffff"/>
+<line x1="120" y1="118" x2="960" y2="118" stroke="#94a3b8" stroke-width="1"/>
+<path d="M 156 118 L 192 36 L 768 36 L 816 118" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 199.4 118.0 C 202.9 118.0 204.4 50.0 209.4 50.0 L 750.6 50.0 C 755.6 50.0 757.1 118.0 760.6 118.0 Z" fill="#0f766e" fill-opacity="0.22" stroke="#0f766e" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text xml:space="preserve" x="28" y="76" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#0f766e" text-anchor="start">2300 Hz</text>
+<text xml:space="preserve" x="28" y="96" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">signal</text>
+<text xml:space="preserve" x="480" y="78" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#0f766e" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">360–2,640 Hz</text>
+<line x1="120" y1="228" x2="960" y2="228" stroke="#94a3b8" stroke-width="1"/>
+<path d="M 156 228 L 192 146 L 768 146 L 816 228" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 415.4 228.0 C 418.9 228.0 420.4 160.0 425.4 160.0 L 534.6 160.0 C 539.6 160.0 541.1 228.0 544.6 228.0 Z" fill="#b45309" fill-opacity="0.22" stroke="#b45309" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text xml:space="preserve" x="28" y="186" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="700" fill="#b45309" text-anchor="start">500 Hz</text>
+<text xml:space="preserve" x="28" y="206" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">signal</text>
+<text xml:space="preserve" x="480" y="188" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#b45309" text-anchor="middle" paint-order="stroke" stroke="#ffffff" stroke-width="5" stroke-linejoin="round">1,260–1,740 Hz</text>
+<text xml:space="preserve" x="772.8" y="52" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">a typical 2.4 kHz</text>
+<text xml:space="preserve" x="772.8" y="67" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">SSB receive filter</text>
+<line x1="120" y1="228" x2="120" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="120" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">0</text>
+<line x1="240" y1="228" x2="240" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="240" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">500</text>
+<line x1="360" y1="228" x2="360" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="360" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">1,000</text>
+<line x1="480" y1="228" x2="480" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="480" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">1,500</text>
+<line x1="600" y1="228" x2="600" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="600" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">2,000</text>
+<line x1="720" y1="228" x2="720" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="720" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">2,500</text>
+<line x1="840" y1="228" x2="840" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="840" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">3,000</text>
+<line x1="960" y1="228" x2="960" y2="234" stroke="#94a3b8" stroke-width="1"/>
+<text xml:space="preserve" x="960" y="250" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="middle">3,500</text>
+<text xml:space="preserve" x="540" y="274" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1e293b" text-anchor="middle">Audio frequency, Hz above the dial (upper sideband)</text>
+<rect x="24" y="292" width="952" height="44" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
+<text xml:space="preserve" x="38" y="319" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Both are centred 1,500 Hz above the dial: with the dial at 7.1010 MHz, the signal's centre is on 7.1025 MHz. The 500 Hz signal fits a 500–600 Hz filter centred there.</text>
+</svg>

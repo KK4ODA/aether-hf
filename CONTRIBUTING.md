@@ -54,8 +54,11 @@ request meets the rules the first time.
 12. **The manual moves with the application.** A change that adds, removes, renames or
     changes the behaviour of anything an operator sees or sets — a tab, a box, a button, a
     setting or its default, a banner, a reading, what a host program is told — updates
-    [`docs/user/manual.md`](docs/user/manual.md) in the same commit, and the other guide in
-    `docs/user/` that covers it. The version it names moves with `tools/release.py bump`.
+    the operator's manual, [`docs/manual/manual.md`](docs/manual/manual.md), in the same
+    commit, and the other guide in `docs/user/` that covers it: its words, its change log, and
+    the screenshot or schematic that shows it (`node tools/manual/screens.mjs`,
+    `tools/manual/figures.py`). `tools/manual/build.py update` rewrites its contents and rung
+    tables, and CI checks the rest. The version it names moves with `tools/release.py bump`.
 
 ## Workflow
 

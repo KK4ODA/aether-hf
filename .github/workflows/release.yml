@@ -391,6 +391,18 @@ jobs:
         if: needs.plan.outputs.channel != 'nightly'
         run: python tools/protocol_notice.py --tag "$TAG" --notes notes.md
 
+      # The operator's manual of this release, as a PDF beside its installers (the manual's
+      # "Printing the manual"). Chrome is on the runner, and Inter draws the schematics as they
+      # were drawn. A manual that fails to build holds no release back: the run says so, and the
+      # release goes out without it.
+      - name: The manual
+        continue-on-error: true
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q fonts-inter || true
+          python3 tools/manual/build.py pdf "dist/Aether-Manual-${VERSION}.pdf"
+          printf '\nThe operator'"'"'s manual for this release is `Aether-Manual-%s.pdf`, below.\n' \
+            "$VERSION" >> notes.md
+
       - name: Checksums
         working-directory: dist
         run: sha256sum * | tee SHA256SUMS

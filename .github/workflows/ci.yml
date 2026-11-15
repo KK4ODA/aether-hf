@@ -5,16 +5,19 @@ on:
     branches: [master, main, "phase-*"]
     # A push that changes only notes — the research reports, the ADRs, the field log, a
     # README or CLAUDE.md — runs nothing: a third of November's pushes were notes, each a
-    # full run on three systems. Two Markdown files are checked and still count: the
-    # manual names the version (`tools/release.py check`) and the air-interface spec's
-    # tables are tested (`test_spec.py`). field/sessions/ is test data (tests/field.rs),
-    # so field/ counts but for its notes. Pull requests always run everything.
+    # full run on three systems. Some Markdown is checked and still counts: the manual names
+    # the version (`tools/release.py check`) and its contents, rung tables, figures and links
+    # are tested (`test_manual.py`), the old manual's page keeps its links (the same test),
+    # and the air-interface spec's tables are tested (`test_spec.py`). field/sessions/ is test
+    # data (tests/field.rs), so field/ counts but for its notes. Pull requests always run
+    # everything.
     paths:
       - "**"
       - "!**/*.md"
       - "!docs/research/**"
       - "!docs/adr/**"
       - "docs/user/manual.md"
+      - "docs/manual/**"
       - "docs/spec/**"
   pull_request:
   workflow_dispatch:
