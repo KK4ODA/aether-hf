@@ -50,11 +50,12 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::{
     frames::{
-        CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody, DataHeader, DataKind, FRAGMENT_HEADER,
-        GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS, MISSED_UNKNOWN, PROTOCOL_VERSION, Piece,
-        ProbeBody, REPORT, WINDOW, bandwidth_code, bandwidth_hz_of, data_capacity, data_kind,
-        decode_data, encode_data, in_window, level_of, pack_callsign, pieces, seq_after,
-        seq_distance, with_level,
+        AcceptFrame, CAP_LEVEL_MASK, CAPPED_VERSION, CONNECT_BODY_8_BYTES, ConnectBody,
+        DataHeader, DataKind, FRAGMENT_HEADER, GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS,
+        MISSED_UNKNOWN, PROTOCOL_VERSION, Piece, ProbeBody, REPORT, WINDOW, bandwidth_code,
+        bandwidth_hz_of, caller_code, data_capacity, data_kind, decode_data, encode_data,
+        in_window, is_acceptance, level_of, pack_callsign, pieces, seq_after, seq_distance,
+        with_level,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, FrameOutcome, RateController},
@@ -287,6 +288,23 @@ pub struct GrantConfig {
     pub max_retries: usize,
     /// Tries of a call.
     pub connect_retries: usize,
+    /// The capped call, link protocol 13 (ADR-0126, accepted for building; off until the
+    /// harness and the air have judged it): each try today's connect body in the robust OFDM
+    /// data frame, tone-24 or both back to back, chosen by what was heard
+    /// ([`GrantedEngine::connect_heard`]), no random wait, a short control-frame acceptance
+    /// ([`AcceptFrame`]). Only a station with it hears another's call.
+    pub capped_call: bool,
+    /// The capped call's tries (ADR-0126 §7.4, the author's setting: 2, 6, 8, 10 or 15): that
+    /// many both-ways tries when the station called was not heard lately, floor tries when it
+    /// was heard weak; three quick tries and one fewer floor try when it was heard strong.
+    pub call_tries: usize,
+    /// The capped call's silent pause before its plan's last try, so that two tries do not fall
+    /// in one slow fade (ADR-0126 §7). The caller neither keys nor holds a slot in it.
+    pub call_pause_s: f64,
+    /// The capped call: a both-ways try is accepted in OFDM only when its OFDM part was read
+    /// this much over the OFDM control frame's threshold, on the floor otherwise; a station last
+    /// heard this much over it is called with quick tries first (ADR-0126 §2.2, §2.3).
+    pub call_answer_margin_db: f64,
     /// DISCs a leaving master sends, unanswered, before it leaves without the `DISC_ACK`.
     pub disc_retries: usize,
     /// A leaving master gives up on what it has not got acknowledged after this many whole
@@ -411,6 +429,10 @@ impl Default for GrantConfig {
             max_burst_s: None,
             max_retries: 8,
             connect_retries: 8,
+            capped_call: false,
+            call_tries: 2,
+            call_pause_s: 15.0,
+            call_answer_margin_db: 6.0,
             disc_retries: 3,
             disc_patience_exchanges: 2.0,
             disc_patience_s: 20.0,
@@ -753,6 +775,8 @@ enum AnswerKind {
     Ans,
     Window,
     ConnectAck,
+    /// The capped call's acceptance (ADR-0126).
+    CappedAck,
     ProbeAck,
     Disc,
     DiscAck,
@@ -936,6 +960,14 @@ pub struct GrantedEngine {
     pinned: Option<usize>,
     pin_body: Option<usize>,
     connect_tries: usize,
+    /// The capped call's tries, one a letter: `C` quick, `S` floor, `H` both ways (ADR-0126);
+    /// empty for today's call.
+    call_plan: Vec<u8>,
+    /// The capped call's try this station has answered: its session and where it ends, in
+    /// hundredths of a second — a both-ways try's two parts are answered once.
+    call_answered: Option<(u8, i64)>,
+    /// The capped call: the caller code of the session's caller, for its acceptance.
+    peer_caller_code: u8,
     /// What [`send`](Self::send) was given and no frame carries yet: kept across the start of a
     /// session, cleared at its end (ADR-0052).
     tx_queue: VecDeque<u8>,
@@ -1163,6 +1195,9 @@ impl GrantedEngine {
             pinned: None,
             pin_body: None,
             connect_tries: 0,
+            call_plan: Vec::new(),
+            call_answered: None,
+            peer_caller_code: 0,
             tx_queue: VecDeque::new(),
             top_acked_mode: None,
             records: BTreeMap::new(),
@@ -1235,6 +1270,7 @@ impl GrantedEngine {
     // ── per-session state ─────────────────────────────────────────────
 
     fn reset_session(&mut self) {
+        self.call_answered = None;
         self.top_acked_mode = None;
         self.records.clear();
         self.tx_base = 0;
@@ -1570,6 +1606,21 @@ impl GrantedEngine {
         remote_call: &str,
         as_call: Option<&str>,
     ) -> Result<(), &'static str> {
+        self.connect_heard(remote_call, as_call, None)
+    }
+
+    /// [`connect`](Self::connect), saying the SNR this station last read the one it calls at, if
+    /// lately (the daemon's heard list): it chooses the capped call's tries (ADR-0126 §2.3), and
+    /// today's call ignores it.
+    ///
+    /// # Errors
+    /// As [`connect`](Self::connect).
+    pub fn connect_heard(
+        &mut self,
+        remote_call: &str,
+        as_call: Option<&str>,
+        heard_db: Option<f64>,
+    ) -> Result<(), &'static str> {
         if self.state != State::Idle {
             return Err("already in a session");
         }
@@ -1592,6 +1643,11 @@ impl GrantedEngine {
         self.state = State::Connecting;
         self.role = Role::None;
         self.connect_tries = 0;
+        self.call_plan = if self.config.capped_call {
+            self.plan_for(heard_db)
+        } else {
+            Vec::new()
+        };
         self.left = None;
         self.deadlines.remove(Timer::Leave);
         self.reset_session();
@@ -2064,9 +2120,14 @@ impl GrantedEngine {
         let (payload, _) = frame.decode(None);
         if frame.container() == Container::Control {
             // a control frame not read changes nothing
-            if let Some(payload) = payload
-                && let Ok(ctl) = GrantFrame::decode(&payload)
-            {
+            let Some(payload) = payload else { return };
+            if self.config.capped_call && is_acceptance(&payload) {
+                if let Ok(acc) = AcceptFrame::decode(&payload) {
+                    self.on_capped_accept(&acc, &heard);
+                }
+                return;
+            }
+            if let Ok(ctl) = GrantFrame::decode(&payload) {
                 self.on_control(&ctl, &heard);
             }
             return;
@@ -2098,6 +2159,12 @@ impl GrantedEngine {
             return false;
         };
         match header.kind {
+            DataKind::ConnectReq | DataKind::ConnectAck if self.config.capped_call => {
+                if header.kind == DataKind::ConnectReq {
+                    self.on_capped_request(header, &body, frame);
+                }
+                false
+            }
             DataKind::ConnectReq | DataKind::ConnectAck => {
                 self.on_connect(header, &body, frame);
                 false
@@ -2608,6 +2675,10 @@ impl GrantedEngine {
     /// use, and a random part of a floor frame per try later, so that two stations calling each
     /// other fall apart.
     fn send_connect(&mut self) {
+        if self.config.capped_call {
+            self.send_capped_try();
+            return;
+        }
         let floor = self.connect_floor();
         let level = self.call_level();
         let body = ConnectBody {
@@ -2652,11 +2723,329 @@ impl GrantedEngine {
         if self.state != State::Connecting {
             return;
         }
-        if self.connect_tries >= self.config.connect_retries {
+        let tries = if self.config.capped_call {
+            self.call_plan.len()
+        } else {
+            self.config.connect_retries
+        };
+        if self.connect_tries >= tries {
             self.end_session("no answer", false);
             return;
         }
         self.send_connect();
+    }
+
+    // ── the capped call (ADR-0126) ────────────────────────────────────
+
+    /// The capped call's tries (ADR-0126 §2.3, §7.4), `call_tries` of them: both-ways tries when
+    /// the station called was not heard lately; three quick tries and one fewer floor try when it
+    /// was heard strong; floor tries when it was heard weak. With two: H H, C C C S, S S.
+    fn plan_for(&self, heard_db: Option<f64>) -> Vec<u8> {
+        let n = self.config.call_tries.max(1);
+        if self.timing.floor_modes == 0 {
+            return vec![b'C'; n];
+        }
+        if self.floor_only() {
+            return vec![b'S'; n];
+        }
+        let Some(heard) = heard_db else {
+            return vec![b'H'; n];
+        };
+        if heard >= self.ctl_threshold() + self.config.call_answer_margin_db {
+            let mut plan = vec![b'C'; 3];
+            plan.extend(std::iter::repeat_n(b'S', (n - 1).max(1)));
+            return plan;
+        }
+        vec![b'S'; n]
+    }
+
+    /// The silent pause before the plan's last try (ADR-0126 §7).
+    fn pause_before_next(&self) -> f64 {
+        let tries = self.call_plan.len();
+        if tries > 1 && self.connect_tries == tries - 1 {
+            self.config.call_pause_s
+        } else {
+            0.0
+        }
+    }
+
+    /// A try of the capped call (ADR-0126 §7): today's connect body in a quick try (the robust
+    /// OFDM data frame, an OFDM acceptance), a floor try (tone-24, a floor acceptance) or both
+    /// back to back (either acceptance), the OFDM part stating one frame to follow; the slot
+    /// sized for the longest acceptance the try allows; no random wait after it, but the pause
+    /// before the last try.
+    fn send_capped_try(&mut self) {
+        let Some(&kind) = self.call_plan.get(self.connect_tries) else {
+            return;
+        };
+        let level = self.call_level();
+        let body = ConnectBody {
+            src: self.my_call.clone(),
+            dst: self.remote_call.clone(),
+            caps: with_level(self.config.capabilities, u8::try_from(level).unwrap_or(3)),
+            version: CAPPED_VERSION,
+            snr_db: None,
+            turnaround_s: self.config.turnaround_s,
+            identifier_s: self.my_ident_s,
+        };
+        let Ok(body) = body.encode() else { return };
+        let Ok(stated) = ConnectBody::decode(&body) else {
+            return;
+        };
+        let header = DataHeader {
+            kind: DataKind::ConnectReq,
+            seq: 0,
+            session: self.session,
+            piece: None,
+        };
+        let mut frames = Vec::new();
+        let parts: &[(bool, u8)] = match kind {
+            b'C' => &[(false, 0)],
+            b'S' => &[(true, 0)],
+            _ => &[(false, 1), (true, 0)],
+        };
+        for &(floor, follows) in parts {
+            let mode = self.robust_mode(floor);
+            let Ok(payload) = encode_data(&header, &body, self.timing.capacity(mode)) else {
+                return;
+            };
+            let mut frame = Self::data_frame(payload, mode);
+            frame.follows = follows;
+            frames.push(frame);
+        }
+        let families = match kind {
+            b'C' => Families::of(false),
+            b'S' => Families::of(true),
+            _ => Families::both(),
+        };
+        self.connect_tries += 1;
+        self.call_jitter = self.pause_before_next();
+        let mut slot = Slot::new(
+            SlotKind::Connect,
+            families.max_of(|f| self.ctl_s(f)),
+            kind != b'C',
+            families,
+        );
+        slot.level = level;
+        slot.granter_turnaround_s = stated.turnaround_s;
+        self.key_granting(slot, frames);
+    }
+
+    /// A capped call's connect body, if it calls this station in its version and bandwidth
+    /// (ADR-0126 §7); said and `None` otherwise.
+    fn capped_request(&mut self, body: &[u8]) -> Option<ConnectBody> {
+        let req = ConnectBody::decode(body).ok()?;
+        if !self.callsigns.contains(&req.dst) {
+            return None;
+        }
+        if req.version != CAPPED_VERSION {
+            self.event(
+                "ignored",
+                format!("{} calls with link protocol {}", req.src, req.version),
+            );
+            return None;
+        }
+        if bandwidth_code(req.caps) != bandwidth_code(self.config.capabilities) {
+            let mismatch = self.mismatch(req.caps);
+            self.event(
+                "ignored",
+                format!("{} calls in another bandwidth{mismatch}", req.src),
+            );
+            return None;
+        }
+        Some(req)
+    }
+
+    /// A capped call heard in a session: `true` when it ends the session and is answered as from
+    /// idle (the peer under a new session number), `false` otherwise — a try whose acceptance was
+    /// not read is answered again in its own slot.
+    fn capped_called_again(
+        &mut self,
+        src: &str,
+        session: u8,
+        frame: &Heard,
+        timing: (f64, f64, bool),
+    ) -> bool {
+        let (start, end, floor) = timing;
+        if self.role != Role::Slave || src != self.remote_call {
+            return false; // another station's call: this one is in a session
+        }
+        if session == self.session {
+            if self.m_end.is_none() && self.grant.is_none() {
+                self.heard(frame);
+                self.schedule_capped_accept(session, frame, start, end, floor);
+            }
+            return false;
+        }
+        self.end_session(&format!("{src} called again"), false);
+        true
+    }
+
+    /// A try of a capped call heard (ADR-0126 §7).
+    fn on_capped_request(&mut self, header: DataHeader, body: &[u8], frame: &Heard) {
+        let Some(req) = self.capped_request(body) else {
+            return;
+        };
+        let both = !frame.floor && frame.follows.unwrap_or(0) >= 1;
+        let end = if both {
+            frame.t_end + self.timing.data_frame_s_for(self.robust_mode(true))
+        } else {
+            frame.t_end
+        };
+        let start = self.slot_start(
+            end,
+            both || frame.floor,
+            usize::from(level_of(req.caps)),
+            req.turnaround_s,
+        );
+        let floor = self.capped_answer_floor(frame, both);
+        if matches!(self.state, State::Connected | State::Disconnecting)
+            && !self.capped_called_again(&req.src, header.session, frame, (start, end, floor))
+        {
+            return;
+        }
+        if start < self.hold_until - 1e-9 || self.probing.is_some() {
+            return;
+        }
+        if self.state == State::Connecting {
+            if req.src == self.remote_call && self.my_call > self.remote_call {
+                return; // simultaneous calls: the higher callsign keeps calling
+            }
+            self.deadlines.remove(Timer::Connect);
+        }
+        self.drop_identifier();
+        self.my_call.clone_from(&req.dst);
+        self.remote_call.clone_from(&req.src);
+        self.session = header.session;
+        self.left = None;
+        self.deadlines.remove(Timer::Leave);
+        self.reset_session();
+        self.my_ident_s = self.ident_for(&req.dst);
+        self.peer_capabilities = req.caps & !CAP_LEVEL_MASK;
+        self.peer_turnaround_s = req.turnaround_s;
+        self.peer_identifier_s = req.identifier_s;
+        self.peer_caller_code = caller_code(&req.src).unwrap_or(0);
+        self.state = State::Connected;
+        self.role = Role::Slave;
+        self.heard(frame);
+        self.measure_lateness(frame);
+        self.ans_sticky = floor;
+        let remote = self.remote_call.clone();
+        self.event("connected", format!("{remote} (slave)"));
+        self.event("role", "slave".to_owned());
+        self.schedule_capped_accept(header.session, frame, start, end, floor);
+    }
+
+    /// The acceptance's family (ADR-0126 §7): a quick try's in OFDM, the only one its caller
+    /// listens for; a floor try's on the floor; a both-ways try's in OFDM only when its OFDM part
+    /// was read `call_answer_margin_db` over the OFDM control frame's threshold.
+    fn capped_answer_floor(&self, frame: &Heard, both: bool) -> bool {
+        if self.timing.floor_modes == 0 {
+            return false;
+        }
+        if frame.floor || self.floor_only() {
+            return true;
+        }
+        if !both {
+            return false;
+        }
+        frame.snr_db < self.ctl_threshold() + self.config.call_answer_margin_db
+    }
+
+    fn schedule_capped_accept(
+        &mut self,
+        session: u8,
+        frame: &Heard,
+        start: f64,
+        end: f64,
+        floor: bool,
+    ) {
+        #[allow(clippy::cast_possible_truncation)]
+        let key = (session, (end * 100.0).round() as i64);
+        if self.call_answered == Some(key) {
+            return; // the other part of a both-ways try already answered
+        }
+        self.call_answered = Some(key);
+        let mut answer = Answer::new(
+            AnswerKind::CappedAck,
+            start,
+            start + self.config.slack_s,
+            floor,
+        );
+        answer.session = self.session;
+        answer.anchor = end;
+        answer.snr_db = Some(frame.snr_db);
+        self.schedule(answer);
+    }
+
+    fn send_capped_acceptance(&mut self, answer: &Answer) {
+        if self.session != answer.session || self.role != Role::Slave {
+            return;
+        }
+        let ctl = AcceptFrame {
+            caller: self.peer_caller_code,
+            session: self.session,
+            level: u8::try_from(self.asked_level()).unwrap_or(3),
+            snr_db: answer.snr_db,
+            bandwidth: bandwidth_code(self.config.capabilities),
+            version: CAPPED_VERSION,
+            turnaround_s: self.config.turnaround_s,
+            identifier_s: self.my_ident_s,
+        };
+        let frame = TxFrame {
+            container: Container::Control,
+            payload: ctl.encode().to_vec(),
+            mode: 0,
+            rv: 0,
+            floor: answer.floor,
+            follows: 0,
+        };
+        self.transmit(vec![frame], Keying::answering(answer, 0.0), None);
+    }
+
+    fn on_capped_accept(&mut self, acc: &AcceptFrame, frame: &Heard) {
+        if self.state != State::Connecting || acc.session != self.session {
+            return;
+        }
+        if caller_code(&self.my_call).ok() != Some(acc.caller) {
+            return;
+        }
+        let remote = self.remote_call.clone();
+        if acc.bandwidth != bandwidth_code(self.config.capabilities) {
+            self.event("ignored", format!("{remote} answers in another bandwidth"));
+            return;
+        }
+        if acc.version != CAPPED_VERSION {
+            self.event(
+                "ignored",
+                format!("{remote} answers with link protocol {}", acc.version),
+            );
+            return;
+        }
+        self.deadlines.remove(Timer::Connect);
+        self.peer_capabilities = self.config.capabilities & !CAP_LEVEL_MASK;
+        self.peer_turnaround_s = acc.turnaround_s;
+        self.peer_identifier_s = acc.identifier_s;
+        self.level_asked = usize::from(acc.level);
+        self.state = State::Connected;
+        self.role = Role::Master;
+        self.heard(frame);
+        if let Some(snr) = acc.snr_db {
+            self.peer_snr_db = Some(snr);
+            self.rate.seed(snr);
+            if self.timing.floor_modes > 0 {
+                self.hdr_floor = self.floor_only()
+                    || snr < self.ctl_threshold() + self.config.answer_floor_margin_db;
+            }
+        }
+        self.possible = Families::of(frame.floor);
+        self.event("connected", format!("{remote} (master)"));
+        self.event("role", "master".to_owned());
+        if self.slot.is_some() && self.in_slot(frame) {
+            self.state_end(frame.t_end, frame.floor);
+        } else {
+            self.arm_wait();
+        }
     }
 
     /// The probe goes on the tone floor (ADR-0016). It carries no turnaround: its level covers
@@ -3686,6 +4075,7 @@ impl GrantedEngine {
         }
         match answer.what {
             AnswerKind::ConnectAck => self.send_acceptance(&answer),
+            AnswerKind::CappedAck => self.send_capped_acceptance(&answer),
             AnswerKind::ProbeAck => self.send_probe_answer(&answer),
             AnswerKind::Disc | AnswerKind::DiscAck => self.send_disc_answer(&answer),
             AnswerKind::Ans if self.state == State::Connected && self.role == Role::Slave => {

@@ -16,8 +16,9 @@ use std::{fs, path::PathBuf};
 use aether_link::{
     datagram::{Reassembler, body, fragments, parse_body, read_fragment},
     frames::{
-        ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, Piece, ProbeBody, decode_data,
-        encode_data, level_of, pack_callsign, pieces, unpack_callsign,
+        AcceptFrame, ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, Piece, ProbeBody,
+        caller_code, decode_data, encode_data, is_acceptance, level_of, pack_callsign, pieces,
+        unpack_callsign,
     },
     rate::{
         AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
@@ -395,6 +396,57 @@ fn grant_frames_match_the_model() {
                 index - 1
             );
         }
+    }
+}
+
+fn accept_frame(doc: &Value) -> AcceptFrame {
+    let byte = |key: &str| u8::try_from(int(doc, key)).expect("byte");
+    AcceptFrame {
+        caller: byte("caller"),
+        session: byte("session"),
+        level: byte("level"),
+        snr_db: doc["snr_db"].as_f64(),
+        bandwidth: byte("bandwidth"),
+        version: byte("version"),
+        turnaround_s: doc["turnaround_s"].as_f64().expect("turnaround"),
+        identifier_s: doc["identifier_s"].as_f64().expect("identifier"),
+    }
+}
+
+/// The capped call's acceptance (ADR-0126): bytes, the fields read back, and the session
+/// control frames it must never be taken for.
+#[test]
+fn accept_frames_match_the_model() {
+    let mut checked = 0;
+    for case in vectors()["accept_frames"].as_array().expect("accept frames") {
+        if let Some(others) = case["not_acceptances"].as_array() {
+            for hex in others {
+                let bytes = from_hex(hex.as_str().expect("hex"));
+                assert!(!is_acceptance(&bytes), "{hex} taken for an acceptance");
+                assert!(AcceptFrame::decode(&bytes).is_err(), "{hex} decoded");
+            }
+            continue;
+        }
+        let frame = accept_frame(&case["frame"]);
+        let expected = from_hex(case["encoded"].as_str().expect("encoded"));
+        assert_eq!(frame.encode().to_vec(), expected, "{frame:?}: bytes");
+        assert!(is_acceptance(&expected), "{frame:?}: not an acceptance");
+        let decoded = AcceptFrame::decode(&expected).expect("decode");
+        assert_eq!(decoded, accept_frame(&case["decoded"]), "{frame:?}: decoded");
+        checked += 1;
+    }
+    assert!(checked >= 4, "only {checked} acceptances");
+}
+
+#[test]
+fn caller_codes_match_the_model() {
+    for case in vectors()["caller_codes"].as_array().expect("caller codes") {
+        let call = case["call"].as_str().expect("call");
+        assert_eq!(
+            usize::from(caller_code(call).expect("packs")),
+            int(case, "code"),
+            "{call}"
+        );
     }
 }
 

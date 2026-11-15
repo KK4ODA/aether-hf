@@ -296,3 +296,35 @@ path gone weak waits about 34 s (C C C S, then the pause, then its one floor try
 
 Owed before an acceptance: the narrow miss to the author, the harness's contention and 200 Hz
 offset tests (the port first), and the air.
+
+### 7.4 The number of tries is the operator's (the author's request, 2026-11-15)
+
+The author asked for the number of tries to be a setting the operator picks in a profile in Setup:
+**2 by default, or 6, 8, 10 or 15.** With N tries the plans are:
+
+| what was heard | plan |
+|---|---|
+| not heard lately | H × N |
+| heard strong (6 dB over the OFDM control threshold) | C C C, then S × (N − 1) |
+| heard weak | S × N |
+
+The pause comes before the last try only, whatever N. A call nobody answers, from the engine's own
+timing (the same on both airs, the pause left out of channel time):
+
+| tries | H × N: channel, ends | C C C + S × (N − 1) | S × N | keyed (H × N) |
+|---|---|---|---|---|
+| 2 | 22.1 s, 37.1 s | 19.7 s, 34.7 s | 20.0 s, 35.0 s | 12.8 s |
+| 6 | 69.1 s, 84.1 s | 65.5 s, 80.5 s | 62.8 s, 77.8 s | 38.5 s |
+| 8 | 95.2 s, 110.2 s | 89.4 s, 104.4 s | 86.7 s, 101.7 s | 51.3 s |
+| 10 | 121.2 s, 136.2 s | 113.4 s, 128.4 s | 110.7 s, 125.7 s | 64.1 s |
+| 15 | 186.3 s, 201.3 s | 173.2 s, 188.2 s | 170.5 s, 185.5 s | 96.2 s |
+
+Even fifteen tries end before today's eight (about 205 s). R1′ judges the default; a larger number is
+the operator's choice to hold the channel longer, and the manual says so beside the setting.
+
+What is built now: `GrantConfig.call_tries` in the model and the port, and the granted vectors'
+`capped-six` session, which holds the port to six tries. What waits for the release that makes the
+capped call the default, because a new configuration key ships with a schema bump in a release
+(CLAUDE.md): the key (`[radio] call_tries`, a portable setting, so in profiles; options 2, 6, 8, 10,
+15), the configuration schema step, Setup step 4's *Call tries* list, and the manual's words, table
+row and screenshot.

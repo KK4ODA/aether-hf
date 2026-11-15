@@ -113,6 +113,11 @@ fn config(doc: &Value) -> GrantConfig {
         max_burst_s: opt(&doc["max_burst_s"]),
         max_retries: int(&doc["max_retries"]),
         connect_retries: int(&doc["connect_retries"]),
+        // the capped call's (ADR-0126): written only for a capped session
+        capped_call: doc["capped_call"].as_bool().unwrap_or(false),
+        call_tries: opt_int(&doc["call_tries"]).unwrap_or(2),
+        call_pause_s: opt(&doc["call_pause_s"]).unwrap_or(15.0),
+        call_answer_margin_db: opt(&doc["call_answer_margin_db"]).unwrap_or(6.0),
         disc_retries: int(&doc["disc_retries"]),
         disc_patience_exchanges: num(&doc["disc_patience_exchanges"]),
         disc_patience_s: num(&doc["disc_patience_s"]),
@@ -507,9 +512,10 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
         let at = format!("{at} ({name})");
         match name {
             "connect" => engine
-                .connect(
+                .connect_heard(
                     entry["remote"].as_str().expect("remote"),
                     entry["as"].as_str(),
+                    opt(&entry["heard"]),
                 )
                 .expect("connect"),
             "probe" => engine

@@ -31,6 +31,7 @@ from aether_model.link.frames import (
     MISSED_UNKNOWN,
     PROTOCOL_VERSION,
     REPORT,
+    AcceptFrame,
     ConnectBody,
     DataFlags,
     DataHeader,
@@ -38,8 +39,10 @@ from aether_model.link.frames import (
     GrantFrame,
     GrantKind,
     ProbeBody,
+    caller_code,
     data_capacity,
     encode_data,
+    is_acceptance,
     level_of,
     pack_callsign,
     pieces,
@@ -203,6 +206,63 @@ def connect_body_cases() -> list[dict]:  # type: ignore[type-arg]
             }
         )
     return out
+
+
+def accept_frame_doc(f: AcceptFrame) -> dict:  # type: ignore[type-arg]
+    return {
+        "caller": f.caller,
+        "session": f.session,
+        "level": f.level,
+        "snr_db": f.snr_db,
+        "bandwidth": f.bandwidth,
+        "version": f.version,
+        "turnaround_s": f.turnaround_s,
+        "identifier_s": f.identifier_s,
+    }
+
+
+def accept_frame_cases() -> list[dict]:  # type: ignore[type-arg]
+    """The capped call's acceptance (ADR-0126 §2.1, §7): every field at its edges, the SNR's
+    six-bit clamp, the turnaround and the identifier rounded up to their steps and clamped; and
+    the session control frames that are not acceptances."""
+    out = []
+    for frame in (
+        AcceptFrame(0, 1),
+        AcceptFrame(
+            127, 255, level=3, snr_db=31.6, bandwidth=1, turnaround_s=0.25, identifier_s=6.3
+        ),
+        AcceptFrame(
+            caller_code("KK4ODA-1"),
+            200,
+            level=1,
+            snr_db=-12.5,
+            bandwidth=2,
+            turnaround_s=2.0,
+            identifier_s=9.0,
+        ),
+        AcceptFrame(5, 133, snr_db=-40.0, version=12),
+    ):
+        encoded = frame.encode()
+        out.append(
+            {
+                "frame": accept_frame_doc(frame),
+                "encoded": encoded.hex(),
+                "decoded": accept_frame_doc(AcceptFrame.decode(encoded)),
+            }
+        )
+    others = [
+        GrantFrame(kind, session).encode().hex() for kind in GrantKind for session in (1, 127)
+    ]
+    assert not any(is_acceptance(bytes.fromhex(h)) for h in others)
+    out.append({"not_acceptances": others})
+    return out
+
+
+def caller_code_cases() -> list[dict]:  # type: ignore[type-arg]
+    return [
+        {"call": call, "code": caller_code(call)}
+        for call in ("W4ODA", "KK4XYZ", "KK4ODA-1", "VK2DEF/P", "A1", "9Z9ZZZ9ZZ")
+    ]
 
 
 def grant_frame_cases() -> list[dict]:  # type: ignore[type-arg]
@@ -438,6 +498,9 @@ def main() -> int:
         "datagrams": datagram_cases(),
         "datagram_bodies": datagram_body_cases(),
         "grant_frames": grant_frame_cases(),
+        # the capped call's acceptance and caller codes (ADR-0126)
+        "accept_frames": accept_frame_cases(),
+        "caller_codes": caller_code_cases(),
         # the rate controller, input by input, on both airs (ADR-0094, ADR-0099)
         "controller_traces": [
             controller_trace(air, seed)

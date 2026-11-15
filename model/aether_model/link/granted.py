@@ -343,6 +343,10 @@ class GrantConfig:
     frame, tone-24 or both back to back, chosen by what was heard (:meth:`GrantedEngine.connect`'s
     ``heard_db``), no random wait, at most two tries that reach a weak path, a short control-frame
     acceptance (:class:`AcceptFrame`). Only a station with it hears another's call."""
+    call_tries: int = 2
+    """The capped call's tries (ADR-0126 §7.4, the author's setting: 2, 6, 8, 10 or 15): that many
+    both-ways tries when the station called was not heard lately, floor tries when it was heard
+    weak; three quick tries and one fewer floor try when it was heard strong."""
     call_pause_s: float = 15.0
     """The capped call's silent pause before its plan's last try, so that two tries do not fall
     in one slow fade (ADR-0126 §7). The caller neither keys nor holds a slot in it."""
@@ -1801,18 +1805,20 @@ class GrantedEngine:
     # ── the capped call (ADR-0126) ────────────────────────────────────
 
     def _plan_for(self, heard_db: float | None) -> str:
-        """The capped call's tries (ADR-0126 §2.3): two both-ways tries when the station called
-        was not heard lately; three quick tries and a floor try when it was heard strong; two
-        floor tries when it was heard weak."""
+        """The capped call's tries (ADR-0126 §2.3, §7.4), ``call_tries`` of them: both-ways tries
+        when the station called was not heard lately; three quick tries and one fewer floor try
+        when it was heard strong; floor tries when it was heard weak. With two: H H, C C C S,
+        S S."""
+        n = max(1, self.cfg.call_tries)
         if self.timing.floor_modes <= 0:
-            return "CC"
+            return "C" * n
         if self._floor_only():
-            return "SS"
+            return "S" * n
         if heard_db is None:
-            return "HH"
+            return "H" * n
         if heard_db >= self._ctl_threshold() + self.cfg.call_answer_margin_db:
-            return "CCCS"
-        return "SS"
+            return "CCC" + "S" * max(1, n - 1)
+        return "S" * n
 
     def _pause_before_next(self) -> float:
         """The silent pause before the plan's last try (ADR-0126 §7)."""

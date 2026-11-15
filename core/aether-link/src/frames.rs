@@ -896,9 +896,164 @@ pub fn in_window(seq: u8, base: u8, width: usize) -> bool {
     seq_distance(seq, base) < width
 }
 
+// ── the capped call (ADR-0126) ────────────────────────────────────────
+
+/// The link protocol of the capped call (ADR-0126 §7): a call is today's connect request, at
+/// most a set number of tries chosen by what was heard; its acceptance is the control frame
+/// [`AcceptFrame`]. Only a station with `GrantConfig::capped_call` speaks it.
+pub const CAPPED_VERSION: u8 = 13;
+
+/// The bits of a caller's code.
+pub const CALLER_CODE_BITS: u32 = 7;
+
+/// The CRC-32 of IEEE 802.3 (zlib's), bit by bit: the capped call's caller code is built on it,
+/// and this crate takes no dependency for seven bits.
+#[must_use]
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFF_u32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A caller's code: the low seven bits of the CRC-32 of its packed callsign. An acceptance names
+/// the call it answers by the session number and this.
+///
+/// # Errors
+/// If the callsign cannot be packed.
+pub fn caller_code(call: &str) -> Result<u8, FrameError> {
+    let packed = pack_callsign(call)?;
+    Ok((crc32(&packed) & ((1 << CALLER_CODE_BITS) - 1)) as u8)
+}
+
+/// An acceptance of the capped call: an ANSWER whose session field is 0, which no session's
+/// control frame has (session numbers keep their low seven bits set).
+#[must_use]
+pub fn is_acceptance(payload: &[u8]) -> bool {
+    payload.len() >= CONTROL_BYTES
+        && payload[1] >> 1 == 0
+        && GrantKind::from_bits(payload[0] >> 6) == GrantKind::Answer
+}
+
+/// Whole steps up, as the model's ceil less a hair, clamped to four bits.
+fn steps_up(seconds: f64, per_second: f64) -> u8 {
+    (seconds * per_second - 1e-9).ceil().clamp(0.0, 15.0) as u8
+}
+
+/// The capped call's acceptance: an ANSWER with session field 0 (ADR-0126 §2.1).
+///
+/// ```text
+/// 0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
+/// 1: 0 (8)
+/// 2: 0 (2) | SNR (6)
+/// 3: bandwidth (2) | version (6)
+/// 4: caller code (7) | 0 (1)
+/// 5: session (8)
+/// 6: turnaround (4) | identifier (4)
+/// ```
+///
+/// `level`: the gap level the called station needs; `snr_db`: how it read the call;
+/// `turnaround_s`: 0–1.5 s in 0.1 s steps; `identifier_s`: its closing Morse identifier, 0–7.5 s
+/// in 0.5 s steps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcceptFrame {
+    /// The caller's code ([`caller_code`]).
+    pub caller: u8,
+    /// The whole session number.
+    pub session: u8,
+    /// The gap level the called station needs.
+    pub level: u8,
+    /// How the called station read the call, whole decibels.
+    pub snr_db: Option<f64>,
+    /// The called station's air (the capability byte's bandwidth code).
+    pub bandwidth: u8,
+    /// The called station's link protocol.
+    pub version: u8,
+    /// The called station's declared turnaround.
+    pub turnaround_s: f64,
+    /// The called station's closing identifier's length.
+    pub identifier_s: f64,
+}
+
+impl AcceptFrame {
+    /// Serialise into exactly [`CONTROL_BYTES`] bytes.
+    #[must_use]
+    pub fn encode(&self) -> [u8; CONTROL_BYTES] {
+        let snr = match self.snr_db {
+            None => GRANT_SNR_UNKNOWN,
+            Some(value) => ((value.round_ties_even().clamp(-31.0, 31.0) as i8) as u8) & 0x3F,
+        };
+        [
+            (GrantKind::Answer.to_bits() << 6) | (self.level & 0x03),
+            0,
+            snr,
+            ((self.bandwidth & 0x03) << 6) | (self.version & 0x3F),
+            (self.caller & 0x7F) << 1,
+            self.session,
+            (steps_up(self.turnaround_s, 10.0) << 4) | steps_up(self.identifier_s, 2.0),
+        ]
+    }
+
+    /// Parse one.
+    ///
+    /// # Errors
+    /// If the payload is not an acceptance.
+    pub fn decode(payload: &[u8]) -> Result<Self, FrameError> {
+        if payload.len() < CONTROL_BYTES {
+            return Err(FrameError::TooShort);
+        }
+        if !is_acceptance(payload) {
+            return Err(FrameError::UnknownKind(payload[0] >> 6));
+        }
+        let raw = payload[2] & 0x3F;
+        let snr_db = (raw != GRANT_SNR_UNKNOWN).then(|| {
+            f64::from(if raw >= 32 {
+                i16::from(raw) - 64
+            } else {
+                i16::from(raw)
+            })
+        });
+        Ok(Self {
+            caller: payload[4] >> 1,
+            session: payload[5],
+            level: payload[0] & 0x03,
+            snr_db,
+            bandwidth: payload[3] >> 6,
+            version: payload[3] & 0x3F,
+            turnaround_s: f64::from(payload[6] >> 4) / 10.0,
+            identifier_s: f64::from(payload[6] & 0x0F) / 2.0,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_caller_code_is_built_on_zlibs_crc32() {
+        // the CRC-32 check value of every catalogue (IEEE 802.3, reflected, zlib's)
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b""), 0);
+    }
+
+    #[test]
+    fn an_acceptance_is_never_a_session_control_frame() {
+        for kind in [GrantKind::Header, GrantKind::Answer, GrantKind::Disc, GrantKind::DiscAck] {
+            for session in 1..=127_u8 {
+                let frame = GrantFrame::new(kind, session);
+                assert!(!is_acceptance(&frame.encode()), "{kind:?} {session}");
+            }
+        }
+    }
 
     #[test]
     fn callsigns_round_trip() {

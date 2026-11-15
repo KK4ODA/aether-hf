@@ -3185,6 +3185,138 @@
    ]
   }
  ],
+ "accept_frames": [
+  {
+   "frame": {
+    "caller": 0,
+    "session": 1,
+    "level": 0,
+    "snr_db": null,
+    "bandwidth": 0,
+    "version": 13,
+    "turnaround_s": 0.0,
+    "identifier_s": 0.0
+   },
+   "encoded": "4000200d000100",
+   "decoded": {
+    "caller": 0,
+    "session": 1,
+    "level": 0,
+    "snr_db": null,
+    "bandwidth": 0,
+    "version": 13,
+    "turnaround_s": 0.0,
+    "identifier_s": 0.0
+   }
+  },
+  {
+   "frame": {
+    "caller": 127,
+    "session": 255,
+    "level": 3,
+    "snr_db": 31.6,
+    "bandwidth": 1,
+    "version": 13,
+    "turnaround_s": 0.25,
+    "identifier_s": 6.3
+   },
+   "encoded": "43001f4dfeff3d",
+   "decoded": {
+    "caller": 127,
+    "session": 255,
+    "level": 3,
+    "snr_db": 31.0,
+    "bandwidth": 1,
+    "version": 13,
+    "turnaround_s": 0.3,
+    "identifier_s": 6.5
+   }
+  },
+  {
+   "frame": {
+    "caller": 105,
+    "session": 200,
+    "level": 1,
+    "snr_db": -12.5,
+    "bandwidth": 2,
+    "version": 13,
+    "turnaround_s": 2.0,
+    "identifier_s": 9.0
+   },
+   "encoded": "4100348dd2c8ff",
+   "decoded": {
+    "caller": 105,
+    "session": 200,
+    "level": 1,
+    "snr_db": -12.0,
+    "bandwidth": 2,
+    "version": 13,
+    "turnaround_s": 1.5,
+    "identifier_s": 7.5
+   }
+  },
+  {
+   "frame": {
+    "caller": 5,
+    "session": 133,
+    "level": 0,
+    "snr_db": -40.0,
+    "bandwidth": 0,
+    "version": 12,
+    "turnaround_s": 0.0,
+    "identifier_s": 0.0
+   },
+   "encoded": "4000210c0a8500",
+   "decoded": {
+    "caller": 5,
+    "session": 133,
+    "level": 0,
+    "snr_db": -31.0,
+    "bandwidth": 0,
+    "version": 12,
+    "turnaround_s": 0.0,
+    "identifier_s": 0.0
+   }
+  },
+  {
+   "not_acceptances": [
+    "00022000000000",
+    "00fe2000000000",
+    "40022000000000",
+    "40fe2000000000",
+    "80022000000000",
+    "80fe2000000000",
+    "c0022000000000",
+    "c0fe2000000000"
+   ]
+  }
+ ],
+ "caller_codes": [
+  {
+   "call": "W4ODA",
+   "code": 114
+  },
+  {
+   "call": "KK4XYZ",
+   "code": 18
+  },
+  {
+   "call": "KK4ODA-1",
+   "code": 105
+  },
+  {
+   "call": "VK2DEF/P",
+   "code": 23
+  },
+  {
+   "call": "A1",
+   "code": 109
+  },
+  {
+   "call": "9Z9ZZZ9ZZ",
+   "code": 36
+  }
+ ],
  "controller_traces": [
   {
    "air": 2300,

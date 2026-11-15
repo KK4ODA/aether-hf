@@ -138,6 +138,13 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "on_time_to_lower": c.on_time_to_lower,
         "need_ease_after": c.need_ease_after,
     }
+    if c.capped_call:
+        # the capped call's (ADR-0126), only where a session turns it on: the sessions before it
+        # read as they always did
+        doc["capped_call"] = True
+        doc["call_tries"] = c.call_tries
+        doc["call_pause_s"] = bits(c.call_pause_s)
+        doc["call_answer_margin_db"] = bits(c.call_answer_margin_db)
     return doc
 
 
@@ -306,7 +313,11 @@ def frame_doc(frame: Any, calls: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
-    "connect": lambda remote, as_call=None: {"remote": remote, "as": as_call},
+    "connect": lambda remote, as_call=None, heard_db=None: {
+        "remote": remote,
+        "as": as_call,
+        **({} if heard_db is None else {"heard": bits(heard_db)}),
+    },
     "probe": lambda remote, as_call=None: {"remote": remote, "as": as_call},
     "disconnect": lambda drain_s=None: {"drain_s": bits(drain_s)},
     "abort": lambda: {},
@@ -1234,6 +1245,76 @@ def own_choice(seed: int) -> Callable[[], list[Recorder]]:
     return run
 
 
+def _until_idle(sim: TwoStationSim, *engines: GrantedEngine, limit: float) -> None:
+    t = sim.t
+    while t < limit and any(e.state.value != "idle" for e in engines):
+        t += 0.1
+        sim.run(until=t)
+
+
+def capped() -> list[Recorder]:
+    """The capped call (ADR-0126 §7) through every plan: nothing heard (two both-ways tries,
+    the acceptance in OFDM), heard strong (quick tries first), heard weak (floor tries only), a
+    both-ways try read under the margin (the acceptance on the floor), a message behind a call,
+    and a call nobody hears (the pause before the last try, the call over)."""
+    a, b, ra, rb = _pair(WIDE, capped_call=True, turnaround_s=0.2, identifier_s=3.0)
+    rng = random.Random(51)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=51)
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 600))
+    sim.run(until=40.0)
+    a.disconnect()
+    _until_idle(sim, a, b, limit=90.0)
+    a.connect("KK4XYZ", heard_db=12.0)
+    sim.run(until=sim.t + 20.0)
+    a.disconnect()
+    _until_idle(sim, a, b, limit=sim.t + 60.0)
+    sim.set_snr(-14.0)
+    a.connect("KK4XYZ", heard_db=-14.0)
+    sim.run(until=sim.t + 30.0)
+    a.disconnect()
+    _until_idle(sim, a, b, limit=sim.t + 120.0)
+    sim.set_snr(-2.0)
+    a.connect("KK4XYZ")
+    sim.run(until=sim.t + 30.0)
+    b.disconnect()
+    _until_idle(sim, a, b, limit=sim.t + 120.0)
+    sim.set_snr(-60.0)
+    a.connect("KK4XYZ")
+    _until_idle(sim, a, b, limit=sim.t + 60.0)
+    return [ra, rb]
+
+
+def capped_mixed() -> list[Recorder]:
+    """Today's call and the capped call do not hear each other's calls (ADR-0126 §2.1): a
+    capped station ignores a protocol-12 call and says so; today's ignores a protocol-13 one.
+    The narrow air, a capped station heard weak."""
+    a, b, ra, rb = _pair(NARROW, sender={"capped_call": True})
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=52)
+    a.connect("KK4XYZ", heard_db=0.0)
+    _until_idle(sim, a, b, limit=60.0)
+    b.connect("W4ODA")
+    _until_idle(sim, a, b, limit=400.0)
+    return [ra, rb]
+
+
+def capped_six() -> list[Recorder]:
+    """Six tries (ADR-0126 §7.4): a call nobody hears goes its six both-ways tries with the
+    pause before the last; one heard strong, three quick tries then five floor tries, answered
+    once the path comes back on the third floor try."""
+    a, b, ra, rb = _pair(WIDE, capped_call=True, call_tries=6)
+    sim = TwoStationSim(a, b, snr_db=-60.0, seed=53)
+    a.connect("KK4XYZ")
+    _until_idle(sim, a, b, limit=200.0)
+    a.connect("KK4XYZ", heard_db=10.0)
+    sim.run(until=sim.t + 30.0)
+    sim.set_snr(-10.0)
+    sim.run(until=sim.t + 40.0)
+    a.disconnect()
+    _until_idle(sim, a, b, limit=sim.t + 120.0)
+    return [ra, rb]
+
+
 SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "clean-wide": clean_wide,
     "weak-narrow": weak_narrow,
@@ -1275,6 +1356,10 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "floor-in-flight": floor_in_flight(45),
     "edge-at-the-end": floor_in_flight(46, WIDE, 6.0, 1000),
     "own-choice": own_choice(47),
+    # the capped call (ADR-0126), appended last so the blob table's indices stay
+    "capped": capped,
+    "capped-mixed": capped_mixed,
+    "capped-six": capped_six,
 }
 
 

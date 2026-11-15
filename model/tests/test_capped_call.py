@@ -156,3 +156,29 @@ def test_data_follows_a_capped_call_intact() -> None:
         t += 0.1
         sim.run(until=t)
     assert bytes(sim.st[1].delivered) == message
+
+
+@pytest.mark.parametrize("tries", [2, 6, 8, 10, 15])
+def test_the_number_of_tries_is_the_setting(tries: int) -> None:
+    """ADR-0126 §7.4: N both-ways tries, N floor tries, or three quick tries and N−1 floor
+    tries; a call nobody hears goes every one, with the pause before the last."""
+    a, b, sim = _pair(WIDE, -60.0)
+    a.cfg.call_tries = tries
+    a.connect("KK4XYZ", heard_db=-14.0)
+    assert a._call_plan == "S" * tries
+    a.abort()
+    sim.run(until=1.0)
+    t = sim.t
+    a.connect("KK4XYZ", heard_db=15.0)
+    assert a._call_plan == "CCC" + "S" * (tries - 1)
+    a.abort()
+    sim.run(until=t + 1.0)
+    first = len(sim.radiated(0))
+    a.connect("KK4XYZ")
+    assert a._call_plan == "H" * tries
+    t = sim.t
+    while a.state is not State.IDLE and t < 600.0:
+        t += 0.5
+        sim.run(until=t)
+    assert len(sim.radiated(0)) - first == tries
+    assert b.state is State.IDLE
