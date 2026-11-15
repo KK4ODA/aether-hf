@@ -26,6 +26,8 @@ a call counts as connected once the called station has the caller's details too.
 calls a second time when the first call gives up, and records the pair's outcome beside the
 first's. `--step` is the bench's clock (1 s by default); `--what call` leaves the probes out;
 `ended` is when a call that did not connect gave up, `up` when both stations were in the session.
+`--details-in-call` is the capped call's revision (ADR-0126 §7: the callsigns in the call's data
+frames), `--pause` its silent pause before the plan's last try, in seconds.
 """
 
 from __future__ import annotations
@@ -47,10 +49,24 @@ WAITS = {"growing": None, "short": 1.0, "none": 0.0}
 
 
 def point(
-    job: tuple[str, int, str, float, int, float | None, str, str, bool, float, str],
+    job: tuple[str, int, str, float, int, float | None, str, str, bool, float, str, bool, float],
 ) -> list[dict[str, object]]:
     """Every trial of one (air, class, SNR): a call and a probe, each on a fresh pair."""
-    tree, bandwidth, channel, snr, trials, wait, calls, heard, again, step, what_ = job
+    (
+        tree,
+        bandwidth,
+        channel,
+        snr,
+        trials,
+        wait,
+        calls,
+        heard,
+        again,
+        step,
+        what_,
+        revised,
+        pause,
+    ) = job
     floor_only = calls == "floor"
     capped = calls == "capped"
     sys.path.insert(0, str(Path(tree) / "model"))
@@ -75,6 +91,8 @@ def point(
             cfg.call_floor_only = True
         if capped:
             cfg.capped_call = True
+            cfg.call_details_in_call = revised
+            cfg.call_pause_s = pause
         return cfg
 
     heard_db = None if heard == "none" else (snr if heard == "true" else float(heard))
@@ -151,6 +169,7 @@ def point(
                     **(
                         {
                             "plan": plan or "",
+                            "pause_s": pause if capped else "",
                             "up": "" if up is None or not ok else up,
                             "ended": "" if ended is None else ended,
                             "keyed_s": round(spent, 2),
@@ -181,6 +200,8 @@ def main() -> int:
     ap.add_argument("--again", action="store_true", help="a second call when the first fails")
     ap.add_argument("--step", type=float, default=1.0, help="the bench's clock, seconds")
     ap.add_argument("--what", default="both", choices=("both", "call", "probe"))
+    ap.add_argument("--details-in-call", action="store_true", help="capped: ADR-0126 §7")
+    ap.add_argument("--pause", type=float, default=0.0, help="capped: pause before the last try")
     args = ap.parse_args()
     wait = WAITS[args.wait] if args.wait in WAITS else float(args.wait)
     jobs = [
@@ -196,6 +217,8 @@ def main() -> int:
             args.again,
             args.step,
             args.what,
+            args.details_in_call,
+            args.pause,
         )
         for bw in args.bandwidth.split(",")
         for channel in args.channels.split(",")

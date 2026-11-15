@@ -130,4 +130,4 @@ context → decision → alternatives considered → consequences.
 | [0123](0123-fm-identification.md) | On FM a station identifies with its callsign in the digital signal (FM-11) | proposed; its reading confirmed |
 | [0124](0124-fm-host-interfaces.md) | Aether FM's host interfaces are HF's, with the air named (FM-12) | proposed |
 | [0125](0125-legacy-packet-beside-aether-fm.md) | Legacy packet runs beside Aether FM, built from public specifications (FM-13) | proposed |
-| [0126](0126-the-capped-call.md) | The capped call — a call in control frames, chosen by what was heard, over in 20 s (link protocol 13) | proposed; on the model bench passes R1, fails R2 and R3 |
+| [0126](0126-the-capped-call.md) | The capped call — a call in control frames, chosen by what was heard, over in 20 s (link protocol 13) | proposed; the first design fails R2 and R3 on the model bench, the revision (§7) passes all but a narrow miss on R2 (b) |

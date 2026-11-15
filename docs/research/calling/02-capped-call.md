@@ -129,3 +129,91 @@ and the two-try plan on slow fades. Three changes, each a candidate to register 
 
 The contention test (two stations that cannot hear each other) and the 200 Hz offset test need the
 harness, so the port, and come after the author's choice of revision.
+
+## 5. The revision: the callsigns in the call, and a pause (ADR-0126 §7)
+
+Registered in ADR-0126 §7 (commit `18bd978`) before these runs, at the author's decision. Built
+behind two more switches (`GrantConfig.call_details_in_call`, `call_pause_s`); off, the vectors
+regenerate byte for byte. Each try carries today's connect body in the robust OFDM data frame,
+tone-24, or both back to back; the acceptance is the short control frame; a silent 15 s pause goes
+before the plan's last try. Same bench, same cells, same `today` runs:
+
+    python tools/bench_calls.py --variant rev-unheard --calls capped --details-in-call --heard none --pause 15 --again --step 0.1 --what call --snr=-60,-20,-18,-16,-14,-12,-10,-8,-4,0,4,8 --out rev-unheard.csv
+
+and `rev-heard` (`--heard true`), `rev-stale` (`--heard 10`), `rev-unheard-p0` (`--pause 0`) and
+`rev-unheard-p30` (`--pause 30`). Counts and medians are in `data/capped-call-cells.csv` beside the
+first runs'.
+
+| criterion | result |
+|---|---|
+| **R1′**, channel time at most 22.5 s, over within 40 s | **passes**: H H 22.1 s (over at 37.1 s), S S 20.0 s (35.0 s), C C C S 19.7 s (34.7 s), both airs |
+| **R2 (a)**, one call from −14 dB up | **passes** |
+| **R2 (b)**, two calls against today's one, every cell | **narrow miss**: Good −16 dB, 27 against 29, both airs; every other cell passes |
+| **R3**, faster at the median | **passes**: 10.4 s (H H) and 9.3 s (S S) where today takes 11.5 s; 7.6 s on a good path with nothing heard, 2.2 s heard strong |
+| **R4**, the informed openings | **passes** |
+
+**The narrow miss.** In three of the 30 Good −16 dB draws (trials 2, 11 and 15) today's call
+connected at its third or fifth try, after 45.5, 94.0 and 100.5 s; the revised call's two calls,
+which span about 74 s with their pauses, both fell in the fade. Good fades for longer than the
+pause on these draws. A third call, or a longer pause, would reach them; neither was registered.
+
+2 300 Hz, connected of 30 and the median time to the session (the 500 Hz air gives the same counts):
+
+**Good**
+
+| SNR | today | revised, one call | two calls | median | heard at the path's SNR |
+|---|---|---|---|---|---|
+| −18 dB | 23, 45.5 s | 19 | 23 | 10.4 s | S S, 19, 34.3 s |
+| −16 dB | 29, 45.4 s | 25 | 27 | 10.4 s | S S, 21, 9.3 s |
+| −14 dB | 30, 11.5 s | 29 | 30 | 10.4 s | S S, 28, 9.3 s |
+| −12 dB | 30, 11.5 s | 29 | 30 | 10.4 s | S S, 29, 9.3 s |
+| −8 … +0 dB | 30, 11.5 s | 30 | 30 | 10.4 s | S S, 30, 9.3 s |
+| +4, +8 dB | 30, 11.5 s | 30 | 30 | 7.6 s | C C C S, 30, 2.2 s |
+
+**Moderate**
+
+| SNR | today | revised, one call | two calls | median | heard at the path's SNR |
+|---|---|---|---|---|---|
+| −18 dB | 3, 49.9 s | 5 | 10 | 10.4 s | S S, 8, 21.8 s |
+| −16 dB | 21, 42.5 s | 22 | 27 | 10.4 s | S S, 20, 9.3 s |
+| −14 … +0 dB | 30, 11.5 s | 30 | 30 | 10.4 s | S S, 28–30, 9.3 s |
+| +4, +8 dB | 30, 11.5 s | 30 | 30 | 7.6 s | C C C S, 30, 2.2 s |
+
+**Poor**
+
+| SNR | today | revised, one call | two calls | median | heard at the path's SNR |
+|---|---|---|---|---|---|
+| −18 dB | 2, 50.2 s | 3 | 6 | 36.4 s | S S, 5, 9.3 s |
+| −16 dB | 25, 11.5 s | 27 | 29 | 10.4 s | S S, 24, 9.3 s |
+| −14 … +0 dB | 30, 11.5 s | 30 | 30 | 10.4 s | S S, 28–30, 9.3 s |
+| +4, +8 dB | 30, 11.5 s | 30 | 30 | 7.6 s | C C C S, 30, 2.2 s |
+
+AWGN: 30 of 30 from −18 dB up, 10.4 s (H H) and 9.3 s (S S) up to +0 dB, 7.6 s and 2.2 s above; at
+−20 dB 12 of 30 against today's 3.
+
+**The pause** (reported, not judged; 2 300 Hz, one call / two calls of 30, nothing heard):
+
+| cell | today | first design, no pause | revised, no pause | revised, 15 s | revised, 30 s |
+|---|---|---|---|---|---|
+| Good −18 dB | 23/27 | 10/25 | 13/24 | **19/23** | 16/18 |
+| Good −16 dB | 29/29 | 20/27 | 20/28 | **25/27** | 23/26 |
+| Good −14 dB | 30/30 | 24/28 | 26/29 | **29/30** | 28/29 |
+| Moderate −16 dB | 21/28 | 26/29 | 23/28 | 22/27 | 21/26 |
+| Poor −16 dB | 25/30 | 30/30 | 28/30 | 27/29 | 24/28 |
+
+The pause is what brings Good near today's reach; 30 s gains nothing over 15 s. On Moderate and Poor
+at the floor's edge the first design reached more often than the revision (Moderate −18 dB: 16
+against 5): its floor try was the floor control frame, about 2 dB deeper on fading than tone-24, the
+revision's.
+
+**Stale knowledge** (reported): called as heard strong on a path gone weak, C C C S waits for its
+quick tries and the pause, then has one floor try: the median 34.0 s from −18 to −8 dB, and fewer
+calls through (Good −16 dB: 17 against 25; Moderate −16 dB: 10 against 22). The heard list's 15
+minutes are what keep that rare; a shorter window, or a floor try earlier in C C C S, is the
+author's call.
+
+**Where this leaves the call.** Against today's call on this bench, the revision gives the channel
+back in about 22 s instead of about 205 s when nobody answers, connects a good path in 7.6 s (2.2 s
+when the station was heard strong) instead of 11.5 s, a weak one in 9.3–10.4 s, and reaches as often
+except on Good's slowest fades at −16 dB and below, where a second call does not always make up for
+today's eight tries. The harness's tests (contention, a station 200 Hz off) and the port remain.

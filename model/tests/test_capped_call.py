@@ -24,13 +24,21 @@ from aether_model.link.sim import TwoStationSim, control_thresholds_for
 
 
 def _pair(
-    air: AirInterface, snr_db: float, *, capped: tuple[bool, bool] = (True, True), seed: int = 17
+    air: AirInterface,
+    snr_db: float,
+    *,
+    capped: tuple[bool, bool] = (True, True),
+    seed: int = 17,
+    revised: bool = False,
+    pause_s: float = 0.0,
 ) -> tuple[GrantedEngine, GrantedEngine, TwoStationSim]:
     timing = phy_timing(air.params)
 
     def config(on: bool) -> GrantConfig:
         cfg = GrantConfig(max_mode=air.n_rungs - 1, capabilities=bandwidth_capabilities(air.params))
         cfg.capped_call = on
+        cfg.call_details_in_call = revised
+        cfg.call_pause_s = pause_s
         return cfg
 
     a = GrantedEngine("W4ODA", timing, config(capped[0]), seed=seed)
@@ -173,3 +181,53 @@ def test_data_follows_the_details_intact() -> None:
         sim.run(until=t)
     assert bytes(sim.st[1].delivered) == message
     assert b.remote_call == "W4ODA"
+
+
+# ── the revision: the callsigns in the call, and a pause (ADR-0126 §7) ─────────────────────────
+
+
+@pytest.mark.parametrize("air", [WIDE, NARROW], ids=["2300", "500"])
+@pytest.mark.parametrize(
+    ("heard", "plan"),
+    [(None, "HH"), (15.0, "CCCS"), (-14.0, "SS")],
+    ids=["unheard", "strong", "weak"],
+)
+def test_a_revised_call_knows_the_caller_at_the_acceptance(
+    air: AirInterface, heard: float | None, plan: str
+) -> None:
+    a, b, sim = _pair(air, 15.0, revised=True, pause_s=15.0)
+    a.connect("KK4XYZ", heard_db=heard)
+    assert a._call_plan == plan
+    t = 0.0
+    while not (a.connected and b.connected) and t < 60.0:
+        t += 0.1
+        sim.run(until=t)
+    assert a.connected and b.connected
+    assert b.identified and b.remote_call == "W4ODA"
+    # the call's frames are data frames carrying the connect body; the acceptance a control
+    # frame, on the floor for a floor try
+    first = sim.radiated(1)[0]
+    expected = b.timing.control_frame_s_for(plan == "SS")
+    assert first[1] - first[0] == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("air", [WIDE, NARROW], ids=["2300", "500"])
+@pytest.mark.parametrize("heard", [None, 15.0, -14.0], ids=["unheard", "strong", "weak"])
+def test_a_revised_call_nobody_hears_holds_the_channel_22_5_s_at_most(
+    air: AirInterface, heard: float | None
+) -> None:
+    """ADR-0126 §7.2, R1′: the pause before the last try is silence, not channel time."""
+    pause = 15.0
+    a, _, sim = _pair(air, -60.0, revised=True, pause_s=pause)
+    a.connect("KK4XYZ", heard_db=heard)
+    t = 0.0
+    while a.state is State.CONNECTING:
+        t += 0.1
+        sim.run(until=t)
+    assert t <= 40.0
+    assert t - pause <= 22.5
+    tries = sim.radiated(0)
+    assert len(tries) == len(a._call_plan)
+    # the last try waits the pause after the one before it has stopped listening
+    gap = tries[-1][0] - tries[-2][1]
+    assert gap >= pause

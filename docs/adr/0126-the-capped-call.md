@@ -5,8 +5,10 @@ bench it"). Link protocol 13. Built in the model behind a bench switch (`GrantCo
 and judged there by the criteria of §5, registered before the runs; the results are
 `docs/research/calling/02-capped-call.md` and §6. **On the model bench it passes R1 (a call nobody
 answers ends in 15.6–16.5 s) and fails R2 and R3**: the details step costs more than the call
-saves on a weak path, and two tries are too few on a slowly fading one. A revision is the
-author's call (§6). Not ported: the port, the harness and the air come after that decision. It would supersede ADR-0016 §2.1 (the alternating tries), ADR-0056 §2.1
+saves on a weak path, and two tries are too few on a slowly fading one. **The revision of §7**
+(the callsigns in the call, a 15 s pause before the last try), registered before its runs, passes
+R1′, R2 (a), R3 and R4 and misses R2 (b) narrowly (one cell, Good −16 dB, 27 against 29: §7.3).
+Not ported: the port, the harness and the air come after the author's decision. It would supersede ADR-0016 §2.1 (the alternating tries), ADR-0056 §2.1
 (the floor acceptance of a weak ordinary call) and the call's random wait (`07-protocol-8.md`
 §5.1).
 
@@ -278,3 +280,23 @@ are in the call.
   is what the pause is for); the stale arm (heard strong at +10 dB on any path).
 
 A narrow miss goes to the author with its trace.
+
+### 7.3 What the model bench found (2026-11-15)
+
+`docs/research/calling/02-capped-call.md` §5:
+
+| criterion | result |
+|---|---|
+| R1′ | passes: channel time 22.1 s (H H), 20.0 s (S S), 19.7 s (C C C S); over at 34.7–37.1 s |
+| R2 (a) | passes |
+| R2 (b) | narrow miss: Good −16 dB, two calls 27 of 30 against today's 29 (both airs); three draws today connected only at 45–100 s |
+| R3 | passes: 10.4 s (H H), 9.3 s (S S) on weak paths, 7.6 s and 2.2 s on good ones, against 11.5 s |
+| R4 | passes |
+
+The pause brings Good's reach near today's (−16 dB, one call: 25 against 20 without it); 30 s gains
+nothing over 15 s. On Moderate and Poor at −18 dB the first design reached more often (its floor try
+was the floor control frame, about 2 dB deeper on fading than tone-24). A station heard strong on a
+path gone weak waits about 34 s (C C C S, then the pause, then its one floor try).
+
+Owed before an acceptance: the narrow miss to the author, the harness's contention and 200 Hz
+offset tests (the port first), and the air.
