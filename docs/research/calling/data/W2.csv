@@ -1,0 +1,21 @@
+bench,scenario,base,seed,pass,why,invariants,air_s,collisions,rf_overlaps,radiated_s,mechanisms,ends,transfers,wall_s
+K2,40m-gateway-hidden-callers-2300,40m-gateway-hidden-callers-2300,64,True,a connected: not within 180 s of air,,218.1,11,10,9.963,both initiating 10,none / none / none,call a lost; call c 16.0 s,100.2
+K2,40m-gateway-hidden-callers-2300-s1064,40m-gateway-hidden-callers-2300,1064,True,c connected: not within 180 s of air,,238.1,11,11,9.778,both initiating 11,none / none / none,call a 20.0 s; call c lost,106.0
+K2,40m-gateway-hidden-callers-2300-s2064,40m-gateway-hidden-callers-2300,2064,True,c connected: not within 180 s of air,,234.1,11,11,9.823,both initiating 11,none / none / none,call a 16.0 s; call c lost,103.5
+K2,40m-gateway-hidden-callers-2300-s3064,40m-gateway-hidden-callers-2300,3064,True,a connected: not within 180 s of air,,218.2,11,24,12.087,both initiating 24,none / none / none,call a lost; call c 16.0 s,95.2
+K2,40m-gateway-hidden-callers-2300-s4064,40m-gateway-hidden-callers-2300,4064,True,a connected: not within 180 s of air,,218.1,10,10,9.049,both initiating 10,none / none / none,call a lost; call c 16.0 s,96.8
+K2,40m-gateway-hidden-callers-2300-s5064,40m-gateway-hidden-callers-2300,5064,True,a connected: not within 180 s of air,,218.2,10,9,9.403,both initiating 9,none / none / none,call a lost; call c 16.0 s,96.9
+K2,40m-gateway-hidden-callers-2300-s6064,40m-gateway-hidden-callers-2300,6064,True,c connected: not within 180 s of air,,248.3,10,18,9.836,leaving 10; both initiating 8,none / none / none,call a 16.0 s; call c lost,105.1
+K2,40m-gateway-hidden-callers-2300-s7064,40m-gateway-hidden-callers-2300,7064,True,c connected: not within 180 s of air,,238.1,10,9,9.383,both initiating 9,none / none / none,call a 20.0 s; call c lost,106.3
+K2,40m-gateway-hidden-callers-2300-s8064,40m-gateway-hidden-callers-2300,8064,True,a connected: not within 180 s of air,,218.2,9,8,14.11,both initiating 8,none / none / none,call a lost; call c 33.0 s,101.4
+K2,40m-gateway-hidden-callers-2300-s9064,40m-gateway-hidden-callers-2300,9064,True,a connected: not within 180 s of air,,218.2,11,9,9.1,both initiating 9,none / none / none,call a lost; call c 15.0 s,92.5
+K2x,40m-gateway-hidden-callers-2300-x0,40m-gateway-hidden-callers-2300-x0,64,True,a connected: not within 180 s of air,,218.1,11,10,9.963,both initiating 10,none / none / none,call a lost; call c 16.0 s,96.3
+K2x,40m-gateway-hidden-callers-2300-x1,40m-gateway-hidden-callers-2300-x1,1064,True,c connected: not within 180 s of air,,238.1,11,12,9.738,both initiating 12,none / none / none,call a 20.0 s; call c lost,103.1
+K2x,40m-gateway-hidden-callers-2300-x2,40m-gateway-hidden-callers-2300-x2,2064,True,c connected: not within 180 s of air,,238.1,10,10,9.149,both initiating 10,none / none / none,call a 20.0 s; call c lost,102.3
+K2x,40m-gateway-hidden-callers-2300-x3,40m-gateway-hidden-callers-2300-x3,3064,True,a connected: not within 180 s of air,,218.2,11,23,11.787,both initiating 23,none / none / none,call a lost; call c 16.0 s,96.9
+K2x,40m-gateway-hidden-callers-2300-x4,40m-gateway-hidden-callers-2300-x4,4064,True,a connected: not within 180 s of air,,218.1,10,10,8.949,both initiating 10,none / none / none,call a lost; call c 16.0 s,101.9
+K2x,40m-gateway-hidden-callers-2300-x5,40m-gateway-hidden-callers-2300-x5,5064,True,a connected: not within 180 s of air,,218.2,10,9,9.423,both initiating 9,none / none / none,call a lost; call c 16.0 s,101.6
+K2x,40m-gateway-hidden-callers-2300-x6,40m-gateway-hidden-callers-2300-x6,6064,True,c connected: not within 180 s of air,,248.2,10,18,9.817,leaving 10; both initiating 8,none / none / none,call a 15.0 s; call c lost,109.7
+K2x,40m-gateway-hidden-callers-2300-x7,40m-gateway-hidden-callers-2300-x7,7064,True,c connected: not within 180 s of air,,238.1,10,9,9.424,both initiating 9,none / none / none,call a 20.0 s; call c lost,110.3
+K2x,40m-gateway-hidden-callers-2300-x8,40m-gateway-hidden-callers-2300-x8,8064,True,a connected: not within 180 s of air,,218.2,9,8,14.11,both initiating 8,none / none / none,call a lost; call c 33.0 s,96.2
+K2x,40m-gateway-hidden-callers-2300-x9,40m-gateway-hidden-callers-2300-x9,9064,True,a connected: not within 180 s of air,,218.2,10,9,9.559,both initiating 9,none / none / none,call a lost; call c 16.0 s,91.1
