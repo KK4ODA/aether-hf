@@ -1527,7 +1527,7 @@ impl GrantedEngine {
     /// The tries the call under way will make, for a capped call (ADR-0126); 0 for today's call,
     /// which makes `connect_retries`.
     #[must_use]
-    pub const fn call_tries_planned(&self) -> usize {
+    pub fn call_tries_planned(&self) -> usize {
         self.call_plan.len()
     }
 
