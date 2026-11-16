@@ -362,6 +362,9 @@ pub struct RateController {
     /// ADR-0128 (proposed, off): the first rung by the four channels' mean prior, one frame of the
     /// first transmission tried at the rung the optimistic prior starts at.
     first_try: bool,
+    /// ADR-0128's variant J (registered, off; acts only with `first_try`): a decoded first try
+    /// moves the choice to its rung at once.
+    first_try_jump: bool,
     /// The rung of the first transmission's try, until its outcome comes back.
     first_try_rung: Option<usize>,
 }
@@ -422,6 +425,7 @@ impl RateController {
             ofdm_failed: false,
             penalties: class_penalty_db(n).to_vec(),
             first_try: false,
+            first_try_jump: false,
             first_try_rung: None,
         }
     }
@@ -437,6 +441,13 @@ impl RateController {
     #[must_use]
     pub fn try_wait(&self, mode: usize) -> usize {
         self.wait(mode)
+    }
+
+    /// The same controller with ADR-0128's variant J on or off (the model's `first_try_jump`).
+    #[must_use]
+    pub const fn with_first_try_jump(mut self, on: bool) -> Self {
+        self.first_try_jump = on;
+        self
     }
 
     /// Whether ADR-0128's first burst is on.
@@ -993,6 +1004,12 @@ impl RateController {
         }
         if decoded {
             self.probe_wait[tried] = Some(self.probe_every);
+            if self.first_try_jump
+                && let Some(index) = self.modes.iter().position(|&m| m == tried)
+                && self.usable(index)
+            {
+                self.index = index;
+            }
         } else {
             let wait = self.wait(tried);
             self.probe_wait[tried] = Some(self.probe_wait_max.min(2 * wait));

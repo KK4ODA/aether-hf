@@ -667,7 +667,11 @@ mod controller_traces {
             .get("first_try")
             .is_some_and(|v| v.as_bool() == Some(true))
         {
-            c = c.with_first_try(true);
+            c = c.with_first_try(true).with_first_try_jump(
+                trace
+                    .get("first_try_jump")
+                    .is_some_and(|v| v.as_bool() == Some(true)),
+            );
             let penalties = trace["penalties"].as_array().expect("penalties");
             let table = aether_link::rate::class_penalty_db(thresholds.len());
             assert_eq!(

@@ -419,7 +419,11 @@ def probe_body_cases() -> list[dict]:  # type: ignore[type-arg]
 
 
 def controller_trace(
-    air: AirInterface, seed: int, steps: int = 400, first_try: bool = False
+    air: AirInterface,
+    seed: int,
+    steps: int = 400,
+    first_try: bool = False,
+    jump: bool = False,
 ) -> dict[str, object]:
     """The rate controller alone (ADR-0094, ADR-0099), input by input: a seed, then frames at the recommended rung and
     others (decoded, failed, never detected, combined), echo readings and bare SNRs drawn at
@@ -429,7 +433,7 @@ def controller_trace(
     timing = phy_timing(air.params)
     # the air stated in the capability byte, as a station's: the guess differs by air (ADR-0111)
     caps = bandwidth_capabilities(air.params)
-    config = GrantConfig(capabilities=caps, first_burst_try=first_try)
+    config = GrantConfig(capabilities=caps, first_burst_try=first_try, first_burst_jump=jump)
     ctl = GrantedEngine("TOOL", timing, config).rate
     modes = sorted(ctl.thresholds)
     rng = random.Random(seed)
@@ -499,6 +503,8 @@ def controller_trace(
     if first_try:
         # ADR-0128 (proposed, off): said only when on; the four channels' penalties it starts by
         extra = {"first_try": True, "penalties": [list(ctl.penalties[m]) for m in modes]}
+        if jump:
+            extra["first_try_jump"] = True
     return {
         **extra,
         "air": air.params.bandwidth.value,
@@ -567,6 +573,11 @@ def main() -> int:
         + [
             controller_trace(air, seed, first_try=True)
             for air, seed in ((WIDE, 5), (NARROW, 6), (WIDE, 7), (NARROW, 8))
+        ]
+        # its variant J (00-plan.md §5)
+        + [
+            controller_trace(air, seed, first_try=True, jump=True)
+            for air, seed in ((WIDE, 9), (NARROW, 10), (WIDE, 11), (NARROW, 12))
         ],
         # the echo share above which each rung is kept off the ladder (ADR-0087), by mode
         "echo_limits": [ECHO_LIMIT.get(m) for m in sorted(AWGN_THRESHOLD_DB)],

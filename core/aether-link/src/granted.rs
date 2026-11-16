@@ -368,6 +368,10 @@ pub struct GrantConfig {
     /// prior's rung, with one frame tried at the rung today's prior would start at (the model's
     /// `first_burst_try`).
     pub first_burst_try: bool,
+    /// ADR-0128's variant J (registered, off; acts only with `first_burst_try`): when the first
+    /// transmission's one bold frame decodes, the choice moves to its rung at once (the model's
+    /// `first_burst_jump`).
+    pub first_burst_jump: bool,
     /// This station's radio: how long after it stops sending it hears again (VOX hold and
     /// receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s.
     pub turnaround_s: f64,
@@ -461,6 +465,7 @@ impl Default for GrantConfig {
             elide: true,
             header_above_recommendation: true,
             first_burst_try: false,
+            first_burst_jump: false,
             turnaround_s: 0.0,
             identifier_s: 0.0,
             identifiers: BTreeMap::new(),
@@ -1188,7 +1193,8 @@ impl GrantedEngine {
         let call = my_call.trim().to_ascii_uppercase();
         let rate = rate_for(&timing)
             .for_air(wide_air(&config))
-            .with_first_try(config.first_burst_try);
+            .with_first_try(config.first_burst_try)
+            .with_first_try_jump(config.first_burst_jump);
         let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
@@ -1329,7 +1335,8 @@ impl GrantedEngine {
         self.measure_again = false;
         self.rate = rate_for(&self.timing)
             .for_air(wide_air(&self.config))
-            .with_first_try(self.config.first_burst_try);
+            .with_first_try(self.config.first_burst_try)
+            .with_first_try_jump(self.config.first_burst_jump);
         self.last_rx_mode = None;
         self.missed = MISSED_UNKNOWN;
         self.price_controllers();
@@ -2059,7 +2066,8 @@ impl GrantedEngine {
         }
         self.rate = rate_for(&self.timing)
             .for_air(wide_air(&self.config))
-            .with_first_try(self.config.first_burst_try);
+            .with_first_try(self.config.first_burst_try)
+            .with_first_try_jump(self.config.first_burst_jump);
         self.price_controllers();
     }
 
