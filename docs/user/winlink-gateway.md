@@ -136,8 +136,8 @@ to.
 3. **Receive level.** *Good* on a quiet frequency.
 4. **Modem settings.** Bandwidth **2300 Hz**. *Wait for a clear channel* on. Fastest mode: the
    last entry. Turnaround 0 for CAT or a serial line (a VOX interface: its delay plus 100 ms).
-   Morse ID: a US callsign always sends it, at the end of every session, as `KK4ODA` (the SSID
-   is dropped).
+   Identify by: a US callsign always identifies, at the end of every session, as `KK4ODA` (the
+   SSID is dropped), in Morse or, with *Data signal*, in Aether's own signal.
 5. **Application settings.** **Recording** on. **Debug mode** on: every session Trimode runs is
    recorded and uploaded to the project a minute after it ends, which is the point of the test.
    **Host programs** on, port 8300. KISS programs off.

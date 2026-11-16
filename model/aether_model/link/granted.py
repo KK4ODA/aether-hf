@@ -1086,6 +1086,12 @@ class GrantedEngine:
         return self._peer_identifier_s
 
     @property
+    def sent_floor(self) -> bool:
+        """The family of the last frame this station sent: an identification frame the daemon
+        sends on its own goes in it (ADR-0127 §2.2)."""
+        return self._sent_floor
+
+    @property
     def identifier_owed(self) -> bool:
         """Whether a session's closing identifier is owed and not yet handed over: the daemon
         tells a host program the session is over only once it has gone out (ADR-0075)."""

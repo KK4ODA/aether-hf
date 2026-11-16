@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.1.0 |
+| **Version** | 1.2.0 |
 | **Updated** | 2026-11-16 |
 | **Describes** | Aether HF 0.2.0-beta.160 |
 | **Licence** | CC BY 4.0 |
@@ -486,7 +486,7 @@ quiet leaves the signal inside the sound card's own noise.
 
 ### Step 4. Modem settings
 
-![Setup scrolled to step 4: bandwidth, answer only, fastest mode, compress, call tries, busy channel, turnaround, answer gap, longest key, Morse ID and band edges](screens/setup-modem.png)
+![Setup scrolled to step 4: bandwidth, answer only, fastest mode, compress, call tries, busy channel, turnaround, answer gap, longest key, identify by and band edges](screens/setup-modem.png)
 
 *Figure 14. Setup step 4: the modem's settings.*
 
@@ -519,19 +519,28 @@ quiet leaves the signal inside the sound card's own noise.
   station that keeps calling again after being answered.
 - **Longest key**: the watchdog's limit on one transmission, 30 s by default. Aether sizes its
   transmissions to fit inside it.
-- **Morse ID**: your callsign in Morse at the end of each session, the last thing your station
-  sends for it.
+- **Identify by**: how your station sends its callsign at the end of each session, the last thing
+  it sends for it. **On** says whether it does.
+  - **Morse**, the default: your callsign as a tone, at the **Morse speed** below. It takes
+    several seconds.
+  - **Data signal**: your callsign in plain ASCII inside Aether's own signal, which anyone with
+    the published specification can read. It takes under half a second on a good path and about
+    three seconds on a weak one, so each session ends sooner. The Morse speed is hidden. Under
+    US rules this is identification "by a RTTY emission using a specified digital code"
+    (§97.119(b)(3)); see [Identifying in the data signal](../user/fcc-regulatory-controls.md#identifying-in-the-data-signal).
+  - Never both: the setting is one choice.
   - It sends your callsign without its SSID: `N1CALL-1` goes out as `N1CALL`, and a `-T` or `-R`
     is dropped too. The rules ask for your assigned call sign (§97.119), and the SSID is not part
     of it. A `/` part such as `/P` is kept.
-  - **A US callsign always sends it.** The box is ticked and greyed, and its tooltip says why.
+  - **A US callsign always identifies.** The box is ticked and greyed, and its tooltip says why.
     For any other callsign it is your choice, off by default; a host program's `CWID ON` turns it
-    on for the program's sessions.
+    on for the program's sessions. The program cannot choose Morse: it identifies the way you
+    chose here.
   - A call or probe that leads to no session is identified 30 s later, on its own. Calls,
-    probes, beacons and KISS frames carry no Morse ID of their own.
-  - The US rules cap an automatic identifier at 20 wpm, whatever is set here. The speed is marked
-    when the cap applies. A session longer than ten minutes is not identified in between: see
-    [The rules](#19-the-rules).
+    probes, beacons and KISS frames carry no identifier of their own.
+  - The US rules cap an automatic Morse identifier at 20 wpm, whatever is set here. The speed is
+    marked when the cap applies. A session longer than ten minutes is not identified in between,
+    by either method: see [The rules](#19-the-rules).
 - **Band edges**: the margin kept between your signal and a segment's edge (50 Hz by default), for
   dial error and the radio's transmit chain. **Band-plan guidance** says when a transmission the
   rules allow is outside the voluntary band plan's digital areas.
@@ -887,8 +896,8 @@ You do not need this to operate, but it explains what you see on the lamps and i
 - **Lost frames are sent again** until they arrive, and copies of a frame are combined, so even a
   frame no single copy carried can be read.
 - **Each station picks its own speed** for its own data, from what the other station tells it.
-- **The goodbye**: what is queued goes first, then each station says goodbye. The Morse IDs come
-  last: the called station's, then the caller's.
+- **The goodbye**: what is queued goes first, then each station says goodbye. The identifiers
+  come last, in Morse or in the data signal: the called station's, then the caller's.
 
 ## 16. Speeds: the rungs
 
@@ -1036,9 +1045,9 @@ transmission the rules refuse never goes out, and the header's badge says why.
 - **Control.** At your own station you are at the controls (local control). A station left
   answering with nobody at the radio, such as a gateway, is under **automatic control**: Aether
   then transmits only in the segments where automatic control of data is allowed.
-- **Identification.** Aether sends each station's Morse ID at the end of each session, and nothing
-  in Morse during it. The rules ask for your callsign at least every ten minutes, so keep each
-  session under ten minutes.
+- **Identification.** Aether sends each station's identifier at the end of each session, in Morse
+  or in the data signal (Setup step 4), and nothing during it. The rules ask for your callsign at
+  least every ten minutes, so keep each session under ten minutes.
 - **No encryption.** Aether never encrypts. Anyone who hears it can read what it carries.
 - **You remain the control operator.** Aether's check helps; it does not replace you.
 
@@ -1081,7 +1090,7 @@ in their places, and your own come back when the program leaves.
 
 - The program's `MYCALL` names the callsigns it answers for. While it is attached, Aether answers no
   other callsign of its own.
-- A program's `CWID ON` turns the Morse ID on for its sessions.
+- A program's `CWID ON` turns the identifier on for its sessions, sent the way Setup step 4 says.
 - The first transmission after a program attaches is checked on its own: if the receive audio does
   not change while the radio is keyed, the Log says the radio may not be transmitting. A program set
   to key a port nothing is wired to is found at once.
@@ -1409,7 +1418,7 @@ a program, which you can turn off in Setup step 5.
 | Callsign, rules, control, licence class | Setup step 1 |
 | Sound card and keying | Setup step 2 |
 | Receive level | Setup step 3: aim for *Good* |
-| Bandwidth, Morse ID, turnaround | Setup step 4 |
+| Bandwidth, identify by, turnaround | Setup step 4 |
 | Host programs, KISS, updates, debug mode | Setup step 5 |
 | Drive | Session tab › Keying and drive › **Set drive**: ALC just moving, then back off |
 | Call, disconnect, probe, beacon, Test | Session tab › Call |
@@ -1479,3 +1488,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 |---|---|---|
 | 1.0.0 | 2026-11-15 | First edition: the illustrated manual in place of `docs/user/manual.md`, with Parts, schematics and screenshots, the rung tables from the model, a chapter on RadioPost, and Aether FM as planned. |
 | 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
+| 1.2.0 | 2026-11-16 | The identifier in the data signal (ADR-0127): Setup step 4's **Identify by** (Morse or Data signal) in place of **Morse ID**, the Morse speed on its own row, and the goodbye, the rules and the host programs' `CWID ON` in those words. |

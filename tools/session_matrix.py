@@ -168,7 +168,7 @@ bandwidth = {bandwidth}
 wait_for_clear = {wait_for_clear}
 answer_gap_ms = {answer_gap_ms}{turnaround}{call_tries}
 max_mode = {max_mode}
-cw_id = {cw_id}{cw_id_interval}
+cw_id = {cw_id}{cw_id_interval}{identify_by}
 
 [host]
 enabled = {host}
@@ -188,6 +188,11 @@ dir = "{record}"
 # never the project's upload folder from a bench (debug mode, ADR-0050)
 send_to_project = false
 """
+
+
+IDENTIFY_BY: str | None = None
+"""``--identify-by``: every station of a build that reads it identifies this way (ADR-0127),
+unless its scenario says otherwise."""
 
 
 @functools.cache
@@ -685,6 +690,9 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         turnaround = f"\nturnaround_ms = {int(cfg.get('turnaround_ms', 0))}" if schema >= 12 else ""
         # a call's tries (schema 14, link protocol 13: ADR-0126), the operator's setting
         call_tries = f"\ncall_tries = {int(cfg.get('call_tries', 2))}" if schema >= 14 else ""
+        # how it identifies (schema 15, ADR-0127): the scenario's, or --identify-by for all
+        method = cfg.get("identify_by", IDENTIFY_BY or "morse")
+        identify_by = f'\nidentify_by = "{method}"' if schema >= 15 else ""
         # the Morse identifier's interval, gone with schema 13 (ADR-0075): an older build reads
         # it, and a scenario may set it for one
         cw_id_interval = (
@@ -694,9 +702,10 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         )
         config.write_text(
             STATION_TOML.format(
-                schema=min(schema, 14),
+                schema=min(schema, 15),
                 turnaround=turnaround,
                 call_tries=call_tries,
+                identify_by=identify_by,
                 cw_id_interval=cw_id_interval,
                 callsign=callsign,
                 tx_level=cfg.get("tx_level", 0.25),
@@ -1054,6 +1063,17 @@ def identifier_faults(run: Run, report: dict, *, last: bool) -> list[str]:
         for tx in sent:
             frames = tx.get("frames") or []
             kind = frames[0].get("kind", "?") if frames else "id"
+            # the identifier in the data signal (ADR-0127): its frames are judged as the Morse
+            # identifier is — alone, or behind a DISC_ACK, the last of the transmission
+            idents = [f for f in frames if f.get("kind") == "Ident"]
+            if kind == "Ident":
+                kind = "id"
+            if idents and any(
+                f.get("kind") != "Ident" for f in frames[len(frames) - len(idents) :]
+            ):
+                faults.append(f"{who}: identification frames not last at {tx['air_s']:.1f} s")
+            if idents and not tx.get("cw_id"):
+                faults.append(f"{who}: identification frames uncounted at {tx['air_s']:.1f} s")
             session = int(tx.get("session", 0))
             if tx.get("role") in ("Master", "Slave"):
                 took_part.add(session)
@@ -1320,12 +1340,19 @@ def main() -> int:
         help="pin every station's own data at this rung (the rate controller's oracle)",
     )
     ap.add_argument(
+        "--identify-by",
+        choices=("morse", "data"),
+        help="how every station of a schema-15 build identifies, unless its scenario says",
+    )
+    ap.add_argument(
         "--fail-on",
         choices=("any", "invariants"),
         default="any",
         help="exit 1 when any run failed, or only when one broke an invariant (the nightly)",
     )
     args = ap.parse_args()
+    global IDENTIFY_BY  # one setting for every run, set once before any starts
+    IDENTIFY_BY = args.identify_by
     paths = args.scenarios or sorted(SCENARIOS.glob("*.toml"))
     if args.tag:
         paths = [

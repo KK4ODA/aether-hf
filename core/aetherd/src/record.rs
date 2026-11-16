@@ -133,6 +133,14 @@ impl FrameRecord {
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
 #[must_use]
 pub fn describe_control(payload: &[u8]) -> Option<String> {
+    if let Ok(ident) = aether_link::frames::IdentFrame::decode(payload) {
+        // a station's identifier in the data signal (ADR-0127)
+        return Some(format!(
+            "Ident {}{}",
+            ident.text,
+            if ident.more { " more" } else { "" }
+        ));
+    }
     if let Ok(accept) = aether_link::frames::AcceptFrame::decode(payload) {
         // a call's acceptance (protocol 13, ADR-0126)
         return Some(format!(

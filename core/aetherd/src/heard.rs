@@ -34,6 +34,8 @@ pub enum Activity {
     Connected,
     /// A datagram: a KISS client's frame — an APRS report, a `VarAC` broadcast (ADR-0019).
     Datagram,
+    /// Its identifier in the data signal, at the end of a session (ADR-0127).
+    Identified,
 }
 
 /// One station, as the list keeps it.

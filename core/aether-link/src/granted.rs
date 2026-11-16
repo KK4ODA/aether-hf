@@ -1991,6 +1991,13 @@ impl GrantedEngine {
         self.peer_identifier_s
     }
 
+    /// The family of the last frame this station sent: an identification frame the daemon sends
+    /// on its own goes in it (ADR-0127 §2.2).
+    #[must_use]
+    pub const fn sent_floor(&self) -> bool {
+        self.sent_floor
+    }
+
     /// Whether a session's closing identifier is owed and not yet handed over: the daemon tells
     /// a host program the session is over only once it has gone out (ADR-0075).
     #[must_use]

@@ -109,7 +109,8 @@ Pat's configuration, with Aether keying the radio.
   dial list has them. Aether listens before it transmits and waits for a clear channel.
 * **Identify**: a US callsign sends its Morse ID at the end of every session, whatever Setup
   says, without its SSID (`KK4ODA-1` goes out as `KK4ODA`). Any other callsign sends it if
-  Setup step 4's *Morse ID* is ticked. Nothing identifies a
+  Setup step 4's *On* box beside *Identify by* is ticked. *Identify by* can send the ID in the
+  data signal instead of Morse, which ends each session a few seconds sooner. Nothing identifies a
   session in between: for a long one, see *FCC regulatory controls*.
 * **What you will see:** the banner across the top of every tab says what the station is doing
   (calling, connected, how a session ended); the **Status** tab shows the signal-to-noise ratio

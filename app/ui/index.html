@@ -707,7 +707,7 @@
               <button class="step-link" data-step="1" title="Step 1: your callsign, the rules the station operates under, and the field log"><span class="step-link-n">1</span>Callsign and rules</button>
               <button class="step-link" data-step="2" title="Step 2: the sound card and how the radio is keyed"><span class="step-link-n">2</span>Radio interface</button>
               <button class="step-link" data-step="3" title="Step 3: the receive level from the sound card"><span class="step-link-n">3</span>Receive level</button>
-              <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the Morse identifier and band edges"><span class="step-link-n">4</span>Modem</button>
+              <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the identifier and band edges"><span class="step-link-n">4</span>Modem</button>
               <button class="step-link" data-step="5" title="Step 5: updates, recording, host programs and the KISS port"><span class="step-link-n">5</span>Application</button>
               <button class="step-link" data-step="6" title="Step 6: write the settings to the modem's configuration"><span class="step-link-n">6</span>Save</button>
             </nav>
@@ -869,7 +869,7 @@
             <!-- 4 -->
             <li class="step card console-card" data-step="4">
               <div class="card-head step-head">
-                <h3 class="card-title step-title" title="Bandwidth, speed, the busy channel, the turnaround, the answer gap, the key limit, the Morse identifier and band edges. A change here takes effect once the station is idle, with no restart."><span class="step-num">4</span>Modem settings</h3>
+                <h3 class="card-title step-title" title="Bandwidth, speed, the busy channel, the turnaround, the answer gap, the key limit, the identifier and band edges. A change here takes effect once the station is idle, with no restart."><span class="step-num">4</span>Modem settings</h3>
               </div>
               <div class="row">
                 <label for="radio-bandwidth" title="This station's own bandwidth">Bandwidth</label>
@@ -917,10 +917,17 @@
                 <span class="sub" title="Seconds">s</span>
               </div>
               <div class="row">
-                <label for="radio-cwid" title="The Morse identifier at the end of each session">Morse ID</label>
+                <label for="radio-identify-by" title="How the station identifies at the end of each session: never both">Identify by</label>
+                <select id="radio-identify-by" class="narrow" title="Morse: the callsign as a 1500 Hz tone, several seconds at 20 wpm. Data signal: the callsign in ASCII inside Aether's own signal (§97.119(b)(3)), under half a second on a good path and about three on a weak one, and readable by anyone with the published specification. Either way it is the last thing the station sends for a session">
+                  <option value="morse">Morse</option>
+                  <option value="data">Data signal</option>
+                </select>
+                <label class="check" id="radio-cwid-box" title="Send this station's callsign at the end of each session: the last thing it sends for the session, never during one, on a beacon or on a KISS frame. A US callsign always sends it (§97.119); for any other callsign it is your choice, off by default, or the host program's CWID ON"><input id="radio-cwid" title="Send this station's callsign at the end of each session" type="checkbox" /> On</label>
+              </div>
+              <div class="row" id="radio-cwid-speed-row">
+                <label for="radio-cwid-wpm" title="The Morse identifier's speed">Morse speed</label>
                 <input id="radio-cwid-wpm" title="Morse speed in words per minute; under the US rules an automatically keyed identifier goes no faster than 20 wpm (§97.119(b)(1)), whatever is set here" type="text" inputmode="decimal" class="port" value="20" aria-label="Morse speed in words per minute" />
                 <span class="sub" title="Words per minute">wpm</span>
-                <label class="check" id="radio-cwid-box" title="Send this station's callsign in Morse at the end of each session: the last thing it sends for the session, never during one, on a beacon or on a KISS frame. A US callsign always sends it (§97.119); for any other callsign it is your choice, off by default, or the host program's CWID ON"><input id="radio-cwid" title="Send this station's callsign in Morse at the end of each session" type="checkbox" /> On</label>
               </div>
               <div class="row">
                 <label for="reg-margin" title="The margin kept at a segment's edges">Band edges</label>

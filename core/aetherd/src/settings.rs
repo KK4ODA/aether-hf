@@ -205,6 +205,12 @@ pub const RULES: &[Rule] = &[
         ..rule("radio.turnaround_ms")
     },
     Rule {
+        options: &["morse", "data"],
+        why: "the station identifies at the end of each session in Morse, or with its callsign in \
+              ASCII in the data signal; never both (ADR-0127)",
+        ..rule("radio.identify_by")
+    },
+    Rule {
         options: &["2", "6", "8", "10", "15"],
         why: "two tries reach most stations and give the channel back soon; the others call a \
               weak or busy station longer (ADR-0126)",

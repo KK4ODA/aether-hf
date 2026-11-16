@@ -48,11 +48,12 @@ pub use host::HostPresence;
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use aether_link::{
-    Action, Container, GrantConfig, GrantFrame, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
-    State,
+    Action, Container, GrantConfig, GrantFrame, GrantedEngine, HarqBuffer, IdentifyBy, PhyTiming,
+    SoftFrame, State,
     frames::{
-        AcceptFrame, ConnectBody, DataHeader, DataKind, ProbeBody, caller_code, decode_data,
-        encode_data, is_acceptance, pack_callsign, unpack_callsign, with_bandwidth,
+        AcceptFrame, ConnectBody, DataHeader, DataKind, IdentFrame, ProbeBody, caller_code,
+        decode_data, encode_data, identification_frames, is_acceptance, is_identification,
+        pack_callsign, unpack_callsign, with_bandwidth,
     },
     granted::{HEADER_UNDECODABLE_SHARE, Role},
 };
@@ -130,6 +131,10 @@ pub struct StationConfig {
     /// The speed the identifier is sent at when a callsign requires it and the setting is off
     /// (`[radio] cw_id_wpm`).
     pub cw_id_wpm: f64,
+    /// How the station identifies (`[radio] identify_by`, ADR-0127): in Morse, or with its
+    /// callsign in identification frames in the data signal. Whether it identifies is the
+    /// settings above.
+    pub identify_by: IdentifyBy,
     /// The host program keys the radio (`[ptt] kind = "host"`, ADR-0025): with none attached,
     /// nothing this station sends reaches the air, which the log says of a closing identifier.
     pub keyed_by_host: bool,
@@ -181,6 +186,7 @@ impl Default for StationConfig {
             compress: true,
             cw_id: None,
             cw_id_wpm: CwId::default().wpm,
+            identify_by: IdentifyBy::Morse,
             keyed_by_host: false,
             record_dir: None,
             record_auto: false,
@@ -329,6 +335,8 @@ struct LinkTx {
     /// The closing Morse identifier after the frames, or alone: the engine's placement
     /// (ADR-0075).
     identifier_s: f64,
+    /// How many of the last frames are the closing identifier in the data signal (ADR-0127).
+    ident_frames: usize,
     /// Made outside every slot — a closing identifier no slot could be had for: it waits for a
     /// clear channel as a call does.
     listen_first: bool,
@@ -1227,6 +1235,9 @@ pub struct Station<P: Ptt> {
     outbound: Vec<u8>,
     /// The Morse identifier: when it last went out, and what is owed.
     identifier: IdentifierState,
+    /// The first frame of another station's two-frame identifier, heard: its text and where it
+    /// ended (ADR-0127).
+    ident_part: Option<(String, f64)>,
     /// The engine's transmission rendered or on the air, and when it may radiate (ADR-0069
     /// §2.3): the gate holds it until the slot's start and drops it past the slot's slack. Only
     /// the engine's own transmissions are reported to it, done or dropped — a beacon, a
@@ -1399,6 +1410,7 @@ impl<P: Ptt> Station<P> {
             decompressor: Decompressor::new(false),
             outbound: Vec::new(),
             identifier: IdentifierState::default(),
+            ident_part: None,
             keying: None,
             policy: Policy::from_setting(&config.regulatory.profile),
             occupancy: crate::regulatory::occupancy::air(params.bandwidth.hz()).ok(),
@@ -2270,6 +2282,7 @@ impl<P: Ptt> Station<P> {
             ..CwId::default()
         });
         self.config.cw_id_wpm = config.radio.cw_id_wpm;
+        self.config.identify_by = config.radio.identify_by.link();
         self.config.keyed_by_host = matches!(config.ptt, crate::config::PttConfig::Host { .. });
         self.refresh_burst_cap(self.now());
         self.note_identifier_speed();
@@ -2327,6 +2340,9 @@ impl<P: Ptt> Station<P> {
     /// speed and heard the same 20 wpm every time: the rules' limit was applied and never
     /// mentioned.
     pub fn note_identifier_speed(&mut self) {
+        if self.config.identify_by == IdentifyBy::Data {
+            return; // no Morse, no speed (ADR-0127)
+        }
         let Some(cw) = self.identifier_for(&self.identifying_call()) else {
             return;
         };
@@ -2357,11 +2373,14 @@ impl<P: Ptt> Station<P> {
         }
         let reason = required.map_or("", crate::cwid::Required::reason);
         let sent = crate::cwid::sent_as(&call);
+        let how = match self.config.identify_by {
+            IdentifyBy::Morse => "the Morse ID goes out",
+            IdentifyBy::Data => "the identifier goes out in the data signal",
+        };
         self.note(
             "identifier",
             &format!(
-                "the Morse ID goes out as {sent} at the end of every session though its setting \
-                 is off. {reason}"
+                "{how} as {sent} at the end of every session though its setting is off. {reason}"
             ),
         );
         self.identifier.noted_required = Some(call);
@@ -2397,6 +2416,10 @@ impl<P: Ptt> Station<P> {
             "wpm": cw.map_or(self.config.cw_id_wpm, |cw| cw.wpm),
             "sent_wpm": cw.map(|cw| self.sent_wpm(cw)),
             "max_wpm": self.policy.cw_id_max_wpm(),
+            "method": match self.config.identify_by {
+                IdentifyBy::Morse => "morse",
+                IdentifyBy::Data => "data",
+            },
         })
     }
 
@@ -4027,8 +4050,25 @@ impl<P: Ptt> Station<P> {
     /// What a decoded control frame says of who sent it: a call's acceptance names the call by
     /// its session and the caller's code (protocol 13, ADR-0126); a session's control frame
     /// carries the session's low seven bits (protocol 8).
-    fn report_control(&self, report: &mut FrameReport, payload: &[u8]) {
+    fn report_control(&mut self, report: &mut FrameReport, payload: &[u8], span: (f64, f64)) {
         report.control = crate::record::describe_control(payload);
+        if is_identification(payload) {
+            // another station's identifier in its data signal (ADR-0127): who sent it, once its
+            // last frame is in — a two-frame callsign joined, back to back
+            report.kind = "ident";
+            let part = self.ident_part.take();
+            if let Ok(ident) = IdentFrame::decode(payload) {
+                if ident.more {
+                    self.ident_part = Some((ident.text, span.1));
+                } else {
+                    let first = part
+                        .filter(|(_, end)| (0.0..=0.25).contains(&(span.0 - end)))
+                        .map(|(text, _)| text);
+                    report.from = Some(first.unwrap_or_default() + &ident.text);
+                }
+            }
+            return;
+        }
         if let Ok(accept) = AcceptFrame::decode(payload) {
             report.kind = "answer";
             let to_us = accept.session == self.engine.session()
@@ -4077,7 +4117,7 @@ impl<P: Ptt> Station<P> {
         };
         if control {
             if let Some(payload) = payload {
-                self.report_control(&mut report, payload);
+                self.report_control(&mut report, payload, (span_start, span_end));
             }
         } else if let Some((header, body)) = payload.and_then(|p| decode_data(p).ok()) {
             match header.kind {
@@ -4339,7 +4379,9 @@ impl<P: Ptt> Station<P> {
             || self
                 .pending
                 .iter()
-                .any(|next| matches!(next, Outgoing::Link(tx) if tx.identifier_s > 0.0))
+                .any(|next| {
+                    matches!(next, Outgoing::Link(tx) if tx.identifier_s > 0.0 || tx.ident_frames > 0)
+                })
             || self.keying.is_some_and(|window| window.identifier)
     }
 
@@ -4370,6 +4412,7 @@ impl<P: Ptt> Station<P> {
                     not_after,
                     not_before,
                     identifier_s,
+                    ident_frames,
                     listen_first,
                     ..
                 } => {
@@ -4398,11 +4441,18 @@ impl<P: Ptt> Station<P> {
                             ..KeyWindow::default()
                         },
                         identifier_s,
+                        ident_frames,
                         listen_first,
                     }));
                 }
                 Action::Deliver(bytes) => self.deliver(&bytes),
                 Action::Event { name, detail } => {
+                    // another station's identifier, heard in its data signal (ADR-0127 §2.4)
+                    let (name, detail) = if name == "ident_heard" {
+                        ("ident", format!("identified {detail}"))
+                    } else {
+                        (name, detail)
+                    };
                     // A session is where compression is agreed, so both coders are built the
                     // moment one comes up and thrown away when it ends: their state is the
                     // stream's history, and carrying it into the next session would make the
@@ -4598,14 +4648,14 @@ impl<P: Ptt> Station<P> {
             return;
         };
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
-        let mut link: Option<(KeyWindow, f64)> = None;
+        let mut link: Option<(KeyWindow, f64, usize)> = None;
         let (frames, origin) = match outgoing {
             // the engine's closing identifier on its own (ADR-0075)
             Outgoing::Link(tx) if tx.frames.is_empty() => {
                 return self.render_link_identifier(now, &tx);
             }
             Outgoing::Link(tx) => {
-                link = Some((tx.window, tx.identifier_s));
+                link = Some((tx.window, tx.identifier_s, tx.ident_frames));
                 (tx.frames, tx.origin)
             }
             Outgoing::Frames(frames, origin) => (frames, origin),
@@ -4675,7 +4725,7 @@ impl<P: Ptt> Station<P> {
 
         // at unit level: the transmit level is applied as the audio leaves
         self.playback.extend(std::iter::repeat_n(0.0f32, lead));
-        if let Some((window, identifier_s)) = link {
+        if let Some((window, identifier_s, ident_frames)) = link {
             self.note_setup(now, &frames);
             // where in the transmission its header lies, for a cut that may come before it can
             // be read
@@ -4690,7 +4740,7 @@ impl<P: Ptt> Station<P> {
             // starts after them, or this station's own after its answer's (ADR-0069) — but the
             // closing identifier behind a DISC_ACK, in the time every DISC grants it: the last
             // thing this station sends for the session (ADR-0075)
-            let carried = self.link_identifier(now, audio_rate, identifier_s);
+            let carried = self.closing_identifier(now, &frames, identifier_s, ident_frames);
             self.keying = Some(KeyWindow {
                 identifier: carried,
                 frames_samples,
@@ -4724,7 +4774,61 @@ impl<P: Ptt> Station<P> {
     /// [`Self::render_identifier`], with its account of the air.
     fn render_identifier_tagged(&mut self, now: f64) {
         self.render_identifier(now);
-        self.tx_tag = Some(self.tag(now, Origin::station("identifier"), &[], true));
+        let frames = if self.config.identify_by == IdentifyBy::Data {
+            self.setup_identification(&self.identifier.setup_call.clone())
+        } else {
+            Vec::new()
+        };
+        self.tx_tag = Some(self.tag(now, Origin::station("identifier"), &frames, true));
+    }
+
+    /// A setup's identifier in the data signal (ADR-0055 §4, ADR-0127): the callsign's
+    /// identification frames in the family of the station's last frame; none when that callsign
+    /// sends no identifier.
+    fn setup_identification(&self, call: &str) -> Vec<aether_link::TxFrame> {
+        if self.identifier_for(call).is_none() {
+            return Vec::new();
+        }
+        identification_frames(call)
+            .iter()
+            .filter_map(|ident| ident.encode().ok())
+            .map(|payload| aether_link::TxFrame {
+                container: Container::Control,
+                payload: payload.to_vec(),
+                mode: 0,
+                rv: 0,
+                floor: self.engine.sent_floor(),
+                follows: 0,
+            })
+            .collect()
+    }
+
+    /// The closing identifier behind a link transmission's frames, if it carries one: in the data
+    /// signal its frames are already among them (ADR-0127), in Morse it follows them. Whether
+    /// one went out.
+    fn closing_identifier(
+        &mut self,
+        now: f64,
+        frames: &[aether_link::TxFrame],
+        identifier_s: f64,
+        ident_frames: usize,
+    ) -> bool {
+        if ident_frames > 0 {
+            self.data_identified(now, frames);
+            return true;
+        }
+        let audio_rate = self.air.info().audio_rate as f64;
+        self.link_identifier(now, audio_rate, identifier_s)
+    }
+
+    /// The closing identifier went out in the data signal (ADR-0127): counted, and said with the
+    /// callsign its frames carry.
+    fn data_identified(&mut self, now: f64, frames: &[aether_link::TxFrame]) {
+        self.identified(now);
+        let sent = identified_as(frames).unwrap_or_default();
+        self.identifier.outcome = Some(format!(
+            "the closing identifier went out as {sent}, in the data signal"
+        ));
     }
 
     /// [`Self::render_audio`], with its account of the air.
@@ -4756,6 +4860,11 @@ impl<P: Ptt> Station<P> {
                 Container::Control if is_acceptance(&frame.payload) => serde_json::json!({
                     "c": "control",
                     "kind": "Accept",
+                    "floor": frame.floor,
+                }),
+                Container::Control if is_identification(&frame.payload) => serde_json::json!({
+                    "c": "control",
+                    "kind": "Ident",
                     "floor": frame.floor,
                 }),
                 Container::Control => match GrantFrame::decode(&frame.payload) {
@@ -4927,6 +5036,19 @@ impl<P: Ptt> Station<P> {
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
         let call = self.identifier.setup_call.clone();
+        if self.config.identify_by == IdentifyBy::Data {
+            // in the data signal: the gate judged its frames as data (ADR-0127)
+            let frames = self.setup_identification(&call);
+            let Some(rendered) = self.render_frames(&frames) else {
+                return;
+            };
+            self.playback.extend(std::iter::repeat_n(0.0f32, lead));
+            self.playback.extend(rendered.audio);
+            self.playback.extend(std::iter::repeat_n(0.0f32, tail));
+            self.record_sent(&frames, now);
+            self.data_identified(now, &frames);
+            return;
+        }
         // nothing to say after all — no identifier for that callsign, or the rules refuse it
         // now: key nothing
         let Some(audio) = self.identifier_audio_for(&call, now, audio_rate) else {
@@ -5225,7 +5347,7 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// The Morse identifier went out now.
+    /// The closing identifier went out now: Morse, or the data signal's (ADR-0127).
     fn identified(&mut self, _now: f64) {
         self.stats.cw_ids += 1;
         self.identifier.setup_at = None;
@@ -5289,6 +5411,9 @@ impl<P: Ptt> Station<P> {
             .iter()
             .map(|call| (call.clone(), self.identifier_length_for(call)))
             .collect();
+        // in the data signal the engine declares its frames' length, and these say only
+        // whether each callsign identifies (ADR-0127)
+        self.engine.set_identify_by(self.config.identify_by);
         self.engine.set_identifiers(&lengths);
         self.engine
             .set_identifier_s(lengths.first().map_or(0.0, |(_, seconds)| *seconds));
@@ -5473,6 +5598,10 @@ impl<P: Ptt> Station<P> {
                     direction,
                 })
             }
+            Outgoing::Identifier if self.config.identify_by == IdentifyBy::Data => {
+                let frames = self.setup_identification(&self.identifier.setup_call);
+                self.transmission_of(&Outgoing::Frames(frames, Origin::station("identifier")))
+            }
             Outgoing::Identifier => Ok(self.identifier_transmission(&self.identifier.setup_call)),
             Outgoing::Audio { silent: true, .. } => Ok(Transmission {
                 what: "a keying test".to_owned(),
@@ -5505,6 +5634,20 @@ impl<P: Ptt> Station<P> {
         let Some(first) = frames.first() else {
             return ("nothing".to_owned(), session);
         };
+        let idents = frames
+            .iter()
+            .filter(|f| f.container == Container::Control && is_identification(&f.payload))
+            .count();
+        if idents == frames.len() {
+            return ("the identifier, in the data signal".to_owned(), session);
+        }
+        if idents > 0 {
+            let (what, direction) = self.describe_frames(&frames[..frames.len() - idents], air);
+            return (
+                format!("{what} and the identifier, in the data signal"),
+                direction,
+            );
+        }
         match first.container {
             Container::Data => match decode_data(&first.payload).map(|(h, _)| h.kind) {
                 Ok(DataKind::ConnectReq) => ("a call".to_owned(), Direction::Originate),
@@ -5549,10 +5692,13 @@ impl<P: Ptt> Station<P> {
             return false;
         };
         let judged = self.transmission_of(next);
+        let wrong = self.foreign_identifier(next);
         let s = self.situation(true);
-        let result = match judged {
-            Ok(tx) => self.policy.authorize(&s, &tx),
-            Err(why) => Err(Box::new(self.policy.unmeasured(
+        let result = match (judged, wrong) {
+            // an identifier carries this station's own callsign or nothing (ADR-0127 §2.5)
+            (_, Some(call)) => Err(Box::new(self.policy.wrong_identifier(&s, &call))),
+            (Ok(tx), None) => self.policy.authorize(&s, &tx),
+            (Err(why), None) => Err(Box::new(self.policy.unmeasured(
                 &s,
                 "this transmission",
                 &why,
@@ -5575,6 +5721,28 @@ impl<P: Ptt> Station<P> {
                 false
             }
         }
+    }
+
+    /// The callsign an identification frame of a queued transmission carries when it is none
+    /// of this station's (ADR-0127 §2.5, C6): `None` when it carries none, or the station's.
+    fn foreign_identifier(&self, outgoing: &Outgoing) -> Option<String> {
+        let setup;
+        let frames = match outgoing {
+            Outgoing::Link(LinkTx { frames, .. }) | Outgoing::Frames(frames, _) => frames,
+            Outgoing::Identifier if self.config.identify_by == IdentifyBy::Data => {
+                setup = self.setup_identification(&self.identifier.setup_call);
+                &setup
+            }
+            _ => return None,
+        };
+        let call = identified_as(frames)?;
+        let ours = self
+            .engine
+            .callsigns
+            .iter()
+            .chain(std::iter::once(&self.engine.my_call))
+            .any(|own| crate::cwid::sent_as(own) == call);
+        (!ours).then_some(call)
     }
 
     /// A transmission the rules refuse: it is dropped, reported, and — when it was a
@@ -5969,6 +6137,18 @@ fn envelope(air: &AirOccupancy, timing: &PhyTiming, upto: usize) -> Edges {
         .map(|r| air.rungs[r].edges.union(air.control(timing.is_floor(r))))
         .reduce(Edges::union)
         .unwrap_or(air.control_floor)
+}
+
+/// The callsign a transmission's identification frames carry (ADR-0127), a two-frame one joined;
+/// `None` when it carries none.
+fn identified_as(frames: &[aether_link::TxFrame]) -> Option<String> {
+    let texts: Vec<String> = frames
+        .iter()
+        .filter(|f| f.container == Container::Control && is_identification(&f.payload))
+        .filter_map(|f| IdentFrame::decode(&f.payload).ok())
+        .map(|ident| ident.text)
+        .collect();
+    (!texts.is_empty()).then(|| texts.concat())
 }
 
 /// Whether a transmission sets up a contact — a call, an acceptance, a probe or its answer —
@@ -9248,6 +9428,167 @@ mod tests {
         ends_with_its_identifier(&mut air.b, "DiscAck");
     }
 
+    /// Two stations that identify in their data signal (ADR-0127).
+    fn data_air() -> Air {
+        Air::with(1.0, 0.0005, |config| StationConfig {
+            identify_by: IdentifyBy::Data,
+            ..config
+        })
+    }
+
+    #[test]
+    fn in_the_data_signal_a_session_ends_with_both_identifiers_last() {
+        // ADR-0127: the identifier takes the Morse identifier's place — behind the slave's
+        // DISC_ACK, and alone after the master's last slot — as identification frames, each
+        // station's callsign in ASCII, heard by the other
+        let both_idle = |a: &Station<NullPtt>, b: &Station<NullPtt>| a.quiescent() && b.quiescent();
+        let mut air = data_air();
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 300]);
+        air.a.disconnect();
+        air.run(150.0, both_idle);
+        assert_eq!((air.a.stats.cw_ids, air.b.stats.cw_ids), (1, 1));
+        let heard_a = air.a.take_events();
+        let heard_b = air.b.take_events();
+        ends_with_its_identifier(&mut air.a, "Ident");
+        ends_with_its_identifier(&mut air.b, "DiscAck");
+        assert!(
+            heard_a.iter().any(|e| e == "ident:identified KK4XYZ"),
+            "{heard_a:?}"
+        );
+        assert!(
+            heard_b.iter().any(|e| e == "ident:identified W4ODA"),
+            "{heard_b:?}"
+        );
+        assert!(
+            heard_a
+                .iter()
+                .any(|e| e
+                    == "identified:the closing identifier went out as W4ODA, in the data signal"),
+            "{heard_a:?}"
+        );
+        // the frame reports name the sender, so it joins the stations heard
+        let ident = air
+            .b
+            .take_frame_reports()
+            .into_iter()
+            .find(|r| r.kind == "ident")
+            .expect("an identification frame reported");
+        assert_eq!(ident.from.as_deref(), Some("W4ODA"));
+        assert!(ident.decoded);
+
+        // the slave aborts: the master closes so that both identify, in the data signal
+        let mut air = data_air();
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |a, b| a.connected() && b.connected());
+        air.a.send(&[0x42; 3000]);
+        air.run(5.0, |_, _| false);
+        air.b.abort();
+        air.run(150.0, both_idle);
+        ends_with_its_identifier(&mut air.a, "Ident");
+        ends_with_its_identifier(&mut air.b, "DiscAck");
+    }
+
+    #[test]
+    fn the_data_identifier_closes_sooner_than_morse() {
+        // the same session, each way: from the master's disconnect to both stations quiet
+        let close = |mut air: Air| {
+            air.a.connect("KK4XYZ").expect("idle");
+            air.run(60.0, |a, b| a.connected() && b.connected());
+            air.a.disconnect();
+            let asked = air.a.now();
+            air.run(150.0, |a, b| a.quiescent() && b.quiescent());
+            air.a.now() - asked
+        };
+        let morse = close(Air::new(1.0, 0.0005));
+        let data = close(data_air());
+        assert!(data < morse - 3.0, "morse {morse:.1} s, data {data:.1} s");
+    }
+
+    #[test]
+    fn an_identifier_in_the_data_signal_is_judged_as_data_and_names_this_station() {
+        // ADR-0127 §2.5, C6: the gate judges an identification frame as the data emission it
+        // is, at the dial it goes out on — a data emission refused in the phone segment where
+        // a Morse identifier would go — and refuses one that names a callsign the station is
+        // not configured for
+        use crate::regulatory::ControlMode;
+        let queued = |station: &mut Station<NullPtt>, call: &str| {
+            let frames = identification_frames(call)
+                .iter()
+                .map(|f| aether_link::TxFrame {
+                    container: Container::Control,
+                    payload: f.encode().expect("encode").to_vec(),
+                    mode: 0,
+                    rv: 0,
+                    floor: true,
+                    follows: 0,
+                })
+                .collect();
+            station
+                .pending
+                .push_back(Outgoing::Frames(frames, Origin::station("identifier")));
+        };
+        let mut data_segment = lone_station(under_us_rules(14_078_000, ControlMode::Local));
+        queued(&mut data_segment, "W4ODA");
+        assert!(
+            data_segment.gate(1.0),
+            "its own callsign in the data segment goes"
+        );
+        let (_, judged) = data_segment.last_gate.clone().expect("judged");
+        assert_eq!(judged.kind, crate::regulatory::EmissionKind::Data);
+        assert_eq!(judged.what, "the identifier, in the data signal");
+        assert_eq!(judged.dial_hz, Some(14_078_000.0));
+
+        let mut phone = lone_station(under_us_rules(14_200_000, ControlMode::Local));
+        queued(&mut phone, "W4ODA");
+        assert!(
+            !phone.gate(1.0),
+            "a data emission in the phone segment is refused"
+        );
+        assert_eq!(
+            phone.last_gate.clone().expect("judged").1.kind,
+            crate::regulatory::EmissionKind::Data
+        );
+
+        let mut foreign = lone_station(under_us_rules(14_078_000, ControlMode::Local));
+        queued(&mut foreign, "N0CALL");
+        assert!(!foreign.gate(1.0), "another callsign is never sent");
+        let refused = foreign.take_regulatory_reports();
+        assert!(
+            refused
+                .iter()
+                .any(|d| d.code == "identifier" && !d.allowed()),
+            "{refused:?}"
+        );
+        assert!(foreign.pending.is_empty(), "dropped, not keyed");
+        // a two-frame callsign of the station's own is its own
+        let mut long = Station::new(
+            StationConfig {
+                callsign: "W4/G4ABC".to_owned(),
+                wait_for_clear: false,
+                regulatory: under_us_rules(14_078_000, ControlMode::Local),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        queued(&mut long, "W4/G4ABC-7");
+        assert!(long.gate(1.0));
+    }
+
+    #[test]
+    fn the_status_says_how_the_station_identifies() {
+        let mut air = data_air();
+        assert_eq!(air.a.identifier_status()["method"], "data");
+        assert_eq!(air.a.identifier_check("KK4ODA")["enabled"], true);
+        let morse = Air::new(1.0, 0.0005);
+        assert_eq!(morse.a.identifier_status()["method"], "morse");
+        // a program's CWID ON means "identify", by the station's choice (ADR-0127 §2.1)
+        let _ = air.a.take_events();
+        assert_eq!(air.a.identifier_check("VE3XYZ")["method"], "data");
+    }
+
     #[test]
     fn a_station_whose_callsign_needs_no_identifier_ends_as_before() {
         // a non-US callsign with the setting off sends none: its DISC_ACK is its last word,
@@ -9622,6 +9963,7 @@ mod tests {
             origin: Origin::station("test"),
             window: KeyWindow::default(),
             identifier_s,
+            ident_frames: 0,
             listen_first: false,
         }));
         station.render_next(1.0);
@@ -12930,6 +13272,7 @@ mod tests {
                 ..KeyWindow::default()
             },
             identifier_s: 0.0,
+            ident_frames: 0,
             listen_first: false,
         }));
     }

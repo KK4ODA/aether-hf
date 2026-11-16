@@ -717,8 +717,8 @@ function showCwid() {
   box.disabled = forced;
   box.checked = forced || cwidSetting;
   const why = forced
-    ? `${cwidRequired}: this callsign identifies in Morse at the end of every session, whatever the box says`
-    : "Send this station's callsign in Morse at the end of each session: the last thing it sends for the session";
+    ? `${cwidRequired}: this callsign identifies at the end of every session, whatever the box says`
+    : "Send this station's callsign at the end of each session: the last thing it sends for the session";
   box.title = why;
   $("radio-cwid-box").title = why;
   showCwidCap();
@@ -740,6 +740,11 @@ function checkCwidRequired() {
     }
     showCwid();
   }, 300);
+}
+
+// How the station identifies (ADR-0127): the Morse speed is shown only for Morse.
+function showIdentifyBy() {
+  $("radio-cwid-speed-row").hidden = $("radio-identify-by").value !== "morse";
 }
 
 function showCwidCap() {
@@ -1598,6 +1603,7 @@ const ACTIVITY_TEXT = {
   answering: "answering",
   connected: "session",
   datagram: "KISS frame",
+  identified: "identified",
 };
 
 async function loadHeard() {
@@ -3624,6 +3630,8 @@ async function loadConfig() {
   $("radio-turnaround").value = String(radio.turnaround_ms ?? 0);
   cwidSetting = radio.cw_id === true;
   $("radio-cwid-wpm").value = String(radio.cw_id_wpm ?? 20);
+  select($("radio-identify-by"), radio.identify_by ?? "morse");
+  showIdentifyBy();
   cwidChecked = null;
   showCwid();
   checkCwidRequired();
@@ -3708,8 +3716,9 @@ const SETTING_NAMES = {
   "radio.max_key_s": "longest key",
   "radio.answer_gap_ms": "answer gap",
   "radio.turnaround_ms": "turnaround",
-  "radio.cw_id": "Morse ID",
+  "radio.cw_id": "identifier",
   "radio.cw_id_wpm": "Morse speed",
+  "radio.identify_by": "identify by",
   "regulatory.edge_margin_hz": "band edges",
   "regulatory.band_plan": "band-plan guidance",
   "regulatory.log_permitted": "automatic log",
@@ -4048,6 +4057,7 @@ function formChanges() {
   if (turnaround !== null) changes["radio.turnaround_ms"] = Math.round(turnaround);
   // the operator's own setting, never the box a US callsign ticks (ADR-0075)
   changes["radio.cw_id"] = cwidSetting;
+  changes["radio.identify_by"] = $("radio-identify-by").value;
   changes["update.channel"] = $("update-channel").value;
   changes["update.check"] = $("update-check").checked;
   changes["record.auto"] = $("record-auto").checked;
@@ -4776,7 +4786,8 @@ function numberWithin(id, low, high) {
 // here is wrong" rather than "you did this": a busy threshold, a key limit and a Morse
 // schedule that parse, a host port a program can reach.
 function checkModemSettings() {
-  const morse = !$("radio-cwid").checked || numberWithin("radio-cwid-wpm", 5, 40);
+  const morse = !$("radio-cwid").checked || $("radio-identify-by").value !== "morse"
+    || numberWithin("radio-cwid-wpm", 5, 40);
   const ok = numberWithin("radio-busy-db", 0, 60) && numberWithin("radio-max-key", 1, 600)
     && numberWithin("radio-answer-gap", 0, 2000) && numberWithin("radio-turnaround", 0, 1500)
     && morse;
@@ -6286,6 +6297,7 @@ function wire() {
   wireDebug();
   wireRxFilter();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
+  $("radio-identify-by").addEventListener("change", showIdentifyBy);
   $("radio-cwid").addEventListener("change", () => {
     // the box is the setting only where the callsign leaves it to the operator
     if (cwidRequired === null) cwidSetting = $("radio-cwid").checked;

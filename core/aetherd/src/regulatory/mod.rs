@@ -545,6 +545,27 @@ impl Policy {
         }
     }
 
+    /// The refusal of an identification frame that names a callsign this station is not
+    /// configured for (ADR-0127 §2.5): an identifier is the station's own callsign or nothing.
+    #[must_use]
+    pub fn wrong_identifier(&self, s: &Situation, call: &str) -> Decision {
+        let tx = Transmission {
+            what: "the identifier in the data signal".to_owned(),
+            kind: EmissionKind::Data,
+            audio: Edges::tone(0.0, 0.0),
+            direction: Direction::Originate,
+        };
+        Draft::new(s, &tx, self.reading()).blocked(
+            "identifier",
+            "§97.119(a)",
+            &format!("TX BLOCKED: the identifier names {call}, not this station"),
+            &format!(
+                "An identification frame carries {call}, which is none of this station's \
+                 callsigns. A station identifies with its own callsign only."
+            ),
+        )
+    }
+
     /// The refusal of a transmission whose spectrum is not known: nothing is measured for it,
     /// so nothing says where it would land.
     #[must_use]

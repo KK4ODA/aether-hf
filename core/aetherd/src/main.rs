@@ -647,6 +647,7 @@ fn station_config(
         }),
         // a US callsign identifies whatever the setting says, at this speed (ADR-0075)
         cw_id_wpm: config.radio.cw_id_wpm,
+        identify_by: config.radio.identify_by.link(),
         keyed_by_host: matches!(config.ptt, PttConfig::Host { .. }),
         operator: config.operator.clone(),
         regulatory: regulatory_settings(config, simulated),
@@ -2064,6 +2065,7 @@ fn sighting_of(
         "answer" | "probe-answer" => (Activity::Answering, frame.to.clone()),
         "probe" => (Activity::Probing, frame.to.clone()),
         "datagram" => (Activity::Datagram, None),
+        "ident" => (Activity::Identified, None),
         _ => (Activity::Connected, None),
     };
     Some(Sighting {

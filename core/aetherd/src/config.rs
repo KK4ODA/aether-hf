@@ -127,6 +127,29 @@ pub enum CatProtocol {
     Icom,
 }
 
+/// How a station identifies at the end of a session (ADR-0127): one value, so the two can
+/// never both be on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IdentifyBy {
+    /// A Morse identifier, at `cw_id_wpm` (ADR-0075).
+    #[default]
+    Morse,
+    /// The callsign in ASCII in the data signal: identification frames (§97.119(b)(3)).
+    Data,
+}
+
+impl IdentifyBy {
+    /// The link engine's name for the method.
+    #[must_use]
+    pub const fn link(self) -> aether_link::IdentifyBy {
+        match self {
+            Self::Morse => aether_link::IdentifyBy::Morse,
+            Self::Data => aether_link::IdentifyBy::Data,
+        }
+    }
+}
+
 /// Which input a Yaesu radio transmits from when keyed over CAT.
 /// Which input a Yaesu was once told to transmit from. **It does nothing**, and is kept
 /// only so a configuration that names it still loads: the belief that `TX2;` keys the
@@ -327,6 +350,12 @@ pub struct RadioSection {
     /// Morse speed in words per minute.
     #[serde(default = "default_cw_wpm")]
     pub cw_id_wpm: f64,
+    /// How the station identifies (ADR-0127): `morse`, the default, or `data`, the callsign in
+    /// identification frames in its data signal. `cw_id` and a US callsign still decide
+    /// whether it identifies; this says how. A host program's `CWID ON` means "identify", by
+    /// this choice.
+    #[serde(default)]
+    pub identify_by: IdentifyBy,
 }
 
 fn default_cw_wpm() -> f64 {
@@ -398,6 +427,7 @@ impl Default for RadioSection {
             compress: false,
             cw_id: false,
             cw_id_wpm: default_cw_wpm(),
+            identify_by: IdentifyBy::Morse,
         }
     }
 }
@@ -921,7 +951,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -947,6 +977,7 @@ pub const MIGRATIONS: &[Migration] = &[
     turnaround,
     identifier_at_the_end,
     call_tries,
+    identify_by,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1105,6 +1136,11 @@ fn identifier_at_the_end(table: &mut toml::Table) {
 /// whose default makes the call link protocol 13 makes, and the step is for going back
 /// (`<name>.bak-v13`).
 fn call_tries(_table: &mut toml::Table) {}
+
+/// Schema 14 → 15, the data identifier (ADR-0127): nothing moves — `radio.identify_by` is a new
+/// key whose default is the Morse identifier every earlier version sends, and the step is for
+/// going back (`<name>.bak-v14`).
+fn identify_by(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1568,6 +1604,8 @@ pub const LIVE_KEYS: &[&str] = &[
     // the identifier is rendered at each transmission, so its settings apply to the next
     "radio.cw_id",
     "radio.cw_id_wpm",
+    // declared in the next call or acceptance, as the identifier's length is
+    "radio.identify_by",
     "record.auto",
     "record.notes",
     "record.send_to_project",
@@ -1773,7 +1811,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 14
+schema_version = 15
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1862,6 +1900,10 @@ compress = false
 # it is your call, off by default.
 cw_id = false
 cw_id_wpm = 20.0
+# How the station identifies: "morse", or "data" for the callsign in ASCII inside the data
+# signal (§97.119(b)(3)), which takes a fraction of a second where Morse takes several. Morse
+# speed applies to Morse only.
+identify_by = "morse"
 
 [control]
 # The modem's own interface: JSON over WebSocket at ws://<bind>/v1, or POST /v1/<method>.

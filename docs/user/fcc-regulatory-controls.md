@@ -188,9 +188,9 @@ locally controlled station's: somebody is at the radio when they are pressed.
   * Nothing during a session sends one, and neither do calls, acceptances, probes, probe answers,
     beacons or KISS frames.
   * A call or probe that leads to no session is identified on its own, 30 s after.
-* **Who sends it.** A US callsign always does, whatever *Morse ID* says in Setup and whatever a
-  host program's `CWID OFF` says. VARA HF forces it for US callsigns too. Any other callsign
-  sends it only if *Morse ID* is ticked; it is off by default. *US* is decided from the callsign
+* **Who sends it.** A US callsign always does, whatever the *On* box beside *Identify by* says
+  in Setup and whatever a host program's `CWID OFF` says. VARA HF forces it for US callsigns too.
+  Any other callsign sends it only if the box is ticked; it is off by default. *US* is decided from the callsign
   the identifier sends, by where the station operates:
   * the prefixes AA–AL, K, N and W are US;
   * an SSID (`-1`), `-T`/`-R`, and `/P`, `/M`, `/MM`, `/QRP` or a bare digit change nothing;
@@ -206,6 +206,41 @@ locally controlled station's: somebody is at the radio when they are pressed.
   It goes at **20 wpm at most**, §97.119(b)(1)'s limit for an identifier sent by an automatic
   device. A faster setting is held to 20, and Setup step 4 and the log say so.
 
+### Identifying in the data signal
+
+Setup step 4's **Identify by** chooses how the station identifies: **Morse** (the default) or
+**Data signal** (ADR-0127). It is one setting, so the two are never both on. *Whether* the station
+identifies is unchanged: a US callsign always does, any other only with the box ticked or a host
+program's `CWID ON`. A host program cannot ask for Morse: `CWID ON` means "identify", the way the
+station chose.
+
+* **What is sent.** The same callsign the Morse identifier sends (no SSID, `-T` or `-R`; a `/`
+  part kept), in 7-bit ASCII (ITU-T T.50, §97.309(a)(3)), in one or two *identification frames*:
+  Aether control frames whose layout `docs/spec/air-interface.md` §7.1 publishes, so anyone with
+  that document can read the callsign (§97.309(a)(4)). Six characters fit one frame, which covers
+  every US callsign; seven to twelve go as two frames back to back.
+* **When it goes.** Where the Morse identifier would: once a session, at the end, the last thing
+  each station sends for it, by every rule of the section above (behind the answer to the
+  goodbye, alone after it, alone after listening when the path is lost, 30 s after a contact that
+  went no further than its setup). It goes in the family of the station's last frame: about
+  0.43 s on a good path, 3.2 s on the tone floor. A session ends 2.5–8.3 s sooner than with
+  Morse at 20 wpm.
+* **How it is judged.** As the data emission it is, at the dial it goes out on, like every other
+  frame: where data is not allowed it does not go, even where Morse would. It is not CW, so the
+  20 wpm cap does not apply. Before keying, the gate also checks that the callsign in the frame is
+  one of the station's own; a frame with any other callsign is refused and never keyed.
+* **The reading.** §97.119(b)(3) allows identification "by a RTTY emission using a specified
+  digital code when all or part of the communications are transmitted by a RTTY or data
+  emission". Aether's emission is data, not RTTY in Part 97's strict sense, so this is a reading:
+  the callsign in a specified code (ASCII), in a publicly documented format, at the end of a
+  communication that was itself data. It is the reading packet radio, PACTOR and ARDOP take for
+  the callsigns in their own frames, and the one Aether FM takes (ADR-0123). The author, as
+  licensee, confirmed it on 2026-11-16 (ADR-0127 §3). If you read the rule otherwise, choose
+  Morse.
+* **What other stations see.** A station on this version that hears it logs `identified
+  <callsign>` and lists the station among the stations heard. An older version ignores the
+  frame.
+
 ### What identifies a long session
 
 §97.119(a) asks for the call sign at the end of each communication **and at least every 10
@@ -215,8 +250,9 @@ minutes during it**. What Aether and the host programs send, as of this release:
   carry the callsigns. They are packed in Aether's own 6-bit code (`pack_callsign` in the air
   interface), not Baudot, AMTOR or ASCII. Session frames (data, acknowledgements and the
   goodbye) carry none.
-* **Aether's Morse identifier**: at the end only. Nothing in Aether identifies a session between
-  its call and its end.
+* **Aether's identifier**, in Morse or in the data signal (*Identifying in the data signal*,
+  above): at the end only. Nothing in Aether identifies a session between its call and its end,
+  with either method.
 * **VarAC**: its *Call ID interval* setting sends `DE <your callsign>` as chat text on its own
   schedule. Aether carries that text as data, inside its own frames, and compressed if
   *Compress* is on (off by default).

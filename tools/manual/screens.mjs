@@ -124,7 +124,7 @@ function config({callsign = ME, configured = true, bandwidth = 2300} = {}) {
       : {kind: "none"},
     radio: {max_key_s: 30, wait_for_clear: true, busy_threshold_db: 6, bandwidth,
             answer_only: false, answer_gap_ms: 0, turnaround_ms: 0, max_mode: 19,
-            compress: false, cw_id: false, cw_id_wpm: 20},
+            compress: false, cw_id: false, cw_id_wpm: 20, identify_by: "morse"},
     control: {enabled: true, bind: "127.0.0.1:8515", token: null, ui_dir: null},
     host: {enabled: false, bind: "127.0.0.1:8300", trace: false},
     kiss: {enabled: false, bind: "127.0.0.1:8100", rung: 1, wait_for_clear: true,
@@ -146,7 +146,8 @@ function config({callsign = ME, configured = true, bandwidth = 2300} = {}) {
 
 const LIVE_KEYS = ["audio.tx_level", "radio.wait_for_clear", "radio.busy_threshold_db",
   "radio.bandwidth", "radio.answer_only", "radio.answer_gap_ms", "radio.turnaround_ms",
-  "radio.max_mode", "radio.cw_id", "radio.cw_id_wpm", "record.auto", "record.notes",
+  "radio.max_mode", "radio.cw_id", "radio.cw_id_wpm", "radio.identify_by", "record.auto",
+  "record.notes",
   "record.send_to_project", "regulatory.dial_hz", "panel.waterfall.auto"];
 
 const DEVICES = {
