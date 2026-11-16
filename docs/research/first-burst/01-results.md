@@ -1,7 +1,7 @@
 # The first burst after a call: results
 
 **Status:** 2026-11-16. **Verdict: fails the registered criteria — F2, F3 and F4 — not by a narrow
-margin.** F1 (fewer first-burst blocks sent again), F5 (completion) and F6 (safety) pass. The switch
+margin.** The variant J, which moves straight to the bold rung (§8), fails the same three, by less. F1 (fewer first-burst blocks sent again), F5 (completion) and F6 (safety) pass. The switch
 stays off; the decision is the author's (§5).
 
 ## 1. What ran
@@ -151,3 +151,85 @@ faults in the port fails them. `cargo clippy --all-targets --all-features -D war
 test of §4. That test passed six times out of six when run alone, and the full workspace then passed
 with `--no-fail-fast`: 604 of 604 `aetherd` unit tests and every integration test, the two-daemon
 sessions included.
+
+## 8. Variant J: straight to the bold rung (registered in `00-plan.md` §5)
+
+The author asked for the variant §5.3 named. J is ADR-0128 as built, except that a decoded first try
+moves the choice to its rung at once (`first_burst_jump`, model `8eda89f`, port `9d1a2a7`, the
+registration `96114cc` before any run). Both daemons came from that tree: A′ with the switches off,
+J with both on. They ran the same 25 scenarios and draws as §1, 114 pairs, and then the seven
+flagged scenarios again on the same draws (30 pairs). A container restart stopped both arms at
+102/97 runs. The 29 missing runs were deleted and run again from scratch (`/home/user/fb/resume.sh`);
+no half-finished run was kept.
+
+**Verdict: fails F2, F3 and F4; F1, F5 and F6 pass.**
+
+| | asked | first pass (114 pairs) | rerun of the flagged (30 pairs) | verdict |
+|---|---|---|---|---|
+| F1 first-burst blocks sent again | ≤ ⅔ of A′'s | 37.3 % → 20.1 % (×0.54); 509 → 192 s of later copies; lower in 13 of 15 | 25.0 % → 8.5 % | **pass** |
+| F2 air, pooled | ≤ 1.02 | **1.051** (B: 1.083) | 1.182 (the flagged only) | **fail** |
+| F3 no scenario over 1.15 | none | 5 over | **4 confirmed**: `15m-equatorial-flutter-2300` 1.33, `80m-qsb-dropout-500` 1.31, `20m-dx-500` 1.29, `80m-winlink-exchange-500` 1.28 (`20m-dx-moderate-2300` 1.18 → 1.13) | **fail** |
+| F4 Tests | ≥ 0.97; none under 0.85 | **0.855 / 0.872** | **confirmed**: `20m-dx-moderate-2300` message 0.41 (file 0.58), `80m-start-low-reading-500` 0.75, `80m-strong-moderate-500` 0.82 | **fail** |
+| F5 completion | J ≥ A′, no scenario −2 | A′ 111, J 114 | 30 / 30 | pass |
+| F6 safety | nothing new | 0 / 0 radiated overlaps, no invariant broken | 0 / 0 | pass |
+
+**What J fixed.** The strong paths that sank B are even or better. Against A′, J ran
+`40m-good-throughput-2300` ×1.10 (B ×1.21), `80m-steady-mail-2300` ×1.03 (B ×1.19),
+`40m-trimode-gateway-2300` ×0.96 (B ×1.19) and `quick-awgn-2300` ×0.86 (B ×0.90). The 500 Hz AGC and
+NVIS edge scenarios, which the change was for, gained more than under B: ×0.83–0.89, and every
+`80m-trimode-gateway-client-vanishes-500` run passed (A′ 4 of 6). On `40m-good-throughput-2300`,
+draw 20, the caller's first transmission went `18,15×5` and its second at 18 throughout.
+
+**What it did not fix: the start across the floor's edge.** J changes only what happens after a try,
+and when the safe rung is on the floor and today's first rung is OFDM there is no try (`00-plan.md`
+§2.2). The first pass splits cleanly on that:
+
+| J's first burst against A′'s | runs passed in both | air J/A′, geometric mean | median |
+|---|---|---|---|
+| on the floor with no try, where A′ started on OFDM | 39 | ×1.14 | ×1.17 |
+| every other start | 72 | ×1.006 | ×1.00 |
+
+Wherever a same-family try was possible, J is level with today. Its pooled loss, and every F3 and F4
+failure, comes from the floor starts. An example is `20m-dx-moderate-2300`, draw 1051, the Test's
+session. A′ started at rung 14. J started at the floor's top (rung 5), sent its first 70 s on 5.36 s
+floor frames, crossed to OFDM at 7 after the full wait, and climbed a rung a try to 11: message
+195 bit/s against 707.
+
+**But the floor starts also hold J's gains.** The 39 floor starts include the AGC and NVIS edge
+scenarios: `80m-agc-carrier-inside-500` and `-outside-500` four runs each, `80m-nvis-evening-500`,
+`80m-nvis-disturbed-500` and `80m-trimode-gateway-client-vanishes-500`. There a floor start is right:
+a 7 ms echo kills OFDM. A J that kept today's start whenever the edge lies between the two rungs
+would be about level with today (×1.006 on the other starts) and would give those gains up. It was
+not built: it would be another change, and the author's call.
+
+### 8.1 J against A′, every scenario (first pass)
+
+Medians of the paired ratios. "Again" is the share of first-burst blocks sent again.
+
+| scenario | runs | pass A | pass B | again A | again B | air B/A | msg B/A | file B/A | overlaps A/B |
+|---|---|---|---|---|---|---|---|---|---|
+| 15m-equatorial-flutter-2300 | 4 | 4 | 4 | 11% | 3% | 1.33 |  |  | 0/0 |
+| 20m-dx-500 | 4 | 4 | 4 | 19% | 13% | 1.29 |  |  | 0/0 |
+| 20m-dx-moderate-2300 | 4 | 4 | 4 | 59% | 13% | 1.18 | 0.41 | 0.57 | 0/0 |
+| 20m-polar-path-2300 | 4 | 4 | 4 | 3% | 0% | 1.12 |  |  | 0/0 |
+| 40m-gateway-busy-when-called-2300 | 4 | 4 | 4 | 40% | 7% | 0.99 |  |  | 0/0 |
+| 40m-good-throughput-2300 | 4 | 4 | 4 | 24% | 2% | 1.10 |  |  | 0/0 |
+| 40m-trimode-gateway-2300 | 4 | 4 | 4 | 62% | 62% | 0.96 |  |  | 0/0 |
+| 40m-winlink-exchange-2300 | 4 | 4 | 4 | 50% | 50% | 1.01 |  |  | 0/0 |
+| 80m-agc-carrier-inside-500 | 6 | 6 | 6 | 88% | 37% | 0.85 |  |  | 0/0 |
+| 80m-agc-carrier-outside-500 | 6 | 5 | 6 | 79% | 56% | 0.83 |  |  | 0/0 |
+| 80m-flutter-500 | 4 | 4 | 4 | 9% | 0% | 1.07 | 0.86 | 0.99 | 0/0 |
+| 80m-nvis-disturbed-500 | 6 | 6 | 6 | 73% | 54% | 1.00 |  |  | 0/0 |
+| 80m-nvis-evening-500 | 6 | 6 | 6 | 73% | 58% | 1.01 | 0.95 | 1.02 | 0/0 |
+| 80m-qsb-dropout-500 | 4 | 4 | 4 | 17% | 5% | 1.31 |  |  | 0/0 |
+| 80m-start-high-reading-500 | 6 | 6 | 6 | 19% | 6% | 0.99 | 0.92 | 0.96 | 0/0 |
+| 80m-start-low-reading-500 | 6 | 6 | 6 | 6% | 3% | 1.11 | 0.76 | 0.73 | 0/0 |
+| 80m-steady-mail-2300 | 4 | 4 | 4 | 0% | 4% | 1.03 |  |  | 0/0 |
+| 80m-steady-mail-500 | 4 | 4 | 4 | 75% | 71% | 1.09 |  |  | 0/0 |
+| 80m-strong-moderate-500 | 4 | 4 | 4 | 33% | 8% | 0.98 | 0.82 | 1.01 | 0/0 |
+| 80m-trimode-gateway-client-vanishes-500 | 6 | 4 | 6 | 56% | 35% | 0.89 |  |  | 0/0 |
+| 80m-weak-500 | 4 | 4 | 4 | 38% | 6% | 0.98 |  |  | 0/0 |
+| 80m-weak-both-ways-ladder-500 | 4 | 4 | 4 | 29% | 24% | 1.01 | 1.04 | 0.97 | 0/0 |
+| 80m-weak-wide-test-2300 | 4 | 4 | 4 | 33% | 0% | 1.00 | 1.00 | 1.00 | 0/0 |
+| 80m-winlink-exchange-500 | 4 | 4 | 4 | 42% | 30% | 1.28 |  |  | 0/0 |
+| quick-awgn-2300 | 4 | 4 | 4 | 6% | 0% | 0.86 |  |  | 0/0 |
