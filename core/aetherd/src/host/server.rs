@@ -109,9 +109,13 @@ const PENDING_SETTLE: Duration = Duration::from_millis(1500);
 /// as `PTT ON` (ADR-0103). RMS Trimode judges a link hung when no PTT has come for some minutes
 /// at the moment it hears `CONNECTED`, and the acceptance's keying, the station's last
 /// transmission before it, had never been told. The acceptance goes in the slot the call
-/// grants: the call's end, the turnaround and answer gap (at most 1.5 s and 2 s), the keying.
-/// One the rules or the keying gate refuse never keys, and the `CONNECTED` goes all the same.
-const ACCEPTANCE_KEY_WAIT: Duration = Duration::from_secs(4);
+/// grants, which opens after the call's end: a both-ways try is taken when its OFDM part is
+/// read, 5.4 s before its tone part ends (ADR-0126), and the gap after it holds the level (up
+/// to 2 s on a call's last try), the turnaround and answer gap (at most 1.5 s and 2 s) and the
+/// keying. 4 s had covered the call before protocol 13, read at its end; on the harness's
+/// three-station gateway, run nearer real time, the `CONNECTED` went before the key. One the
+/// rules or the keying gate refuse never keys, and the `CONNECTED` goes all the same.
+const ACCEPTANCE_KEY_WAIT: Duration = Duration::from_secs(12);
 
 /// A called session's acceptance, between the station taking the call and the program hearing
 /// `CONNECTED` (ADR-0103).

@@ -498,6 +498,13 @@ read, refused and said so, as every other version's.
   read an acceptance as a `CONNECT_ACK` data frame; each now knows the control frame (an
   acceptance is "the answer to a call", a response under §97.221(c)(1), and carries no Morse
   identifier).
+* **The host program's `CONNECTED`.** ADR-0103 holds a called session's `CONNECTED` until the
+  acceptance's `PTT ON`, at most 4 s from the call being taken. A both-ways try is taken when its
+  OFDM part is read, 5.4 s before its tone part ends, and its acceptance keys after that and the
+  slot's gap: in real time nearly every call's `CONNECTED` would have gone before its key. The
+  release candidate's scenario pass found it (`40m-gateway-three-clients-2300`,
+  `80m-pat-fade-500`, run nearer real time under load). The wait is 12 s
+  (`ACCEPTANCE_KEY_WAIT`).
 * **The first data's rung.** An acceptance carries the both-ways try's OFDM reading where today's
   carried the floor's, capped near 17.5 dB. On the daemon tests' loopback (about 25 dB, where
   64-QAM decodes only by combining) a session's first data goes at rung 19 and comes through on

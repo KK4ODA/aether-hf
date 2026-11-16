@@ -2698,7 +2698,7 @@ A called session whose `PENDING` the program heard now has its `CONNECTED` wait 
 acceptance's `PTT ON` (`acceptance_key` in `host/server.rs`): the program hears `PENDING`,
 `PTT ON`, `CONNECTED`, `PTT OFF` — the order it already hears for its own calls — whether it keys
 the radio or not, and an acceptance that never keys lets the `CONNECTED` go after
-`ACCEPTANCE_KEY_WAIT` (4 s) with a warning. A call whose `PENDING` the program never heard
+`ACCEPTANCE_KEY_WAIT` (4 s; 12 s since link protocol 13) with a warning. A call whose `PENDING` the program never heard
 (`LISTEN` off) gets no `PTT` while it stays off, and once it listens hears `PENDING`, the
 acceptance's keying told late, then `CONNECTED` (§5, 2026-11-08: the first build left that case
 untold, and the harness's Trimode caught it on a Windows CI runner; `Acceptance` follows the call
@@ -3163,7 +3163,8 @@ and their random wait, `connect_retries`, the CONNECT_ACK data acceptance, ADR-0
 tries, a lost OFDM acceptance costs the pause (first calls of 40–45 s on VOX/NVIS paths), a
 hidden loser's tries and identifier fall on the winner's start, and the acceptance's OFDM reading
 starts strong sessions at rung 19, which the daemon tests' loopback decodes only by combining
-(those tests call `below_64qam`).
+(those tests call `below_64qam`). The host adapter's `ACCEPTANCE_KEY_WAIT` is 12 s: a both-ways try
+is taken at its OFDM part, 5.4 s before its tone part ends and the acceptance keys.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
