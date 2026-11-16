@@ -1,9 +1,12 @@
 # ADR-0127: A station may identify in its data signal instead of Morse
 
-**Status:** accepted for building, 2026-11-16. The author asked for it after the exchange-timing
-study of the same day (§1): identification is to be a Setup choice, Morse or the data signal,
-never both. The same day the author, as licensee, confirmed §3's regulatory reading and answered
-§9's five questions. Nothing is built yet; §6's criteria judge it.
+**Status:** accepted and built, 2026-11-16; C1–C6 pass (§10). The author asked for it after the
+exchange-timing study of the same day (§1): identification is to be a Setup choice, Morse or the
+data signal, never both. The same day the author, as licensee, confirmed §3's regulatory reading
+and answered §9's five questions. The model, the port, the spec and their vectors are on
+`master`; the daemon's setting waits on the branch `feat/adr-0127-data-identifier` for the
+release that carries configuration schema 15 (a key ships with a release: the shell's
+`SCHEMA_HISTORY` test holds the schema to the package version).
 
 ## 1. Context
 
@@ -209,3 +212,79 @@ that the data identifier is also at the end only.
    `CWID ON` at every start, so forcing Morse would have undone the setting on every gateway.
 5. **Identifying during a long session:** not at all. Aether adds no in-session identifier with
    either method (§4).
+
+## 10. Results (2026-11-16)
+
+**What was built.** Model first (`frames.py` `IdentFrame`, `identification_frames`,
+`ident_callsign`, `is_identification`; `granted.py` `GrantConfig.identify_by`,
+`data_identifier_s`, `SlotTransmit.ident_frames`, the `ident_heard` event, `sent_floor`), then the
+port (`frames.rs`, `granted.rs` `IdentifyBy`, `Action::Transmit::ident_frames`), the spec (§7.1's
+table, §7.2), and the daemon (`[radio] identify_by`, schema 15 `identify_by`, fixture
+`0.2.0-beta.160-identifier.toml`, the gate's `foreign_identifier` and `wrong_identifier`, the
+`ident` frame report and log line, the heard list's `identified`, `status.identifier.method`),
+Setup step 4, the manual (1.2.0) and `fcc-regulatory-controls.md`.
+
+**Two things the ADR left open, decided in building:**
+- **The declared length is the floor's** (one frame 3.5 s, two 6.5 s), whatever family the closing
+  takes: the call cannot know it, and an older build reckons with the number as seconds, so it
+  must cover the longer family.
+- **A master that decodes its closing slave's last identification frame** keys its own after
+  that frame, by R4's wait, instead of after the declared length. It moves a deadline earlier
+  only on decoded evidence; undecoded, the declared length stands. On a strong path this is what
+  makes the closing short. In the harness's `40m-closing-identifiers-2300`, the slave's DISC_ACK
+  and identifier end at 31.86 s and the master's identifier keys at 32.59 s.
+
+**C1, the model: pass.** Every ADR-0075 closing test in `test_granted.py` runs with both methods
+(both roles, both airs, aborts, a lost and every lost DISC_ACK, a dead path, a band that closes,
+called again, a station that sends none): 72 cases, each identifier last, no radiated overlap.
+New tests cover the frame's family, the declared length and a two-frame callsign. The same
+session with each method closes at least 2 s sooner with the data signal on every one of six
+seeds and both airs.
+
+**C2, the vectors: pass.** With `morse`, the 42 granted sessions and every link-vector entry
+regenerate byte for byte; only new entries are appended. Three new replay sessions
+(`data-identifiers`, `data-identifier-ends`, `ident-heard`) and `link_vectors.json`
+`ident_frames` hold the port to the model. Planted faults fail the replay: the early key, and the
+frame taken for a session DISC.
+
+**C3, a listener with the spec: pass.** `model/tests/test_ident_frame.py` reads the callsigns an
+engine sent, `KK4ODA` in one frame and `W4/G4ABC` in two, using only the table in
+`air-interface.md` §7.1 and the character width its prose states.
+
+**C4, older builds: pass.** The model, and the port by the `ident-heard` replay, ignore a
+session-0 DISC in a session, idle, calling and after leaving one: the state is unchanged and
+there is no action but the report. In the mixed pairs with beta.160 (`--tag mixed`, this build
+identifying in the data signal), 7 of 7 scenarios pass each way round with no radiated overlap.
+Of 22 identification transmissions, beta.160 answered none.
+
+**C5, the harness: pass.** Three draws each of `40m-closing-identifiers-2300`, its `-ve3-` twin,
+`80m-varac-chat-and-ping-500` and the quick set (`40m-gateway-busy-when-called-2300`,
+`40m-trimode-gateway-2300`, `quick-awgn-2300`) with `--identify-by data`: 18 of 18 pass. That is
+81 identifiers judged by `identifier_faults`, which now also faults identification frames that
+are not last in their transmission or not counted, with no fault. The same draws with `morse`
+also pass 18 of 18. The closing, from the master's DISC to the end of the last identifier,
+paired by draw:
+
+| Scenario | Morse | Data signal |
+|---|---|---|
+| `40m-closing-identifiers-2300` (two US callsigns) | 10.3 s | 3.4 s |
+| `40m-closing-identifiers-ve3-2300` (one identifies) | 5.8 s | 2.9 s |
+| `80m-varac-chat-and-ping-500` | 10.0 s | 3.4 s (one draw 6.1 s, on the floor) |
+| `40m-gateway-busy-when-called-2300` | 10.5 s | 3.4 s |
+| `40m-trimode-gateway-2300` | 11.0 s | 3.4 s |
+| `quick-awgn-2300` | 10.8 s | 3.4 s |
+
+The closing is shorter in all 18 draws, with a median of 7.0 s saved. One data draw
+(`40m-gateway-busy-when-called-2300` s1062) had 3 radiated overlaps. They came 30 s in, when a
+third station's call landed in a session, long before any identifier. Rerun twice each way on that
+draw, the second Morse run had the same 3 overlaps: harness variance, not this change.
+
+**C6, the gate: pass.** `an_identifier_in_the_data_signal_is_judged_as_data_and_names_this_station`:
+- the frame is judged as `Data` at the dial;
+- it is allowed on 14.078 MHz and refused on 14.200 MHz, where Morse would go;
+- a frame naming `N0CALL` is refused with code `identifier` and never keyed;
+- a two-frame callsign of the station's own goes.
+
+**Not changed, noted.** The heard list's new activity `identified` cannot be read by an older
+build: going back to beta.160 after hearing a data identifier, its `heard.json`, and the answer
+gaps kept in it, start empty, as ADR-0019's `datagram` did before.

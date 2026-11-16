@@ -3166,6 +3166,24 @@ starts strong sessions at rung 19, which the daemon tests' loopback decodes only
 (those tests call `below_64qam`). The host adapter's `ACCEPTANCE_KEY_WAIT` is 12 s: a both-ways try
 is taken at its OFDM part, 5.4 s before its tone part ends and the acceptance keys.
 
+**The identifier in the data signal (2026-11-16, ADR-0127; schema 15, no wire change).**
+`[radio] identify_by = "morse" | "data"` (live, in profiles; Setup step 4's *Identify by*, the
+Morse speed shown only for Morse) says how a station identifies; `cw_id` and a US callsign still
+say whether, and a host's `CWID ON` means "identify" by the station's choice. The data identifier
+is an *identification frame*: a DISC with session field 0, six 7-bit ASCII characters
+(`IdentFrame`, `identification_frames`, `ident_callsign` = `cwid::sent_as`; two frames back to
+back for 7–12 characters), in the family of the station's last frame (`sent_floor`), in the
+Morse identifier's place by every ADR-0075 rule (`SlotTransmit.ident_frames`,
+`Action::Transmit::ident_frames`). The length declared is the floor's (3.5 s, two 6.5 s) whatever
+the closing's family; a master that decodes its slave's last frame keys its own after it.
+Receiving: the engine's `ident_heard` event, the daemon's `ident:identified <call>` log line, the
+`ident` frame report and the heard list's `identified`. The gate judges the frames as data at the
+dial and refuses one naming another callsign (`wrong_identifier`, code `identifier`). The harness
+writes `identify_by` for a schema-15 daemon (`session_matrix.py --identify-by`) and
+`identifier_faults` judges the frames as Morse. Model, port and spec are on `master`; the
+daemon's commit waits on `feat/adr-0127-data-identifier` for the release that bumps the version
+(the shell's `SCHEMA_HISTORY` line names beta.161).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
