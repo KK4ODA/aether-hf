@@ -354,3 +354,85 @@ Three causes, each seen more than once:
 
 Each is the author's call; whichever are taken go into the model first, and the A/B is run again on
 the same draws.
+
+## 7. The second round (ADR-0126 §9)
+
+The author took all three changes of §6.4: no move to 500 Hz for a call of four tries or fewer, a
+both-ways try heard again answered on the floor, and a random part in the pause (up to the last
+try's length). Built in the model and the port (`6a0cc71`), and run as **C2** on the same draws as
+§6, against §6's T runs (the changes do nothing with the capped call off). One row a run is in
+`data/capped-C2.csv`.
+
+### 7.1 The results
+
+| criterion | T (today) | C (first round) | C2 (second round) |
+|---|---|---|---|
+| H1, nobody answers: tries, radiated, span | 8, 25.8 s, 212–215 s | 2, 12.9 s, 32.8–36.1 s | 2, 12.9 s, **35.3 s** (limit 39.5) |
+| H2, runs passed | 24 / 24 | 22 / 24 | **19 / 24** |
+| H2, the calls' time | 1 522 s | 1 560 s | 1 612 s |
+| H3, sessions; median first session | 12 / 12; 22 s | 12 / 12; 10.5 s | 12 / 12; **11 s** |
+| H3, radiated overlaps | 35 (27.6 s) | 58 (41.3 s) | **92 (52.7 s)** |
+| H4, 200 Hz off | 78, 23, 23 s | 11 s, lost, 11 s | **11, 40, 11 s** |
+| H5, scenarios passed | 64 / 64 | 62 / 64 | **62 / 64** |
+| K2, both dial at once (reported) | 10 / 10, 22 s | 2 / 10 | **8 / 10, 39 s** |
+
+H2 by scenario (3 draws each; runs passed and the calls' time):
+
+| scenario | T | C2 |
+|---|---|---|
+| `40m-gateway-busy-when-called-2300` | 3, 317 s | 3, 273 s |
+| `40m-gateway-three-clients-2300` | 3, 145 s | 3, 87 s |
+| `40m-trimode-gateway-2300` | 3, 73 s | 3, 33 s |
+| `40m-wide-calls-narrow-unprobed` | 3, 352 s | **0**, 540 s (3 calls lost) |
+| `80m-gateway-fq-hangup-2300` | 3, 75 s | 3, 33 s |
+| `80m-trimode-gateway-client-vanishes-500` | 3, 326 s | **1**, 402 s (2 calls lost) |
+| `80m-vox-caller-learned-gap-500` | 3, 189 s | 3, 211 s (was 1 of 3) |
+| `quick-awgn-2300` | 3, 45 s | 3, 33 s |
+
+H5's other 56 scenarios all passed on C2, `80m-band-closes-2300` among them; no invariant broken and
+no radiated overlap in either arm. Over the 62 both passed, the air was 15 314 s against 15 526 s
+(median ratio 0.993), and the first calls connected at a median 11 s against 15 s.
+
+### 7.2 What each change did
+
+* **No move for a short call.** H1 now passes (no move, no busy wait), H4 connects in every draw (seed
+  1065's second try stayed at 2 300 Hz and was answered at 40 s), and `80m-band-closes-2300` passes.
+  The price is the case the move was for: `40m-wide-calls-narrow-unprobed` (a 2 300 Hz station calls a
+  500 Hz station it has not heard) no longer connects; the 500 Hz station hears the call's floor and
+  tells its operator.
+* **A both-ways try heard again answered on the floor.** The VOX caller passes 3 of 3 (its first
+  call connects on the second try at 42 s, the later ones at 9–10 s once the gap is learned), and so
+  does the band that closed. Where the first OFDM acceptance is lost (VOX holds of 400–900 ms, the
+  NVIS echo) the call now connects, but after the pause: five scenarios' first calls took 40–45 s
+  against today's 12–16 s (`80m-agc-carrier-inside-500`, `80m-band-closes-2300`,
+  `80m-disconnect-slow-drain-500`, `80m-poor-500-pactor-signalink`, the VOX scenario).
+* **The random pause.** K2 goes from 2 to 8 draws of 10 with a session (median 39 s, on the second
+  try). The daemon draws it from its callsign, so a station's pause before a given call is the same
+  in every draw.
+
+### 7.3 What still fails, and why
+
+* **H2 (a) and (c), H5 (a): two scenarios.** `40m-wide-calls-narrow-unprobed` is the first change's
+  price, chosen. `80m-trimode-gateway-client-vanishes-500` failed in 2 draws of 3 on the call after
+  the outage: the gateway decoded both floor tries, each while the Trimode stand-in had `LISTEN` off,
+  which it does for one whole second in every four of air (`01-results.md` §3.1; the real program
+  0.5 s in 3.5 s), and the same pause in both draws put the second try's end in the deaf second too.
+  T made more tries and connected on a later one.
+* **H3 (c), the hidden loser's overlaps,** which none of the changes aimed at: 92 against 35. 51 of
+  them are the losing caller's closing Morse identifier keyed over the winner's session (one overlap a
+  dit, 5.7 s in all); the loser's two tries over the session are 35 s. By seconds, 52.7 against 27.6.
+
+### 7.4 What it points to (not built, not benched)
+
+* **The 500 Hz station a wide caller has not heard.** Keep the trade (a probe, the heard list or the
+  operator's choice of 500 Hz reaches it), or move only with the tries setting at 6 or more, as now.
+* **A lost OFDM acceptance costs the pause.** Today's call alternates and answers on the floor within
+  about 12 s; the capped call waits about 20 s more for its second try. Two ways out: answer every
+  both-ways try on the floor (about 2.8 s more on every good-path connect), or send the acceptance in
+  both families back to back, OFDM then floor, so a caller that lost the first reads the second.
+* **The Trimode stand-in's whole-second scan** makes the harness's gateway deaf a quarter of the
+  time at whole-second phases; on the air it is a seventh at random phases. Scanning on the channel's
+  sub-second clock would make that scenario judge the call, not the stand-in.
+* **The hidden loser's identifier.** A call that went unanswered is identified on its own after
+  ADR-0055's wait, and a station that cannot hear the session it falls on keys it there. Whether that
+  identifier should wait for a clear channel is the identifier's question, not the call's.

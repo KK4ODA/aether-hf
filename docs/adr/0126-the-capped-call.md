@@ -5,10 +5,10 @@ model bench ("results accepted, go ahead"), its one narrow miss (§7.3) accepted
 Its first design (§2.1's call frame, the codes, the details at the head of the data: §2–§6) was
 benched and failed R2 and R3 (§6); it is removed from the model and lives in the history at
 `343be84`. The capped call is in the model and the port behind `GrantConfig.capped_call`, off by
-default, with the number of tries a setting (§7.4). The harness's A/B (§8) ran on 2026-11-16 and
-failed H2–H5 with a narrow miss on H1 (§8.4): three causes, each with a change for the author to
-choose, before the A/B is run again; then the air, before it becomes the default and link protocol
-13 ships.
+default, with the number of tries a setting (§7.4). The harness's A/B (§8) failed H2–H5 with a
+narrow miss on H1 (§8.4); the author's three changes (§9) pass H1 and H4 and leave H2, H3 (c) and
+H5 failing on what §9.3 names, for the author's next call; then the air, before it becomes the
+default and link protocol 13 ships.
 
 ## 1. Context
 
@@ -444,3 +444,23 @@ in `GrantConfig::default`. **T's runs of §8 are reused**: none of the three cha
 `capped_call` off (the move's rule is read only for a capped call's plan). One row a run in
 `docs/research/calling/data/capped-C2.csv`. H3 (c) — the hidden loser's overlaps — is aimed at by
 none of the three and is expected to fail again; it is judged as registered.
+
+### 9.3 What the harness found (2026-11-16)
+
+`docs/research/calling/02-capped-call.md` §7; one row a run in `capped-C2.csv`.
+
+| criterion | result |
+|---|---|
+| H1 | passes: two tries, 12.9 s radiated, the last ending 35.3 s after the first began, both airs |
+| H2 | fails: (a) 19 runs against 24, (c) 1 612 s against 1 522 s; (b) 1 overlap against 0. `40m-wide-calls-narrow-unprobed` 0 of 3 (the first change's price) and `80m-trimode-gateway-client-vanishes-500` 1 of 3 (both tries decoded in the Trimode stand-in's deaf second); the VOX caller 3 of 3 |
+| H3 | (a) 12 against 12 and (b) a median 11 s against 22 s pass; (c) fails, 92 overlaps against 35, 51 of them the hidden loser's Morse identifier |
+| H4 | passes: 11, 40, 11 s |
+| H5 | fails: 62 of 64 against 64, the same two scenarios; the other 56 pass, the band that closed among them; air 0.993 of today's at the median, first calls 11 s against 15 s |
+| K2 (reported) | 8 of 10 draws with a session, median 39 s (first round 2 of 10; today 10 of 10, 22 s) |
+
+The changes did what they were for: no more moves that lose a try, the VOX caller and the NVIS echo
+connect, two callers who met come apart. What remains: a wide station no longer reaches a 500 Hz one
+it has not heard (chosen); a lost OFDM acceptance now costs the pause (first calls of 40–45 s where
+today's took 12–16 s, in five scenarios); the harness's Trimode stand-in deaf a whole second in four;
+and the hidden loser's overlaps. The changes these point to are listed in that section's §7.4 and are
+the author's call.

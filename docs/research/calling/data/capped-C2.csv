@@ -1,0 +1,112 @@
+bench,scenario,base,seed,pass,why,invariants,air_s,rf_overlaps,radiated_s,ends,transfers,tries,tries_radiated_s,tries_span_s,wall_s
+H1,40m-nobody-answers-2300,40m-nobody-answers-2300,66,True,connected: not within 180 s of air,,182.2,0,0.0,none / none,call a lost,2,12.87,35.34,34.6
+H1,40m-nobody-answers-2300-s1066,40m-nobody-answers-2300,1066,True,connected: not within 180 s of air,,182.1,0,0.0,none / none,call a lost,2,12.87,35.34,34.8
+H1,40m-nobody-answers-2300-s2066,40m-nobody-answers-2300,2066,True,connected: not within 180 s of air,,182.2,0,0.0,none / none,call a lost,2,12.87,35.34,35.1
+H1,80m-nobody-answers-500,80m-nobody-answers-500,67,True,connected: not within 180 s of air,,182.1,0,0.0,none / none,call a lost,2,12.87,35.33,33.4
+H1,80m-nobody-answers-500-s1067,80m-nobody-answers-500,1067,True,connected: not within 180 s of air,,182.2,0,0.0,none / none,call a lost,2,12.87,35.33,33.1
+H1,80m-nobody-answers-500-s2067,80m-nobody-answers-500,2067,True,connected: not within 180 s of air,,182.2,0,0.0,none / none,call a lost,2,12.87,35.33,32.7
+H2,40m-gateway-busy-when-called-2300,40m-gateway-busy-when-called-2300,62,True,,,130.1,0,0.0,closed / peer disconnected / closed,call a 11.0 s; host-reply 120 B 3 s 320 bps; host-send 6000 B 35 s 1371 bps; host-reply 40 B 8 s 40 bps; call c 73.0 s; host-reply 120 B 3 s 320 bps; host-send 400 B 11 s 291 bps; host-reply 40 B 8 s 40 bps,,,,40.4
+H2,40m-gateway-busy-when-called-2300-s1062,40m-gateway-busy-when-called-2300,1062,True,,,195.2,1,5.855,closed / peer disconnected / closed,call a 11.0 s; host-reply 120 B 3 s 320 bps; host-send 6000 B 69 s 696 bps; host-reply 40 B 5 s 64 bps; call c 101.0 s; host-reply 120 B 3 s 320 bps; host-send 400 B 35 s 91 bps; host-reply 40 B 21 s 15 bps,,,,61.3
+H2,40m-gateway-busy-when-called-2300-s2062,40m-gateway-busy-when-called-2300,2062,True,,,124.2,0,0.0,closed / peer disconnected / closed,call a 11.0 s; host-reply 120 B 3 s 320 bps; host-send 6000 B 35 s 1371 bps; host-reply 40 B 4 s 80 bps; call c 66.0 s; host-reply 120 B 11 s 87 bps; host-send 400 B 7 s 457 bps; host-reply 40 B 5 s 64 bps,,,,40.2
+H2,40m-gateway-three-clients-2300,40m-gateway-three-clients-2300,61,True,,,189.1,0,0.0,closed / peer disconnected / closed / closed,call a 10.0 s; host-reply 120 B 11 s 87 bps; host-send 1500 B 10 s 1200 bps; host-reply 40 B 4 s 80 bps; call c 8.0 s; host-reply 120 B 3 s 320 bps; host-send 800 B 13 s 492 bps; host-reply 600 B 11 s 436 bps; call d 11.0 s; host-reply 120 B 16 s 60 bps; host-send 300 B 14 s 171 bps; host-reply 40 B 8 s 40 bps,,,,93.7
+H2,40m-gateway-three-clients-2300-s1061,40m-gateway-three-clients-2300,1061,True,,,213.2,0,0.0,closed / peer disconnected / closed / closed,call a 11.0 s; host-reply 120 B 10 s 96 bps; host-send 1500 B 5 s 2400 bps; host-reply 40 B 8 s 40 bps; call c 8.0 s; host-reply 120 B 7 s 137 bps; host-send 800 B 22 s 291 bps; host-reply 600 B 16 s 300 bps; call d 10.0 s; host-reply 120 B 5 s 192 bps; host-send 300 B 15 s 160 bps; host-reply 40 B 7 s 46 bps,,,,108.2
+H2,40m-gateway-three-clients-2300-s2061,40m-gateway-three-clients-2300,2061,True,,,221.2,0,0.0,closed / peer disconnected / closed / closed,call a 10.0 s; host-reply 120 B 4 s 240 bps; host-send 1500 B 10 s 1200 bps; host-reply 40 B 4 s 80 bps; call c 8.0 s; host-reply 120 B 7 s 137 bps; host-send 800 B 12 s 533 bps; host-reply 600 B 25 s 192 bps; call d 11.0 s; host-reply 120 B 14 s 69 bps; host-send 300 B 23 s 104 bps; host-reply 40 B 13 s 25 bps,,,,109.0
+H2,40m-trimode-gateway-2300,40m-trimode-gateway-2300,45,True,,,65.1,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 120 B 6 s 160 bps; host-send 80 B 5 s 128 bps; host-reply 200 B 4 s 400 bps; host-send 1500 B 15 s 800 bps; host-reply 40 B 4 s 80 bps,,,,12.5
+H2,40m-trimode-gateway-2300-s1045,40m-trimode-gateway-2300,1045,True,,,66.2,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 120 B 4 s 240 bps; host-send 80 B 5 s 128 bps; host-reply 200 B 5 s 320 bps; host-send 1500 B 16 s 750 bps; host-reply 40 B 5 s 64 bps,,,,12.5
+H2,40m-trimode-gateway-2300-s2045,40m-trimode-gateway-2300,2045,True,,,86.2,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 120 B 7 s 137 bps; host-send 80 B 19 s 34 bps; host-reply 200 B 15 s 107 bps; host-send 1500 B 10 s 1200 bps; host-reply 40 B 5 s 64 bps,,,,15.7
+H2,40m-wide-calls-narrow-unprobed,40m-wide-calls-narrow-unprobed,23,False,did not connect; ended none/none; connected: not within 180 s of air,,182.2,0,0.0,none / none,call a lost,,,,34.0
+H2,40m-wide-calls-narrow-unprobed-s1023,40m-wide-calls-narrow-unprobed,1023,False,did not connect; ended none/none; connected: not within 180 s of air,,182.1,0,0.0,none / none,call a lost,,,,35.5
+H2,40m-wide-calls-narrow-unprobed-s2023,40m-wide-calls-narrow-unprobed,2023,False,did not connect; ended none/none; connected: not within 180 s of air,,182.2,0,0.0,none / none,call a lost,,,,35.6
+H2,80m-gateway-fq-hangup-2300,80m-gateway-fq-hangup-2300,251,True,,,82.1,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 225 B 13 s 138 bps; host-send 108 B 8 s 108 bps; host-reply 3 B 22 s 1 bps; hang-up 20 s,,,,15.4
+H2,80m-gateway-fq-hangup-2300-s1251,80m-gateway-fq-hangup-2300,1251,True,,,98.1,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 225 B 4 s 450 bps; host-send 108 B 24 s 36 bps; host-reply 3 B 22 s 1 bps; hang-up 23 s,,,,17.9
+H2,80m-gateway-fq-hangup-2300-s2251,80m-gateway-fq-hangup-2300,2251,True,,,99.2,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 225 B 15 s 120 bps; host-send 108 B 24 s 36 bps; host-reply 3 B 21 s 1 bps; hang-up 19 s,,,,17.5
+H2,80m-trimode-gateway-client-vanishes-500,80m-trimode-gateway-client-vanishes-500,46,False,did not connect; ended no response/link timeout; host connected: not within 180 s of air,,592.2,0,0.0,no response / link timeout,call a 11.0 s; host-reply 120 B 61 s 16 bps; call a lost,,,,101.1
+H2,80m-trimode-gateway-client-vanishes-500-s1046,80m-trimode-gateway-client-vanishes-500,1046,True,,,678.1,0,0.0,closed / peer disconnected,call a 11.0 s; host-reply 120 B 50 s 19 bps; call a 9.0 s; host-reply 120 B 56 s 17 bps; host-send 1000 B 192 s 42 bps,,,,116.5
+H2,80m-trimode-gateway-client-vanishes-500-s2046,80m-trimode-gateway-client-vanishes-500,2046,False,did not connect; ended no response/link timeout; host connected: not within 180 s of air,,604.2,0,0.0,no response / link timeout,call a 11.0 s; host-reply 120 B 74 s 13 bps; call a lost,,,,101.5
+H2,80m-vox-caller-learned-gap-500,80m-vox-caller-learned-gap-500,71,True,,,301.1,0,0.0,closed / peer disconnected,call a 42.0 s; message 200 B 25 s 64 bps; call a 10.0 s; message 200 B 7 s 229 bps; call a 10.0 s; message 200 B 12 s 133 bps; call a 9.0 s; message 200 B 11 s 145 bps; call a 9.0 s; message 200 B 17 s 94 bps,,,,54.6
+H2,80m-vox-caller-learned-gap-500-s1071,80m-vox-caller-learned-gap-500,1071,True,,,320.1,0,0.0,closed / peer disconnected,call a 14.0 s; message 200 B 20 s 80 bps; call a 9.0 s; message 200 B 12 s 133 bps; call a 9.0 s; message 200 B 8 s 200 bps; call a 9.0 s; message 200 B 37 s 43 bps; call a 9.0 s; message 200 B 12 s 133 bps,,,,57.6
+H2,80m-vox-caller-learned-gap-500-s2071,80m-vox-caller-learned-gap-500,2071,True,,,346.1,0,0.0,closed / peer disconnected,call a 42.0 s; message 200 B 16 s 100 bps; call a 10.0 s; message 200 B 12 s 133 bps; call a 10.0 s; message 200 B 17 s 94 bps; call a 9.0 s; message 200 B 18 s 89 bps; call a 10.0 s; message 200 B 13 s 123 bps,,,,59.3
+H2,quick-awgn-2300,quick-awgn-2300,1,True,,,65.2,0,0.0,closed / peer disconnected,call a 11.0 s; message 3000 B 19 s 1263 bps; reply 600 B 17 s 282 bps,,,,10.8
+H2,quick-awgn-2300-s1001,quick-awgn-2300,1001,True,,,43.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 3000 B 11 s 2182 bps; reply 600 B 5 s 960 bps,,,,7.8
+H2,quick-awgn-2300-s2001,quick-awgn-2300,2001,True,,,43.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 3000 B 11 s 2182 bps; reply 600 B 5 s 960 bps,,,,7.2
+H3,40m-gateway-hidden-callers-after-12-2300,40m-gateway-hidden-callers-after-12-2300,64,True,c connected: not within 180 s of air,,230.1,5,1.9,none / none / none,call a 11.0 s; call c lost,,,,101.5
+H3,40m-gateway-hidden-callers-after-12-2300-s1064,40m-gateway-hidden-callers-after-12-2300,1064,True,c connected: not within 180 s of air,,230.1,6,4.39,none / none / none,call a 11.0 s; call c lost,,,,101.7
+H3,40m-gateway-hidden-callers-after-12-2300-s2064,40m-gateway-hidden-callers-after-12-2300,2064,True,c connected: not within 180 s of air,,230.1,3,1.205,none / none / none,call a 11.0 s; call c lost,,,,97.9
+H3,40m-gateway-hidden-callers-after-18-2300,40m-gateway-hidden-callers-after-18-2300,64,True,c connected: not within 180 s of air,,236.2,1,0.455,none / none / none,call a 11.0 s; call c lost,,,,99.1
+H3,40m-gateway-hidden-callers-after-18-2300-s1064,40m-gateway-hidden-callers-after-18-2300,1064,True,c connected: not within 180 s of air,,236.2,4,1.28,none / none / none,call a 10.0 s; call c lost,,,,96.6
+H3,40m-gateway-hidden-callers-after-18-2300-s2064,40m-gateway-hidden-callers-after-18-2300,2064,True,c connected: not within 180 s of air,,236.2,3,1.205,none / none / none,call a 11.0 s; call c lost,,,,96.1
+H3,40m-gateway-hidden-callers-after-3-2300,40m-gateway-hidden-callers-after-3-2300,64,True,a connected: not within 180 s of air,,221.1,8,4.995,none / none / none,call a lost; call c 8.0 s,,,,94.2
+H3,40m-gateway-hidden-callers-after-3-2300-s1064,40m-gateway-hidden-callers-after-3-2300,1064,True,c connected: not within 180 s of air,,229.2,14,7.975,none / none / none,call a 11.0 s; call c lost,,,,96.3
+H3,40m-gateway-hidden-callers-after-3-2300-s2064,40m-gateway-hidden-callers-after-3-2300,2064,True,c connected: not within 180 s of air,,228.2,4,6.46,none / none / none,call a 10.0 s; call c lost,,,,94.6
+H3,40m-gateway-hidden-callers-after-7-2300,40m-gateway-hidden-callers-after-7-2300,64,True,c connected: not within 180 s of air,,229.2,10,4.675,none / none / none,call a 11.0 s; call c lost,,,,94.6
+H3,40m-gateway-hidden-callers-after-7-2300-s1064,40m-gateway-hidden-callers-after-7-2300,1064,True,c connected: not within 180 s of air,,229.2,17,9.09,none / none / none,call a 11.0 s; call c lost,,,,97.4
+H3,40m-gateway-hidden-callers-after-7-2300-s2064,40m-gateway-hidden-callers-after-7-2300,2064,True,c connected: not within 180 s of air,,228.1,17,9.03,none / none / none,call a 10.0 s; call c lost,,,,97.0
+H4,40m-offset-200-2300,40m-offset-200-2300,65,True,,,40.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 1000 B 14 s 571 bps,,,,8.9
+H4,40m-offset-200-2300-s1065,40m-offset-200-2300,1065,True,,,60.2,0,0.0,closed / peer disconnected,call a 40.0 s; message 1000 B 5 s 1600 bps,,,,12.0
+H4,40m-offset-200-2300-s2065,40m-offset-200-2300,2065,True,,,31.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 1000 B 5 s 1600 bps,,,,5.9
+H5,15m-equatorial-flutter-2300,15m-equatorial-flutter-2300,54,True,,,66.1,0,0.0,closed / peer disconnected,call a 12.0 s; message 1500 B 18 s 667 bps; reply 300 B 9 s 267 bps,,,,12.4
+H5,15m-old-rig-offset-500,15m-old-rig-offset-500,57,True,,,136.1,0,0.0,closed / peer disconnected,call a 5.0 s; message 200 B 4 s 400 bps; reply 200 B 21 s 76 bps; message 3000 B 81 s 296 bps,,,,25.2
+H5,15m-opening-closes-2300,15m-opening-closes-2300,55,True,,,713.1,0,0.0,no response / link timeout,call a 11.0 s; message? 40000 lost (allowed),,,,132.3
+H5,20m-dx-500,20m-dx-500,58,True,,,264.2,0,0.0,closed / peer disconnected,call a 5.0 s; message 120 B 10 s 96 bps; reply 90 B 12 s 60 bps; message 60 B 3 s 160 bps; reply 150 B 10 s 120 bps; message 6000 B 189 s 254 bps,,,,44.9
+H5,20m-dx-moderate-2300,20m-dx-moderate-2300,51,True,,,282.1,0,0.0,closed / peer disconnected,call a 5.0 s; message 60 B 9 s 53 bps; reply 80 B 5 s 128 bps; message 1500 B 13 s 923 bps; reply 2000 B 26 s 615 bps; message 40 B 9 s 36 bps,,,,54.9
+H5,20m-ft8-neighbours-2300,20m-ft8-neighbours-2300,56,True,,,138.1,0,0.0,closed / peer disconnected,call a 22.0 s; message 60 B 13 s 37 bps; reply 80 B 22 s 29 bps; message 1500 B 12 s 1000 bps; reply 2000 B 41 s 390 bps; message 40 B 2 s 160 bps,,,,50.1
+H5,20m-long-path-echo-2300,20m-long-path-echo-2300,53,True,,,58.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 4000 B 29 s 1103 bps; reply 1000 B 6 s 1333 bps,,,,10.8
+H5,20m-polar-path-2300,20m-polar-path-2300,52,True,,,94.2,0,0.0,closed / peer disconnected,call a 12.0 s; message 2000 B 36 s 444 bps; reply 500 B 19 s 211 bps,,,,17.2
+H5,40m-abort-and-recall-2300,40m-abort-and-recall-2300,43,True,,,99.1,0,0.0,closed / peer disconnected,call a 11.0 s; call a 6.0 s; message 2000 B 31 s 516 bps,,,,19.0
+H5,40m-agc-carrier-edge-2300,40m-agc-carrier-edge-2300,34,True,,,91.1,0,0.0,closed / peer disconnected,clear a 0.0 s; call a 8.0 s; message 2000 B 6 s 2667 bps,,,,17.3
+H5,40m-closing-identifiers-2300,40m-closing-identifiers-2300,74,True,,,430.1,0,0.0,no response / link timeout,call a 11.0 s; message 1500 B 17 s 706 bps; call a 10.0 s; reply 800 B 7 s 914 bps; call a 20.0 s; call a 10.0 s; call a 6.0 s,,,,79.0
+H5,40m-closing-identifiers-ve3-2300,40m-closing-identifiers-ve3-2300,75,True,,,379.1,0,0.0,no response / link timeout,call a 11.0 s; message 1500 B 8 s 1500 bps; call a 3.0 s; reply 800 B 9 s 711 bps; call a 3.0 s; call a 3.0 s; call a 10.0 s,,,,69.6
+H5,40m-drift-and-clocks-2300,40m-drift-and-clocks-2300,15,True,,,176.1,0,0.0,closed / peer disconnected,,,,,33.9
+H5,40m-drifting-rig-500,40m-drifting-rig-500,79,True,,,401.2,0,0.0,closed / peer disconnected,call a 12.0 s; message 1000 B 164 s 49 bps; reply 500 B 70 s 57 bps; message 1000 B 117 s 68 bps,,,,70.9
+H5,40m-gateway-client-vanishes-2300,40m-gateway-client-vanishes-2300,41,True,,,329.1,0,0.0,closed / peer disconnected,call a 11.0 s; call a 2.0 s; message 2000 B 16 s 1000 bps,,,,57.7
+H5,40m-good-2300-rtty-crashes,40m-good-2300-rtty-crashes,9,True,,,222.1,0,0.0,closed / peer disconnected,,,,,44.7
+H5,40m-good-throughput-2300,40m-good-throughput-2300,20,True,,,85.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 16000 B 41 s 3122 bps; reply 4000 B 18 s 1778 bps,,,,15.9
+H5,40m-hidden-vara-2300,40m-hidden-vara-2300,12,True,,,81.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 4000 B 57 s 561 bps,,,,17.2
+H5,40m-long-attachment-cwid-2300,40m-long-attachment-cwid-2300,44,True,,,593.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 60000 B 540 s 889 bps; reply 2000 B 22 s 727 bps,,,,110.8
+H5,40m-moderate-2300-vara-qrm,40m-moderate-2300-vara-qrm,7,True,,,240.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 4000 B 35 s 914 bps; reply 800 B 8 s 800 bps,,,,55.4
+H5,40m-rtty-contest-2300,40m-rtty-contest-2300,19,True,,,348.1,0,0.0,closed / peer disconnected,,,,,89.1
+H5,40m-wide-calls-narrow,40m-wide-calls-narrow,22,True,,,118.1,0,0.0,closed / peer disconnected,call a 6.0 s; message 2000 B 77 s 208 bps,,,,23.8
+H5,40m-winlink-exchange-2300,40m-winlink-exchange-2300,31,True,,,82.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 60 B 2 s 240 bps; reply 80 B 5 s 128 bps; message 120 B 2 s 480 bps; reply 40 B 8 s 40 bps; message 1500 B 8 s 1500 bps; reply 120 B 4 s 240 bps; message 40 B 9 s 36 bps; reply 2000 B 17 s 941 bps; message 40 B 2 s 160 bps,,,,15.9
+H5,80m-agc-carrier-inside-500,80m-agc-carrier-inside-500,33,True,,,352.2,0,0.0,closed / peer disconnected,busy a 0.0 s; clear a 0.0 s; call a 40.0 s; message 1000 B 227 s 35 bps,,,,63.3
+H5,80m-agc-carrier-outside-500,80m-agc-carrier-outside-500,31,True,,,319.2,0,0.0,closed / peer disconnected,clear a 0.0 s; call a 8.0 s; message 1000 B 226 s 35 bps,,,,57.2
+H5,80m-agc-slow-carrier-outside-500,80m-agc-slow-carrier-outside-500,32,True,,,322.1,0,0.0,closed / peer disconnected,clear a 0.0 s; call a 10.0 s; message 1000 B 217 s 37 bps,,,,56.5
+H5,80m-asymmetric-500,80m-asymmetric-500,11,True,,,244.1,0,0.0,closed / peer disconnected,,,,,43.3
+H5,80m-band-closes-2300,80m-band-closes-2300,14,True,message 16000: not within 400 s of air,,447.1,0,0.0,no response / link timeout,call a 45.0 s; message 16000 B lost,,,,80.8
+H5,80m-called-again-cwid-500,80m-called-again-cwid-500,62,True,,,121.1,0,0.0,closed / peer disconnected,call a 14.0 s; call a 15.0 s; message 1000 B 45 s 178 bps,,,,20.9
+H5,80m-capture-skips-500,80m-capture-skips-500,63,True,,,326.2,0,0.0,closed / peer disconnected,,,,,61.2
+H5,80m-disconnect-slow-drain-500,80m-disconnect-slow-drain-500,330002,True,,,363.1,0,0.0,closed / peer disconnected,call a 44.0 s; call a 11.0 s,,,,90.3
+H5,80m-floor-top-start-500,80m-floor-top-start-500,61,True,,,335.1,0,0.0,closed / peer disconnected,,,,,59.2
+H5,80m-flutter-500,80m-flutter-500,21,True,,,262.1,0,0.0,closed / peer disconnected,,,,,44.0
+H5,80m-leave-together-500,80m-leave-together-500,42,True,,,358.2,0,0.0,closed / peer disconnected,call a 14.0 s; call a 10.0 s; message 1000 B 241 s 33 bps,,,,60.9
+H5,80m-local-rfi-ladder-500,80m-local-rfi-ladder-500,1014,True,,,346.1,0,0.0,closed / peer disconnected,,,,,62.1
+H5,80m-lopsided-acks-500,80m-lopsided-acks-500,59,True,,,368.1,0,0.0,closed / peer disconnected,,,,,63.6
+H5,80m-nvis-disturbed-500,80m-nvis-disturbed-500,24,True,,,256.1,0,0.0,closed / peer disconnected,call a 14.0 s; message 1000 B 210 s 38 bps,,,,43.5
+H5,80m-nvis-evening-500,80m-nvis-evening-500,6,True,,,278.2,0,0.0,closed / peer disconnected,,,,,60.3
+H5,80m-offset-500,80m-offset-500,16,True,,,95.1,0,0.0,closed / peer disconnected,call a 5.0 s; message 2000 B 61 s 262 bps,,,,17.3
+H5,80m-pat-fade-500,80m-pat-fade-500,109,True,,,349.1,0,0.0,closed / peer disconnected,call a 10.0 s; host-send 1200 B 313 s 31 bps; host-reply 200 B 7 s 229 bps,,,,350.0
+H5,80m-poor-500-pactor-signalink,80m-poor-500-pactor-signalink,8,True,,,197.1,0,0.0,closed / peer disconnected,call a 43.0 s; message 2000 B 108 s 148 bps; reply 300 B 29 s 83 bps,,,,38.6
+H5,80m-qsb-dropout-500,80m-qsb-dropout-500,13,True,,,418.1,0,0.0,closed / peer disconnected,call a 14.0 s; message 8000 B 383 s 167 bps,,,,71.4
+H5,80m-slow-machine-500,80m-slow-machine-500,81,True,,,239.1,0,0.0,closed / peer disconnected,,,,,39.2
+H5,80m-start-high-reading-500,80m-start-high-reading-500,223,True,,,261.1,0,0.0,closed / peer disconnected,,,,,42.2
+H5,80m-start-low-reading-500,80m-start-low-reading-500,223,True,,,229.2,0,0.0,closed / peer disconnected,,,,,37.1
+H5,80m-steady-mail-2300,80m-steady-mail-2300,1112,True,,,185.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 22500 B 154 s 1169 bps; reply 120 B 5 s 192 bps,,,,30.5
+H5,80m-steady-mail-500,80m-steady-mail-500,1113,True,,,471.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 22500 B 439 s 410 bps; reply 120 B 6 s 160 bps,,,,71.1
+H5,80m-strong-moderate-500,80m-strong-moderate-500,141,True,,,250.1,0,0.0,closed / peer disconnected,,,,,43.3
+H5,80m-thunderstorm-agc-2300,80m-thunderstorm-agc-2300,17,True,,,236.2,0,0.0,closed / peer disconnected,,,,,43.9
+H5,80m-vara-on-frequency-500,80m-vara-on-frequency-500,23,True,,,109.2,0,0.0,closed / peer disconnected,call a 11.0 s; message 2000 B 76 s 211 bps,,,,23.7
+H5,80m-varac-chat-and-ping-500,80m-varac-chat-and-ping-500,76,True,,,79.2,0,0.0,closed / peer disconnected,ping 24 s; call a 9.0 s; host-send 60 B 8 s 60 bps; host-reply 80 B 10 s 64 bps; host-send 40 B 5 s 64 bps; host-reply 25 B 4 s 50 bps,,,,13.9
+H5,80m-vox-caller-declared-500,80m-vox-caller-declared-500,71,True,,,226.2,0,0.0,closed / peer disconnected,call a 12.0 s; message 200 B 18 s 89 bps; call a 10.0 s; message 200 B 4 s 400 bps; call a 6.0 s; message 200 B 11 s 145 bps; call a 10.0 s; message 200 B 9 s 178 bps; call a 3.0 s; message 200 B 5 s 320 bps,,,,40.4
+H5,80m-weak-500,80m-weak-500,18,True,,,156.1,0,0.0,closed / peer disconnected,call a 14.0 s; message 1000 B 119 s 67 bps,,,,29.7
+H5,80m-weak-both-ways-ladder-500,80m-weak-both-ways-ladder-500,1015,True,,,346.1,0,0.0,closed / peer disconnected,,,,,63.1
+H5,80m-weak-wide-test-2300,80m-weak-wide-test-2300,1023,True,,,288.2,0,0.0,closed / peer disconnected,,,,,52.8
+H5,80m-winlink-exchange-500,80m-winlink-exchange-500,32,True,,,218.1,0,0.0,closed / peer disconnected,call a 11.0 s; message 60 B 2 s 240 bps; reply 80 B 10 s 64 bps; message 120 B 10 s 96 bps; reply 40 B 10 s 32 bps; message 1500 B 51 s 235 bps; reply 120 B 10 s 96 bps; message 40 B 11 s 29 bps; reply 2000 B 87 s 184 bps; message 40 B 2 s 160 bps,,,,34.9
+K2,40m-gateway-hidden-callers-2300,40m-gateway-hidden-callers-2300,64,True,c connected: not within 180 s of air,,256.2,8,12.665,none / none / none,call a 38.0 s; call c lost,,,,102.6
+K2,40m-gateway-hidden-callers-2300-s1064,40m-gateway-hidden-callers-2300,1064,True,a connected: not within 180 s of air,,218.2,6,10.34,none / none / none,call a lost; call c 39.0 s,,,,91.9
+K2,40m-gateway-hidden-callers-2300-s2064,40m-gateway-hidden-callers-2300,2064,True,a connected: not within 180 s of air; c connected: not within 180 s of air,,368.1,8,10.13,none / none / none,call a lost; call c lost,,,,114.5
+K2,40m-gateway-hidden-callers-2300-s3064,40m-gateway-hidden-callers-2300,3064,True,a connected: not within 180 s of air,,218.2,6,9.83,none / none / none,call a lost; call c 11.0 s,,,,96.1
+K2,40m-gateway-hidden-callers-2300-s4064,40m-gateway-hidden-callers-2300,4064,True,a connected: not within 180 s of air,,218.2,6,10.365,none / none / none,call a lost; call c 38.0 s,,,,95.2
+K2,40m-gateway-hidden-callers-2300-s5064,40m-gateway-hidden-callers-2300,5064,True,a connected: not within 180 s of air,,218.2,11,10.16,none / none / none,call a lost; call c 39.0 s,,,,92.7
+K2,40m-gateway-hidden-callers-2300-s6064,40m-gateway-hidden-callers-2300,6064,True,a connected: not within 180 s of air,,218.2,6,10.365,none / none / none,call a lost; call c 39.0 s,,,,91.2
+K2,40m-gateway-hidden-callers-2300-s7064,40m-gateway-hidden-callers-2300,7064,True,a connected: not within 180 s of air; c connected: not within 180 s of air,,368.1,8,10.19,none / none / none,call a lost; call c lost,,,,114.9
+K2,40m-gateway-hidden-callers-2300-s8064,40m-gateway-hidden-callers-2300,8064,True,a connected: not within 180 s of air,,218.2,6,10.365,none / none / none,call a lost; call c 39.0 s,,,,91.7
+K2,40m-gateway-hidden-callers-2300-s9064,40m-gateway-hidden-callers-2300,9064,True,a connected: not within 180 s of air,,218.2,5,7.605,none / none / none,call a lost; call c 10.0 s,,,,86.9
