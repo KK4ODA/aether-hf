@@ -418,7 +418,9 @@ def probe_body_cases() -> list[dict]:  # type: ignore[type-arg]
     return out
 
 
-def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str, object]:
+def controller_trace(
+    air: AirInterface, seed: int, steps: int = 400, first_try: bool = False
+) -> dict[str, object]:
     """The rate controller alone (ADR-0094, ADR-0099), input by input: a seed, then frames at the recommended rung and
     others (decoded, failed, never detected, combined), echo readings and bare SNRs drawn at
     random, and what it recommends and holds after each — every rule of the controller, where a
@@ -427,7 +429,8 @@ def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str
     timing = phy_timing(air.params)
     # the air stated in the capability byte, as a station's: the guess differs by air (ADR-0111)
     caps = bandwidth_capabilities(air.params)
-    ctl = GrantedEngine("TOOL", timing, GrantConfig(capabilities=caps)).rate
+    config = GrantConfig(capabilities=caps, first_burst_try=first_try)
+    ctl = GrantedEngine("TOOL", timing, config).rate
     modes = sorted(ctl.thresholds)
     rng = random.Random(seed)
     snr = rng.uniform(-10.0, 20.0)
@@ -435,11 +438,15 @@ def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str
 
     def state() -> dict[str, object]:
         common = {"recommend": ctl.recommend(), "snr": ctl.snr_db, "echo": ctl.echo}
-        return {
+        out = {
             **common,
             "estimates": [ctl.estimate(m) for m in ctl.modes],
             "values": [ctl.value(m) for m in ctl.modes],
         }
+        if first_try:
+            # each rung's try wait, in transmissions: what the first try's verdict moves
+            out["waits"] = [ctl._probe_wait.get(m, ctl.probe_every) for m in ctl.modes]
+        return out
 
     ctl.seed(snr)
     ops.append({"seed": snr, **state()})
@@ -488,7 +495,12 @@ def controller_trace(air: AirInterface, seed: int, steps: int = 400) -> dict[str
             reading = snr if rng.random() < 0.8 else None
             ctl.observe_snr(reading)
             ops.append({"observe_snr": reading, **state()})
+    extra: dict[str, object] = {}
+    if first_try:
+        # ADR-0127 (proposed, off): said only when on; the four channels' penalties it starts by
+        extra = {"first_try": True, "penalties": [list(ctl.penalties[m]) for m in modes]}
     return {
+        **extra,
         "air": air.params.bandwidth.value,
         "thresholds": [ctl.thresholds[m] for m in modes],
         "payload": [timing.capacity(m) for m in modes],
@@ -550,6 +562,11 @@ def main() -> int:
         "controller_traces": [
             controller_trace(air, seed)
             for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3), (NARROW, 4))
+        ]
+        # the first burst's safe start and its try (ADR-0127, proposed, off by default)
+        + [
+            controller_trace(air, seed, first_try=True)
+            for air, seed in ((WIDE, 5), (NARROW, 6), (WIDE, 7), (NARROW, 8))
         ],
         # the echo share above which each rung is kept off the ladder (ADR-0087), by mode
         "echo_limits": [ECHO_LIMIT.get(m) for m in sorted(AWGN_THRESHOLD_DB)],

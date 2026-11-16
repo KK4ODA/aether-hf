@@ -364,6 +364,10 @@ pub struct GrantConfig {
     /// floor poll, where a 0.43 s header would have been read. A floor header costs 3.2 s and
     /// broke even on weak paths, so it is kept only where it is cheap.
     pub header_above_recommendation: bool,
+    /// ADR-0127 (proposed, off): the session's first data transmission at the four channels' mean
+    /// prior's rung, with one frame tried at the rung today's prior would start at (the model's
+    /// `first_burst_try`).
+    pub first_burst_try: bool,
     /// This station's radio: how long after it stops sending it hears again (VOX hold and
     /// receiver recovery). Declared at the connection, 0.1 s steps up to 1.5 s.
     pub turnaround_s: f64,
@@ -456,6 +460,7 @@ impl Default for GrantConfig {
             window_doublings: 1,
             elide: true,
             header_above_recommendation: true,
+            first_burst_try: false,
             turnaround_s: 0.0,
             identifier_s: 0.0,
             identifiers: BTreeMap::new(),
@@ -1181,7 +1186,9 @@ impl GrantedEngine {
     #[allow(clippy::too_many_lines)] // the engine's state, a field a line
     pub fn new(my_call: &str, timing: PhyTiming, config: GrantConfig, seed: u64) -> Self {
         let call = my_call.trim().to_ascii_uppercase();
-        let rate = rate_for(&timing).for_air(wide_air(&config));
+        let rate = rate_for(&timing)
+            .for_air(wide_air(&config))
+            .with_first_try(config.first_burst_try);
         let drain = config.disc_drain_s;
         let mut engine = Self {
             callsigns: vec![call.clone()],
@@ -1320,7 +1327,9 @@ impl GrantedEngine {
         self.measure_out = None;
         self.measure_unheard = false;
         self.measure_again = false;
-        self.rate = rate_for(&self.timing).for_air(wide_air(&self.config));
+        self.rate = rate_for(&self.timing)
+            .for_air(wide_air(&self.config))
+            .with_first_try(self.config.first_burst_try);
         self.last_rx_mode = None;
         self.missed = MISSED_UNKNOWN;
         self.price_controllers();
@@ -2041,7 +2050,9 @@ impl GrantedEngine {
         if let Some(rung) = max_mode {
             self.config.max_mode = rung;
         }
-        self.rate = rate_for(&self.timing).for_air(wide_air(&self.config));
+        self.rate = rate_for(&self.timing)
+            .for_air(wide_air(&self.config))
+            .with_first_try(self.config.first_burst_try);
         self.price_controllers();
     }
 
