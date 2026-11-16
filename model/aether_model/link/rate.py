@@ -439,6 +439,9 @@ class RateController:
     """ADR-0128 (proposed, off): the session's first rung by the four channels' mean prior, with one
     frame of the first transmission tried at the rung the optimistic prior would have started at
     (:meth:`seed`, :meth:`_end_first_try`)."""
+    first_try_jump: bool = False
+    """ADR-0128's variant J (registered, off; acts only with :attr:`first_try`): a decoded first try
+    moves the choice to its rung at once (:meth:`_end_first_try`)."""
     _first_try: int | None = None
     """The rung of the first transmission's try (ADR-0128), until its outcome comes back."""
 
@@ -753,7 +756,9 @@ class RateController:
     def _end_first_try(self, frames: list[FrameOutcome]) -> None:
         """The first transmission's try decided by its one frame (ADR-0128): decoded, the try ends
         and the climb on clean frames goes on from the first rung; lost, its next try waits twice
-        as long, as a failed try's. Not sent, no verdict."""
+        as long, as a failed try's. Not sent, no verdict. With :attr:`first_try_jump` (variant J), a
+        decoded try moves the choice to its rung, the echo allowing; the decision that follows
+        every transmission is C1's own."""
         mode = self._first_try
         assert mode is not None
         at = [f for f in frames if f.mode == mode]
@@ -762,6 +767,9 @@ class RateController:
             return
         if any(f.decoded for f in at):
             self._probe_wait[mode] = self.probe_every
+            index = self.modes.index(mode)
+            if self.first_try_jump and self._usable(index):
+                self._index = index
         else:
             wait = self._probe_wait.get(mode, self.probe_every)
             self._probe_wait[mode] = min(self.probe_wait_max, 2 * wait)
