@@ -131,3 +131,4 @@ context → decision → alternatives considered → consequences.
 | [0124](0124-fm-host-interfaces.md) | Aether FM's host interfaces are HF's, with the air named (FM-12) | proposed |
 | [0125](0125-legacy-packet-beside-aether-fm.md) | Legacy packet runs beside Aether FM, built from public specifications (FM-13) | proposed |
 | [0126](0126-the-capped-call.md) | The capped call — a call in control frames, chosen by what was heard, over in 20 s (link protocol 13) | accepted: the default from beta.160 (§10), today's call deleted; the harness's second round (§9) and its remaining costs accepted by the author |
+| [0127](0127-the-first-burst-starts-safe.md) | The first burst after a call starts safe and tries the bold rung with one frame | proposed: behind a switch, off; judged on the harness |
