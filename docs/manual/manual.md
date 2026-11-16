@@ -7,7 +7,7 @@
 | **Status** | Current |
 | **Version** | 1.1.0 |
 | **Updated** | 2026-11-16 |
-| **Describes** | Aether HF 0.2.0-beta.159 |
+| **Describes** | Aether HF 0.2.0-beta.160 |
 | **Licence** | CC BY 4.0 |
 
 This manual shows you how to set up Aether, make contacts with it, and use it with Winlink
@@ -1477,5 +1477,5 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 
 | Version | Date | Changes |
 |---|---|---|
-| 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
 | 1.0.0 | 2026-11-15 | First edition: the illustrated manual in place of `docs/user/manual.md`, with Parts, schematics and screenshots, the rung tables from the model, a chapter on RadioPost, and Aether FM as planned. |
+| 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
