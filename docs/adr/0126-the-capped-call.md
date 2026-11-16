@@ -413,3 +413,34 @@ to teach the gap (H2, H5); and no random wait (K2, H3 (c)). The changes they poi
 a call of fewer than five tries, a try heard again answered on the floor, a pause made a little
 random — are the author's call; whichever are taken go into the model first, and the A/B is run
 again on the same draws.
+
+## 9. Second round: three changes (the author's decision, 2026-11-16; registered before its runs)
+
+The author, on §8.4: "make all three fixes and rerun the test".
+
+### 9.1 What changes
+
+1. **No move to 500 Hz for a short call.** §8.1's move before the last try is withdrawn. A capped
+   call moves as ADR-0058 has it — after four unanswered tries — only when it makes five or more
+   (the tries setting at 6, 8, 10 or 15); a call of four tries or fewer stays in its bandwidth. A
+   500 Hz station that hears a 2 300 Hz call's floor still tells its operator (ADR-0035).
+2. **A both-ways try heard again is answered on the floor.** A called station in the session its
+   acceptance opened that reads the same call's both-ways try again (the same session number) knows
+   its acceptance was lost, and answers on the floor, which a both-ways try's caller listens for: the
+   floor's acceptance (3.2 s) outlasts a VOX hold and comes through an echo. A quick try heard again
+   is still answered in OFDM, the only family its caller listens for; a floor try's always was on the
+   floor.
+3. **The pause is random.** Before the plan's last try the caller waits 15 s and a uniform part of
+   up to that try's length (6.4 s for a both-ways try, 5.4 s for a floor try, 1.05 s for a quick one),
+   from the engine's draws, so that two callers who met on one try seldom meet the same way on the
+   next. The tries before the pause keep no wait.
+
+### 9.2 How it is judged
+
+The criteria of §8.3, on the same draws, with one change: **H1's span** is the last try's end within
+**39.5 s** of the first's start (§8.3's 33 s and up to one both-ways try of random pause); its two
+tries and 13.5 s radiated stand. The arm is **C2**: the tree with these changes and `capped_call: true`
+in `GrantConfig::default`. **T's runs of §8 are reused**: none of the three changes does anything with
+`capped_call` off (the move's rule is read only for a capped call's plan). One row a run in
+`docs/research/calling/data/capped-C2.csv`. H3 (c) — the hidden loser's overlaps — is aimed at by
+none of the three and is expected to fail again; it is judged as registered.
