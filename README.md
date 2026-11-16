@@ -22,7 +22,7 @@ Linux and macOS or headless on a Raspberry Pi gateway.
 > scenario in the test harness before it becomes a fix ([`field/LOG.md`](field/LOG.md),
 > [`docs/research/link-architecture/`](docs/research/link-architecture/README.md)).
 >
-> **Both stations of a contact need Aether, with the same link protocol** (protocol 12 at the
+> **Both stations of a contact need Aether, with the same link protocol** (protocol 13 at the
 > time of writing). When a release changes the protocol, the update window says *Update
 > required*, and the panel warns when a station calls in another one.
 

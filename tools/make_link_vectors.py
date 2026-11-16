@@ -218,18 +218,27 @@ def accept_frame_doc(f: AcceptFrame) -> dict:  # type: ignore[type-arg]
         "version": f.version,
         "turnaround_s": f.turnaround_s,
         "identifier_s": f.identifier_s,
+        "compression": f.compression,
+        "capabilities": f.capabilities(),
     }
 
 
 def accept_frame_cases() -> list[dict]:  # type: ignore[type-arg]
-    """The capped call's acceptance (ADR-0126 §2.1, §7): every field at its edges, the SNR's
+    """The call's acceptance (ADR-0126 §2.1, §7): every field at its edges, the SNR's
     six-bit clamp, the turnaround and the identifier rounded up to their steps and clamped; and
     the session control frames that are not acceptances."""
     out = []
     for frame in (
         AcceptFrame(0, 1),
         AcceptFrame(
-            127, 255, level=3, snr_db=31.6, bandwidth=1, turnaround_s=0.25, identifier_s=6.3
+            127,
+            255,
+            level=3,
+            snr_db=31.6,
+            bandwidth=1,
+            turnaround_s=0.25,
+            identifier_s=6.3,
+            compression=True,
         ),
         AcceptFrame(
             caller_code("KK4ODA-1"),
@@ -498,7 +507,7 @@ def main() -> int:
         "datagrams": datagram_cases(),
         "datagram_bodies": datagram_body_cases(),
         "grant_frames": grant_frame_cases(),
-        # the capped call's acceptance and caller codes (ADR-0126)
+        # the call's acceptance and caller codes (ADR-0126)
         "accept_frames": accept_frame_cases(),
         "caller_codes": caller_code_cases(),
         # the rate controller, input by input, on both airs (ADR-0094, ADR-0099)

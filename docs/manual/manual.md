@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.0.0 |
-| **Updated** | 2026-11-15 |
+| **Version** | 1.1.0 |
+| **Updated** | 2026-11-16 |
 | **Describes** | Aether HF 0.2.0-beta.159 |
 | **Licence** | CC BY 4.0 |
 
@@ -486,7 +486,7 @@ quiet leaves the signal inside the sound card's own noise.
 
 ### Step 4. Modem settings
 
-![Setup scrolled to step 4: bandwidth, answer only, fastest mode, compress, busy channel, turnaround, answer gap, longest key, Morse ID and band edges](screens/setup-modem.png)
+![Setup scrolled to step 4: bandwidth, answer only, fastest mode, compress, call tries, busy channel, turnaround, answer gap, longest key, Morse ID and band edges](screens/setup-modem.png)
 
 *Figure 14. Setup step 4: the modem's settings.*
 
@@ -501,6 +501,11 @@ quiet leaves the signal inside the sound card's own noise.
   cap the link. The rules may hold it lower on some frequencies.
 - **Compress**: off by default. It compresses the whole session, so on a weak path one lost frame
   can spoil the rest. Use it only on a solid link.
+- **Call tries**: how many tries a call makes before it gives up: 2 (the default), 6, 8, 10 or
+  15. Two reach most stations and give the frequency back in about 40 s when nobody answers. More
+  tries keep calling a weak or busy station longer, and hold the frequency longer: fifteen take
+  about three minutes. A call of six or more that four tries at 2300 Hz have not had answered goes
+  on at 500 Hz.
 - **Busy channel**: *wait for a clear channel before calling*, and how far above the noise counts
   as busy (6 dB by default). With it on, a call, probe or beacon also waits while Aether hears two
   other stations in a session, through the pauses between their transmissions, at least 4 s after
@@ -588,8 +593,11 @@ frequency in the program.
 
 Type the other station's callsign, with its SSID if it uses one. Then:
 
-- **Connect**: call it and start a session. Calls go out on the tone floor first, the most robust
-  rungs.
+- **Connect**: call it and start a session. A call is two tries by default (**Call tries**, Setup
+  step 4), chosen by how well you last heard the station: the fast OFDM frame and the robust tone
+  frame together when you have not heard it lately, quick tries first when you heard it strong,
+  tone frames when you heard it weak. The last try comes after a 15 to 21 s pause. If nobody
+  answers, the call ends in about 40 s; press **Connect** again to call again.
 - **Disconnect**: send what is still queued, then close. It waits a minute at most; past that the
   session closes anyway. While it waits, the banner and the line under the buttons say how much is
   left and the seconds left: *Disconnecting from N2CALL: sending the last 1.2 kB (45 s at most).
@@ -965,8 +973,10 @@ The tables below are made from the modem's own figures every time the manual is 
   fits between other signals, and works through a narrow filter.
 - **Both stations use the same bandwidth.** A 2300 Hz station answers a 500 Hz call at 500 Hz by
   itself, and goes back after 20 s of quiet. A 2300 Hz station calling a station it knows runs
-  500 Hz moves there first. After four unanswered tries at 2300 Hz to a station not known to run
-  2300 Hz, it tries at 500 Hz.
+  500 Hz moves there first. A call of six or more tries (**Call tries**, Setup step 4) that four
+  tries at 2300 Hz have not had answered goes on at 500 Hz, to a station not known to run 2300 Hz.
+  With the default two tries it stays at 2300 Hz: a station running 500 Hz hears the call and
+  tells its operator, and a probe tells you the bandwidth it runs.
 - **The Stations tab's Hz column** shows what your station remembers of each station. A probe's
   answer says the bandwidth a station really runs.
 - **A host program's bandwidth wins.** With Host programs on, the program's `BW` command sets the
@@ -1467,4 +1477,5 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 
 | Version | Date | Changes |
 |---|---|---|
+| 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
 | 1.0.0 | 2026-11-15 | First edition: the illustrated manual in place of `docs/user/manual.md`, with Parts, schematics and screenshots, the rung tables from the model, a chapter on RadioPost, and Aether FM as planned. |

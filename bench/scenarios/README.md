@@ -21,6 +21,8 @@ tx_level = 0.25             # [audio] tx_level; the channel's SNR is against it
 answer_gap_ms = 0           # [radio] answer_gap_ms
 turnaround_ms = 0           # [radio] turnaround_ms, the radio's own (a daemon of schema 12
                             # and up; an older build's file leaves it out)
+call_tries = 2              # [radio] call_tries: 2, 6, 8, 10 or 15 (schema 14 and up,
+                            # link protocol 13's call)
 wait_for_clear = true
 max_mode = 19               # [radio] max_mode (default 19 at 2300 Hz, 14 at 500 Hz)
 pin_rung = 7                # the station's own data at this rung whatever the other

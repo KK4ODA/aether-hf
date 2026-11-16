@@ -3143,6 +3143,28 @@ comes 10.5 s after a lost one, three of the stand-in's cycles exactly, and is lo
 41 s); the real Trimode's cycle is about 3.6 s. `bench/baselines/scenarios.csv` is all 64
 scenarios × 3 draws on this runner.
 
+**The capped call (2026-11-16, ADR-0126, link protocol 13, beta.160; the author's call bench,
+`docs/research/calling/`).** A call is `call_tries` tries (`[radio] call_tries`, 2 by default;
+6, 8, 10 or 15 in Setup step 4; schema 14), each the connect request in the robust OFDM data
+frame (C, answered in OFDM), tone-24 (S, answered on the floor) or both back to back (H, the OFDM
+part stating one to follow; answered in OFDM only if that part was read 6 dB over the control
+threshold), chosen by the SNR the station last read the one it calls (`Station::heard_lately`,
+15 minutes → `GrantedEngine::connect_heard`): not heard H×N, heard strong C C C + S×(N−1), weak
+S×N. No random wait between tries; before the last a silent 15 s pause plus a uniform part up to
+that try's length, and the last try grants the top gap level (a slow station is reached). The
+acceptance is `AcceptFrame`, an ANSWER control frame with session field 0, named by the whole
+session number and the caller's code (CRC-32 of the packed callsign, low 7 bits), carrying the
+called station's level, SNR, bandwidth, version, compression, turnaround and identifier. A
+both-ways try heard again is accepted on the floor (the OFDM acceptance was lost: a VOX hold, an
+echo). ADR-0058's move to 500 Hz needs more than four tries. Deleted: the alternating eight tries
+and their random wait, `connect_retries`, the CONNECT_ACK data acceptance, ADR-0056's
+`floor_answer_margin_db`, the `capped_call` switch. The harness A/B (§8, §9) is in
+`02-capped-call.md` §6–§7; its accepted costs: an unheard 500 Hz station is not reached on two
+tries, a lost OFDM acceptance costs the pause (first calls of 40–45 s on VOX/NVIS paths), a
+hidden loser's tries and identifier fall on the winner's start, and the acceptance's OFDM reading
+starts strong sessions at rung 19, which the daemon tests' loopback decodes only by combining
+(those tests call `below_64qam`).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

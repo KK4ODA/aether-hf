@@ -1,7 +1,8 @@
 name = "40m-wide-calls-narrow-unprobed"
 description = """40 m: a 2300 Hz station calls one that runs 500 Hz without probing it first
 (KO4WX calling KK4ODA-1, 2026-10-10): after four unanswered tries the call should go on at
-500 Hz and be answered (ADR-0058). Moderate path at +6 dB. A call, 2 kB, a disconnect."""
+500 Hz and be answered (ADR-0058) — a call of six tries, the setting that keeps that move
+(ADR-0126 §9; two tries stay at 2300 Hz). Moderate path at +6 dB. A call, 2 kB, a disconnect."""
 tags = ["40m", "stress"]
 seconds = 900
 seed = 23
@@ -9,6 +10,7 @@ seed = 23
 [stations.a]
 callsign = "WC4Y"
 bandwidth = 2300
+call_tries = 6
 [stations.b]
 callsign = "KK4ODA"
 bandwidth = 500

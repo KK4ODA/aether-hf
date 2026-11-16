@@ -58,7 +58,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-ANSWER_KINDS = {"Ack", "ConnectAck", "ProbeAck", "DiscAck"}
+# "Accept": a call's acceptance since link protocol 13 (ADR-0126); "ConnectAck" before it
+ANSWER_KINDS = {"Ack", "Accept", "ConnectAck", "ProbeAck", "DiscAck"}
 LEAVING_KINDS = {"Disc", "DiscAck"}
 REPEATS = {"timer:wait", "timer:resend", "timer:keepalive", "timer:connect", "timer:leave"}
 

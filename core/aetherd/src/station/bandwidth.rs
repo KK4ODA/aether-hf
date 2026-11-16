@@ -108,8 +108,8 @@ pub const KIN_HEARD_S: f64 = 30.0 * 60.0;
 pub const CALL_HEARD_S: f64 = 15.0 * 60.0;
 
 /// Unanswered tries at 2 300 Hz before a call to a station whose bandwidth is not known goes on
-/// at 500 Hz (ADR-0058): two on the floor and two ordinary — the half of a call
-/// (`connect_retries` 8) a station that hears it answers in.
+/// at 500 Hz (ADR-0058), when the call makes more than this (the tries setting at 6 or more:
+/// ADR-0126 §9).
 pub const NARROW_AFTER_TRIES: usize = 4;
 
 /// How long before its next try a call is carried on to the narrow air (ADR-0058): a few of the
@@ -704,15 +704,11 @@ impl<P: Ptt> Station<P> {
     }
 
     /// The unanswered tries after which a 2 300 Hz call goes on at 500 Hz: [`NARROW_AFTER_TRIES`],
-    /// and for a capped call only when it makes more (ADR-0126 §9): a 2 300 Hz station reads only
-    /// the tone floor of a 500 Hz call, so a short call that moved lost its last try's OFDM half to
-    /// every station not known to run 500 Hz.
+    /// and only for a call that makes more (ADR-0126 §9): a 2 300 Hz station reads only the tone
+    /// floor of a 500 Hz call, so a short call that moved lost its last try's OFDM half to every
+    /// station not known to run 500 Hz.
     fn narrow_after_tries(&self) -> Option<usize> {
-        match self.engine.call_tries_planned() {
-            0 => Some(NARROW_AFTER_TRIES),
-            tries if tries > NARROW_AFTER_TRIES => Some(NARROW_AFTER_TRIES),
-            _ => None,
-        }
+        (self.engine.call_tries_planned() > NARROW_AFTER_TRIES).then_some(NARROW_AFTER_TRIES)
     }
 
     /// Whether the station could move to another bandwidth now.

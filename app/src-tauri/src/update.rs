@@ -163,7 +163,7 @@ fn newer(candidate: &str, current: &str) -> bool {
 /// The link protocol this build's modem speaks: `aether_link::frames::PROTOCOL_VERSION`, which
 /// a test holds this to. A release's manifest states its own (`link_protocol`), and an offer
 /// of another is an update the operator must take to keep working other stations.
-pub const LINK_PROTOCOL: u8 = 12;
+pub const LINK_PROTOCOL: u8 = 13;
 
 /// An offered version that speaks another link protocol than this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -790,6 +790,7 @@ const SCHEMA_HISTORY: &[(&str, u32)] = &[
     ("0.2.0-beta.89", 11),
     ("0.2.0-beta.106", 12),
     ("0.2.0-beta.111", 13),
+    ("0.2.0-beta.160", 14),
 ];
 
 /// The settings schema a version reads, if it is one this build knows of.

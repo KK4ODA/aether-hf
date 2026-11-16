@@ -99,13 +99,14 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "max_data_frames": c.max_data_frames,
         "max_burst_s": bits(c.max_burst_s),
         "max_retries": c.max_retries,
-        "connect_retries": c.connect_retries,
+        "call_tries": c.call_tries,
+        "call_pause_s": bits(c.call_pause_s),
+        "call_answer_margin_db": bits(c.call_answer_margin_db),
         "disc_retries": c.disc_retries,
         "disc_patience_exchanges": bits(c.disc_patience_exchanges),
         "disc_patience_s": bits(c.disc_patience_s),
         "disc_drain_s": bits(c.disc_drain_s),
         "leave_repeats": c.leave_repeats,
-        "floor_answer_margin_db": bits(c.floor_answer_margin_db),
         "answer_floor_margin_db": bits(c.answer_floor_margin_db),
         "family_readings": c.family_readings,
         "link_timeout_s": bits(c.link_timeout_s),
@@ -139,13 +140,6 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "on_time_to_lower": c.on_time_to_lower,
         "need_ease_after": c.need_ease_after,
     }
-    if c.capped_call:
-        # the capped call's (ADR-0126), only where a session turns it on: the sessions before it
-        # read as they always did
-        doc["capped_call"] = True
-        doc["call_tries"] = c.call_tries
-        doc["call_pause_s"] = bits(c.call_pause_s)
-        doc["call_answer_margin_db"] = bits(c.call_answer_margin_db)
     return doc
 
 
@@ -1253,12 +1247,12 @@ def _until_idle(sim: TwoStationSim, *engines: GrantedEngine, limit: float) -> No
         sim.run(until=t)
 
 
-def capped() -> list[Recorder]:
-    """The capped call (ADR-0126 §7) through every plan: nothing heard (two both-ways tries,
+def calls() -> list[Recorder]:
+    """The call (ADR-0126) through every plan: nothing heard (two both-ways tries,
     the acceptance in OFDM), heard strong (quick tries first), heard weak (floor tries only), a
     both-ways try read under the margin (the acceptance on the floor), a message behind a call,
     and a call nobody hears (the pause before the last try, the call over)."""
-    a, b, ra, rb = _pair(WIDE, capped_call=True, turnaround_s=0.2, identifier_s=3.0)
+    a, b, ra, rb = _pair(WIDE, turnaround_s=0.2, identifier_s=3.0)
     rng = random.Random(51)
     sim = TwoStationSim(a, b, snr_db=12.0, seed=51)
     a.connect("KK4XYZ")
@@ -1286,24 +1280,11 @@ def capped() -> list[Recorder]:
     return [ra, rb]
 
 
-def capped_mixed() -> list[Recorder]:
-    """Today's call and the capped call do not hear each other's calls (ADR-0126 §2.1): a
-    capped station ignores a protocol-12 call and says so; today's ignores a protocol-13 one.
-    The narrow air, a capped station heard weak."""
-    a, b, ra, rb = _pair(NARROW, sender={"capped_call": True})
-    sim = TwoStationSim(a, b, snr_db=6.0, seed=52)
-    a.connect("KK4XYZ", heard_db=0.0)
-    _until_idle(sim, a, b, limit=60.0)
-    b.connect("W4ODA")
-    _until_idle(sim, a, b, limit=400.0)
-    return [ra, rb]
-
-
-def capped_six() -> list[Recorder]:
+def call_six() -> list[Recorder]:
     """Six tries (ADR-0126 §7.4): a call nobody hears goes its six both-ways tries with the
     pause before the last; one heard strong, three quick tries then five floor tries, answered
     once the path comes back on the third floor try."""
-    a, b, ra, rb = _pair(WIDE, capped_call=True, call_tries=6)
+    a, b, ra, rb = _pair(WIDE, call_tries=6)
     sim = TwoStationSim(a, b, snr_db=-60.0, seed=53)
     a.connect("KK4XYZ")
     _until_idle(sim, a, b, limit=200.0)
@@ -1316,12 +1297,12 @@ def capped_six() -> list[Recorder]:
     return [ra, rb]
 
 
-def capped_again() -> list[Recorder]:
+def call_again() -> list[Recorder]:
     """A try heard again (ADR-0126 §9): the OFDM acceptance does not get back, so a both-ways
     try's second is answered on the floor and connects; a quick try's are answered in OFDM again
     (the only family its caller listens for), until the plan's floor try is answered on the
     floor."""
-    a, b, ra, rb = _pair(WIDE, capped_call=True)
+    a, b, ra, rb = _pair(WIDE)
     sim = TwoStationSim(a, b, snr_db=12.0, seed=54)
 
     def ofdm_control_lost(frame: TxFrame) -> float:
@@ -1382,11 +1363,10 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "floor-in-flight": floor_in_flight(45),
     "edge-at-the-end": floor_in_flight(46, WIDE, 6.0, 1000),
     "own-choice": own_choice(47),
-    # the capped call (ADR-0126), appended last so the blob table's indices stay
-    "capped": capped,
-    "capped-mixed": capped_mixed,
-    "capped-six": capped_six,
-    "capped-again": capped_again,
+    # the call of protocol 13 (ADR-0126)
+    "calls": calls,
+    "call-six": call_six,
+    "call-again": call_again,
 }
 
 

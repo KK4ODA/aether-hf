@@ -410,6 +410,7 @@ fn accept_frame(doc: &Value) -> AcceptFrame {
         version: byte("version"),
         turnaround_s: doc["turnaround_s"].as_f64().expect("turnaround"),
         identifier_s: doc["identifier_s"].as_f64().expect("identifier"),
+        compression: doc["compression"].as_bool().expect("compression"),
     }
 }
 
@@ -433,6 +434,11 @@ fn accept_frames_match_the_model() {
         assert!(is_acceptance(&expected), "{frame:?}: not an acceptance");
         let decoded = AcceptFrame::decode(&expected).expect("decode");
         assert_eq!(decoded, accept_frame(&case["decoded"]), "{frame:?}: decoded");
+        assert_eq!(
+            usize::from(decoded.capabilities()),
+            int(&case["decoded"], "capabilities"),
+            "{frame:?}: capabilities"
+        );
         checked += 1;
     }
     assert!(checked >= 4, "only {checked} acceptances");

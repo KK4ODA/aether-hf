@@ -1,14 +1,10 @@
 # ADR-0126: The capped call — a call in control frames, chosen by what was heard, over in 20 s
 
-**Status:** accepted for building, 2026-11-15 — the revision of §7, the author's decision on its
-model bench ("results accepted, go ahead"), its one narrow miss (§7.3) accepted. Link protocol 13.
-Its first design (§2.1's call frame, the codes, the details at the head of the data: §2–§6) was
-benched and failed R2 and R3 (§6); it is removed from the model and lives in the history at
-`343be84`. The capped call is in the model and the port behind `GrantConfig.capped_call`, off by
-default, with the number of tries a setting (§7.4). The harness's A/B (§8) failed H2–H5 with a
-narrow miss on H1 (§8.4); the author's three changes (§9) pass H1 and H4 and leave H2, H3 (c) and
-H5 failing on what §9.3 names, for the author's next call; then the air, before it becomes the
-default and link protocol 13 ships.
+**Status:** accepted, 2026-11-16 — the default from beta.160, link protocol 13 (§10): the author
+took the second round's results (§9.3) and its remaining costs, and today's call is deleted. Built
+as the revision of §7 with the three changes of §9 and what §10.2 found making it the default; the
+number of tries is the operator's setting (§7.4, §10.3). The first design (§2–§6) failed R2 and R3
+on the model bench and lives in the history at `343be84`. Owed: the air.
 
 ## 1. Context
 
@@ -464,3 +460,54 @@ it has not heard (chosen); a lost OFDM acceptance now costs the pause (first cal
 today's took 12–16 s, in five scenarios); the harness's Trimode stand-in deaf a whole second in four;
 and the hidden loser's overlaps. The changes these point to are listed in that section's §7.4 and are
 the author's call.
+
+## 10. The default, link protocol 13 (2026-11-16, the author's decision)
+
+The author, on §9.3: "I'm OK living with those small problems for now" — cut the release — and,
+asked what happens to today's call: delete it. From beta.160 the capped call is **the** call.
+
+### 10.1 What goes
+
+* Today's call: eight tries alternating the tone floor and the ordinary family (ADR-0016), their
+  random wait growing with the tries, `connect_retries`, and the bench's `call_wait_frames` and
+  `call_floor_only`.
+* The `CONNECT_ACK` data frame as an acceptance: a station of protocol 13 sends none and ignores
+  one. ADR-0056's margin for accepting an ordinary call on the floor (`floor_answer_margin_db`):
+  §7's rule (a both-ways try's OFDM part read 6 dB over the control threshold) took its place.
+* The switch `GrantConfig.capped_call`, and with it every "capped" name in the code: the call's
+  functions have the names today's had (`send_connect`, `on_request`, `on_acceptance`, …).
+
+`PROTOCOL_VERSION` is 13 (model, port, the shell's `LINK_PROTOCOL`); a call of protocol 12 is
+read, refused and said so, as every other version's.
+
+### 10.2 What was found making it the default, and changed
+
+* **A slow called station.** Today's call raised the gap level it grants every second try, so a
+  called station whose computer decodes late (1.35 s in the model's test) was reached by the
+  fifth try. Two tries never pass level 0. The plan's **last try now grants the top level**
+  (2 s): a late station is reached on it, and a call nobody answers holds the channel about 2 s
+  longer (24.1 s for H H, from 22.1 s). A both-ways try reaches such a station on its first try
+  anyway: its OFDM part is decoded while its floor part is still on the air.
+* **Compression.** The acceptance had no capability byte, and the caller took the called
+  station's capabilities for its own: one station with compression on and the other off would
+  have compressed one way and not decompressed the other. Byte 4's low bit, beside the caller's
+  code, now carries the called station's compression; the caller builds its peer's capabilities
+  from the acceptance (`AcceptFrame.compression`, `capabilities()`).
+* **The daemon's view of an acceptance.** The frame reports, the sidecars' transmissions, the
+  rules check's description, the third-station reserve and ADR-0055's "sets up a contact" all
+  read an acceptance as a `CONNECT_ACK` data frame; each now knows the control frame (an
+  acceptance is "the answer to a call", a response under §97.221(c)(1), and carries no Morse
+  identifier).
+* **The first data's rung.** An acceptance carries the both-ways try's OFDM reading where today's
+  carried the floor's, capped near 17.5 dB. On the daemon tests' loopback (about 25 dB, where
+  64-QAM decodes only by combining) a session's first data goes at rung 19 and comes through on
+  its third copy. Not changed — where a session starts is the rate controller's, and its review's
+  (CLAUDE.md's rule); the tests of what a session does keep both stations below rung 18.
+
+### 10.3 The operator's setting
+
+`[radio] call_tries` (2, 6, 8, 10 or 15; 2 unless set; live; in profiles), configuration schema
+14 (a no-op step, `call_tries`; fixture `0.2.0-beta.159-call.toml`; the shell's `SCHEMA_HISTORY`
+`("0.2.0-beta.160", 14)`), Setup step 4's **Call tries**, the manual's words. A call of six or
+more keeps ADR-0058's move to 500 Hz after four unanswered tries at 2 300 Hz;
+`40m-wide-calls-narrow-unprobed` now runs with six.

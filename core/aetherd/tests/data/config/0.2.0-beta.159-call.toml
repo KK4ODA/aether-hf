@@ -1,0 +1,39 @@
+# As beta.159 wrote a gateway's file: schema 13, the last before `radio.call_tries` (ADR-0126,
+# link protocol 13: a call is a set number of tries, two unless set).
+schema_version = 13
+callsign = "KK4ODA-1"
+
+[operator]
+grid = "EM73tv"
+rig = "FTDX10"
+power_w = 50.0
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.12
+
+[ptt]
+kind = "cat"
+port = "COM6"
+protocol = "yaesu"
+baud = 38400
+
+[radio]
+bandwidth = 2300
+max_mode = 19
+wait_for_clear = true
+answer_gap_ms = 0
+turnaround_ms = 0
+compress = true
+cw_id = true
+cw_id_wpm = 20.0
+
+[host]
+enabled = true
+
+[regulatory]
+profile = "us-fcc-part97"
+control = "automatic"
+license_class = "extra"
+sideband = "usb"

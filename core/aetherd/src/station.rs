@@ -51,8 +51,8 @@ use aether_link::{
     Action, Container, GrantConfig, GrantFrame, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
     State,
     frames::{
-        ConnectBody, DataHeader, DataKind, ProbeBody, decode_data, encode_data, pack_callsign,
-        unpack_callsign, with_bandwidth,
+        AcceptFrame, ConnectBody, DataHeader, DataKind, ProbeBody, caller_code, decode_data,
+        encode_data, is_acceptance, pack_callsign, unpack_callsign, with_bandwidth,
     },
     granted::{HEADER_UNDECODABLE_SHARE, Role},
 };
@@ -2237,6 +2237,9 @@ impl<P: Ptt> Station<P> {
         // this radio's turnaround: declared in the next call or acceptance
         self.config.turnaround_s = f64::from(config.radio.turnaround_ms) / 1000.0;
         self.engine.set_turnaround_s(self.config.turnaround_s);
+        // the next call's tries (ADR-0126)
+        self.config.link.call_tries = config.radio.call_tries as usize;
+        self.engine.set_call_tries(self.config.link.call_tries);
         // the operator's fastest rung, on the ladder running now — and in the engine, which
         // used to keep the one it started with until the modem restarted
         self.config.max_mode_setting = Some(config.radio.max_mode);
@@ -4056,8 +4059,17 @@ impl<P: Ptt> Station<P> {
         if control {
             if let Some(payload) = payload {
                 report.control = crate::record::describe_control(payload);
-                // a control frame of protocol 8 carries the session's low seven bits
-                if let Ok(control) = GrantFrame::decode(payload) {
+                if let Ok(accept) = AcceptFrame::decode(payload) {
+                    // a call's acceptance (protocol 13, ADR-0126): it names the call by its
+                    // session and the caller's code, not by callsigns
+                    report.kind = "answer";
+                    let to_us = accept.session == self.engine.session()
+                        && caller_code(&self.engine.my_call).is_ok_and(|c| c == accept.caller);
+                    // the station this one called, while it calls or once the session is up
+                    report.from = to_us.then(|| self.engine.remote_call.clone());
+                    report.to = to_us.then(|| self.engine.my_call.clone());
+                } else if let Ok(control) = GrantFrame::decode(payload) {
+                    // a control frame of protocol 8 carries the session's low seven bits
                     report.from = ours(self.engine.session())
                         .filter(|_| control.session == self.engine.session() & 0x7F);
                 }
@@ -4736,6 +4748,11 @@ impl<P: Ptt> Station<P> {
         let described: Vec<serde_json::Value> = frames
             .iter()
             .map(|frame| match frame.container {
+                Container::Control if is_acceptance(&frame.payload) => serde_json::json!({
+                    "c": "control",
+                    "kind": "Accept",
+                    "floor": frame.floor,
+                }),
                 Container::Control => match GrantFrame::decode(&frame.payload) {
                     Ok(control) => serde_json::json!({
                         "c": "control",
@@ -5508,6 +5525,9 @@ impl<P: Ptt> Station<P> {
                     )
                 }
             },
+            Container::Control if is_acceptance(&first.payload) => {
+                ("the answer to a call".to_owned(), Direction::Respond)
+            }
             Container::Control => {
                 let kind = GrantFrame::decode(&first.payload)
                     .map_or_else(|_| "control".to_owned(), |c| format!("{:?}", c.kind));
@@ -5908,6 +5928,10 @@ impl<P: Ptt> Station<P> {
     fn other_session(&self, control: bool, payload: &[u8]) -> Option<reserve::Heard> {
         let ours = self.engine.session();
         if control {
+            if let Ok(accept) = AcceptFrame::decode(payload) {
+                // a call's acceptance: a session starting between two other stations
+                return (accept.session != ours).then_some(reserve::Heard::Session);
+            }
             let frame = GrantFrame::decode(payload).ok()?;
             if frame.session == ours & 0x7F {
                 return None;
@@ -5946,16 +5970,17 @@ fn envelope(air: &AirOccupancy, timing: &PhyTiming, upto: usize) -> Edges {
 /// and so carries no identifier (ADR-0055).
 fn sets_up_contact(frames: &[aether_link::TxFrame]) -> bool {
     frames.iter().any(|frame| {
-        frame.container == Container::Data
-            && decode_data(&frame.payload).is_ok_and(|(header, _)| {
-                matches!(
-                    header.kind,
-                    DataKind::ConnectReq
-                        | DataKind::ConnectAck
-                        | DataKind::Probe
-                        | DataKind::ProbeAck
-                )
-            })
+        (frame.container == Container::Control && is_acceptance(&frame.payload))
+            || (frame.container == Container::Data
+                && decode_data(&frame.payload).is_ok_and(|(header, _)| {
+                    matches!(
+                        header.kind,
+                        DataKind::ConnectReq
+                            | DataKind::ConnectAck
+                            | DataKind::Probe
+                            | DataKind::ProbeAck
+                    )
+                }))
     })
 }
 
@@ -7455,9 +7480,9 @@ mod tests {
 
     #[test]
     fn the_burst_has_the_rms_the_tx_level_documents() {
-        // a call's first try is a tone frame (ADR-0016), which goes out at the OFDM frames'
-        // peak — `tone::gain_db()` above their average — and its second an OFDM frame, whose
-        // RMS is what `tx_level` documents
+        // a call's first try to a station not heard is both ways (ADR-0126): an OFDM frame,
+        // whose RMS is what `tx_level` documents, then a tone frame, which goes out at the OFDM
+        // frames' peak — `tone::gain_db()` above their average
         let mut station = Station::new(
             StationConfig {
                 callsign: "W4ODA".to_owned(),
@@ -7475,7 +7500,7 @@ mod tests {
             let count = station.playback(&mut out).expect("playback");
             audio.extend_from_slice(&out[..count]);
             station.capture(&vec![0.0f32; 4096]).expect("capture");
-            if station.stats.transmissions >= 2 && !station.transmitting() {
+            if station.stats.transmissions >= 1 && !station.transmitting() {
                 break;
             }
         }
@@ -7494,11 +7519,16 @@ mod tests {
                 quiet = quiet.saturating_add(1);
             }
         }
-        assert_eq!(bursts.len(), 2, "two tries of the call");
+        assert_eq!(bursts.len(), 1, "the call's first try");
         let rms = |b: &[f32]| (b.iter().map(|x| x * x).sum::<f32>() / b.len() as f32).sqrt();
         let expected = 0.25 / std::f32::consts::SQRT_2;
         let tone = expected * 10f32.powf(aether_phy::tone::gain_db() as f32 / 20.0);
-        let (floor, ordinary) = (rms(&bursts[0]), rms(&bursts[1]));
+        // the OFDM frame is the first 1.05 s, the tone frame the last 5.36 s: well inside each
+        let rate = 48_000.0_f32;
+        let burst = &bursts[0];
+        let head = &burst[..(0.9 * rate) as usize];
+        let tail = &burst[burst.len() - (4.5 * rate) as usize..];
+        let (floor, ordinary) = (rms(tail), rms(head));
         assert!(
             (floor / tone - 1.0).abs() < 0.1,
             "tone burst RMS {floor:.4}; the OFDM frames' peak is {tone:.4}"
@@ -8197,6 +8227,16 @@ mod tests {
         assert_eq!(station.stats.watchdog_trips, 0);
     }
 
+    /// The loopback reads about 25 dB, but its 64-QAM rungs (18 and 19 at 2 300 Hz) decode
+    /// there only by combining copies (the transmitter's peak reduction). A call's acceptance
+    /// carries the both-ways try's OFDM reading (ADR-0126), where the old call's carried the
+    /// floor's, capped near 17.5 dB, so a session's first data would go at rung 19 and come
+    /// through on its third copy. Tests of what a session does keep below it.
+    fn below_64qam(air: &mut Air) {
+        air.a.engine.set_max_mode(17);
+        air.b.engine.set_max_mode(17);
+    }
+
     /// Run `air` with `b` stalled for `stall_s` once `a` has keyed a transmission of the
     /// session's, as the scenario harness's slow machine does: `b` neither hears nor answers,
     /// what `a` sends piles up, the newest two seconds of it are kept and the rest lost — told
@@ -8210,6 +8250,7 @@ mod tests {
             .map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8)
             .collect();
         let mut air = Air::new(1.0, 0.0005);
+        below_64qam(&mut air);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
@@ -8418,6 +8459,7 @@ mod tests {
         // granted — 29 s of floor frames — and its DISC went as the run ended, unheard. A header
         // cut before it could be read granted nothing; its slot is measured from the cut
         let mut air = Air::new(1.0, 0.0005);
+        below_64qam(&mut air);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
@@ -9029,6 +9071,7 @@ mod tests {
         // who called whom, what crossed, the fastest rung each way and how it ended: what
         // three test sessions with ND1J left to be read out of recordings (2026-09-25)
         let mut air = Air::new(1.0, 0.0005);
+        below_64qam(&mut air);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(60.0, |a, b| a.connected() && b.connected());
         air.a.send(&[0x42; 300]);
@@ -10106,6 +10149,7 @@ mod tests {
             .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
             .collect();
         let mut air = Air::new(1.0, 0.0005);
+        below_64qam(&mut air);
         air.a.connect("KK4XYZ").expect("idle");
         air.a.send(&message);
         let mut reports = Vec::new();
@@ -10151,6 +10195,7 @@ mod tests {
         // frame: a beacon names its sender outright, and once a session is up the frames
         // with its id are the other station's
         let mut air = Air::new(1.0, 0.0005);
+        below_64qam(&mut air);
         assert!(air.b.last_frame().is_none());
         assert!(air.b.constellation().is_none());
         air.a.beacon(None).expect("idle");
@@ -10223,6 +10268,7 @@ mod tests {
     #[test]
     fn a_session_keeps_its_account_and_its_throughput() {
         let mut air = Air::new(1.0, 0.0005);
+        below_64qam(&mut air);
         assert!(air.a.link().is_none());
         assert!(air.a.throughput_bps().abs() < f64::EPSILON);
         air.a.connect("KK4XYZ").expect("idle");
@@ -10875,12 +10921,14 @@ mod tests {
     fn a_wide_call_nobody_answers_goes_on_at_500_hz_and_a_narrow_station_answers() {
         // ADR-0058, from the air: KO4WX called this station at 2 300 Hz for minutes while it
         // ran 500 Hz. A 2 300 Hz call to a station of unknown bandwidth that four tries have
-        // not had answered goes on at 500 Hz, where the narrow station answers it
+        // not had answered goes on at 500 Hz, where the narrow station answers it — a call of
+        // more than four tries (ADR-0126 §9: the setting at 6 or more)
         let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
             params: aether_phy::waveform::NARROW_500,
             ..config
         });
         air.a = caller_on(WIDE_2300);
+        air.a.engine.set_call_tries(6);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(400.0, |a, b| a.connected() && b.connected());
         assert!(
@@ -10913,8 +10961,8 @@ mod tests {
         assert!(
             events.iter().any(|e| e.starts_with(
                 "bandwidth:calling KK4XYZ at 2300 Hz, as the host program asked, though it was \
-                 last heard running 500 Hz; at 500 Hz after 4 unanswered tries"
-            )),
+                 last heard running 500 Hz"
+            ) && !e.contains("unanswered tries")),
             "{events:?}"
         );
         air.run(90.0, |a, b| a.connected() && b.connected());
@@ -10937,12 +10985,14 @@ mod tests {
     fn a_host_programs_wide_call_nobody_answers_still_goes_on_at_500_hz() {
         // ADR-0102 keeps ADR-0058 for a program's call: the bandwidth it chose is the first
         // tried, not the only one. Winlink Express always says a BW, so before this its calls
-        // to a 500 Hz station never went on at 500 Hz
+        // to a 500 Hz station never went on at 500 Hz. A call of more than four tries
+        // (ADR-0126 §9)
         let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
             params: aether_phy::waveform::NARROW_500,
             ..config
         });
         air.a = caller_on(WIDE_2300);
+        air.a.engine.set_call_tries(6);
         assert_eq!(air.a.host_bandwidth(Some(2300)), Ok(2300));
         air.a.connect_keeping("KK4XYZ", None, true).expect("idle");
         air.run(400.0, |a, b| a.connected() && b.connected());

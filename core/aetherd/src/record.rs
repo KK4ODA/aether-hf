@@ -133,6 +133,23 @@ impl FrameRecord {
 /// A decoded control frame in a few words, for the sidecar and the replay listing.
 #[must_use]
 pub fn describe_control(payload: &[u8]) -> Option<String> {
+    if let Ok(accept) = aether_link::frames::AcceptFrame::decode(payload) {
+        // a call's acceptance (protocol 13, ADR-0126)
+        return Some(format!(
+            "Accept session {} caller {} level {} snr {} bandwidth {} version {}{}",
+            accept.session,
+            accept.caller,
+            accept.level,
+            accept.snr_db.map_or("-".to_owned(), |s| format!("{s:.0}")),
+            accept.bandwidth,
+            accept.version,
+            if accept.compression {
+                " compression"
+            } else {
+                ""
+            },
+        ));
+    }
     let frame = aether_link::GrantFrame::decode(payload).ok()?;
     Some(format!(
         "{:?} session {} count {}{} level {} base {} bitmap {:#06x} missed {} n {}{} snr {}{}{}{}{}",

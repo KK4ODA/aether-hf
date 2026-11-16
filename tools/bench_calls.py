@@ -16,16 +16,14 @@ Step 5; a tree run now needs the granted engine (2026-10-13 on).
     python tools/bench_calls.py --variant "calls on the floor" --out calls.csv
     python tools/bench_calls.py --tree C:/Dev/aether-before --variant beta.54 --out before.csv
 
-`--wait` sets the random wait after a call's try (`docs/research/calling/`): `growing` (today's,
-`1 + tries` floor frames), `short` (one floor frame), `none`, or a number of floor frames;
-`--calls floor` puts every try of a call on the tone floor (today's: `alternate`).
-
-`--calls capped` is the capped call (ADR-0126): its tries chosen by `--heard` — `none` (not heard
-lately: two both-ways tries), `true` (heard at the cell's SNR) or a number of dB. `--again`
-calls a second time when the first call gives up, and records the pair's outcome beside the
-first's. `--step` is the bench's clock (1 s by default); `--what call` leaves the probes out;
-`ended` is when a call that did not connect gave up, `up` when both stations were in the session.
-`--pause` is the capped call's silent pause before its plan's last try, in seconds (15).
+The call (ADR-0126, link protocol 13) chooses its tries by `--heard`: `none` (not heard lately:
+both-ways tries), `true` (heard at the cell's SNR) or a number of dB; `--tries` is the operator's
+setting (2). `--again` calls a second time when the first call gives up, and records the pair's
+outcome beside the first's. `--step` is the bench's clock (1 s by default); `--what call` leaves
+the probes out; `ended` is when a call that did not connect gave up, `up` when both stations were
+in the session. `--pause` is the silent pause before a call's last try, in seconds (15), before
+its random part. The rows of `docs/research/calling/` before protocol 13 were taken with the
+options this tool had then (`--wait`, `--calls`): run them from a tree of that time.
 """
 
 from __future__ import annotations
@@ -43,11 +41,8 @@ CALL_S = 400
 PROBE_S = 120
 
 
-WAITS = {"growing": None, "short": 1.0, "none": 0.0}
-
-
 def point(
-    job: tuple[str, int, str, float, int, float | None, str, str, bool, float, str, float],
+    job: tuple[str, int, str, float, int, int, str, bool, float, str, float],
 ) -> list[dict[str, object]]:
     """Every trial of one (air, class, SNR): a call and a probe, each on a fresh pair."""
     (
@@ -56,16 +51,13 @@ def point(
         channel,
         snr,
         trials,
-        wait,
-        calls,
+        call_tries,
         heard,
         again,
         step,
         what_,
         pause,
     ) = job
-    floor_only = calls == "floor"
-    capped = calls == "capped"
     sys.path.insert(0, str(Path(tree) / "model"))
     sys.path.insert(0, str(Path(tree) / "tools"))
     import bench_link as bench
@@ -82,13 +74,8 @@ def point(
         """Each station its own, stating its air's capability byte: the default reads as
         2300 Hz, and both stations of a 500 Hz point had run as such."""
         cfg = GrantConfig(max_mode=air.n_rungs - 1, capabilities=bandwidth_capabilities(air.params))
-        if wait is not None:
-            cfg.call_wait_frames = wait
-        if floor_only:
-            cfg.call_floor_only = True
-        if capped:
-            cfg.capped_call = True
-            cfg.call_pause_s = pause
+        cfg.call_tries = call_tries
+        cfg.call_pause_s = pause
         return cfg
 
     heard_db = None if heard == "none" else (snr if heard == "true" else float(heard))
@@ -114,10 +101,7 @@ def point(
             ended = up = ok2 = took2 = plan = None
             spent = 0.0
             if what == "call":
-                if capped:
-                    a.connect("KK4XYZ", heard_db=heard_db)
-                else:
-                    a.connect("KK4XYZ")
+                a.connect("KK4XYZ", heard_db=heard_db)
                 plan = a._call_plan or None
                 calls_made = 1
                 for k in range(1, round(CALL_S / step) + 1):
@@ -138,10 +122,7 @@ def point(
                         if again and calls_made == 1:
                             calls_made = 2
                             up = None
-                            if capped:
-                                a.connect("KK4XYZ", heard_db=heard_db)
-                            else:
-                                a.connect("KK4XYZ")
+                            a.connect("KK4XYZ", heard_db=heard_db)
                             continue
                         break
             else:
@@ -165,14 +146,14 @@ def point(
                     **(
                         {
                             "plan": plan or "",
-                            "pause_s": pause if capped else "",
+                            "pause_s": pause,
                             "up": "" if up is None or not ok else up,
                             "ended": "" if ended is None else ended,
                             "keyed_s": round(spent, 2),
                             "ok2": int(bool(ok2)) if again else "",
                             "seconds2": "" if took2 is None or not again else took2,
                         }
-                        if what == "call" and (capped or again or step != 1.0)
+                        if what == "call"
                         else {}
                     ),
                 }
@@ -190,15 +171,13 @@ def main() -> int:
     ap.add_argument("--snr", default="-16,-12,-8,-4,0,4,8")
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--jobs", type=int, default=2)
-    ap.add_argument("--wait", default="growing", help="growing, short, none, or floor frames")
-    ap.add_argument("--calls", default="alternate", choices=("alternate", "floor", "capped"))
-    ap.add_argument("--heard", default="none", help="capped: none, true, or dB")
+    ap.add_argument("--tries", type=int, default=2, help="the call's tries: 2, 6, 8, 10 or 15")
+    ap.add_argument("--heard", default="none", help="none, true, or dB")
     ap.add_argument("--again", action="store_true", help="a second call when the first fails")
     ap.add_argument("--step", type=float, default=1.0, help="the bench's clock, seconds")
     ap.add_argument("--what", default="both", choices=("both", "call", "probe"))
-    ap.add_argument("--pause", type=float, default=15.0, help="capped: pause before the last try")
+    ap.add_argument("--pause", type=float, default=15.0, help="the pause before the last try")
     args = ap.parse_args()
-    wait = WAITS[args.wait] if args.wait in WAITS else float(args.wait)
     jobs = [
         (
             args.tree,
@@ -206,8 +185,7 @@ def main() -> int:
             channel,
             float(snr),
             args.trials,
-            wait,
-            args.calls,
+            args.tries,
             args.heard,
             args.again,
             args.step,

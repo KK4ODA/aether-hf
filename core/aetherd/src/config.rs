@@ -298,6 +298,13 @@ pub struct RadioSection {
     /// up to 1.5 s.
     #[serde(default)]
     pub turnaround_ms: u32,
+    /// How many tries a call makes before it gives up (ADR-0126): 2, the default, or 6, 8, 10
+    /// or 15. Each try is chosen by how well the station called was last heard; a call of two
+    /// both-ways tries nobody answers is over in about 40 s and holds the channel about 24 s of
+    /// it, and more tries hold it longer for a weak or busy station. A call of more than four
+    /// moves to 500 Hz after four unanswered at 2 300 Hz (ADR-0058).
+    #[serde(default = "default_call_tries")]
+    pub call_tries: u32,
     /// Fastest mode this station will use; lower it for a rig that cannot manage the dense
     /// constellations, or a band where they never work. Indexes the ladder of the bandwidth
     /// in use — the tone floor's kinds, then the OFDM modes (ADR-0013, ADR-0014, ADR-0015):
@@ -336,6 +343,10 @@ fn default_true() -> bool {
 
 fn default_busy_threshold() -> f64 {
     6.0
+}
+
+const fn default_call_tries() -> u32 {
+    2
 }
 
 fn default_max_mode() -> usize {
@@ -382,6 +393,7 @@ impl Default for RadioSection {
             answer_only: false,
             answer_gap_ms: 0,
             turnaround_ms: 0,
+            call_tries: default_call_tries(),
             max_mode: default_max_mode(),
             compress: false,
             cw_id: false,
@@ -909,7 +921,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 13;
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -934,6 +946,7 @@ pub const MIGRATIONS: &[Migration] = &[
     debug_mode,
     turnaround,
     identifier_at_the_end,
+    call_tries,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1087,6 +1100,11 @@ fn identifier_at_the_end(table: &mut toml::Table) {
         radio.remove("cw_id_interval_s");
     }
 }
+
+/// Schema 13 → 14, the capped call (ADR-0126): nothing moves — `radio.call_tries` is a new key
+/// whose default makes the call link protocol 13 makes, and the step is for going back
+/// (`<name>.bak-v13`).
+fn call_tries(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1544,6 +1562,8 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.answer_gap_ms",
     // declared in the next call or acceptance
     "radio.turnaround_ms",
+    // the next call's
+    "radio.call_tries",
     "radio.busy_threshold_db",
     // the identifier is rendered at each transmission, so its settings apply to the next
     "radio.cw_id",
@@ -1753,7 +1773,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 13
+schema_version = 14
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1821,6 +1841,10 @@ answer_only = false
 # waits that long before answering. 0 for a radio keyed by CAT, a serial line or a host program;
 # with VOX, the delay time plus 100. Up to 1500.
 turnaround_ms = 0
+# How many tries a call makes before it gives up: 2, 6, 8, 10 or 15. Two reach most stations and
+# give the channel back in about 40 s when nobody answers; more tries keep calling a weak or busy
+# station longer, and hold the channel longer.
+call_tries = 2
 # The least time between the end of another station's frames and this station transmitting, in
 # milliseconds, for a station keyed by VOX that has not set its own turnaround: 500-800 suits
 # a SignaLink. 0 waits for nothing more than the other station says it needs.

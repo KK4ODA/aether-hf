@@ -500,8 +500,10 @@ pub const GRANTED_VERSION: u8 = 8;
 /// bytes, which a station of version 10 does not read. 12 since one rate controller, at the
 /// sender (ADR-0099): the control frame's five bits that recommended a rung say the family a
 /// header's slot is sized in and how many frames of the transmission answered the receiver never
-/// detected ([`GrantFrame`]).
-pub const PROTOCOL_VERSION: u8 = 12;
+/// detected ([`GrantFrame`]). 13 since the capped call (ADR-0126): a call is at most a set number
+/// of tries chosen by what was heard, and its acceptance is the control frame [`AcceptFrame`], not
+/// a `CONNECT_ACK` data frame.
+pub const PROTOCOL_VERSION: u8 = 13;
 
 /// A control frame's `missed` when its sender read no count for the transmission it answers, so
 /// cannot say how many of its frames it never detected (ADR-0099).
@@ -896,17 +898,12 @@ pub fn in_window(seq: u8, base: u8, width: usize) -> bool {
     seq_distance(seq, base) < width
 }
 
-// ── the capped call (ADR-0126) ────────────────────────────────────────
-
-/// The link protocol of the capped call (ADR-0126 §7): a call is today's connect request, at
-/// most a set number of tries chosen by what was heard; its acceptance is the control frame
-/// [`AcceptFrame`]. Only a station with `GrantConfig::capped_call` speaks it.
-pub const CAPPED_VERSION: u8 = 13;
+// ── the call's acceptance (ADR-0126) ──────────────────────────────────
 
 /// The bits of a caller's code.
 pub const CALLER_CODE_BITS: u32 = 7;
 
-/// The CRC-32 of IEEE 802.3 (zlib's), bit by bit: the capped call's caller code is built on it,
+/// The CRC-32 of IEEE 802.3 (zlib's), bit by bit: a caller's code is built on it,
 /// and this crate takes no dependency for seven bits.
 #[must_use]
 pub fn crc32(bytes: &[u8]) -> u32 {
@@ -934,7 +931,7 @@ pub fn caller_code(call: &str) -> Result<u8, FrameError> {
     Ok((crc32(&packed) & ((1 << CALLER_CODE_BITS) - 1)) as u8)
 }
 
-/// An acceptance of the capped call: an ANSWER whose session field is 0, which no session's
+/// A call's acceptance: an ANSWER whose session field is 0, which no session's
 /// control frame has (session numbers keep their low seven bits set).
 #[must_use]
 pub fn is_acceptance(payload: &[u8]) -> bool {
@@ -948,19 +945,21 @@ fn steps_up(seconds: f64, per_second: f64) -> u8 {
     (seconds * per_second - 1e-9).ceil().clamp(0.0, 15.0) as u8
 }
 
-/// The capped call's acceptance: an ANSWER with session field 0 (ADR-0126 §2.1).
+/// A call's acceptance: an ANSWER with session field 0 (ADR-0126 §2.1).
 ///
 /// ```text
 /// 0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
 /// 1: 0 (8)
 /// 2: 0 (2) | SNR (6)
 /// 3: bandwidth (2) | version (6)
-/// 4: caller code (7) | 0 (1)
+/// 4: caller code (7) | compression (1)
 /// 5: session (8)
 /// 6: turnaround (4) | identifier (4)
 /// ```
 ///
 /// `level`: the gap level the called station needs; `snr_db`: how it read the call;
+/// `compression`: the called station offers stream compression (capability bit 0, used only if
+/// both offer it);
 /// `turnaround_s`: 0–1.5 s in 0.1 s steps; `identifier_s`: its closing Morse identifier, 0–7.5 s
 /// in 0.5 s steps.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -981,9 +980,18 @@ pub struct AcceptFrame {
     pub turnaround_s: f64,
     /// The called station's closing identifier's length.
     pub identifier_s: f64,
+    /// The called station offers stream compression.
+    pub compression: bool,
 }
 
 impl AcceptFrame {
+    /// The called station's capability byte as the acceptance states it: its bandwidth and its
+    /// compression (no level: an answer carries none).
+    #[must_use]
+    pub fn capabilities(&self) -> u8 {
+        ((self.bandwidth & 0x03) << 1) | u8::from(self.compression)
+    }
+
     /// Serialise into exactly [`CONTROL_BYTES`] bytes.
     #[must_use]
     pub fn encode(&self) -> [u8; CONTROL_BYTES] {
@@ -996,7 +1004,7 @@ impl AcceptFrame {
             0,
             snr,
             ((self.bandwidth & 0x03) << 6) | (self.version & 0x3F),
-            (self.caller & 0x7F) << 1,
+            ((self.caller & 0x7F) << 1) | u8::from(self.compression),
             self.session,
             (steps_up(self.turnaround_s, 10.0) << 4) | steps_up(self.identifier_s, 2.0),
         ]
@@ -1030,6 +1038,7 @@ impl AcceptFrame {
             version: payload[3] & 0x3F,
             turnaround_s: f64::from(payload[6] >> 4) / 10.0,
             identifier_s: f64::from(payload[6] & 0x0F) / 2.0,
+            compression: payload[4] & 0x01 != 0,
         })
     }
 }

@@ -1,7 +1,6 @@
-"""The capped call (ADR-0126, accepted for building): each try today's connect body, chosen by
-what was heard, at most two tries that reach a weak path with a silent pause before the last,
-answered by a short control-frame acceptance. Behind ``GrantConfig.capped_call``; off, nothing
-changes (the granted vectors are byte for byte today's)."""
+"""The call (ADR-0126, link protocol 13): each try the connect request, chosen by what was heard,
+``call_tries`` of them with a silent pause before the last, answered by a short control-frame
+acceptance."""
 
 from __future__ import annotations
 
@@ -9,13 +8,15 @@ import pytest
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.frames import (
+    CAP_COMPRESSION,
     AcceptFrame,
     GrantFrame,
     GrantKind,
+    bandwidth_code,
     caller_code,
     is_acceptance,
 )
-from aether_model.link.granted import GrantConfig, GrantedEngine, State
+from aether_model.link.granted import LEVELS_S, GrantConfig, GrantedEngine, State
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, TxFrame
 from aether_model.link.sim import TwoStationSim, control_thresholds_for
@@ -27,20 +28,18 @@ def _pair(
     air: AirInterface,
     snr_db: float,
     *,
-    capped: tuple[bool, bool] = (True, True),
     seed: int = 17,
     pause_s: float = PAUSE_S,
 ) -> tuple[GrantedEngine, GrantedEngine, TwoStationSim]:
     timing = phy_timing(air.params)
 
-    def config(on: bool) -> GrantConfig:
+    def config() -> GrantConfig:
         cfg = GrantConfig(max_mode=air.n_rungs - 1, capabilities=bandwidth_capabilities(air.params))
-        cfg.capped_call = on
         cfg.call_pause_s = pause_s
         return cfg
 
-    a = GrantedEngine("W4ODA", timing, config(capped[0]), seed=seed)
-    b = GrantedEngine("KK4XYZ", timing, config(capped[1]), seed=seed + 1)
+    a = GrantedEngine("W4ODA", timing, config(), seed=seed)
+    b = GrantedEngine("KK4XYZ", timing, config(), seed=seed + 1)
     sim = TwoStationSim(
         a, b, snr_db=snr_db, seed=seed, control_thresholds=control_thresholds_for(timing)
     )
@@ -68,6 +67,7 @@ def test_an_acceptance_is_told_from_every_session_control_frame() -> None:
         bandwidth=1,
         turnaround_s=1.5,
         identifier_s=6.5,
+        compression=True,
     )
     assert AcceptFrame.decode(accept.encode()) == accept
     assert is_acceptance(accept.encode())
@@ -85,7 +85,7 @@ def test_an_acceptance_is_told_from_every_session_control_frame() -> None:
     [(None, "HH"), (15.0, "CCCS"), (-14.0, "SS")],
     ids=["unheard", "strong", "weak"],
 )
-def test_a_capped_call_connects_and_the_called_station_knows_who_called(
+def test_a_call_connects_and_the_called_station_knows_who_called(
     air: AirInterface, heard: float | None, plan: str
 ) -> None:
     a, b, sim = _pair(air, 15.0)
@@ -102,11 +102,12 @@ def test_a_capped_call_connects_and_the_called_station_knows_who_called(
 
 @pytest.mark.parametrize("air", [WIDE, NARROW], ids=["2300", "500"])
 @pytest.mark.parametrize("heard", [None, 15.0, -14.0], ids=["unheard", "strong", "weak"])
-def test_a_capped_call_nobody_hears_holds_the_channel_22_5_s_at_most(
+def test_a_call_nobody_hears_holds_the_channel_22_5_s_at_most(
     air: AirInterface, heard: float | None
 ) -> None:
     """ADR-0126 §7.2, R1′: the pause before the last try is silence, not channel time; §9: it
-    has a random part of up to that try's length on top of its 15 s."""
+    has a random part of up to that try's length on top of its 15 s; §10: the last try grants
+    the top gap level, so its listening is that level (2 s) longer."""
     a, b, sim = _pair(air, -60.0)
     a.connect("KK4XYZ", heard_db=heard)
     t, pause = 0.0, 0.0
@@ -118,7 +119,7 @@ def test_a_capped_call_nobody_hears_holds_the_channel_22_5_s_at_most(
     last_try = a._try_s(a._call_plan[-1])
     assert PAUSE_S <= pause <= PAUSE_S + last_try
     assert t <= 40.0 + last_try
-    assert t - pause <= 22.5
+    assert t - pause <= 22.5 + LEVELS_S[-1]
     assert b.state is State.IDLE
     assert sim.radiated(1) == []
     tries = sim.radiated(0)
@@ -141,18 +142,7 @@ def test_a_both_ways_try_is_accepted_in_ofdm_only_when_read_well(
     assert first[1] - first[0] == pytest.approx(b.timing.control_frame_s_for(floor), abs=1e-6)
 
 
-def test_a_station_without_the_switch_does_not_answer_a_capped_call() -> None:
-    a, b, sim = _pair(WIDE, 15.0, capped=(True, False))
-    a.connect("KK4XYZ")
-    t = 0.0
-    while a.state is State.CONNECTING:
-        t += 0.1
-        sim.run(until=t)
-    assert b.state is State.IDLE
-    assert sim.radiated(1) == []
-
-
-def test_data_follows_a_capped_call_intact() -> None:
+def test_data_follows_a_call_intact() -> None:
     a, _, sim = _pair(WIDE, 10.0)
     a.connect("KK4XYZ")
     message = bytes(range(256)) * 4
@@ -241,3 +231,19 @@ def test_two_callers_draw_their_pauses_apart() -> None:
         pauses.add(round(a._call_jitter, 3))
         assert PAUSE_S <= a._call_jitter <= PAUSE_S + a._try_s("H")
     assert len(pauses) == 4
+
+
+@pytest.mark.parametrize(("caller", "called"), [(True, False), (False, True), (True, True)])
+def test_the_acceptance_says_whether_the_called_station_compresses(
+    *, caller: bool, called: bool
+) -> None:
+    """Compression is used only if both stations offer it (§7.3): the caller reads the called
+    station's offer from the acceptance, not from its own."""
+    a, b, sim = _pair(WIDE, 15.0)
+    for engine, on in ((a, caller), (b, called)):
+        engine.cfg.capabilities = (engine.cfg.capabilities & ~CAP_COMPRESSION) | int(on)
+    a.connect("KK4XYZ")
+    assert _until_connected(sim, a, b) is not None
+    assert a.peer_capabilities & CAP_COMPRESSION == int(called)
+    assert b.peer_capabilities & CAP_COMPRESSION == int(caller)
+    assert bandwidth_code(a.peer_capabilities) == bandwidth_code(b.cfg.capabilities)

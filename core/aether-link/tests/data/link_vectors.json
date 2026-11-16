@@ -1786,7 +1786,7 @@
    "src": "KK4ODA",
    "dst": "W1AW",
    "caps": 18,
-   "version": 12,
+   "version": 13,
    "snr_db": null,
    "turnaround_s": 0.25,
    "identifier_s": 4.3,
@@ -1794,13 +1794,13 @@
    "decoded_turnaround_s": 0.3,
    "decoded_identifier_s": 4.5,
    "level": 2,
-   "encoded": "2cb7cf101000005dc05700000000120c7f0309"
+   "encoded": "2cb7cf101000005dc05700000000120d7f0309"
   },
   {
    "src": "W4ODA",
    "dst": "KK4XYZ",
    "caps": 25,
-   "version": 12,
+   "version": 13,
    "snr_db": -3.0,
    "turnaround_s": 0.2,
    "identifier_s": 0.0,
@@ -1808,13 +1808,13 @@
    "decoded_turnaround_s": 0.2,
    "decoded_identifier_s": 0.0,
    "level": 3,
-   "encoded": "5df3c4040000002cb7d865a00000190cfd0200"
+   "encoded": "5df3c4040000002cb7d865a00000190dfd0200"
   },
   {
    "src": "A1",
    "dst": "9Z9ZZZ9ZZ",
    "caps": 0,
-   "version": 12,
+   "version": 13,
    "snr_db": 12.5,
    "turnaround_s": 2.0,
    "identifier_s": 200.0,
@@ -1822,13 +1822,13 @@
    "decoded_turnaround_s": 1.5,
    "decoded_identifier_s": 127.5,
    "level": 0,
-   "encoded": "05c0000000000091a91a69a91a68000c0c0fff"
+   "encoded": "05c0000000000091a91a69a91a68000d0c0fff"
   },
   {
    "src": "M0ABC",
    "dst": "VK2DEF/P",
    "caps": 2,
-   "version": 12,
+   "version": 13,
    "snr_db": 0.0,
    "turnaround_s": 0.0,
    "identifier_s": 0.5,
@@ -1836,7 +1836,7 @@
    "decoded_turnaround_s": 0.0,
    "decoded_identifier_s": 0.5,
    "level": 0,
-   "encoded": "35b0420c00000058b74414699000020c000001"
+   "encoded": "35b0420c00000058b74414699000020d000001"
   }
  ],
  "probe_bodies": [
@@ -3195,7 +3195,9 @@
     "bandwidth": 0,
     "version": 13,
     "turnaround_s": 0.0,
-    "identifier_s": 0.0
+    "identifier_s": 0.0,
+    "compression": false,
+    "capabilities": 0
    },
    "encoded": "4000200d000100",
    "decoded": {
@@ -3206,7 +3208,9 @@
     "bandwidth": 0,
     "version": 13,
     "turnaround_s": 0.0,
-    "identifier_s": 0.0
+    "identifier_s": 0.0,
+    "compression": false,
+    "capabilities": 0
    }
   },
   {
@@ -3218,9 +3222,11 @@
     "bandwidth": 1,
     "version": 13,
     "turnaround_s": 0.25,
-    "identifier_s": 6.3
+    "identifier_s": 6.3,
+    "compression": true,
+    "capabilities": 3
    },
-   "encoded": "43001f4dfeff3d",
+   "encoded": "43001f4dffff3d",
    "decoded": {
     "caller": 127,
     "session": 255,
@@ -3229,7 +3235,9 @@
     "bandwidth": 1,
     "version": 13,
     "turnaround_s": 0.3,
-    "identifier_s": 6.5
+    "identifier_s": 6.5,
+    "compression": true,
+    "capabilities": 3
    }
   },
   {
@@ -3241,7 +3249,9 @@
     "bandwidth": 2,
     "version": 13,
     "turnaround_s": 2.0,
-    "identifier_s": 9.0
+    "identifier_s": 9.0,
+    "compression": false,
+    "capabilities": 4
    },
    "encoded": "4100348dd2c8ff",
    "decoded": {
@@ -3252,7 +3262,9 @@
     "bandwidth": 2,
     "version": 13,
     "turnaround_s": 1.5,
-    "identifier_s": 7.5
+    "identifier_s": 7.5,
+    "compression": false,
+    "capabilities": 4
    }
   },
   {
@@ -3264,7 +3276,9 @@
     "bandwidth": 0,
     "version": 12,
     "turnaround_s": 0.0,
-    "identifier_s": 0.0
+    "identifier_s": 0.0,
+    "compression": false,
+    "capabilities": 0
    },
    "encoded": "4000210c0a8500",
    "decoded": {
@@ -3275,7 +3289,9 @@
     "bandwidth": 0,
     "version": 12,
     "turnaround_s": 0.0,
-    "identifier_s": 0.0
+    "identifier_s": 0.0,
+    "compression": false,
+    "capabilities": 0
    }
   },
   {

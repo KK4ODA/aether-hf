@@ -265,7 +265,7 @@ station one slot, defined by what it states; a station keys only in a slot grant
 decoded in time. Its control frame (:class:`GrantFrame`) and its connect body's two more bytes
 are not version 7's, and neither is any of its timing."""
 
-PROTOCOL_VERSION = 12
+PROTOCOL_VERSION = 13
 """The link protocol a station speaks, in the connect body's version byte; what a release
 states (``link_protocol``); a station ignores a call of another, and says so. The same number
 names different frames in different versions, so a session between two versions cannot run.
@@ -285,7 +285,9 @@ none of which a station of version 8 reads. 10 since tone4x100-93 (ADR-0081): ru
 (ADR-0086): a DATA frame's FRAGMENT flag and its two header bytes, which a station of version 10
 does not read. 12 since one rate controller, at the sender (ADR-0099): the control frame's five
 bits that recommended a rung say the family a header's slot is sized in and how many frames of
-the transmission answered the receiver never detected (:class:`GrantFrame`)."""
+the transmission answered the receiver never detected (:class:`GrantFrame`). 13 since the capped
+call (ADR-0126): a call is at most a set number of tries chosen by what was heard, and its
+acceptance is the control frame :class:`AcceptFrame`, not a CONNECT_ACK data frame."""
 
 MISSED_UNKNOWN = 7
 """A control frame's ``missed`` when its sender read no count for the transmission it answers,
@@ -567,12 +569,7 @@ def in_window(seq: int, base: int, width: int = WINDOW) -> bool:
     return seq_distance(seq, base) < width
 
 
-# ── the capped call (ADR-0126) ─────────────────────────────────────
-
-CAPPED_VERSION = 13
-"""The link protocol of the capped call (ADR-0126 §7): a call is today's connect request, at most
-two tries that reach a weak path, chosen by what was heard; its acceptance is the control frame
-:class:`AcceptFrame`. Only a station with ``GrantConfig.capped_call`` speaks it."""
+# ── the call's acceptance (ADR-0126) ──────────────────────────────
 
 CALLER_CODE_BITS = 7
 
@@ -584,7 +581,7 @@ def caller_code(call: str) -> int:
 
 
 def is_acceptance(payload: bytes) -> bool:
-    """An acceptance of the capped call: an ANSWER whose session field is 0, which no session's
+    """A call's acceptance: an ANSWER whose session field is 0, which no session's
     control frame has (session numbers keep their low seven bits set)."""
     return (
         len(payload) >= CONTROL_BYTES
@@ -603,28 +600,35 @@ def _halves(seconds: float) -> int:
 
 @dataclass(frozen=True)
 class AcceptFrame:
-    """The capped call's acceptance: an ANSWER with session field 0 (ADR-0126 §2.1)::
+    """A call's acceptance: an ANSWER with session field 0 (ADR-0126 §2.1)::
 
         0: kind ANSWER (2) | 0 (3) | 0 (1) | level (2)
         1: 0 (8)
         2: 0 (2) | SNR (6)
         3: bandwidth (2) | version (6)
-        4: caller code (7) | 0 (1)
+        4: caller code (7) | compression (1)
         5: session (8)
         6: turnaround (4) | identifier (4)
 
     ``level``: the gap level the called station needs; ``SNR``: how it read the call;
-    ``turnaround``: 0–1.5 s in 0.1 s steps; ``identifier``: its closing Morse identifier, 0–7.5 s
-    in 0.5 s steps."""
+    ``compression``: the called station offers stream compression (capability bit 0, §7.3: used
+    only if both offer it); ``turnaround``: 0–1.5 s in 0.1 s steps; ``identifier``: its closing
+    Morse identifier, 0–7.5 s in 0.5 s steps."""
 
     caller: int
     session: int
     level: int = 0
     snr_db: float | None = None
     bandwidth: int = 0
-    version: int = CAPPED_VERSION
+    version: int = PROTOCOL_VERSION
     turnaround_s: float = 0.0
     identifier_s: float = 0.0
+    compression: bool = False
+
+    def capabilities(self) -> int:
+        """The called station's capability byte as the acceptance states it: its bandwidth and
+        its compression (no level: an answer carries none)."""
+        return ((self.bandwidth & 0x03) << 1) | int(self.compression)
 
     def encode(self) -> bytes:
         snr = (
@@ -638,7 +642,7 @@ class AcceptFrame:
                 0,
                 snr,
                 ((self.bandwidth & 0x03) << 6) | (self.version & 0x3F),
-                (self.caller & 0x7F) << 1,
+                ((self.caller & 0x7F) << 1) | int(self.compression),
                 self.session & 0xFF,
                 (_tenths(self.turnaround_s) << 4) | _halves(self.identifier_s),
             ]
@@ -658,4 +662,5 @@ class AcceptFrame:
             version=payload[3] & 0x3F,
             turnaround_s=(payload[6] >> 4) / 10,
             identifier_s=(payload[6] & 0x0F) / 2,
+            compression=bool(payload[4] & 0x01),
         )

@@ -629,6 +629,7 @@ fn station_config(
         callsign: config.callsign.clone(),
         link: GrantConfig {
             max_mode: config.radio.fastest_mode(),
+            call_tries: config.radio.call_tries as usize,
             ..GrantConfig::default()
         },
         // as set: it indexes the ladder of whichever bandwidth runs (ADR-0026)

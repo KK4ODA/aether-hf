@@ -475,6 +475,7 @@ def test_the_slaves_slot_is_sized_and_stated_in_the_family_the_slave_states() ->
     a._key_granting = key  # type: ignore[method-assign]
     for floor_only in (False, True):
         a._slave_floor_only = floor_only
+        a._slave_want = 4  # the slave has said it has data: the header grants it room
         a._send_header()
         assert sized and a.timing.is_floor(sized[-1]) == floor_only
         grant_s, header = sent[-1]

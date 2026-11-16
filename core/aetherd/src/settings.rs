@@ -204,6 +204,12 @@ pub const RULES: &[Rule] = &[
         why: "a call or acceptance carries it in tenths of a second, up to a second and a half",
         ..rule("radio.turnaround_ms")
     },
+    Rule {
+        options: &["2", "6", "8", "10", "15"],
+        why: "two tries reach most stations and give the channel back soon; the others call a \
+              weak or busy station longer (ADR-0126)",
+        ..rule("radio.call_tries")
+    },
     // ── this installation ──────────────────────────────────────────────────────────
     Rule {
         scope: Scope::Machine,

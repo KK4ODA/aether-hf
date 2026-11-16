@@ -166,7 +166,7 @@ kind = "none"
 [radio]
 bandwidth = {bandwidth}
 wait_for_clear = {wait_for_clear}
-answer_gap_ms = {answer_gap_ms}{turnaround}
+answer_gap_ms = {answer_gap_ms}{turnaround}{call_tries}
 max_mode = {max_mode}
 cw_id = {cw_id}{cw_id_interval}
 
@@ -683,6 +683,8 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         schema = schema_of(binary)
         # a radio's declared turnaround (schema 12, granted slots): what its operator set
         turnaround = f"\nturnaround_ms = {int(cfg.get('turnaround_ms', 0))}" if schema >= 12 else ""
+        # a call's tries (schema 14, link protocol 13: ADR-0126), the operator's setting
+        call_tries = f"\ncall_tries = {int(cfg.get('call_tries', 2))}" if schema >= 14 else ""
         # the Morse identifier's interval, gone with schema 13 (ADR-0075): an older build reads
         # it, and a scenario may set it for one
         cw_id_interval = (
@@ -692,8 +694,9 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         )
         config.write_text(
             STATION_TOML.format(
-                schema=min(schema, 13),
+                schema=min(schema, 14),
                 turnaround=turnaround,
+                call_tries=call_tries,
                 cw_id_interval=cw_id_interval,
                 callsign=callsign,
                 tx_level=cfg.get("tx_level", 0.25),

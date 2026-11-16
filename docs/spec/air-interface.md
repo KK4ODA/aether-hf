@@ -586,24 +586,24 @@ no transmission length or position appears here — the receiver derives a frame
 its transmission from its air time, and the transmission's end from the count every frame
 carries outside its codeword (§3.2, §2.4) or the header before it (§7.2).
 
-Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2) (callsigns do not fit in a control
-frame), `BEACON` (3), `PROBE` (4), `PROBE_ACK` (5), `DATAGRAM` (6) and `MEASURE` (7, link
+Kinds: `DATA` (0), `CONNECT_REQ` (1), `CONNECT_ACK` (2, no longer sent since link protocol 13:
+a call's acceptance is a control frame, below), `BEACON` (3), `PROBE` (4), `PROBE_ACK` (5), `DATAGRAM` (6) and `MEASURE` (7, link
 protocol 9: §7.2, rule 14). The kind's three bits are all in use. `BEACON`, `PROBE`,
 `PROBE_ACK` and `DATAGRAM` are sent outside sessions, and a station in a session never takes one
 of them for session data, whatever its session id says.
 
-A `CONNECT_REQ` and a `CONNECT_ACK` carry this body with sequence number 0 and the session
-id the caller chose (at random, 1–255), at the slowest rung of their family that carries it:
-tone-24 on the tone floor; BPSK ⅕ (rung 6) at 2 300 Hz or QPSK ½ (rung 5, the control mode)
-at 500 Hz in OFDM (§7.2 says which family):
+A `CONNECT_REQ` carries this body with sequence number 0 and the session id the caller chose (at
+random, 1–255), at the slowest rung of its family that carries it: tone-24 on the tone floor;
+BPSK ⅕ (rung 6) at 2 300 Hz or QPSK ½ (rung 5, the control mode) at 500 Hz in OFDM (§7.2, rule
+11, says which):
 
 | Offset | Field |
 |---|---|
 | 0–6 | calling station, packed |
 | 7–13 | called station, packed |
 | 14 | capability byte (§7.3) |
-| 15 | link protocol version: 12 |
-| 16 | measured SNR, one signed byte (whole dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): in an acceptance, the SNR the request it answers arrived at — a request that arrives again after the session is up (its acceptance was lost) is answered again with its own; in a request, 0x7F |
+| 15 | link protocol version: 13 |
+| 16 | measured SNR, one signed byte (whole dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): 0x7F in a request (an acceptance of protocol 12 carried the SNR the request arrived at here) |
 | 17 | the sender's **turnaround**: bits 0–3, how long its radio takes to hear again after it stops sending (VOX hold, receiver recovery), in 0.1 s steps rounded up, 0–1.5 s; bits 4–7 reserved, zero |
 | 18 | the sender's **identifier**: its closing Morse identifier's length in 0.5 s steps rounded up, 0 for none |
 
@@ -611,14 +611,17 @@ Nineteen bytes, with a DATA header and an explicit length, fill the 24 bytes of 
 floor's slowest rung. A body shorter than nineteen bytes is of version 7 or earlier.
 
 A station ignores a request or an acceptance whose version is not its own, and says so.
+13 made the call a set number of tries chosen by what was heard, with a control-frame acceptance
+(ADR-0126).
 Version 2 made a mode number a rung of the ladder (ADR-0013), 3 widened the control frame's
 recommended mode to five bits (ADR-0014), 4 added the 500 Hz middle kinds (ADR-0015), 5 the
 burst countdown (ADR-0041), 6 counted it in pairs (ADR-0046), 7 the turn offered at the end of
 a burst (ADR-0047), 8 granted slots (ADR-0069: the control frame below, the connect body's two
 more bytes, and every rule of §7.2), 9 the measurement frames (ADR-0077), 10 the 500 Hz
 rung 4, `tone4x100-93` in the place of QPSK ⅓ (ADR-0081), 11 a stuck frame sent in pieces,
-the FRAGMENT flag (ADR-0086), and 12 the control frame's slot family and count of frames never
-detected in the five bits that recommended a rung (ADR-0099). The same number
+the FRAGMENT flag (ADR-0086), 12 the control frame's slot family and count of frames never
+detected in the five bits that recommended a rung (ADR-0099), and 13 the call of rule 11 and its
+acceptance (ADR-0126). The same number
 names different frames in different versions, so a session between two versions cannot run.
 
 The SNR byte is the **faster start**: a session used to begin at the most robust mode
@@ -725,6 +728,28 @@ CONTROL container, seven bytes (link protocol 8, ADR-0069):
 
 Bit 0 of a plain acknowledgement's bitmap is always clear, since `base` is the first sequence
 number not received, so a report is never read as an acknowledgement.
+
+A call's **acceptance** (version 13, ADR-0126) is a control frame of kind `ANSWER` whose
+session field (byte 1, bits 7–1) is 0, which no session's control frame has: a session number's
+low seven bits are never all zero. It names the call it answers by the whole session number and
+the caller's code, the low seven bits of the CRC-32 (IEEE 802.3, as zlib computes it) of the
+caller's packed callsign:
+
+| Byte | Bits | Field |
+|---|---|---|
+| 0 | 7–6 | kind: `ANSWER` (1) |
+| 0 | 5–2 | 0 |
+| 0 | 1–0 | level: the gap level the called station needs |
+| 1 | | 0 |
+| 2 | 7–6 | 0 |
+| 2 | 5–0 | SNR: how the called station read the call, as a control frame's |
+| 3 | 7–6 | the called station's bandwidth (capability bits 1–2) |
+| 3 | 5–0 | link protocol version: 13 |
+| 4 | 7–1 | the caller's code |
+| 4 | 0 | the called station offers stream compression (capability bit 0) |
+| 5 | | the session number, whole |
+| 6 | 7–4 | the called station's turnaround, 0.1 s steps rounded up, 0–1.5 s |
+| 6 | 3–0 | its closing identifier's length, 0.5 s steps rounded up, 0–7.5 s |
 
 A **measurement frame** (`MEASURE`, version 9) has the frame's index among its transmission's
 measurement frames, 0–5, in the sequence number's byte and the session number in the session
@@ -856,18 +881,29 @@ deadline. The rules, numbered as in the formal specification
     `DISC` on the floor, granting the `DISC_ACK`'s slot, up to three times. A station's link
     timer is four exchanges of the size in use, 45 s at least; the master also ends once more than
     eight slots in a row have gone silent ("no response").
-11. **Connection.** The `CONNECT_REQ` grants the acceptance's slot, at the level in its
-    capability bits 3–4, and the called station accepts in that slot or not at all. The first try
-    goes out on the tone floor and the tries alternate between the floor and the ordinary
-    family's robust mode (ADR-0016); the level rises every second try, so that a slow called
-    station is reached; and the next try waits until the acceptance's slot is over, plus a
-    random part of a floor frame that grows with the tries, so that two stations calling each
-    other fall apart. An ordinary call heard less than 12 dB above the ordinary control frame's
-    threshold is accepted on the floor (ADR-0056). The caller is the master once it reads the
-    acceptance: its first header goes in the family the acceptance's SNR asks for, its first
+11. **Connection** (version 13, ADR-0126). A call is a set number of tries, *N* (the
+    operator's setting: 2, 6, 8, 10 or 15; 2 unless set), each the `CONNECT_REQ` in one of three
+    forms: a **quick** try, the ordinary family's robust data frame (answered only in the ordinary
+    family); a **floor** try, tone-24 (answered on the floor); or a **both-ways** try, the two back
+    to back, the first stating one frame to follow (answered in either). The caller chooses them
+    by the SNR it last read the called station at, within 15 minutes: not heard, *N* both-ways
+    tries; heard 6 dB or more over the ordinary control frame's threshold, three quick tries and
+    then *N* − 1 floor tries; heard weaker, *N* floor tries. Each try grants the acceptance's slot
+    at the level in its capability bits 3–4 (up one every second try, and the top level on the
+    last, so that a slow called station is reached), and the called station accepts in that slot
+    or not at all. The next try goes once the slot is over, with no random wait — but before the
+    last try the caller is silent for 15 s and a random part of up to that try's length, so that
+    two tries do not fall in one slow fade and two callers who met do not meet the same way
+    again. A both-ways try is accepted in the ordinary family only when its ordinary part was
+    read 6 dB or more over the ordinary control threshold, on the floor otherwise; a both-ways
+    try heard again from the same call (its acceptance was lost) is accepted on the floor. A call
+    whose last try goes unanswered ends ("no answer"). A call of more than four tries that four
+    have not had answered at 2 300 Hz, to a station not known to run 2 300 Hz, goes on at 500 Hz
+    (ADR-0058). The caller is the master once it reads the acceptance: its first header goes in the family the acceptance's SNR asks for, its first
     data at the rung that SNR supports with two usable rungs in hand (§7.1), and its first grant
-    is two frames, so that a gateway can greet. A call from the session's own peer under a new
-    session number ends the session and is answered as from idle (ADR-0056). When two stations
+    is two frames, so that a gateway can greet; it takes the called station's capabilities from
+    the acceptance. A call from the session's own peer under a new session number ends the
+    session and is answered as from idle (ADR-0056). When two stations
     call each other at once, the one whose callsign sorts higher keeps calling and ignores the
     other's request, and the other answers it.
 12. **Open windows.** When neither station has anything to send, the header grants an open
@@ -912,7 +948,8 @@ A contact that went no further than its setup (a call or a probe) is identified 
 
 ### 7.3 Capability negotiation
 
-The connect request and its acceptance each carry a one-byte capability field (§7.1). A capability is
+The connect request carries a one-byte capability field (§7.1), and its acceptance states the
+called station's capabilities in fields of its own (§7.2). A capability is
 used only if **both** stations offered it: a station that has not said it can do something
 cannot be assumed to, and the only safe reading of a missing bit is that the feature is
 unavailable. Unknown bits are ignored, so a later version can add one without breaking an
@@ -923,6 +960,9 @@ earlier one.
 | 0 | Stream compression: deflate, RFC 1951 |
 | 1–2 | Bandwidth of the waveform this frame was sent in: 0 = 2 300 Hz, 1 = 500 Hz, 2 = 2 750 Hz (reserved), 3 = reserved |
 | 3–4 | In a request (a call, a probe): the gap level of the slot its answer goes in (§7.2, rule 8). An answer carries 0 |
+
+A call's acceptance (§7.2) carries no capability byte: it states the called station's bandwidth
+and compression in fields of its own, and the caller reads them as bits 0–2.
 | 5–7 | Reserved, must be zero |
 
 The bandwidth and level bits are not negotiated: the first state the air the sender runs, the

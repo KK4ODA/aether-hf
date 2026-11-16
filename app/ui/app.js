@@ -3615,6 +3615,7 @@ async function loadConfig() {
   configuredMaxMode = radio.max_mode ?? null;
   selectMaxMode(String(radio.max_mode ?? FASTEST_MODE));
   $("radio-compress").checked = radio.compress === true;
+  select($("radio-call-tries"), String(radio.call_tries ?? 2));
   $("radio-wait").checked = radio.wait_for_clear !== false;
   $("radio-busy-db").value = String(radio.busy_threshold_db ?? 6);
   busyThresholdDb = Number(radio.busy_threshold_db ?? 6);
@@ -3701,6 +3702,7 @@ const SETTING_NAMES = {
   "panel.interface": "interface",
   "radio.max_mode": "fastest mode",
   "radio.compress": "compression",
+  "radio.call_tries": "call tries",
   "radio.wait_for_clear": "busy channel",
   "radio.busy_threshold_db": "busy threshold",
   "radio.max_key_s": "longest key",
@@ -4029,6 +4031,7 @@ function formChanges() {
   const fastest = maxModeToSave();
   if (fastest != null) changes["radio.max_mode"] = fastest;
   changes["radio.compress"] = $("radio-compress").checked;
+  changes["radio.call_tries"] = Number($("radio-call-tries").value);
   changes["radio.wait_for_clear"] = $("radio-wait").checked;
   for (const [id, key] of [
     ["radio-busy-db", "radio.busy_threshold_db"],

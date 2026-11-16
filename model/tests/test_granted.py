@@ -37,6 +37,7 @@ from aether_model.link.frames import (
     data_capacity,
     decode_data,
     encode_data,
+    is_acceptance,
     level_of,
     pieces,
     seq_after,
@@ -442,22 +443,27 @@ def test_a_slow_slave_asks_for_a_level_and_completes(air: str) -> None:
 @pytest.mark.parametrize("air", ["2300", "500"])
 def test_a_call_reaches_a_station_that_decodes_late(air: str) -> None:
     """A called station whose receiver reports 1.35 s after a frame ends, keying as late as
-    the protocol allows, misses the acceptance slots at level 0; the call's level rises every
-    second try and reaches it."""
-    a, b = _pair(AIRS[air], latency=KEY_S)
+    the protocol allows, misses a floor try's acceptance slot at level 0; the call's last try
+    grants the top level and reaches it (ADR-0126 §10). A both-ways try reaches it at once: its
+    OFDM part is decoded while its floor part is still on the air."""
+    for heard, tries in ((-14.0, 2), (None, 1)):
+        a, b = _pair(AIRS[air], latency=KEY_S)
 
-    def latency(rx: int, frame: TxFrame, _end: float) -> float:
-        return 1.35 if rx == 1 else 0.1
+        def latency(rx: int, frame: TxFrame, _end: float) -> float:
+            return 1.35 if rx == 1 else 0.1
 
-    sim = TwoStationSim(
-        a, b, snr_db=6.0, seed=9, decode_latency=latency, key_lead=lambda _who: KEY_S
-    )
-    a.connect("KK4XYZ")
-    sim.run(until=200.0)
-    assert a.state is State.CONNECTED and a.role is Role.MASTER
-    assert a.connect_tries > 1
-    assert b.stats.forfeits > 0
-    assert sim.overlaps() == []
+        sim = TwoStationSim(
+            a, b, snr_db=6.0, seed=9, decode_latency=latency, key_lead=lambda _who: KEY_S
+        )
+        a.connect("KK4XYZ", heard_db=heard)
+        t = 0.0
+        while t < 200.0 and not (a.connected and b.connected):
+            t += 0.5
+            sim.run(until=t)
+        assert a.state is State.CONNECTED and a.role is Role.MASTER
+        assert a.connect_tries == tries
+        assert (b.stats.forfeits > 0) == (tries > 1)
+        assert sim.overlaps() == []
 
 
 # ── the interface ─────────────────────────────────────────────────────
@@ -784,6 +790,8 @@ def test_a_count_rescued_with_its_block_places_no_end(
             def answers_lost(frame: TxFrame, hits: random.Random = hits) -> float:
                 if side == "slave" or frame.container is not Container.CONTROL:
                     return 0.0
+                if is_acceptance(frame.payload):
+                    return 0.0  # the session's answers, not the call's acceptance
                 if GrantFrame.decode(frame.payload).kind is not GrantKind.ANSWER:
                     return 0.0
                 return -40.0 if hits.random() < 0.5 else 0.0
@@ -793,7 +801,11 @@ def test_a_count_rescued_with_its_block_places_no_end(
             )
             message = _message(random.Random(seed), 600)
             a.connect(b.my_call)
-            sim.run(until=30.0)
+            t = 0.0
+            while t < 120.0 and not (a.connected and b.connected):
+                t += 1.0
+                sim.run(until=t)
+            assert a.connected and b.connected
             sender.pin_mode(pin)
             sender.send(message)
             if side == "master":
@@ -1419,7 +1431,9 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
             return 0.0
         return -30.0 if decode_data(frame.payload)[0].kind is DataKind.DATA else 0.0
 
-    sim = TwoStationSim(a, b, snr_db=8.0, seed=21, frame_snr_offset=faded)
+    # seed 20: the call of protocol 13 starts the session otherwise; 51 seeds of 60 send a frame
+    # again past its RV 0 copies, 21 among the nine that do not
+    sim = TwoStationSim(a, b, snr_db=8.0, seed=20, frame_snr_offset=faded)
     sent: list[list[TxFrame]] = []
     orig = sim._launch
 
@@ -1430,7 +1444,7 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
 
     sim._launch = spy  # type: ignore[method-assign]
     # a few frames, all of them on the air when the path goes: nothing new to send beside them
-    message = _message(random.Random(21), 100)
+    message = _message(random.Random(20), 100)
     a.connect("KK4XYZ")
     a.send(message)
     sim.run(until=150.0)
@@ -2121,9 +2135,11 @@ def test_a_disconnect_that_drains_nothing_leaves_at_the_next_opportunity() -> No
     assert len(sim.delivered(1)) < len(message)
     left = [e for e in sim.events(0) if e.startswith("disconnect:")]
     assert left and "bytes not delivered" in left[0], left
-    # at the next opportunity: the slot of what was on the air when it was asked, no longer
+    # at the next opportunity: the slot of what was on the air when it was asked, no longer —
+    # the master's first transmission after the request is its closing one
     waited = float(left[0].split("closing ")[1].split(" s after")[0])
-    assert waited < 15.0, left
+    after = [start for start, _ in sim.radiated(0) if start > asked + 0.01]
+    assert after and after[0] == pytest.approx(asked + waited, abs=1.0), (left, after)
     assert sim.overlaps() == []
 
 

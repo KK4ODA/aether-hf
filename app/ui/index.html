@@ -886,6 +886,16 @@
                 <label class="check" title="Off by default. Compression is deflate over the whole session, so on a weak path one lost frame can spoil the rest: turn it on only on a solid link the other station also supports"><input id="radio-compress" title="Compress the session when the other station also offers it" type="checkbox" /> Compress</label>
               </div>
               <div class="row">
+                <label for="radio-call-tries" title="How many tries a call makes before it gives up">Call tries</label>
+                <select id="radio-call-tries" class="narrow" title="How many tries a call makes before it gives up. Two reach most stations and give the channel back in about 40 s when nobody answers; more keep calling a weak or busy station longer, and hold the channel longer. A call of more than four goes on at 500 Hz after four unanswered at 2300 Hz">
+                  <option value="2">2</option>
+                  <option value="6">6</option>
+                  <option value="8">8</option>
+                  <option value="10">10</option>
+                  <option value="15">15</option>
+                </select>
+              </div>
+              <div class="row">
                 <label for="radio-wait" title="What counts as a busy channel">Busy channel</label>
                 <input id="radio-busy-db" title="How far above the noise floor counts as busy, in dB" type="text" inputmode="decimal" class="port" value="6" aria-label="Busy threshold in dB above the noise floor" />
                 <span class="sub" title="Decibels above the noise floor">dB</span>
