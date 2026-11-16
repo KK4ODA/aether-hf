@@ -605,7 +605,7 @@ BPSK ⅕ (rung 6) at 2 300 Hz or QPSK ½ (rung 5, the control mode) at 500 Hz in
 | 15 | link protocol version: 13 |
 | 16 | measured SNR, one signed byte (whole dB, 3 kHz reference, ties to even, −40 … +40; 0x7F = not measured): 0x7F in a request (an acceptance of protocol 12 carried the SNR the request arrived at here) |
 | 17 | the sender's **turnaround**: bits 0–3, how long its radio takes to hear again after it stops sending (VOX hold, receiver recovery), in 0.1 s steps rounded up, 0–1.5 s; bits 4–7 reserved, zero |
-| 18 | the sender's **identifier**: its closing Morse identifier's length in 0.5 s steps rounded up, 0 for none |
+| 18 | the sender's **identifier**: its closing identifier's length in 0.5 s steps rounded up, 0 for none (Morse, or identification frames on the floor: §7.2) |
 
 Nineteen bytes, with a DATA header and an explicit length, fill the 24 bytes of tone-24, the
 floor's slowest rung. A body shorter than nineteen bytes is of version 7 or earlier.
@@ -750,6 +750,28 @@ caller's packed callsign:
 | 5 | | the session number, whole |
 | 6 | 7–4 | the called station's turnaround, 0.1 s steps rounded up, 0–1.5 s |
 | 6 | 3–0 | its closing identifier's length, 0.5 s steps rounded up, 0–7.5 s |
+
+An **identification frame** (ADR-0127) carries a station's callsign in 7-bit ASCII (ITU-T
+T.50): a control frame of kind `DISC` whose session field (byte 1, bits 7–1) is 0, which no
+session's control frame has. Its 42-bit character field holds six 7-bit ASCII characters, the
+first in the field's top seven bits (41–35), the sixth in its bottom seven (6–0); a callsign
+shorter than six characters ends at the first character 0 (NUL). The callsign is sent as the
+Morse identifier sends it: upper case, without an SSID, `-T` or `-R`, every `/` part kept. Seven
+to twelve characters go as two frames back to back, the first with `more` set:
+
+| Byte | Bits | Field |
+|---|---|---|
+| 0 | 7–6 | kind: `DISC` (2) |
+| 0 | 5 | more: one identification frame more of the callsign follows, back to back |
+| 0 | 4–2 | reserved, 0 |
+| 0 | 1–0 | characters, bits 41–40 |
+| 1 | 7–1 | session field: 0 |
+| 1 | 0 | reserved, 0 |
+| 2–6 | 7–0 | characters, bits 39–0, byte 2 most significant |
+
+A receiver ignores the reserved bits. An identification frame is no session's and changes no
+session's state: a station that identifies in its data signal (§7.2) sends these frames in
+place of a Morse identifier, and a station that decodes one reports the callsign.
 
 A **measurement frame** (`MEASURE`, version 9) has the frame's index among its transmission's
 measurement frames, 0–5, in the sequence number's byte and the session number in the session
@@ -927,17 +949,20 @@ ADR-0018) sends every frame on the floor: every try of a call, its answers to ca
 probes, and its control frames. The ceiling is the station's own, and caps only its own data's
 rung.
 
-Data frames carry no callsign. A station that identifies in Morse (the reference daemon: a
-1 500 Hz tone, at most 20 wpm under US rules; on for a US callsign whatever its setting) does
-it once a session, at the end, and its identifier is the last thing it sends for the session
-(ADR-0075). Nothing inside a session carries one, and neither do calls, acceptances, probes,
-probe answers, beacons or datagrams. The connect request and its acceptance each state the
-sender's identifier length, and every `DISC` grants the other station its `DISC_ACK` plus that
-length:
+Data frames carry no callsign. A station identifies once a session, at the end, and its
+identifier is the last thing it sends for the session (ADR-0075): in Morse (the reference
+daemon: a 1 500 Hz tone, at most 20 wpm under US rules; on for a US callsign whatever its
+setting), or in its data signal, as identification frames (§7.1, ADR-0127) in the family of the
+last frame it sent. Nothing inside a session carries one, and neither do calls, acceptances,
+probes, probe answers, beacons or datagrams. The connect request and its acceptance each state
+the sender's identifier length — for identification frames, their length on the floor (one
+frame 3.5 s, two 6.5 s), whatever family the closing takes — and every `DISC` grants the other
+station its `DISC_ACK` plus that length:
 
 * the station that answers a `DISC` sends its identifier right behind its `DISC_ACK`, inside that
   slot, and starts nothing of its own until the other's identifier can be over;
-* the station that sent the `DISC` keys its own on its own once the slot is over;
+* the station that sent the `DISC` keys its own on its own once the slot is over — or once the
+  other station's last identification frame, decoded, has ended, when that is sooner;
 * a session that ends without that exchange (a link timeout, a `DISC` never answered) is
   identified by each station on its own, after listening for a clear channel for up to 15 s;
 * a session ended by the same station calling again is not identified: the communication goes
