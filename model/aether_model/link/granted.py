@@ -376,6 +376,10 @@ class GrantConfig:
     """Silence ends a session after this many exchanges of the size in use, 45 s at least."""
     rate: dict[str, float | int | None] = field(default_factory=dict)
     """Overrides of the rate controller's settings (:class:`RateController`), for benches."""
+    first_burst_try: bool = False
+    """ADR-0127 (proposed, off): the session's first data transmission at the four channels' mean
+    prior's rung, with one frame tried at the rung today's prior would start at
+    (:attr:`RateController.first_try`)."""
     initial_mode: int = 0
     """The rung this station's data goes at before its rate controller has a reading."""
     max_mode: int = 19
@@ -1620,6 +1624,7 @@ class GrantedEngine:
             capacity={m: data_capacity(c) for m, c in capacity.items()},
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
+            first_try=self.cfg.first_burst_try,
             **{**floor, **priced, **self._air_guess(), **self.cfg.rate},  # type: ignore[arg-type]
         )
 

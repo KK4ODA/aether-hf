@@ -302,7 +302,10 @@ def path_decode_probability(
     """The chance a frame decodes at ``snr_db`` on a path not yet measured: the mean of the
     steady channel's curve and the three fading channels' (``penalties`` over the threshold)."""
     points = (0.0, *penalties)
-    return sum(decode_probability(snr_db, threshold_db + p, slope_db) for p in points) / len(points)
+    total = 0.0
+    for p in points:  # added in order, as the port adds (Python's sum() compensates)
+        total += decode_probability(snr_db, threshold_db + p, slope_db)
+    return total / len(points)
 
 
 def prior_probability(
@@ -432,6 +435,12 @@ class RateController:
     alone (:meth:`_clean_climb`)."""
     _ofdm_failed: bool = False
     """The last OFDM frames observed delivered nothing (:meth:`_judge_family`)."""
+    first_try: bool = False
+    """ADR-0127 (proposed, off): the session's first rung by the four channels' mean prior, with one
+    frame of the first transmission tried at the rung the optimistic prior would have started at
+    (:meth:`seed`, :meth:`_end_first_try`)."""
+    _first_try: int | None = None
+    """The rung of the first transmission's try (ADR-0127), until its outcome comes back."""
 
     def __post_init__(self) -> None:
         self._index = min(self._index, len(self.modes) - 1)
@@ -498,7 +507,9 @@ class RateController:
             # the Test's measurement): news of it, as a try would be
             if mode > here:
                 self._judge_try(mode)
-        if self._probing is not None:
+        if self._first_try is not None:
+            self._end_first_try(frames)
+        elif self._probing is not None:
             self._probe_tries += 1
             self._try_frames += sum(1 for f in frames if f.mode == self._probing)
             if self._try_over():
@@ -586,6 +597,7 @@ class RateController:
 
     def _cancel_try(self) -> None:
         self._probing = None
+        self._first_try = None
         self._probe_tries = 0
         self._try_frames = 0
 
@@ -716,8 +728,56 @@ class RateController:
         self.snr_db = saved
         return self.modes[best]
 
+    def safe_first_mode(self, snr_db: float) -> int:
+        """ADR-0127's first rung: the best by the four channels' mean prior at ``snr_db``, never
+        above :meth:`first_mode`'s."""
+        margin = self.prior_margin_db
+        self.prior_margin_db = None
+        safe = self.first_mode(snr_db)
+        self.prior_margin_db = margin
+        return min(safe, self.first_mode(snr_db))
+
+    def first_try_mode(self, safe: int, bold: int) -> int | None:
+        """The rung of the first transmission's try (ADR-0127): the fastest usable rung of
+        ``safe``'s family above it and no faster than ``bold``. One family a transmission — a try
+        across the floor's edge takes the transmission, which is the bold start again — so across
+        the edge there is none."""
+        floor = safe < self.floor_modes
+        above = [
+            m
+            for i, m in enumerate(self.modes)
+            if safe < m <= bold and (m < self.floor_modes) == floor and self._usable(i)
+        ]
+        return above[-1] if above else None
+
+    def _end_first_try(self, frames: list[FrameOutcome]) -> None:
+        """The first transmission's try decided by its one frame (ADR-0127): decoded, the try ends
+        and the climb on clean frames goes on from the first rung; lost, its next try waits twice
+        as long, as a failed try's. Not sent, no verdict."""
+        mode = self._first_try
+        assert mode is not None
+        at = [f for f in frames if f.mode == mode]
+        self._cancel_try()
+        if not at:
+            return
+        if any(f.decoded for f in at):
+            self._probe_wait[mode] = self.probe_every
+        else:
+            wait = self._probe_wait.get(mode, self.probe_every)
+            self._probe_wait[mode] = min(self.probe_wait_max, 2 * wait)
+            self._since_probe[mode] = 0.0
+
     def seed(self, snr_db: float, *, lower_bound: bool = False) -> None:
         if self._smoothed is not None:
             return
         self._smoothed = self.snr_db = snr_db
-        self._index = self.modes.index(self.first_mode(snr_db))
+        if not self.first_try:
+            self._index = self.modes.index(self.first_mode(snr_db))
+            return
+        bold = self.first_mode(snr_db)
+        safe = self.safe_first_mode(snr_db)
+        self._index = self.modes.index(safe)
+        tried = self.first_try_mode(safe, bold)
+        if tried is not None:
+            self._probing = self._first_try = tried
+            self._since_probe[tried] = 0.0
