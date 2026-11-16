@@ -423,15 +423,24 @@ fn ident_frames_match_the_model() {
         if let Some(others) = case["not_identifications"].as_array() {
             for hex in others {
                 let bytes = from_hex(hex.as_str().expect("hex"));
-                assert!(!is_identification(&bytes), "{hex} taken for an identification");
+                assert!(
+                    !is_identification(&bytes),
+                    "{hex} taken for an identification"
+                );
                 assert!(IdentFrame::decode(&bytes).is_err(), "{hex} decoded");
             }
             let empty = from_hex(case["empty"].as_str().expect("empty"));
-            assert!(IdentFrame::decode(&empty).is_err(), "an empty frame decoded");
+            assert!(
+                IdentFrame::decode(&empty).is_err(),
+                "an empty frame decoded"
+            );
             continue;
         }
         let call = case["call"].as_str().expect("call");
-        assert_eq!(ident_callsign(call), case["sent_as"].as_str().expect("sent_as"));
+        assert_eq!(
+            ident_callsign(call),
+            case["sent_as"].as_str().expect("sent_as")
+        );
         let want = case["frames"].as_array().expect("frames");
         let got = identification_frames(call);
         assert_eq!(got.len(), want.len(), "{call}: frames");
@@ -439,9 +448,17 @@ fn ident_frames_match_the_model() {
             assert_eq!(frame.text, w["text"].as_str().expect("text"), "{call}");
             assert_eq!(Some(frame.more), w["more"].as_bool(), "{call}");
             let bytes = from_hex(w["encoded"].as_str().expect("encoded"));
-            assert_eq!(frame.encode().expect("encode").to_vec(), bytes, "{call}: bytes");
+            assert_eq!(
+                frame.encode().expect("encode").to_vec(),
+                bytes,
+                "{call}: bytes"
+            );
             assert!(is_identification(&bytes));
-            assert_eq!(&IdentFrame::decode(&bytes).expect("decode"), frame, "{call}: decoded");
+            assert_eq!(
+                &IdentFrame::decode(&bytes).expect("decode"),
+                frame,
+                "{call}: decoded"
+            );
         }
         checked += 1;
     }
@@ -453,7 +470,10 @@ fn ident_frames_match_the_model() {
 #[test]
 fn accept_frames_match_the_model() {
     let mut checked = 0;
-    for case in vectors()["accept_frames"].as_array().expect("accept frames") {
+    for case in vectors()["accept_frames"]
+        .as_array()
+        .expect("accept frames")
+    {
         if let Some(others) = case["not_acceptances"].as_array() {
             for hex in others {
                 let bytes = from_hex(hex.as_str().expect("hex"));
@@ -467,7 +487,11 @@ fn accept_frames_match_the_model() {
         assert_eq!(frame.encode().to_vec(), expected, "{frame:?}: bytes");
         assert!(is_acceptance(&expected), "{frame:?}: not an acceptance");
         let decoded = AcceptFrame::decode(&expected).expect("decode");
-        assert_eq!(decoded, accept_frame(&case["decoded"]), "{frame:?}: decoded");
+        assert_eq!(
+            decoded,
+            accept_frame(&case["decoded"]),
+            "{frame:?}: decoded"
+        );
         assert_eq!(
             usize::from(decoded.capabilities()),
             int(&case["decoded"], "capabilities"),

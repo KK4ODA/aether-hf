@@ -1363,7 +1363,8 @@ impl IdentFrame {
             field |= u64::from(byte) << (7 * (IDENT_CHARS - 1 - i));
         }
         let mut out = [0u8; CONTROL_BYTES];
-        out[0] = (GrantKind::Disc.to_bits() << 6) | (u8::from(self.more) << 5) | (field >> 40) as u8;
+        out[0] =
+            (GrantKind::Disc.to_bits() << 6) | (u8::from(self.more) << 5) | (field >> 40) as u8;
         for (i, byte) in out[2..].iter_mut().enumerate() {
             *byte = (field >> (8 * (4 - i))) as u8;
         }
