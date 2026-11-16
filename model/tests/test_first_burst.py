@@ -16,13 +16,16 @@ from aether_model.link.rate import FrameOutcome
 from aether_model.link.sim import TwoStationSim
 
 
-def _engine(air: AirInterface, on: bool, call: str = "W4ODA", seed: int = 11) -> GrantedEngine:
+def _engine(
+    air: AirInterface, on: bool, call: str = "W4ODA", seed: int = 11, jump: bool = False
+) -> GrantedEngine:
     config = GrantConfig(
         capabilities=bandwidth_capabilities(air.params),
         max_mode=air.n_rungs - 1,
         max_burst_s=26.0,
         disc_drain_s=1e9,
         first_burst_try=on,
+        first_burst_jump=jump,
     )
     return GrantedEngine(call, phy_timing(air.params), config, seed=seed)
 
@@ -147,3 +150,50 @@ def test_the_switch_reaches_the_controller() -> None:
     assert _engine(WIDE, True).rate.first_try
     assert not _engine(WIDE, False).rate.first_try
     assert not GrantConfig().first_burst_try
+
+
+# ── variant J: a decoded first try moves the choice to its rung (00-plan.md §5) ──
+
+
+def test_j_a_decoded_try_frame_moves_the_choice_to_its_rung() -> None:
+    ctl = _engine(WIDE, True, jump=True).rate
+    ctl.seed(20.0)
+    safe, bold = ctl.modes[ctl._index], ctl._first_try
+    assert bold is not None and safe < bold
+    ctl.observe_frames([_outcome(WIDE, bold, True), *[_outcome(WIDE, safe, True)] * 3], 20.0)
+    assert ctl._first_try is None
+    assert ctl.modes[ctl._index] == bold
+    assert ctl._probe_wait[bold] == ctl.probe_every
+
+
+def test_j_a_lost_try_frame_stays_at_the_safe_rung() -> None:
+    ctl = _engine(WIDE, True, jump=True).rate
+    ctl.seed(20.0)
+    safe, bold = ctl.modes[ctl._index], ctl._first_try
+    assert bold is not None
+    ctl.observe_frames([_outcome(WIDE, bold, False), *[_outcome(WIDE, safe, True)] * 3], 20.0)
+    assert ctl.modes[ctl._index] == safe
+    assert ctl._probe_wait[bold] == 2 * ctl.probe_every
+
+
+def test_j_does_nothing_without_the_first_try() -> None:
+    off = _engine(WIDE, False, jump=True).rate
+    off.seed(20.0)
+    assert off.modes[off._index] == off.first_mode(20.0) and off._probing is None
+    assert not GrantConfig().first_burst_jump
+
+
+def test_j_a_session_goes_on_at_the_bold_rung_after_its_frame_decodes() -> None:
+    a, b = _engine(WIDE, True, jump=True), _engine(WIDE, True, "KK4XYZ", 12, jump=True)
+    seen = _first_data(a)
+    payload = bytes((i * 37) % 256 for i in range(6000))
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=5)
+    a.connect("KK4XYZ")
+    a.send(payload)
+    a.disconnect()
+    sim.run(until=900.0)
+    assert sim.delivered(1) == payload
+    first, second = seen[0], seen[1]
+    bold = first[0]
+    assert bold > max(first[1:]), f"the first transmission starts safe: {first}"
+    assert min(second) >= bold - 1 and max(second) >= bold, f"then at the bold rung: {second}"

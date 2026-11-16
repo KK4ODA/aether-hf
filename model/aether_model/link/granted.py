@@ -388,6 +388,10 @@ class GrantConfig:
     """ADR-0128 (proposed, off): the session's first data transmission at the four channels' mean
     prior's rung, with one frame tried at the rung today's prior would start at
     (:attr:`RateController.first_try`)."""
+    first_burst_jump: bool = False
+    """ADR-0128's variant J (registered, off; acts only with :attr:`first_burst_try`): when the
+    first transmission's one bold frame decodes, the choice moves to its rung at once
+    (:attr:`RateController.first_try_jump`)."""
     initial_mode: int = 0
     """The rung this station's data goes at before its rate controller has a reading."""
     max_mode: int = 19
@@ -1676,6 +1680,7 @@ class GrantedEngine:
             frame_air_s=frame_s,
             penalties=dict(CLASS_PENALTY_DB.get(len(table), {})),
             first_try=self.cfg.first_burst_try,
+            first_try_jump=self.cfg.first_burst_jump,
             **{**floor, **priced, **self._air_guess(), **self.cfg.rate},  # type: ignore[arg-type]
         )
 
