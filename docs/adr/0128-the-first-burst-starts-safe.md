@@ -3,7 +3,9 @@
 **Status:** proposed, 2026-11-16 — **results in, awaiting the author.** It fails the registered
 criteria (F2, F3, F4; `docs/research/first-burst/01-results.md`). It is behind
 `GrantConfig.first_burst_try`, off by default, and nothing ships. An exception the author approved to
-the rule of no more patches to the rate controller; no review follows it.
+the rule of no more patches to the rate controller; no review follows it. **A variant (J)**, moving
+straight to the bold rung when its one frame decodes, was registered on 2026-11-16 at the author's
+request (`00-plan.md` §5); its results are pending.
 
 ## 1. Context
 
