@@ -211,7 +211,7 @@ pub const WIDE_PRIOR_MARGIN_DB: f64 = 1.0;
 pub const WIDE_FAMILY_GAIN_DB: f64 = 1.0;
 
 /// What each rung's 10 % point moves by on ITU-R F.1487's Good, Moderate and Poor channels, dB over
-/// its AWGN point, on the 2 300 Hz ladder: the four channels' mean prior ADR-0127's first rung is
+/// its AWGN point, on the 2 300 Hz ladder: the four channels' mean prior ADR-0128's first rung is
 /// chosen by (the model's `WIDE_CLASS_PENALTY_DB`, held to it by the link vectors).
 pub const WIDE_CLASS_PENALTY_DB: [[f64; 3]; 20] = [
     [7.3, 5.8, 4.5],
@@ -359,7 +359,7 @@ pub struct RateController {
     /// By rung, its fading channels' 10 % points over its AWGN one ([`class_penalty_db`]); empty
     /// for a table that has none.
     penalties: Vec<[f64; 3]>,
-    /// ADR-0127 (proposed, off): the first rung by the four channels' mean prior, one frame of the
+    /// ADR-0128 (proposed, off): the first rung by the four channels' mean prior, one frame of the
     /// first transmission tried at the rung the optimistic prior starts at.
     first_try: bool,
     /// The rung of the first transmission's try, until its outcome comes back.
@@ -426,7 +426,7 @@ impl RateController {
         }
     }
 
-    /// The same controller with ADR-0127's first burst on or off (the model's `first_try`).
+    /// The same controller with ADR-0128's first burst on or off (the model's `first_try`).
     #[must_use]
     pub const fn with_first_try(mut self, on: bool) -> Self {
         self.first_try = on;
@@ -439,7 +439,7 @@ impl RateController {
         self.wait(mode)
     }
 
-    /// Whether ADR-0127's first burst is on.
+    /// Whether ADR-0128's first burst is on.
     #[must_use]
     pub const fn first_try(&self) -> bool {
         self.first_try
@@ -941,7 +941,7 @@ impl RateController {
         self.modes[best.map_or(0, |(i, _)| i)]
     }
 
-    /// ADR-0127's first rung: the best by the four channels' mean prior at `snr_db`, never above
+    /// ADR-0128's first rung: the best by the four channels' mean prior at `snr_db`, never above
     /// [`first_mode`](Self::first_mode)'s (the model's `safe_first_mode`).
     #[must_use]
     pub fn safe_first_mode(&self, snr_db: f64) -> usize {
@@ -965,7 +965,7 @@ impl RateController {
         self.modes[best.map_or(0, |(i, _)| i)].min(self.first_mode(snr_db))
     }
 
-    /// The rung of the first transmission's try (ADR-0127): the fastest usable rung of `safe`'s
+    /// The rung of the first transmission's try (ADR-0128): the fastest usable rung of `safe`'s
     /// family above it and no faster than `bold`; across the floor's edge, none (the model's
     /// `first_try_mode`).
     #[must_use]
@@ -980,7 +980,7 @@ impl RateController {
             .next_back()
     }
 
-    /// The first transmission's try decided by its one frame (ADR-0127): decoded, the try ends
+    /// The first transmission's try decided by its one frame (ADR-0128): decoded, the try ends
     /// and the climb on clean frames goes on; lost, its next try waits twice as long; not sent,
     /// no verdict (the model's `_end_first_try`).
     fn end_first_try(&mut self, tried: usize, frames: &[FrameOutcome]) {

@@ -385,7 +385,7 @@ class GrantConfig:
     rate: dict[str, float | int | None] = field(default_factory=dict)
     """Overrides of the rate controller's settings (:class:`RateController`), for benches."""
     first_burst_try: bool = False
-    """ADR-0127 (proposed, off): the session's first data transmission at the four channels' mean
+    """ADR-0128 (proposed, off): the session's first data transmission at the four channels' mean
     prior's rung, with one frame tried at the rung today's prior would start at
     (:attr:`RateController.first_try`)."""
     initial_mode: int = 0

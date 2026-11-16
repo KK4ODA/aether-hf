@@ -497,7 +497,7 @@ def controller_trace(
             ops.append({"observe_snr": reading, **state()})
     extra: dict[str, object] = {}
     if first_try:
-        # ADR-0127 (proposed, off): said only when on; the four channels' penalties it starts by
+        # ADR-0128 (proposed, off): said only when on; the four channels' penalties it starts by
         extra = {"first_try": True, "penalties": [list(ctl.penalties[m]) for m in modes]}
     return {
         **extra,
@@ -563,7 +563,7 @@ def main() -> int:
             controller_trace(air, seed)
             for air, seed in ((WIDE, 1), (NARROW, 2), (WIDE, 3), (NARROW, 4))
         ]
-        # the first burst's safe start and its try (ADR-0127, proposed, off by default)
+        # the first burst's safe start and its try (ADR-0128, proposed, off by default)
         + [
             controller_trace(air, seed, first_try=True)
             for air, seed in ((WIDE, 5), (NARROW, 6), (WIDE, 7), (NARROW, 8))

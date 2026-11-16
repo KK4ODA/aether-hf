@@ -364,7 +364,7 @@ pub struct GrantConfig {
     /// floor poll, where a 0.43 s header would have been read. A floor header costs 3.2 s and
     /// broke even on weak paths, so it is kept only where it is cheap.
     pub header_above_recommendation: bool,
-    /// ADR-0127 (proposed, off): the session's first data transmission at the four channels' mean
+    /// ADR-0128 (proposed, off): the session's first data transmission at the four channels' mean
     /// prior's rung, with one frame tried at the rung today's prior would start at (the model's
     /// `first_burst_try`).
     pub first_burst_try: bool,

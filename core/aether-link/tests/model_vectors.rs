@@ -661,7 +661,7 @@ mod controller_traces {
             &echo_limit,
         )
         .for_air(trace["wide"].as_bool().expect("wide"));
-        // ADR-0127 (proposed, off): a trace that says so runs with it, and holds the port's
+        // ADR-0128 (proposed, off): a trace that says so runs with it, and holds the port's
         // penalty tables to the model's
         if trace
             .get("first_try")

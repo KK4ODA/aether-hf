@@ -1,4 +1,4 @@
-"""The first burst after a call, read from scenario harness runs (ADR-0127's A/B).
+"""The first burst after a call, read from scenario harness runs (ADR-0128's A/B).
 
 For every session in every run under the given directories, each station's first transmission
 carrying data: its blocks (sequence numbers), the rungs they went at, how many of them the station

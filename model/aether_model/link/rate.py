@@ -436,11 +436,11 @@ class RateController:
     _ofdm_failed: bool = False
     """The last OFDM frames observed delivered nothing (:meth:`_judge_family`)."""
     first_try: bool = False
-    """ADR-0127 (proposed, off): the session's first rung by the four channels' mean prior, with one
+    """ADR-0128 (proposed, off): the session's first rung by the four channels' mean prior, with one
     frame of the first transmission tried at the rung the optimistic prior would have started at
     (:meth:`seed`, :meth:`_end_first_try`)."""
     _first_try: int | None = None
-    """The rung of the first transmission's try (ADR-0127), until its outcome comes back."""
+    """The rung of the first transmission's try (ADR-0128), until its outcome comes back."""
 
     def __post_init__(self) -> None:
         self._index = min(self._index, len(self.modes) - 1)
@@ -729,7 +729,7 @@ class RateController:
         return self.modes[best]
 
     def safe_first_mode(self, snr_db: float) -> int:
-        """ADR-0127's first rung: the best by the four channels' mean prior at ``snr_db``, never
+        """ADR-0128's first rung: the best by the four channels' mean prior at ``snr_db``, never
         above :meth:`first_mode`'s."""
         margin = self.prior_margin_db
         self.prior_margin_db = None
@@ -738,7 +738,7 @@ class RateController:
         return min(safe, self.first_mode(snr_db))
 
     def first_try_mode(self, safe: int, bold: int) -> int | None:
-        """The rung of the first transmission's try (ADR-0127): the fastest usable rung of
+        """The rung of the first transmission's try (ADR-0128): the fastest usable rung of
         ``safe``'s family above it and no faster than ``bold``. One family a transmission — a try
         across the floor's edge takes the transmission, which is the bold start again — so across
         the edge there is none."""
@@ -751,7 +751,7 @@ class RateController:
         return above[-1] if above else None
 
     def _end_first_try(self, frames: list[FrameOutcome]) -> None:
-        """The first transmission's try decided by its one frame (ADR-0127): decoded, the try ends
+        """The first transmission's try decided by its one frame (ADR-0128): decoded, the try ends
         and the climb on clean frames goes on from the first rung; lost, its next try waits twice
         as long, as a failed try's. Not sent, no verdict."""
         mode = self._first_try

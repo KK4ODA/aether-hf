@@ -150,7 +150,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "need_ease_after": c.need_ease_after,
     }
     if c.first_burst_try:
-        # ADR-0127 (proposed, off): said only when on, so the sessions before it stay as they were
+        # ADR-0128 (proposed, off): said only when on, so the sessions before it stay as they were
         doc["first_burst_try"] = True
     return doc
 
@@ -474,7 +474,7 @@ def fading_field(
 def first_burst(
     air: AirInterface, channel: str | None, snr: float, seed: int, size: int
 ) -> Callable[[], list[Recorder]]:
-    """ADR-0127 (proposed, off by default) on: each station's first data transmission at the
+    """ADR-0128 (proposed, off by default) on: each station's first data transmission at the
     four channels' mean prior's rung, one frame of it at the rung today's prior would start at."""
 
     def run() -> list[Recorder]:

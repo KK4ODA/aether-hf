@@ -15,6 +15,14 @@ or F4 flagged was then run again, both builds, on the same draws (46 runs an arm
 from `tools/first_burst.py --compare` (each station's first data transmission is read from its own
 sidecars).
 
+**History.** While the harness ran, another piece of work took ADR-0127 on `master` (the data
+identifier, `45797a2`…`2fb8102`). This one became ADR-0128, and its commits were rebased onto that
+work, so the hashes above are those of the branch as it was registered and run. That branch is kept
+on GitHub as `first-burst-as-registered` (`8d3fe9d`), where the registration `7619eae` comes before
+every run. The daemons A and B were built from that tree. The identifier work is a Setup choice with
+Morse the default, and it does not touch the rate controller. On the rebased tree the vectors
+regenerate as master's plus this change's appended cases, and every check is green.
+
 ## 2. The verdict per criterion
 
 | | asked | first pass (114 pairs) | rerun of the flagged (46 pairs) | verdict |

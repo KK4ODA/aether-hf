@@ -138,7 +138,7 @@ fn config(doc: &Value) -> GrantConfig {
         header_above_recommendation: doc["header_above_recommendation"]
             .as_bool()
             .expect("header_above_recommendation"),
-        // said only when on (ADR-0127, proposed): the sessions before it stay as they were
+        // said only when on (ADR-0128, proposed): the sessions before it stay as they were
         first_burst_try: doc
             .get("first_burst_try")
             .is_some_and(|v| v.as_bool().expect("first_burst_try")),

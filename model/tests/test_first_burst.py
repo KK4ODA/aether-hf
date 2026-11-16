@@ -1,4 +1,4 @@
-"""ADR-0127 (proposed, off by default): the first burst after a call starts at the four channels'
+"""ADR-0128 (proposed, off by default): the first burst after a call starts at the four channels'
 mean prior's rung and tries, with one frame, the rung today's prior would have started at."""
 
 from __future__ import annotations
