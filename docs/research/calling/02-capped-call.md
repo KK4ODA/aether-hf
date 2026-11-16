@@ -436,3 +436,25 @@ no radiated overlap in either arm. Over the 62 both passed, the air was 15 314 s
 * **The hidden loser's identifier.** A call that went unanswered is identified on its own after
   ADR-0055's wait, and a station that cannot hear the session it falls on keys it there. Whether that
   identifier should wait for a clear channel is the identifier's question, not the call's.
+
+## 8. The release candidate (beta.160, link protocol 13)
+
+The capped call made the only call (ADR-0126 §10), with what making it the default found (§10.2),
+rebased on the finer air clock and the seeded Trimode scan (`e5ccdbe`), built at `3e272ad` and run
+as the nightly runs it: every scenario in `bench/scenarios/`, three draws (`--variant 0, 1, 2`),
+`--fail-on invariants`.
+
+* **190 of 192 runs passed; no invariant broken; one radiated overlap.** The two that missed:
+  `80m-trimode-gateway-client-vanishes-500` seed 1046 (the first try fell in the stand-in's deaf
+  window, the second's OFDM acceptance was lost on the NVIS path, and the call ended) and
+  `80m-agc-slow-carrier-outside-500` seed 2032 (the 1 000-byte message on ITU NVIS at 500 Hz, the
+  edge-of-budget case since November). The trend tool flags both as one draw of three; none slower.
+* **Air time:** the median scenario at 0.968 of the baseline's; from 0.72
+  (`80m-gateway-fq-hangup-2300`) to 1.34 (`20m-ft8-neighbours-2300`). `80m-leave-together-500`, flagged
+  slower on two draws, was 358, 392 and 330 s against `master`'s own daemon on the same draws at
+  343, 261 and 282 s: both took the message down the same rungs, and a call that takes another
+  time meets the fading at another moment. `master`'s daemon passed the Trimode scenario 3 of 3.
+* **A first pass under load found a real defect**: ADR-0103's 4 s wait for an acceptance's key,
+  which a both-ways try outlasts (ADR-0126 §10.2). It is 12 s; the pass above is after the fix.
+
+`bench/baselines/scenarios.csv` is these runs (build `3e272ad`).
