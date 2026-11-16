@@ -162,6 +162,12 @@ flagged scenarios again on the same draws (30 pairs). A container restart stoppe
 102/97 runs. The 29 missing runs were deleted and run again from scratch (`/home/user/fb/resume.sh`);
 no half-finished run was kept.
 
+*History.* While J ran, master gained the data identifier's daemon side and beta.161 (`5934759`…
+`c661de2`), and J's commits were rebased onto it. As run, the branch is kept on GitHub as
+`first-burst-jump-as-registered` (`8d90c5e`): the registration `96114cc` comes before every run,
+and A′ and J were built from `9d1a2a7`. The identifier is a Setup choice with Morse the default.
+On the rebased tree the vectors regenerate unchanged and every check is green.
+
 **Verdict: fails F2, F3 and F4; F1, F5 and F6 pass.**
 
 | | asked | first pass (114 pairs) | rerun of the flagged (30 pairs) | verdict |
