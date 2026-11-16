@@ -114,3 +114,29 @@ take another course between runs of one build (CLAUDE.md): 114 runs an arm in al
 
 A narrow miss goes to the author with its trace, case by case; nothing passes by rule. Everything is
 reported, criteria met or not.
+
+## 5. The variant that moves straight to the bold rung (registered 2026-11-16, before its runs)
+
+`01-results.md` found ADR-0128 as built failing F2–F4. The first burst lost less, and the bold frame
+decoded, but it moved no decision. The station then climbed from the safe rung one three-frame try
+a rung. The author asked for the variant that `01-results.md` §5.3 named and left unbuilt.
+
+**The variant (J).** It is ADR-0128 as built (§2) with one difference in its point 3. When the first
+transmission's try frame decodes, the choice moves to the try's rung at once (when the echo allows
+it), and C1's ordinary decision follows as after any transmission. Lost, or not sent, it is as built.
+It sits behind its own switch, `GrantConfig.first_burst_jump` (and `RateController.first_try_jump`),
+which acts only with `first_burst_try` on. Both default off.
+
+*The risk, said before the runs.* One frame is the coin toss that `_try_over` was written against
+(`rate-control/04-results.md` §3.14). On a fading path a lucky bold frame puts the session where the
+first burst used to lose most of its frames, now one transmission later. F1 does not see that loss;
+F2–F4 do.
+
+**Builds.** Both daemons come from one tree, the tip of this branch. A′ has both switches off by
+their defaults; J has both on by their defaults, flipped in the source. They use separate
+`CARGO_TARGET_DIR`s. (The A of §3 was built before master's data-identifier commits; A′ is built
+again so the pairs differ in the switch alone.)
+
+**Scenarios, draws, measures, criteria.** The same as §3 and §4: the same 25 scenarios, four draws,
+and six for the seven noisy scenarios. F1–F6 are judged J against A′, with the same rerun rule for
+F3 and F4. J against B (ADR-0128 as built) is reported, not judged.
