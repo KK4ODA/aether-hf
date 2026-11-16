@@ -4024,6 +4024,25 @@ impl<P: Ptt> Station<P> {
 
     /// Describe a frame for the displays, and keep its constellation. `rung` is the rung of
     /// the ladder a DATA frame was sent at.
+    /// What a decoded control frame says of who sent it: a call's acceptance names the call by
+    /// its session and the caller's code (protocol 13, ADR-0126); a session's control frame
+    /// carries the session's low seven bits (protocol 8).
+    fn report_control(&self, report: &mut FrameReport, payload: &[u8]) {
+        report.control = crate::record::describe_control(payload);
+        if let Ok(accept) = AcceptFrame::decode(payload) {
+            report.kind = "answer";
+            let to_us = accept.session == self.engine.session()
+                && caller_code(&self.engine.my_call).is_ok_and(|c| c == accept.caller);
+            // the station this one called, while it calls or once the session is up
+            report.from = to_us.then(|| self.engine.remote_call.clone());
+            report.to = to_us.then(|| self.engine.my_call.clone());
+        } else if let Ok(control) = GrantFrame::decode(payload) {
+            report.from = (self.engine.connected()
+                && control.session == self.engine.session() & 0x7F)
+                .then(|| self.engine.remote_call.clone());
+        }
+    }
+
     fn report(&mut self, frame: &HeardFrame, rung: usize, now: f64) {
         let control = frame.control;
         let payload = frame.payload.as_deref();
@@ -4058,21 +4077,7 @@ impl<P: Ptt> Station<P> {
         };
         if control {
             if let Some(payload) = payload {
-                report.control = crate::record::describe_control(payload);
-                if let Ok(accept) = AcceptFrame::decode(payload) {
-                    // a call's acceptance (protocol 13, ADR-0126): it names the call by its
-                    // session and the caller's code, not by callsigns
-                    report.kind = "answer";
-                    let to_us = accept.session == self.engine.session()
-                        && caller_code(&self.engine.my_call).is_ok_and(|c| c == accept.caller);
-                    // the station this one called, while it calls or once the session is up
-                    report.from = to_us.then(|| self.engine.remote_call.clone());
-                    report.to = to_us.then(|| self.engine.my_call.clone());
-                } else if let Ok(control) = GrantFrame::decode(payload) {
-                    // a control frame of protocol 8 carries the session's low seven bits
-                    report.from = ours(self.engine.session())
-                        .filter(|_| control.session == self.engine.session() & 0x7F);
-                }
+                self.report_control(&mut report, payload);
             }
         } else if let Some((header, body)) = payload.and_then(|p| decode_data(p).ok()) {
             match header.kind {
