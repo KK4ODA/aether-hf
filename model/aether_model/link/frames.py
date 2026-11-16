@@ -664,3 +664,91 @@ class AcceptFrame:
             identifier_s=(payload[6] & 0x0F) / 2,
             compression=bool(payload[4] & 0x01),
         )
+
+
+# ── the identification frame (ADR-0127) ───────────────────────────
+
+IDENT_CHARS = 6
+"""Characters of the callsign one identification frame carries."""
+
+IDENT_MAX_CHARS = 2 * IDENT_CHARS
+"""The longest callsign the data identifier sends: two frames back to back."""
+
+
+def ident_callsign(call: str) -> str:
+    """The callsign as an identifier sends it — the Morse identifier's rule (``cwid::sent_as``,
+    ADR-0076): upper case, no SSID, ``-T`` or ``-R``, every ``/`` part kept."""
+    parts = [part.split("-")[0] for part in call.strip().upper().split("/")]
+    return "/".join(part for part in parts if part)
+
+
+def is_identification(payload: bytes) -> bool:
+    """An identification frame: a DISC whose session field is 0, which no session's control
+    frame has (session numbers keep their low seven bits set)."""
+    return (
+        len(payload) >= CONTROL_BYTES
+        and not payload[1] >> 1
+        and payload[0] >> 6 == GrantKind.DISC.value
+    )
+
+
+@dataclass(frozen=True)
+class IdentFrame:
+    """The data identifier (ADR-0127 §2.2): a DISC with session field 0, the callsign in 7-bit
+    ASCII (ITU-T T.50)::
+
+        0: kind DISC (2) | more (1) | 0 (3) | characters, bits 41–40
+        1: 0 (7) | 0 (1)
+        2–6: characters, bits 39–0
+
+    The 42-bit character field holds six characters, the first in its top seven bits; a
+    callsign shorter than six ends at the first NUL (0). ``more``: one frame more of the
+    callsign follows, back to back (a callsign of 7–12 characters). The four zero bits are
+    reserved: sent as 0, ignored."""
+
+    text: str
+    more: bool = False
+
+    def encode(self) -> bytes:
+        if len(self.text) > IDENT_CHARS:
+            raise ValueError("an identification frame holds six characters")
+        field_ = 0
+        for i, ch in enumerate(self.text.ljust(IDENT_CHARS, "\0")):
+            code = ord(ch)
+            if code > 0x7F:
+                raise ValueError("not 7-bit ASCII")
+            field_ |= code << (7 * (IDENT_CHARS - 1 - i))
+        return bytes(
+            [
+                (GrantKind.DISC.value << 6) | (int(self.more) << 5) | (field_ >> 40),
+                0,
+                *((field_ >> (8 * (4 - i))) & 0xFF for i in range(5)),
+            ]
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes) -> IdentFrame:
+        if not is_identification(payload):
+            raise ValueError("not an identification frame")
+        field_ = ((payload[0] & 0x03) << 40) | int.from_bytes(payload[2:7], "big")
+        text = ""
+        for i in range(IDENT_CHARS):
+            code = (field_ >> (7 * (IDENT_CHARS - 1 - i))) & 0x7F
+            if code == 0:
+                break
+            if not 0x20 < code < 0x7F:
+                raise ValueError("not a printable character")
+            text += chr(code)
+        if not text:
+            raise ValueError("an empty identification frame")
+        return cls(text=text, more=bool(payload[0] & 0x20))
+
+
+def identification_frames(call: str) -> list[IdentFrame]:
+    """The identification frames of ``call``: one for up to six characters as it is sent
+    (:func:`ident_callsign`), two back to back for seven to twelve. Longer callsigns are cut."""
+    text = ident_callsign(call)[:IDENT_MAX_CHARS]
+    if not text:
+        return []
+    pieces = [text[i : i + IDENT_CHARS] for i in range(0, len(text), IDENT_CHARS)]
+    return [IdentFrame(p, more=i < len(pieces) - 1) for i, p in enumerate(pieces)]

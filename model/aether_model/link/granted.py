@@ -76,6 +76,7 @@ from aether_model.link.frames import (
     DataKind,
     GrantFrame,
     GrantKind,
+    IdentFrame,
     ProbeBody,
     bandwidth_code,
     bandwidth_hz_of,
@@ -83,8 +84,11 @@ from aether_model.link.frames import (
     data_capacity,
     decode_data,
     encode_data,
+    ident_callsign,
+    identification_frames,
     in_window,
     is_acceptance,
+    is_identification,
     level_of,
     pack_callsign,
     pieces,
@@ -303,7 +307,11 @@ class SlotTransmit(Transmit):
     """The station's closing Morse identifier, this long, and the moment of silence that parts
     it from the frames: after the frames — behind a DISC_ACK, in the time every DISC grants it —
     or alone, with no frames; the last thing the station sends for the session (ADR-0075).
-    Already counted in :attr:`duration_s`."""
+    Already counted in :attr:`duration_s`. 0 when the station identifies in its data signal."""
+    ident_frames: int = 0
+    """How many of the last :attr:`frames` are the station's identification frames — its
+    closing identifier in the data signal (ADR-0127), where :attr:`identifier_s` would be its
+    Morse: the same place, the last thing the station sends for the session."""
     listen_first: bool = False
     """A transmission made outside every slot, which no protocol rule keeps clear: the closing
     identifier of a station that could not be given a slot for it — a slave whose session timed
@@ -315,7 +323,7 @@ class SlotTransmit(Transmit):
 
     @property
     def identifier(self) -> bool:
-        return self.identifier_s > 0.0
+        return self.identifier_s > 0.0 or self.ident_frames > 0
 
 
 # ── configuration and counters ────────────────────────────────────────
@@ -419,6 +427,12 @@ class GrantConfig:
     """The identifier's length by the callsign a session runs under: the daemon's, since the
     identifier sends that callsign and whether one is sent at all can follow it (a US callsign
     always identifies). Set by :meth:`GrantedEngine.set_identifiers`."""
+    identify_by: str = "morse"
+    """How the closing identifier goes (ADR-0127): ``"morse"``, the lengths above; or
+    ``"data"``, the callsign in identification frames (:class:`IdentFrame`) in the family of
+    the station's last frame — a length above 0 then only says that the callsign identifies,
+    and the length declared is the frames' on the floor (:meth:`GrantedEngine.data_identifier_s`),
+    whatever family the closing takes."""
     answer_gap_s: float = 0.0
     """The least time between the end of the other station's frames and this station radiating:
     the operator's ``[radio] answer_gap_ms``, or what this station learned the other needs
@@ -701,6 +715,19 @@ class GrantedEngine:
         """Whether the owed identifier listens first: one on its own, and a master's after a
         session in which it read the other station no more — that station may be sending its
         own (ADR-0075)."""
+        self._id_call = ""
+        """The callsign the owed identifier sends: the ended session's own (ADR-0127)."""
+        self._id_peer = ""
+        """The callsign of the station whose closing this station's owed identifier follows:
+        its identification frames, decoded, say where its transmission ended (ADR-0127)."""
+        self._sent_floor = True
+        """The family of the last frame this station sent: an identification frame alone goes
+        in it (ADR-0127 §2.2)."""
+        self._id_after = 0.0
+        """Where the ended session's last granting transmission of this station's ended: the
+        other station's identification frames after it are its closing's."""
+        self._ident_heard: tuple[str, float] | None = None
+        """The first frame of a two-frame identification heard: its text and its end."""
         self._probing: str | None = None
         self._probe_unsent = False
         self.last_probe: ProbeResult | None = None
@@ -1026,8 +1053,26 @@ class GrantedEngine:
         length its call or acceptance declared, which is what the other station reckons with."""
         self.cfg.identifiers = {c.strip().upper(): max(0.0, s) for c, s in lengths.items()}
 
+    def set_identify_by(self, method: str) -> None:
+        """How the closing identifier goes, ``"morse"`` or ``"data"`` (ADR-0127): from the next
+        call or acceptance on, as the identifier's length is."""
+        if method not in ("morse", "data"):
+            raise ValueError(f"no identifier method {method!r}")
+        self.cfg.identify_by = method
+
+    def data_identifier_s(self, call: str) -> float:
+        """The length a station that identifies in its data signal declares (ADR-0127 §2.3):
+        its identification frames on the floor, in 0.5 s steps — the closing's family is not
+        known at the call, and the floor's frames are the longer, so the other station's
+        reckoning covers either. 0 for a callsign that sends nothing."""
+        n = len(identification_frames(call))
+        return math.ceil(n * self._ctl_s(True) * 2 - 1e-9) / 2
+
     def _ident_for(self, call: str) -> float:
-        return self.cfg.identifiers.get(call.upper(), self.cfg.identifier_s)
+        length = self.cfg.identifiers.get(call.upper(), self.cfg.identifier_s)
+        if length > 0.0 and self.cfg.identify_by == "data":
+            return self.data_identifier_s(call)
+        return length
 
     @property
     def peer_identifier_s(self) -> float:
@@ -1304,16 +1349,8 @@ class GrantedEngine:
         self.last_data = None
         payload, _ = frame.decode(None)
         if frame.container is Container.CONTROL:
-            if payload is None:
-                return  # a control frame not read changes nothing
-            if is_acceptance(payload):
-                self._on_acceptance(AcceptFrame.decode(payload), frame)
-                return
-            ctl = None
-            with contextlib.suppress(ValueError):
-                ctl = GrantFrame.decode(payload)
-            if ctl is not None:
-                self._on_control(ctl, frame)
+            if payload is not None:  # a control frame not read changes nothing
+                self._on_control_frame(payload, frame)
             return
         if payload is not None and not self._outside(payload, frame):
             return
@@ -1327,6 +1364,20 @@ class GrantedEngine:
             self._master_data(frame, payload is not None)
         elif self.role is Role.SLAVE:
             self._slave_data(frame, payload is not None)
+
+    def _on_control_frame(self, payload: bytes, frame: SoftFrame) -> None:
+        if is_acceptance(payload):
+            self._on_acceptance(AcceptFrame.decode(payload), frame)
+        elif is_identification(payload):
+            # no session's: it changes no session state (ADR-0127 §2.4)
+            with contextlib.suppress(ValueError):
+                self._on_identification(IdentFrame.decode(payload), frame)
+        else:
+            ctl = None
+            with contextlib.suppress(ValueError):
+                ctl = GrantFrame.decode(payload)
+            if ctl is not None:
+                self._on_control(ctl, frame)
 
     def _outside(self, payload: bytes, frame: SoftFrame) -> bool:
         """Handle a decoded DATA frame that is no session data — a call, an acceptance, a probe
@@ -1646,7 +1697,21 @@ class GrantedEngine:
         granting: _Slot | None = None,
     ) -> float:
         """Hand a transmission over; returns where it ends on the air, as far as this engine
-        knows. An identifier goes after the frames (ADR-0075)."""
+        knows. An identifier goes after the frames (ADR-0075): Morse, or the station's
+        identification frames in the family of its last frame (ADR-0127)."""
+        owed = identifier_s if frames else 0.0
+        ident_frames = 0
+        if identifier_s > 0.0 and self.cfg.identify_by == "data":
+            floor = self._is_floor_tx(frames[-1]) if frames else self._sent_floor
+            idents = [
+                TxFrame(Container.CONTROL, f.encode(), floor=floor)
+                for f in identification_frames(self._id_call or self.my_call)
+            ]
+            frames = [*frames, *idents]
+            ident_frames = len(idents)
+            identifier_s = 0.0
+        if frames:
+            self._sent_floor = self._is_floor_tx(frames[-1])
         dur = identifier_s + sum(self.timing.frame_s(f) for f in frames)
         self.actions.append(
             SlotTransmit(
@@ -1655,13 +1720,12 @@ class GrantedEngine:
                 not_after=not_after,
                 not_before=not_before,
                 identifier_s=identifier_s,
+                ident_frames=ident_frames,
                 listen_first=listen_first,
                 cause=self._cause,
             )
         )
-        self._in_flight.append(
-            (granting, identifier_s if frames else 0.0, _carries_measurement(frames))
-        )
+        self._in_flight.append((granting, owed, _carries_measurement(frames)))
         self.stats.transmissions += 1
         on_air = self.now + self._own_latency()
         if not_before is not None:
@@ -1670,6 +1734,11 @@ class GrantedEngine:
 
     def _control(self, ctl: GrantFrame, floor: bool) -> TxFrame:
         return TxFrame(Container.CONTROL, ctl.encode(), floor=floor)
+
+    def _is_floor_tx(self, frame: TxFrame) -> bool:
+        if frame.container is Container.CONTROL:
+            return frame.floor
+        return self.timing.is_floor(frame.mode)
 
     # ── slots this station grants ─────────────────────────────────────
 
@@ -2745,6 +2814,7 @@ class GrantedEngine:
         if kind is GrantKind.DISC_ACK and self._my_ident_s > 0.0:
             ident_s = self._my_ident_s
             self._id_owed = 0.0
+            self._id_call = self.my_call
             self._disarm("ident")
         if kind is GrantKind.DISC:
             self.stats.left_answered += 1
@@ -3445,7 +3515,33 @@ class GrantedEngine:
         else:
             self._identify_after_leaving()
 
-    # ── the closing identifier (ADR-0075) ─────────────────────────────
+    # ── the closing identifier (ADR-0075, ADR-0127) ───────────────────
+
+    def _on_identification(self, ident: IdentFrame, frame: SoftFrame) -> None:
+        """Another station's identification frame (ADR-0127 §2.4): its callsign, heard; no
+        session's state changes. A master waiting for its closing slave's identifier to be over
+        takes the slave's last frame, decoded, for where its transmission ends — sooner than
+        the length it declared, which covers the floor — and keys its own after it."""
+        heard = self._ident_heard
+        self._ident_heard = None
+        if ident.more:
+            self._ident_heard = (ident.text, frame.t_end)
+            return
+        text = ident.text
+        if heard is not None and 0.0 <= frame.t_start - heard[1] <= 0.25:
+            text = heard[0] + text
+        self.actions.append(Event("ident_heard", text))
+        if (
+            text == self._id_peer
+            and self._id_owed > 0.0
+            and not self._id_alone
+            and "ident" in self._deadlines
+            and frame.t_start >= self._id_after - 1e-9
+        ):
+            due = self._after(frame.t_end, frame.floor, self._peer_wait_s())
+            if due < self._deadlines["ident"] - 1e-9:
+                self._hold_until = due
+                self._arm_at("ident", max(self.now, due))
 
     def _identify_after_leaving(self) -> None:
         """An aborting master's leaving is over — its DISC answered, or the last one's slot
@@ -3483,11 +3579,13 @@ class GrantedEngine:
         if ident <= 0.0 or self.state is not State.IDLE or self._id_owed > 0.0:
             return
         self._id_owed = ident
+        self._id_call = self.my_call
         self._id_alone = True
         self._id_listen = True
         self._arm_at("ident", self.now + self._exchange_s())
 
     def _end_session(self, reason: str, *, disc_heard: bool = False, unread: bool = False) -> None:
+        granted_until = self._slot.tx_end if self._slot is not None else self.now
         left = None
         if self.state is not State.CONNECTING and (reason in LEFT_UNHEARD or disc_heard):
             left = (
@@ -3517,6 +3615,9 @@ class GrantedEngine:
         self._peer_turnaround_s, self._peer_identifier_s, self._silence_level = kept
         self._left = left
         self._id_owed = self._my_ident_s if owes else 0.0
+        self._id_call = self.my_call
+        self._id_peer = ident_callsign(self.remote_call) if was_master else ""
+        self._id_after = granted_until
         self.actions.append(Event("disconnected", reason))
         if not owes:
             return
