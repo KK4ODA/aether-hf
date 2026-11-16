@@ -4,9 +4,9 @@
 model bench ("results accepted, go ahead"), its one narrow miss (§7.3) accepted. Link protocol 13.
 Its first design (§2.1's call frame, the codes, the details at the head of the data: §2–§6) was
 benched and failed R2 and R3 (§6); it is removed from the model and lives in the history at
-`343be84`. The capped call is in the model behind `GrantConfig.capped_call`, off by default; next
-are the port, the harness's A/B (§8) and the air, before it becomes the default and link protocol
-13 ships.
+`343be84`. The capped call is in the model and the port behind `GrantConfig.capped_call`, off by
+default, with the number of tries a setting (§7.4); next are the harness's A/B (§8, registered)
+and the air, before it becomes the default and link protocol 13 ships.
 
 ## 1. Context
 
@@ -328,3 +328,64 @@ capped call the default, because a new configuration key ships with a schema bum
 (CLAUDE.md): the key (`[radio] call_tries`, a portable setting, so in profiles; options 2, 6, 8, 10,
 15), the configuration schema step, Setup step 4's *Call tries* list, and the manual's words, table
 row and screenshot.
+
+## 8. The harness's A/B (registered 2026-11-16, before its runs)
+
+### 8.1 What the daemon does with it
+
+Built before any run, and nothing else in the daemon changes:
+
+* **What was heard.** The station keeps, for every callsign a decoded frame named as its sender,
+  the station time and the SNR of the last one (`heard_lately`, `CALL_HEARD_S` = 15 minutes), and
+  a call goes by it (`connect_heard`). It is the station's memory since it started, not the heard
+  list's file, so a daemon restarted calls as to a station not heard; the harness starts every
+  station fresh, so its Tests (which probe first) call as heard, and its other calls as not heard.
+* **ADR-0058's move to 500 Hz.** A 2 300 Hz call to a station not known to run 2 300 Hz goes on
+  at 500 Hz after four unanswered tries. A capped call of two tries never has a fifth, so the move
+  comes before the plan's last try when the plan has fewer than five: after
+  min(4, tries − 1) unanswered tries, in the silent pause. With two tries, a call whose first
+  both-ways try went unanswered makes its second at 500 Hz; a 2 300 Hz station that hears it
+  answers it by moving to 500 Hz (ADR-0026). That costs a session at 500 Hz where a fade took the
+  first try, against today's four tries at 2 300 Hz; `40m-wide-calls-narrow-unprobed` is the case
+  it keeps.
+
+### 8.2 The arms and the runs
+
+* **T**, today's call: the branch as committed with this section.
+* **C**, the capped call: the same tree with `capped_call: true` in `GrantConfig::default`
+  (`core/aether-link/src/granted.rs`, one line, never committed), so every daemon calls with two
+  tries and answers only capped calls.
+
+Both built `--release`; `tools/session_matrix.py --jobs 2 --drop-passing-audio`, each arm on the same
+draws. One row a run goes to `docs/research/calling/data/capped-T.csv` and `capped-C.csv`.
+
+### 8.3 Criteria
+
+* **H1, nobody answers (judged on C).** New scenarios `40m-nobody-answers-2300` and
+  `80m-nobody-answers-500` (a call into an outage: the called station hears nothing), 3 draws each:
+  in every run the caller's tries (its transmissions while calling) are two, they radiate 13.5 s
+  at most, and the last ends within 33 s of the first's start (§7.4: two both-ways tries of 6.4 s,
+  one listening and the 15 s pause). T is reported.
+* **H2, the calls that are retried today.** K3's eight scenarios (`00-plan.md` §4), 3 draws each
+  (variants 0–2): (a) runs passed, C no fewer than T, and no invariant broken in C that T kept;
+  (b) radiated overlaps pooled, C no more than T + 2; (c) the calls' time pooled (each call from
+  its `CONNECT` to its session up, a call that did not connect counted at the scenario's
+  `connect_within_s`), C ≤ T.
+* **H3, two hidden callers that do not start together.** New scenarios
+  `40m-gateway-hidden-callers-after-N-2300` for N = 3, 7, 12 and 18: K2's scenario with the second
+  client calling N seconds of air after the first, 3 draws each: (a) runs with a session within
+  240 s, C no fewer than T; (b) the median time from the first call to the first session, C ≤ T;
+  (c) radiated overlaps pooled, C no more than T.
+* **H4, 200 Hz off.** `40m-offset-200-2300` (K4), 3 draws: C connects in every draw T connects.
+* **H5, no harm elsewhere.** Every scenario in `bench/scenarios/` (not `long/`), one draw
+  (variant 0): (a) runs passed, C no fewer than T less one, and any scenario C fails that T passed
+  is run on two more draws on both arms and reported; (b) no invariant broken in C that T kept;
+  (c) radiated overlaps pooled, C no more than T + 2.
+* **Reported, not judged:** K2 as registered (`40m-gateway-hidden-callers-2300`, 10 draws), where
+  both clients dial at the same second. With no random wait both clients' tries meet at the
+  gateway every time, so C is expected to connect neither; the author has judged two callers
+  starting together not a case that happens on the air. Programs that connect on a clock (every
+  hour at :00) are where it could, and the result goes to the author with that.
+
+A narrow miss goes to the author with its trace, and does not pass by rule. The harness's whole-
+second air clock and its scanning Trimode stand-in (`01-results.md` §3.1) apply to both arms.

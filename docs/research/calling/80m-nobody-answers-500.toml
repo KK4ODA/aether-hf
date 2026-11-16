@@ -1,0 +1,25 @@
+name = "80m-nobody-answers-500"
+description = """80 m at 500 Hz: a call nobody hears. The called station is in an outage for the
+whole call (off, or a band gone), so every try goes unanswered (ADR-0126 §8.3, H1). Measured:
+the caller's tries in `channel.json` (its transmissions while calling), how much they radiate and
+over how long. The call is expected to fail; what is judged is how long it holds the channel."""
+tags = ["80m", "calling"]
+bandwidth = 500
+seconds = 600
+seed = 67
+
+[stations.a]
+callsign = "W4ODA"
+[stations.b]
+callsign = "KK4XYZ"
+
+[path]
+profile = "moderate"
+snr_db = 10.0
+
+[script]
+continue_on_failure = true
+steps = ["outage 420", "connect", "wait_idle 300"]
+
+[expect]
+idle = true

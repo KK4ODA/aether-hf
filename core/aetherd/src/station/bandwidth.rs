@@ -103,6 +103,10 @@ pub struct Mismatch {
 /// callsigns, unanswered, to suggest it (ADR-0057).
 pub const KIN_HEARD_S: f64 = 30.0 * 60.0;
 
+/// How lately a station must have been read for a capped call to it to go by how well it was
+/// (ADR-0126 §2.3): longer ago, the call is made as to a station not heard.
+pub const CALL_HEARD_S: f64 = 15.0 * 60.0;
+
 /// Unanswered tries at 2 300 Hz before a call to a station whose bandwidth is not known goes on
 /// at 500 Hz (ADR-0058): two on the floor and two ordinary — the half of a call
 /// (`connect_retries` 8) a station that hears it answers in.
@@ -169,9 +173,9 @@ pub(super) struct Bandwidth {
     /// The last call or probe to this station in a bandwidth whose calls it does not answer.
     mismatch: Option<Mismatch>,
     /// The callsigns frames have named as their sender, with the station time each was last
-    /// heard, the most recently heard last: what a call nobody answered is checked against
-    /// (ADR-0057).
-    heard_at: VecDeque<(String, f64)>,
+    /// heard and the SNR it was read at, the most recently heard last: what a call nobody
+    /// answered is checked against (ADR-0057), and what chooses a capped call's tries (ADR-0126).
+    heard_at: VecDeque<(String, f64, f64)>,
 }
 
 impl Bandwidth {
@@ -277,15 +281,31 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// Note that a frame named `callsign` as its sender at station time `now`.
-    pub(super) fn note_sender(&mut self, callsign: &str, now: f64) {
+    /// Note that a frame named `callsign` as its sender at station time `now`, read at
+    /// `snr_db`.
+    pub(super) fn note_sender(&mut self, callsign: &str, now: f64, snr_db: f64) {
         let callsign = callsign.trim().to_ascii_uppercase();
         let heard = &mut self.bandwidth.heard_at;
-        heard.retain(|(call, _)| *call != callsign);
-        heard.push_back((callsign, now));
+        heard.retain(|(call, _, _)| *call != callsign);
+        heard.push_back((callsign, now, snr_db));
         while heard.len() > KNOWN_LIMIT {
             heard.pop_front();
         }
+    }
+
+    /// The SNR the last frame read from `callsign` had, if it was read within
+    /// [`CALL_HEARD_S`] of station time `now`: what a capped call's tries are chosen by
+    /// (ADR-0126 §2.3).
+    #[must_use]
+    pub fn heard_lately(&self, callsign: &str, now: f64) -> Option<f64> {
+        let callsign = callsign.trim().to_ascii_uppercase();
+        self.bandwidth
+            .heard_at
+            .iter()
+            .rev()
+            .find(|(call, _, _)| *call == callsign)
+            .filter(|(_, at, _)| now - at <= CALL_HEARD_S)
+            .map(|(_, _, snr)| *snr)
     }
 
     /// Whether `callsign` is another name of one of this station's: the same base callsign
@@ -317,10 +337,10 @@ impl<P: Ptt> Station<P> {
             .heard_at
             .iter()
             .rev()
-            .find(|(call, at)| {
+            .find(|(call, at, _)| {
                 *call != called && base_callsign(call) == base && now - at <= KIN_HEARD_S
             })
-            .cloned()
+            .map(|(call, at, _)| (call.clone(), *at))
         else {
             return;
         };
@@ -385,7 +405,7 @@ impl<P: Ptt> Station<P> {
         {
             let remote = remote.trim().to_ascii_uppercase();
             let after = if ours == 2300 {
-                format!("; at 500 Hz after {NARROW_AFTER_TRIES} unanswered tries")
+                format!("; at 500 Hz after {} unanswered tries", self.narrow_after_tries())
             } else {
                 String::new()
             };
@@ -666,7 +686,7 @@ impl<P: Ptt> Station<P> {
             .is_some_and(|at| at - now <= MOVE_BEFORE_TRY_S);
         if self.engine.state() != State::Connecting
             || self.bandwidth_hz() != 2300
-            || self.engine.connect_tries() < NARROW_AFTER_TRIES
+            || self.engine.connect_tries() < self.narrow_after_tries()
             || !due
             || self.receiving()
             || self.transmitting
@@ -680,6 +700,16 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.move_to(500, Why::Unanswered(remote));
+    }
+
+    /// The unanswered tries after which a 2 300 Hz call goes on at 500 Hz: [`NARROW_AFTER_TRIES`],
+    /// or for a capped call with fewer, all but its last (ADR-0126 §8.1) — the silent pause before
+    /// the last try is where it moves.
+    fn narrow_after_tries(&self) -> usize {
+        match self.engine.call_tries_planned() {
+            0 => NARROW_AFTER_TRIES,
+            tries => NARROW_AFTER_TRIES.min(tries - 1).max(1),
+        }
     }
 
     /// Whether the station could move to another bandwidth now.

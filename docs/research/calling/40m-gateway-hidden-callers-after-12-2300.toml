@@ -1,0 +1,43 @@
+name = "40m-gateway-hidden-callers-after-12-2300"
+description = """40 m at 2300 Hz: two Winlink clients that cannot hear each other call one scanning
+RMS Trimode gateway, the second 12 s of air after the first (ADR-0126 §8.3, H3; K2 had them
+call at the same moment), both on Moderate paths at the same SNR, so that where
+their tries overlap the gateway reads neither. The call's random wait is what pulls the tries
+apart (docs/research/calling/00-plan.md, K2). Measured: each call's time to its session in
+`transfers` (`call a N s`, `call c N s`); the first of the two is the contention's cost. The
+first session sits idle; the other call's tries meet a gateway in a session and go unanswered."""
+tags = ["40m", "host", "gateway", "multi", "calling"]
+bandwidth = 2300
+seconds = 600
+seed = 64
+
+[stations.a]
+callsign = "KE4QCM"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+[stations.c]
+callsign = "ND1J"
+host = true
+
+[path]
+profile = "moderate"
+snr_db = 6.0
+cfo_hz = 2.0
+[path.a_to_c]
+profile = "good"
+snr_db = -30.0
+[path.c_to_a]
+profile = "good"
+snr_db = -30.0
+
+[script]
+continue_on_failure = true
+steps = [
+  "host a client", "host c client", "host b trimode",
+  "host-call a", "wait 12", "host-call c",
+  "host-wait a", "host-wait c",
+]
+
+[expect]

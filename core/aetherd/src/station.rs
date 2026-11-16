@@ -1865,14 +1865,17 @@ impl<P: Ptt> Station<P> {
                 .callsigns
                 .contains(&call.trim().to_ascii_uppercase())
         });
-        if ours && self.engine.state() == State::Idle {
-            if keep_bandwidth {
-                self.note_kept_bandwidth(remote);
-            } else {
-                self.move_for_call(remote);
-            }
+        let idle = ours && self.engine.state() == State::Idle;
+        if idle && !keep_bandwidth {
+            self.move_for_call(remote);
         }
-        self.engine.connect(remote, as_call)?;
+        // how well the station called was read lately chooses a capped call's tries (ADR-0126)
+        let heard_db = self.heard_lately(remote, self.now());
+        self.engine.connect_heard(remote, as_call, heard_db)?;
+        if idle && keep_bandwidth {
+            // after the call is placed: it says after how many of its tries it moves
+            self.note_kept_bandwidth(remote);
+        }
         // the station's own call; a program's (`connect_for`) says so after (ADR-0106)
         self.call_is_the_stations();
         self.pump();
@@ -4868,7 +4871,7 @@ impl<P: Ptt> Station<P> {
             self.learn_bandwidth(&from, hz as usize);
         }
         if report.decoded {
-            self.note_sender(&from, now);
+            self.note_sender(&from, now, report.snr_db);
         }
         // a call or probe to this station is said, heard or not answered: WC4Y's probe of
         // 2026-10-10 went unanswered, and nothing in KK4ODA-1's files said whether it had been
@@ -10822,6 +10825,21 @@ mod tests {
             "{}",
             mismatch.sentence
         );
+    }
+
+    #[test]
+    fn a_call_is_told_how_well_the_station_called_was_heard_lately() {
+        // ADR-0126 §2.3: the SNR of the last frame read from the station, within 15 minutes
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.beacon(None).expect("idle");
+        air.run(30.0, |a, _| a.stats.beacons_heard > 0);
+        let now = air.a.now();
+        let heard = air.a.heard_lately("kk4xyz", now).expect("heard");
+        // a beacon goes on the tone floor, whose reading stops near 17.5 dB (ADR-0016)
+        assert!(heard > 10.0, "read at {heard:.1} dB");
+        assert_eq!(air.a.heard_lately("KK4XYZ-5", now), None);
+        let later = now + crate::station::bandwidth::CALL_HEARD_S + 1.0;
+        assert_eq!(air.a.heard_lately("KK4XYZ", later), None);
     }
 
     #[test]
