@@ -3,10 +3,7 @@
 **Status:** accepted and built, 2026-11-16; C1–C6 pass (§10). The author asked for it after the
 exchange-timing study of the same day (§1): identification is to be a Setup choice, Morse or the
 data signal, never both. The same day the author, as licensee, confirmed §3's regulatory reading
-and answered §9's five questions. The model, the port, the spec and their vectors are on
-`master`; the daemon's setting waits on the branch `feat/adr-0127-data-identifier` for the
-release that carries configuration schema 15 (a key ships with a release: the shell's
-`SCHEMA_HISTORY` test holds the schema to the package version).
+and answered §9's five questions. v0.2.0-beta.161 carries it, with configuration schema 15.
 
 ## 1. Context
 

@@ -3180,9 +3180,8 @@ Receiving: the engine's `ident_heard` event, the daemon's `ident:identified <cal
 `ident` frame report and the heard list's `identified`. The gate judges the frames as data at the
 dial and refuses one naming another callsign (`wrong_identifier`, code `identifier`). The harness
 writes `identify_by` for a schema-15 daemon (`session_matrix.py --identify-by`) and
-`identifier_faults` judges the frames as Morse. Model, port and spec are on `master`; the
-daemon's commit waits on `feat/adr-0127-data-identifier` for the release that bumps the version
-(the shell's `SCHEMA_HISTORY` line names beta.161).
+`identifier_faults` judges the frames as Morse. v0.2.0-beta.161 carries it (the shell's
+`SCHEMA_HISTORY` line `("0.2.0-beta.161", 15)`).
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
