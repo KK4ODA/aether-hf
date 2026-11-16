@@ -299,7 +299,9 @@ pub struct GrantConfig {
     /// was heard weak; three quick tries and one fewer floor try when it was heard strong.
     pub call_tries: usize,
     /// The capped call's silent pause before its plan's last try, so that two tries do not fall
-    /// in one slow fade (ADR-0126 §7). The caller neither keys nor holds a slot in it.
+    /// in one slow fade (ADR-0126 §7), and a random part of up to that try's length on top, so
+    /// that two callers who met on one try seldom meet on the next (§9). The caller neither keys
+    /// nor holds a slot in it.
     pub call_pause_s: f64,
     /// The capped call: a both-ways try is accepted in OFDM only when its OFDM part was read
     /// this much over the OFDM control frame's threshold, on the floor otherwise; a station last
@@ -2766,14 +2768,27 @@ impl GrantedEngine {
         vec![b'S'; n]
     }
 
-    /// The silent pause before the plan's last try (ADR-0126 §7).
-    fn pause_before_next(&self) -> f64 {
+    /// The silent pause before the plan's last try (ADR-0126 §7): `call_pause_s` and a uniform
+    /// part of up to that try's length (§9), so that two callers who met on one try seldom meet
+    /// the same way on the next.
+    fn pause_before_next(&mut self) -> f64 {
         let tries = self.call_plan.len();
         if tries > 1 && self.connect_tries == tries - 1 {
-            self.config.call_pause_s
+            let last = self.try_s(self.call_plan[tries - 1]);
+            self.config.call_pause_s + self.rng.uniform(0.0, last)
         } else {
             0.0
         }
+    }
+
+    /// A capped call's try's length: its OFDM part, its floor part, or both.
+    fn try_s(&self, kind: u8) -> f64 {
+        let ofdm = self.timing.data_frame_s_for(self.robust_mode(false));
+        if kind == b'C' {
+            return ofdm;
+        }
+        let floor = self.timing.data_frame_s_for(self.robust_mode(true));
+        if kind == b'S' { floor } else { ofdm + floor }
     }
 
     /// A try of the capped call (ADR-0126 §7): today's connect body in a quick try (the robust
@@ -2865,7 +2880,7 @@ impl GrantedEngine {
 
     /// A capped call heard in a session: `true` when it ends the session and is answered as from
     /// idle (the peer under a new session number), `false` otherwise — a try whose acceptance was
-    /// not read is answered again in its own slot.
+    /// not read is answered again in its own slot, on the floor for a both-ways try (ADR-0126 §9).
     fn capped_called_again(
         &mut self,
         src: &str,
@@ -2906,8 +2921,11 @@ impl GrantedEngine {
             req.turnaround_s,
         );
         let floor = self.capped_answer_floor(frame, both);
+        // a both-ways try heard again says the acceptance was lost: the floor's outlasts a VOX
+        // hold and comes through an echo, and its caller listens for it (ADR-0126 §9)
+        let again = floor || (both && self.timing.floor_modes > 0);
         if matches!(self.state, State::Connected | State::Disconnecting)
-            && !self.capped_called_again(&req.src, header.session, frame, (start, end, floor))
+            && !self.capped_called_again(&req.src, header.session, frame, (start, end, again))
         {
             return;
         }

@@ -349,7 +349,9 @@ class GrantConfig:
     weak; three quick tries and one fewer floor try when it was heard strong."""
     call_pause_s: float = 15.0
     """The capped call's silent pause before its plan's last try, so that two tries do not fall
-    in one slow fade (ADR-0126 §7). The caller neither keys nor holds a slot in it."""
+    in one slow fade (ADR-0126 §7), and a random part of up to that try's length on top, so that
+    two callers who met on one try seldom meet on the next (§9). The caller neither keys nor holds
+    a slot in it."""
     call_answer_margin_db: float = 6.0
     """The capped call: a both-ways try is accepted in OFDM only when its OFDM part was read this
     much over the OFDM control frame's threshold, on the floor otherwise; a station last heard
@@ -1821,11 +1823,21 @@ class GrantedEngine:
         return "S" * n
 
     def _pause_before_next(self) -> float:
-        """The silent pause before the plan's last try (ADR-0126 §7)."""
+        """The silent pause before the plan's last try (ADR-0126 §7): ``call_pause_s`` and a
+        uniform part of up to that try's length (§9), so that two callers who met on one try
+        seldom meet the same way on the next."""
         plan = self._call_plan
         if len(plan) > 1 and self._connect_tries == len(plan) - 1:
-            return self.cfg.call_pause_s
+            return self.cfg.call_pause_s + self.rng.uniform(0.0, self._try_s(plan[-1]))
         return 0.0
+
+    def _try_s(self, kind: str) -> float:
+        """A capped call's try's length: its OFDM part, its floor part, or both."""
+        ofdm = self.timing.data_frame_s_for(self.robust_mode(False))
+        if kind == "C":
+            return ofdm
+        floor = self.timing.data_frame_s_for(self.robust_mode(True))
+        return floor if kind == "S" else ofdm + floor
 
     def _send_capped_try(self) -> None:
         """A try of the capped call (ADR-0126 §7): today's connect body in a quick try (the
@@ -1900,7 +1912,8 @@ class GrantedEngine:
     ) -> bool:
         """A capped call heard in a session: ``True`` when it ends the session and is answered
         as from idle (the peer under a new session number), ``False`` otherwise — a try whose
-        acceptance was not read is answered again in its own slot."""
+        acceptance was not read is answered again in its own slot, on the floor for a both-ways
+        try (ADR-0126 §9)."""
         start, end, floor = timing
         if self.role is not Role.SLAVE or src != self.remote_call:
             return False  # another station's call: this one is in a session
@@ -1921,10 +1934,13 @@ class GrantedEngine:
         end = frame.t_end + (self.timing.data_frame_s_for(self.robust_mode(True)) if both else 0.0)
         start = self._slot_start(end, both or frame.floor, level_of(req.caps), req.turnaround_s)
         floor = self._capped_answer_floor(frame, both=both)
+        # a both-ways try heard again says the acceptance was lost: the floor's outlasts a VOX
+        # hold and comes through an echo, and its caller listens for it (ADR-0126 §9)
+        again = floor or (both and self.timing.floor_modes > 0)
         if self.state in (
             State.CONNECTED,
             State.DISCONNECTING,
-        ) and not self._capped_called_again(req.src, header.session, frame, (start, end, floor)):
+        ) and not self._capped_called_again(req.src, header.session, frame, (start, end, again)):
             return
         if start < self._hold_until - 1e-9 or self._probing is not None:
             return

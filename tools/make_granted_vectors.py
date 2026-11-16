@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from collections.abc import Callable
@@ -36,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.fading import FadingPipe
 from aether_model.link.frames import DataKind, GrantFrame, GrantKind, decode_data
-from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine, Transmit
+from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine, State, Transmit
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
 from aether_model.link.sim import SimFrame, TwoStationSim
@@ -1315,6 +1316,31 @@ def capped_six() -> list[Recorder]:
     return [ra, rb]
 
 
+def capped_again() -> list[Recorder]:
+    """A try heard again (ADR-0126 §9): the OFDM acceptance does not get back, so a both-ways
+    try's second is answered on the floor and connects; a quick try's are answered in OFDM again
+    (the only family its caller listens for), until the plan's floor try is answered on the
+    floor."""
+    a, b, ra, rb = _pair(WIDE, capped_call=True)
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=54)
+
+    def ofdm_control_lost(frame: TxFrame) -> float:
+        return -40.0 if frame.container is Container.CONTROL and not frame.floor else 0.0
+
+    for heard in (None, 15.0):
+        sim.frame_snr_offset = ofdm_control_lost
+        a.connect("KK4XYZ", heard_db=heard)
+        t = sim.t
+        limit = t + 120.0
+        while not (a.connected and b.connected) and a.state is not State.IDLE and t < limit:
+            t += 0.5
+            sim.run(until=t, idle_gap=math.inf)
+        sim.frame_snr_offset = None
+        a.disconnect()
+        _until_idle(sim, a, b, limit=sim.t + 120.0)
+    return [ra, rb]
+
+
 SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "clean-wide": clean_wide,
     "weak-narrow": weak_narrow,
@@ -1360,6 +1386,7 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "capped": capped,
     "capped-mixed": capped_mixed,
     "capped-six": capped_six,
+    "capped-again": capped_again,
 }
 
 

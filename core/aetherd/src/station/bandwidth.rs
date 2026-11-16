@@ -404,10 +404,9 @@ impl<P: Ptt> Station<P> {
             && theirs != ours
         {
             let remote = remote.trim().to_ascii_uppercase();
-            let after = if ours == 2300 {
-                format!("; at 500 Hz after {} unanswered tries", self.narrow_after_tries())
-            } else {
-                String::new()
+            let after = match self.narrow_after_tries() {
+                Some(tries) if ours == 2300 => format!("; at 500 Hz after {tries} unanswered tries"),
+                _ => String::new(),
             };
             self.note(
                 "bandwidth",
@@ -686,7 +685,9 @@ impl<P: Ptt> Station<P> {
             .is_some_and(|at| at - now <= MOVE_BEFORE_TRY_S);
         if self.engine.state() != State::Connecting
             || self.bandwidth_hz() != 2300
-            || self.engine.connect_tries() < self.narrow_after_tries()
+            || self
+                .narrow_after_tries()
+                .is_none_or(|after| self.engine.connect_tries() < after)
             || !due
             || self.receiving()
             || self.transmitting
@@ -703,12 +704,14 @@ impl<P: Ptt> Station<P> {
     }
 
     /// The unanswered tries after which a 2 300 Hz call goes on at 500 Hz: [`NARROW_AFTER_TRIES`],
-    /// or for a capped call with fewer, all but its last (ADR-0126 §8.1) — the silent pause before
-    /// the last try is where it moves.
-    fn narrow_after_tries(&self) -> usize {
+    /// and for a capped call only when it makes more (ADR-0126 §9): a 2 300 Hz station reads only
+    /// the tone floor of a 500 Hz call, so a short call that moved lost its last try's OFDM half to
+    /// every station not known to run 500 Hz.
+    fn narrow_after_tries(&self) -> Option<usize> {
         match self.engine.call_tries_planned() {
-            0 => NARROW_AFTER_TRIES,
-            tries => NARROW_AFTER_TRIES.min(tries - 1).max(1),
+            0 => Some(NARROW_AFTER_TRIES),
+            tries if tries > NARROW_AFTER_TRIES => Some(NARROW_AFTER_TRIES),
+            _ => None,
         }
     }
 

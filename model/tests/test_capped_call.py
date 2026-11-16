@@ -17,6 +17,7 @@ from aether_model.link.frames import (
 )
 from aether_model.link.granted import GrantConfig, GrantedEngine, State
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
+from aether_model.link.phy import Container, TxFrame
 from aether_model.link.sim import TwoStationSim, control_thresholds_for
 
 PAUSE_S = 15.0
@@ -104,21 +105,26 @@ def test_a_capped_call_connects_and_the_called_station_knows_who_called(
 def test_a_capped_call_nobody_hears_holds_the_channel_22_5_s_at_most(
     air: AirInterface, heard: float | None
 ) -> None:
-    """ADR-0126 §7.2, R1′: the pause before the last try is silence, not channel time."""
+    """ADR-0126 §7.2, R1′: the pause before the last try is silence, not channel time; §9: it
+    has a random part of up to that try's length on top of its 15 s."""
     a, b, sim = _pair(air, -60.0)
     a.connect("KK4XYZ", heard_db=heard)
-    t = 0.0
+    t, pause = 0.0, 0.0
     while a.state is State.CONNECTING:
         t += 0.1
         sim.run(until=t)
-    assert t <= 40.0
-    assert t - PAUSE_S <= 22.5
+        if a._connect_tries == len(a._call_plan) - 1:
+            pause = a._call_jitter
+    last_try = a._try_s(a._call_plan[-1])
+    assert PAUSE_S <= pause <= PAUSE_S + last_try
+    assert t <= 40.0 + last_try
+    assert t - pause <= 22.5
     assert b.state is State.IDLE
     assert sim.radiated(1) == []
     tries = sim.radiated(0)
     assert len(tries) == len(a._call_plan)
     # the last try waits the pause after the one before it has stopped listening
-    assert tries[-1][0] - tries[-2][1] >= PAUSE_S
+    assert tries[-1][0] - tries[-2][1] >= pause
 
 
 @pytest.mark.parametrize(("snr_db", "floor"), [(15.0, False), (-2.0, True)])
@@ -182,3 +188,56 @@ def test_the_number_of_tries_is_the_setting(tries: int) -> None:
         sim.run(until=t)
     assert len(sim.radiated(0)) - first == tries
     assert b.state is State.IDLE
+
+
+def _ofdm_control_lost(frame: TxFrame) -> float:
+    """An OFDM control frame that does not get back — an echo the caller's try came through, or
+    a VOX hold that swallows it whole. (The simulator loses any frame that overlaps a hold, the
+    floor's too; the harness's receiver reads a tone frame whose start a hold took.)"""
+    return -40.0 if frame.container is Container.CONTROL and not frame.floor else 0.0
+
+
+def test_a_both_ways_try_heard_again_is_answered_on_the_floor() -> None:
+    """ADR-0126 §9: a called station that hears the same both-ways try again knows its OFDM
+    acceptance was lost, and answers on the floor."""
+    a, b, sim = _pair(WIDE, 15.0)
+    sim.frame_snr_offset = _ofdm_control_lost
+    a.connect("KK4XYZ")
+    assert a._call_plan == "HH"
+    assert _until_connected(sim, a, b) is not None
+    answers = sim.radiated(1)
+    ofdm, floor = (b.timing.control_frame_s_for(f) for f in (False, True))
+    assert answers[0][1] - answers[0][0] == pytest.approx(ofdm, abs=1e-6)
+    assert answers[1][1] - answers[1][0] == pytest.approx(floor, abs=1e-6)
+    assert a._connect_tries == 2
+
+
+def test_a_quick_try_heard_again_is_still_answered_in_ofdm() -> None:
+    """ADR-0126 §9: a quick try's caller listens for an OFDM acceptance only."""
+    a, b, sim = _pair(WIDE, 15.0)
+    sim.frame_snr_offset = _ofdm_control_lost
+    a.connect("KK4XYZ", heard_db=15.0)
+    assert a._call_plan == "CCCS"
+    t = 0.0
+    while a._connect_tries < 3 and t < 60.0:
+        t += 0.1
+        sim.run(until=t)
+    ofdm = b.timing.control_frame_s_for(False)
+    answers = sim.radiated(1)
+    assert len(answers) >= 2
+    assert all(end - start == pytest.approx(ofdm, abs=1e-6) for start, end in answers[:2])
+
+
+def test_two_callers_draw_their_pauses_apart() -> None:
+    """ADR-0126 §9: the random part comes from each engine's own draws."""
+    pauses = set()
+    for seed in (1, 2, 3, 4):
+        a, _, sim = _pair(WIDE, -60.0, seed=seed)
+        a.connect("KK4XYZ")
+        t = 0.0
+        while a._connect_tries < 1 or "connect" not in a._deadlines:
+            t += 0.1
+            sim.run(until=t)
+        pauses.add(round(a._call_jitter, 3))
+        assert PAUSE_S <= a._call_jitter <= PAUSE_S + a._try_s("H")
+    assert len(pauses) == 4
