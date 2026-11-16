@@ -142,6 +142,9 @@ fn config(doc: &Value) -> GrantConfig {
         first_burst_try: doc
             .get("first_burst_try")
             .is_some_and(|v| v.as_bool().expect("first_burst_try")),
+        first_burst_jump: doc
+            .get("first_burst_jump")
+            .is_some_and(|v| v.as_bool().expect("first_burst_jump")),
         turnaround_s: num(&doc["turnaround_s"]),
         identifier_s: num(&doc["identifier_s"]),
         identifiers: doc["identifiers"]
