@@ -18,10 +18,12 @@ pub mod rate;
 
 pub use frames::{
     CONTROL_BYTES, ConnectBody, DATA_HEADER, DataHeader, DataKind, FrameError, GrantFrame,
-    GrantKind, ProbeBody, WINDOW,
+    GrantKind, IdentFrame, ProbeBody, WINDOW, ident_callsign, identification_frames,
+    is_identification,
 };
 pub use granted::{
-    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, LadderRung, ProbeResult, State,
+    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, IdentifyBy, LadderRung, ProbeResult,
+    State,
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, FrameOutcome, RateController, usable_modes};

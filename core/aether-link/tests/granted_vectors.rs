@@ -16,8 +16,8 @@
 use std::{cell::RefCell, collections::VecDeque, fs, path::PathBuf};
 
 use aether_link::{
-    Action, Container, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, PhyTiming, SoftFrame,
-    State, TxFrame, granted::Role,
+    Action, Container, GrantConfig, GrantStats, GrantedEngine, HarqBuffer, IdentifyBy, PhyTiming,
+    SoftFrame, State, TxFrame, granted::Role,
 };
 use serde_json::Value;
 
@@ -146,6 +146,11 @@ fn config(doc: &Value) -> GrantConfig {
             .iter()
             .map(|(call, seconds)| (call.clone(), num(seconds)))
             .collect(),
+        identify_by: match doc.get("identify_by").and_then(Value::as_str) {
+            None | Some("morse") => IdentifyBy::Morse,
+            Some("data") => IdentifyBy::Data,
+            Some(other) => panic!("no identifier method {other}"),
+        },
         answer_gap_s: num(&doc["answer_gap_s"]),
         floor_answer_memory: int(&doc["floor_answer_memory"]),
         hold_unknown: doc["hold_unknown"].as_bool().expect("hold_unknown"),
@@ -307,6 +312,7 @@ impl Replay<'_> {
                     not_after,
                     not_before,
                     identifier_s,
+                    ident_frames,
                     listen_first,
                 } => w.get("transmit").is_some_and(|wf| {
                     let wf = wf.as_array().expect("frames");
@@ -320,6 +326,8 @@ impl Replay<'_> {
                         && close_opt(*not_after, opt(&w["not_after"]))
                         && close_opt(*not_before, opt(&w["not_before"]))
                         && close(*identifier_s, num(&w["identifier_s"]))
+                        && Some(*ident_frames as u64)
+                            == Some(w.get("ident_frames").and_then(Value::as_u64).unwrap_or(0))
                         && Some(*listen_first) == w["listen_first"].as_bool()
                 }),
                 Action::Deliver(data) => w.get("deliver").is_some_and(|b| *data == self.blob(b)),

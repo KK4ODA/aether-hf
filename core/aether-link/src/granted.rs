@@ -51,11 +51,11 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use crate::{
     frames::{
         AcceptFrame, CAP_COMPRESSION, CAP_LEVEL_MASK, CONNECT_BODY_8_BYTES, ConnectBody,
-        DataHeader, DataKind, FRAGMENT_HEADER, GrantFrame, GrantKind, MAX_BURST, MAX_FOLLOWS,
-        MISSED_UNKNOWN, PROTOCOL_VERSION, Piece, ProbeBody, REPORT, WINDOW, bandwidth_code,
-        bandwidth_hz_of, caller_code, data_capacity, data_kind, decode_data, encode_data,
-        in_window, is_acceptance, level_of, pack_callsign, pieces, seq_after, seq_distance,
-        with_level,
+        DataHeader, DataKind, FRAGMENT_HEADER, GrantFrame, GrantKind, IdentFrame, MAX_BURST,
+        MAX_FOLLOWS, MISSED_UNKNOWN, PROTOCOL_VERSION, Piece, ProbeBody, REPORT, WINDOW,
+        bandwidth_code, bandwidth_hz_of, caller_code, data_capacity, data_kind, decode_data,
+        encode_data, ident_callsign, identification_frames, in_window, is_acceptance,
+        is_identification, level_of, pack_callsign, pieces, seq_after, seq_distance, with_level,
     },
     phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame},
     rate::{CONTROL_THRESHOLD_DB, FrameOutcome, RateController},
@@ -102,8 +102,13 @@ pub enum Action {
         /// The station's closing Morse identifier, this long with the moment of silence that
         /// parts it from the frames: after the frames — behind a `DISC_ACK`, in the time every
         /// DISC grants it — or alone, with no frames; the last thing the station sends for the
-        /// session (ADR-0075). Counted in `duration_s`.
+        /// session (ADR-0075). Counted in `duration_s`. 0 when the station identifies in its
+        /// data signal.
         identifier_s: f64,
+        /// How many of the last `frames` are the station's identification frames — its closing
+        /// identifier in the data signal (ADR-0127), where `identifier_s` would be its Morse: the
+        /// same place, the last thing the station sends for the session.
+        ident_frames: usize,
         /// A transmission made outside every slot, which no protocol rule keeps clear: the
         /// closing identifier of a station that could not be given a slot for it. The daemon
         /// waits for a clear channel, as it does for a call (ADR-0075).
@@ -371,6 +376,11 @@ pub struct GrantConfig {
     /// identifier sends that callsign and whether one is sent at all can follow it (a US callsign
     /// always identifies). Set by [`set_identifiers`](GrantedEngine::set_identifiers).
     pub identifiers: BTreeMap<String, f64>,
+    /// How the closing identifier goes (ADR-0127): Morse, the lengths above; or the callsign in
+    /// identification frames ([`IdentFrame`]) in the family of the station's last frame — a
+    /// length above 0 then only says that the callsign identifies, and the length declared is
+    /// the frames' on the floor ([`GrantedEngine::data_identifier_s`]).
+    pub identify_by: IdentifyBy,
     /// The least time between the end of the other station's frames and this station
     /// radiating: the operator's `[radio] answer_gap_ms`, or what this station learned the other
     /// needs (ADR-0036, ADR-0054). For a peer whose radio is slower to hear again than it
@@ -449,6 +459,7 @@ impl Default for GrantConfig {
             turnaround_s: 0.0,
             identifier_s: 0.0,
             identifiers: BTreeMap::new(),
+            identify_by: IdentifyBy::Morse,
             answer_gap_s: 0.0,
             decode_budget_s: DECODE_BUDGET_S,
             key_s: KEY_S,
@@ -464,6 +475,16 @@ impl Default for GrantConfig {
             need_ease_after: 6,
         }
     }
+}
+
+/// How a station identifies at the end of a session (ADR-0127).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IdentifyBy {
+    /// A Morse identifier (ADR-0075).
+    #[default]
+    Morse,
+    /// The callsign in identification frames, in the data signal.
+    Data,
 }
 
 /// Counters a caller can show an operator.
@@ -940,6 +961,19 @@ pub struct GrantedEngine {
     /// in which it read the other station no more — that station may be sending its own
     /// (ADR-0075).
     id_listen: bool,
+    /// The callsign the owed identifier sends: the ended session's own (ADR-0127).
+    id_call: String,
+    /// The callsign of the station whose closing this station's owed identifier follows: its
+    /// identification frames, decoded, say where its transmission ended (ADR-0127).
+    id_peer: String,
+    /// Where the ended session's last granting transmission of this station's ended: the other
+    /// station's identification frames after it are its closing's.
+    id_after: f64,
+    /// The family of the last frame this station sent: an identification frame alone goes in
+    /// it (ADR-0127 §2.2).
+    sent_floor: bool,
+    /// The first frame of a two-frame identification heard: its text and its end.
+    ident_heard: Option<(String, f64)>,
     probing: Option<String>,
     probe_unsent: bool,
     last_probe: Option<ProbeResult>,
@@ -1176,6 +1210,11 @@ impl GrantedEngine {
             id_owed: 0.0,
             id_alone: false,
             id_listen: false,
+            id_call: String::new(),
+            id_peer: String::new(),
+            id_after: 0.0,
+            sent_floor: true,
+            ident_heard: None,
             probing: None,
             probe_unsent: false,
             last_probe: None,
@@ -1906,12 +1945,33 @@ impl GrantedEngine {
             .collect();
     }
 
+    /// How the closing identifier goes (ADR-0127): from the next call or acceptance on, as the
+    /// identifier's length is.
+    pub const fn set_identify_by(&mut self, method: IdentifyBy) {
+        self.config.identify_by = method;
+    }
+
+    /// The length a station that identifies in its data signal declares (ADR-0127 §2.3): its
+    /// identification frames on the floor, in 0.5 s steps — the closing's family is not known
+    /// at the call, and the floor's frames are the longer, so the other station's reckoning
+    /// covers either. 0 for a callsign that sends nothing.
+    #[must_use]
+    pub fn data_identifier_s(&self, call: &str) -> f64 {
+        let n = identification_frames(call).len() as f64;
+        (n * self.ctl_s(true) * 2.0 - 1e-9).ceil() / 2.0
+    }
+
     fn ident_for(&self, call: &str) -> f64 {
-        self.config
+        let length = self
+            .config
             .identifiers
             .get(&call.to_ascii_uppercase())
             .copied()
-            .unwrap_or(self.config.identifier_s)
+            .unwrap_or(self.config.identifier_s);
+        if length > 0.0 && self.config.identify_by == IdentifyBy::Data {
+            return self.data_identifier_s(call);
+        }
+        length
     }
 
     /// The other station's closing identifier's length, as its call or acceptance declared it:
@@ -2119,6 +2179,13 @@ impl GrantedEngine {
             if is_acceptance(&payload) {
                 if let Ok(acc) = AcceptFrame::decode(&payload) {
                     self.on_acceptance(&acc, &heard);
+                }
+                return;
+            }
+            if is_identification(&payload) {
+                // no session's: it changes no session state (ADR-0127 §2.4)
+                if let Ok(ident) = IdentFrame::decode(&payload) {
+                    self.on_identification(ident, &heard);
                 }
                 return;
             }
@@ -2503,15 +2570,45 @@ impl GrantedEngine {
 
     /// Hand a transmission over; returns where it ends on the air, as far as this engine knows.
     /// An identifier goes after the frames (ADR-0075).
-    fn transmit(&mut self, frames: Vec<TxFrame>, keying: Keying, granting: Option<u64>) -> f64 {
-        // the frames' air time first, then the identifier: the model's association
-        let frames_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
-        let dur = keying.identifier_s + frames_s;
+    fn transmit(&mut self, mut frames: Vec<TxFrame>, keying: Keying, granting: Option<u64>) -> f64 {
         let carried = if frames.is_empty() {
             0.0
         } else {
             keying.identifier_s
         };
+        let mut identifier_s = keying.identifier_s;
+        let mut ident_frames = 0;
+        if identifier_s > 0.0 && self.config.identify_by == IdentifyBy::Data {
+            // the station's identification frames, in the family of its last frame (ADR-0127)
+            let floor = frames
+                .last()
+                .map_or(self.sent_floor, |f| self.is_floor_tx(f));
+            let call = if self.id_call.is_empty() {
+                self.my_call.clone()
+            } else {
+                self.id_call.clone()
+            };
+            for ident in identification_frames(&call) {
+                if let Ok(payload) = ident.encode() {
+                    frames.push(TxFrame {
+                        container: Container::Control,
+                        payload: payload.to_vec(),
+                        mode: 0,
+                        rv: 0,
+                        floor,
+                        follows: 0,
+                    });
+                    ident_frames += 1;
+                }
+            }
+            identifier_s = 0.0;
+        }
+        if let Some(last) = frames.last() {
+            self.sent_floor = self.is_floor_tx(last);
+        }
+        // the frames' air time first, then the identifier: the model's association
+        let frames_s: f64 = frames.iter().map(|f| self.timing.frame_s(f)).sum();
+        let dur = identifier_s + frames_s;
         let measured = carries_measurement(&frames);
         self.actions.push(Action::Transmit {
             frames,
@@ -2519,7 +2616,8 @@ impl GrantedEngine {
             cause: self.cause,
             not_after: keying.not_after,
             not_before: keying.not_before,
-            identifier_s: keying.identifier_s,
+            identifier_s,
+            ident_frames,
             listen_first: keying.listen_first,
         });
         self.in_flight.push_back((granting, carried, measured));
@@ -2529,6 +2627,14 @@ impl GrantedEngine {
             on_air = on_air.max(earliest);
         }
         on_air + dur
+    }
+
+    fn is_floor_tx(&self, frame: &TxFrame) -> bool {
+        if frame.container == Container::Control {
+            frame.floor
+        } else {
+            self.timing.is_floor(frame.mode)
+        }
     }
 
     fn control(ctl: &GrantFrame, floor: bool) -> TxFrame {
@@ -3997,6 +4103,7 @@ impl GrantedEngine {
         if kind == GrantKind::DiscAck && self.my_ident_s > 0.0 {
             ident_s = self.my_ident_s;
             self.id_owed = 0.0;
+            self.id_call.clone_from(&self.my_call);
             self.deadlines.remove(Timer::Ident);
         }
         if kind == GrantKind::Disc {
@@ -5007,7 +5114,41 @@ impl GrantedEngine {
         }
     }
 
-    // ── the closing identifier (ADR-0075) ─────────────────────────────
+    // ── the closing identifier (ADR-0075, ADR-0127) ───────────────────
+
+    /// Another station's identification frame (ADR-0127 §2.4): its callsign, heard; no session's
+    /// state changes. A master waiting for its closing slave's identifier to be over takes the
+    /// slave's last frame, decoded, for where its transmission ends — sooner than the length it
+    /// declared, which covers the floor — and keys its own after it.
+    fn on_identification(&mut self, ident: IdentFrame, heard: &Heard) {
+        let first = self.ident_heard.take();
+        if ident.more {
+            self.ident_heard = Some((ident.text, heard.t_end));
+            return;
+        }
+        let mut text = ident.text;
+        if let Some((part, end)) = first
+            && (0.0..=0.25).contains(&(heard.t_start - end))
+        {
+            text = part + &text;
+        }
+        let pull = text == self.id_peer
+            && self.id_owed > 0.0
+            && !self.id_alone
+            && heard.t_start >= self.id_after - 1e-9;
+        self.event("ident_heard", text);
+        if !pull {
+            return;
+        }
+        let Some(armed) = self.deadlines.get(Timer::Ident) else {
+            return;
+        };
+        let due = self.after(heard.t_end, heard.floor, self.peer_wait_s());
+        if due < armed - 1e-9 {
+            self.hold_until = due;
+            self.deadlines.set(Timer::Ident, self.now.max(due));
+        }
+    }
 
     /// An aborting master's leaving is over — its DISC answered, or the last one's slot past:
     /// its closing identifier goes once that slot can no longer be in use.
@@ -5059,6 +5200,7 @@ impl GrantedEngine {
             return;
         }
         self.id_owed = ident;
+        self.id_call.clone_from(&self.my_call);
         self.id_alone = true;
         self.id_listen = true;
         self.deadlines
@@ -5075,6 +5217,7 @@ impl GrantedEngine {
     }
 
     fn end_session_with(&mut self, reason: &str, disc_heard: bool, unread: bool) {
+        let granted_until = self.slot.as_ref().map_or(self.now, |s| s.tx_end);
         let left = (self.state != State::Connecting
             && (LEFT_UNHEARD.contains(&reason) || disc_heard))
             .then(|| {
@@ -5112,6 +5255,13 @@ impl GrantedEngine {
         ) = kept;
         self.left = left;
         self.id_owed = if owes { self.my_ident_s } else { 0.0 };
+        self.id_call.clone_from(&self.my_call);
+        self.id_peer = if was_master {
+            ident_callsign(&self.remote_call)
+        } else {
+            String::new()
+        };
+        self.id_after = granted_until;
         self.event("disconnected", reason.to_owned());
         if !owes {
             return;

@@ -100555,5 +100555,145 @@
   null,
   null,
   null
+ ],
+ "ident_frames": [
+  {
+   "call": "KK4ODA-1",
+   "sent_as": "KK4ODA",
+   "frames": [
+    {
+     "text": "KK4ODA",
+     "more": false,
+     "encoded": "82005cb693e241"
+    }
+   ]
+  },
+  {
+   "call": "W4ODA",
+   "sent_as": "W4ODA",
+   "frames": [
+    {
+     "text": "W4ODA",
+     "more": false,
+     "encoded": "8200bb49f12080"
+    }
+   ]
+  },
+  {
+   "call": "k1a",
+   "sent_as": "K1A",
+   "frames": [
+    {
+     "text": "K1A",
+     "more": false,
+     "encoded": "82005b18200000"
+    }
+   ]
+  },
+  {
+   "call": "N0CALL-T",
+   "sent_as": "N0CALL",
+   "frames": [
+    {
+     "text": "N0CALL",
+     "more": false,
+     "encoded": "8200730870664c"
+    }
+   ]
+  },
+  {
+   "call": "W4/G4ABC",
+   "sent_as": "W4/G4ABC",
+   "frames": [
+    {
+     "text": "W4/G4A",
+     "more": true,
+     "encoded": "a200bb45f1da41"
+    },
+    {
+     "text": "BC",
+     "more": false,
+     "encoded": "82001430000000"
+    }
+   ]
+  },
+  {
+   "call": "G4ABC/W4",
+   "sent_as": "G4ABC/W4",
+   "frames": [
+    {
+     "text": "G4ABC/",
+     "more": true,
+     "encoded": "a2003b4830a1af"
+    },
+    {
+     "text": "W4",
+     "more": false,
+     "encoded": "8200bb40000000"
+    }
+   ]
+  },
+  {
+   "call": "VK2ABCD-15",
+   "sent_as": "VK2ABCD",
+   "frames": [
+    {
+     "text": "VK2ABC",
+     "more": true,
+     "encoded": "a200b4b6506143"
+    },
+    {
+     "text": "D",
+     "more": false,
+     "encoded": "82002000000000"
+    }
+   ]
+  },
+  {
+   "call": "VE3/KK4ODA/P",
+   "sent_as": "VE3/KK4ODA/P",
+   "frames": [
+    {
+     "text": "VE3/KK",
+     "more": true,
+     "encoded": "a200b4566be5cb"
+    },
+    {
+     "text": "4ODA/P",
+     "more": false,
+     "encoded": "8100a4f89057d0"
+    }
+   ]
+  },
+  {
+   "call": "ABCDEFGHIJKLMNOP",
+   "sent_as": "ABCDEFGHIJKLMNOP",
+   "frames": [
+    {
+     "text": "ABCDEF",
+     "more": true,
+     "encoded": "a2000c287122c6"
+    },
+    {
+     "text": "GHIJKL",
+     "more": false,
+     "encoded": "82003c8932a5cc"
+    }
+   ]
+  },
+  {
+   "not_identifications": [
+    "00022000000000",
+    "00fe2000000000",
+    "40022000000000",
+    "40fe2000000000",
+    "80022000000000",
+    "80fe2000000000",
+    "c0022000000000",
+    "c0fe2000000000",
+    "4000200d000100"
+   ],
+   "empty": "80000000000000"
+  }
  ]
 }

@@ -36,7 +36,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
 
 from aether_model.frame.modes import NARROW, WIDE, AirInterface
 from aether_model.link.fading import FadingPipe
-from aether_model.link.frames import DataKind, GrantFrame, GrantKind, decode_data
+from aether_model.link.frames import (
+    DataKind,
+    GrantFrame,
+    GrantKind,
+    IdentFrame,
+    decode_data,
+    is_identification,
+)
 from aether_model.link.granted import Deliver, Event, GrantConfig, GrantedEngine, State, Transmit
 from aether_model.link.harness import bandwidth_capabilities, phy_timing
 from aether_model.link.phy import Container, PhyTiming, TxFrame
@@ -126,6 +133,8 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "turnaround_s": bits(c.turnaround_s),
         "identifier_s": bits(c.identifier_s),
         "identifiers": {call: bits(s) for call, s in sorted(c.identifiers.items())},
+        # ADR-0127: said only when not Morse, so the sessions before it stay byte for byte
+        **({} if c.identify_by == "morse" else {"identify_by": c.identify_by}),
         "answer_gap_s": bits(c.answer_gap_s),
         "floor_answer_memory": c.floor_answer_memory,
         "hold_unknown": bool(c.hold_unknown),
@@ -163,6 +172,7 @@ def action_doc(a: object) -> dict[str, Any]:
             "not_after": bits(getattr(a, "not_after", None)),
             "not_before": bits(getattr(a, "not_before", None)),
             "identifier_s": bits(getattr(a, "identifier_s", 0.0)),
+            **({"ident_frames": a.ident_frames} if getattr(a, "ident_frames", 0) else {}),
             "listen_first": bool(getattr(a, "listen_first", False)),
         }
     if isinstance(a, Deliver):
@@ -1121,6 +1131,129 @@ def left_header() -> list[Recorder]:
     return [ra, rb]
 
 
+# ── the data identifier (ADR-0127) ────────────────────────────────
+
+
+def _ident(text: str, more: bool = False) -> bytes:
+    return IdentFrame(text, more).encode()
+
+
+def data_identifiers() -> list[Recorder]:
+    """ADR-0075's closings with the identifier in the data signal: the master asks, the slave
+    asks, a DISC_ACK lost once (the identifier said again behind the next), every DISC_ACK lost
+    (the master's alone, listening first), and a call to another station while the last
+    identifier is owed — on the wide air, strong and then weak enough for the floor."""
+    a, b, ra, rb = _pair(WIDE, identifier_s=4.5, turnaround_s=0.3, identify_by="data")
+    rng = random.Random(51)
+    lost = {"n": 0, "every": False}
+    snr = {"db": 10.0}
+
+    def disc_acks(frame: TxFrame) -> float:
+        if frame.container is not Container.CONTROL or is_identification(frame.payload):
+            return 0.0
+        if GrantFrame.decode(frame.payload).kind is not GrantKind.DISC_ACK:
+            return 0.0
+        lost["n"] += 1
+        return -60.0 if lost["every"] or lost["n"] == 3 else 0.0
+
+    sim = TwoStationSim(
+        a, b, snr_schedule=lambda _t: snr["db"], seed=51, frame_snr_offset=disc_acks
+    )
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 2500))
+    b.send(_message(rng, 2500))
+    sim.run(until=90.0)
+    a.disconnect()
+    sim.run(until=150.0)
+    a.connect("KK4XYZ")
+    sim.run(until=180.0)
+    b.disconnect()
+    sim.run(until=240.0)
+    a.connect("KK4XYZ")  # its first DISC_ACK lost: the DISC said again
+    sim.run(until=280.0)
+    a.disconnect()
+    sim.run(until=360.0)
+    snr["db"] = -7.0
+    a.connect("KK4XYZ")  # on the floor
+    a.send(_message(rng, 200))
+    sim.run(until=520.0)
+    a.disconnect()
+    sim.run(until=640.0)
+    lost["every"] = True
+    snr["db"] = 10.0
+    a.connect("KK4XYZ")  # every DISC_ACK lost: the master gives up
+    sim.run(until=680.0)
+    a.disconnect()
+    sim.run(until=780.0)
+    a.connect("N0CALL")  # nobody: the call ends, and the owed identifier went first
+    sim.run(until=900.0)
+    return [ra, rb]
+
+
+def data_identifier_ends() -> list[Recorder]:
+    """The narrow air: a long callsign (two frames back to back), the master's abort and then
+    the slave's, and a path that dies — each identifier alone, listening first."""
+    a, b, ra, rb = _pair(NARROW, identifier_s=3.5, identify_by="data")
+    a.set_callsigns(["W4/G4ABC", "W4ODA"])
+    rng = random.Random(52)
+    snr = {"db": 6.0}
+    sim = TwoStationSim(a, b, snr_schedule=lambda _t: snr["db"], seed=52)
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 1500))
+    sim.run(until=60.0)
+    a.abort()
+    sim.run(until=150.0)
+    a.connect("KK4XYZ", "W4ODA")
+    a.send(_message(rng, 1500))
+    sim.run(until=200.0)
+    b.abort()
+    sim.run(until=320.0)
+    a.connect("KK4XYZ")
+    a.send(_message(rng, 3000))
+    sim.run(until=360.0)
+    snr["db"] = -60.0
+    sim.run(until=1300.0)
+    return [ra, rb]
+
+
+def ident_heard() -> list[Recorder]:
+    """Another station's identification frames — one frame, then two back to back — heard in a
+    session, while calling, idle, and after leaving a session: each is reported and changes
+    nothing (ADR-0127 §2.4, C4)."""
+    a, b, ra, rb = _pair(NARROW, identifier_s=3.5)
+    frames = (_ident("N0CALL"), _ident("W4/G4A", True), _ident("BC"))
+
+    def hear(*engines: GrantedEngine) -> None:
+        # three frames back to back, each family, ended by now: decoded as they would be
+        for engine in engines:
+            for floor in (True, False):
+                n = a.timing.control_frame_s_for(floor)
+                at = sim.t - len(frames) * n
+                for payload in frames:
+                    heard = SimFrame(
+                        Container.CONTROL, 0, 0, 10.0, at, at + n, payload, 0.0, floor=floor
+                    )
+                    engine.on_frame(heard, sim.t)
+                    at += n
+
+    sim = TwoStationSim(a, b, snr_schedule=lambda t: 10.0 if t < 200.0 else -60.0, seed=53)
+    a.connect("KK4XYZ")
+    sim.run(until=40.0)
+    a.send(b"z" * 600)
+    hear(a, b)  # in a session
+    sim.run(until=150.0)
+    a.disconnect()
+    sim.run(until=190.0)
+    hear(a, b)  # idle
+    b.connect("W4ODA")
+    hear(b)  # calling
+    sim.run(until=200.0)
+    sim.run(until=1000.0)  # the path dies: the session is left
+    hear(a, b)  # after leaving
+    sim.run(until=1100.0)
+    return [ra, rb]
+
+
 def unheard(air: AirInterface, seed: int, snr: float) -> Callable[[], list[Recorder]]:
     """Every third data frame of the transmissions to one station never detected: what the
     receiver says it missed in its next control frame (``missed``, ADR-0099) and the sender's
@@ -1367,6 +1500,10 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "calls": calls,
     "call-six": call_six,
     "call-again": call_again,
+    # the data identifier (ADR-0127)
+    "data-identifiers": data_identifiers,
+    "data-identifier-ends": data_identifier_ends,
+    "ident-heard": ident_heard,
 }
 
 

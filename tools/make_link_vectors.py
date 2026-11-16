@@ -42,7 +42,10 @@ from aether_model.link.frames import (
     caller_code,
     data_capacity,
     encode_data,
+    ident_callsign,
+    identification_frames,
     is_acceptance,
+    is_identification,
     level_of,
     pack_callsign,
     pieces,
@@ -264,6 +267,39 @@ def accept_frame_cases() -> list[dict]:  # type: ignore[type-arg]
     ]
     assert not any(is_acceptance(bytes.fromhex(h)) for h in others)
     out.append({"not_acceptances": others})
+    return out
+
+
+def ident_frame_cases() -> list[dict]:  # type: ignore[type-arg]
+    """The data identifier (ADR-0127 §2.2): the callsign as sent, its frames' bytes and what
+    they decode to, one frame and two; and the control frames that are not identifications."""
+    out: list[dict] = []  # type: ignore[type-arg]
+    for call in (
+        "KK4ODA-1",
+        "W4ODA",
+        "k1a",
+        "N0CALL-T",
+        "W4/G4ABC",
+        "G4ABC/W4",
+        "VK2ABCD-15",
+        "VE3/KK4ODA/P",
+        "ABCDEFGHIJKLMNOP",
+    ):
+        frames = identification_frames(call)
+        out.append(
+            {
+                "call": call,
+                "sent_as": ident_callsign(call),
+                "frames": [
+                    {"text": f.text, "more": f.more, "encoded": f.encode().hex()} for f in frames
+                ],
+            }
+        )
+    others = [
+        GrantFrame(kind, session).encode().hex() for kind in GrantKind for session in (1, 127)
+    ] + [AcceptFrame(0, 1).encode().hex()]
+    assert not any(is_identification(bytes.fromhex(h)) for h in others)
+    out.append({"not_identifications": others, "empty": "80000000000000"})
     return out
 
 
@@ -518,6 +554,8 @@ def main() -> int:
         # the echo share above which each rung is kept off the ladder (ADR-0087), by mode
         "echo_limits": [ECHO_LIMIT.get(m) for m in sorted(AWGN_THRESHOLD_DB)],
         "narrow_echo_limits": [NARROW_ECHO_LIMIT.get(m) for m in sorted(NARROW_AWGN_THRESHOLD_DB)],
+        # the data identifier's frame (ADR-0127)
+        "ident_frames": ident_frame_cases(),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

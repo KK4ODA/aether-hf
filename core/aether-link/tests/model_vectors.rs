@@ -16,9 +16,9 @@ use std::{fs, path::PathBuf};
 use aether_link::{
     datagram::{Reassembler, body, fragments, parse_body, read_fragment},
     frames::{
-        AcceptFrame, ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, Piece, ProbeBody,
-        caller_code, decode_data, encode_data, is_acceptance, level_of, pack_callsign, pieces,
-        unpack_callsign,
+        AcceptFrame, ConnectBody, DataHeader, DataKind, GrantFrame, GrantKind, IdentFrame, Piece,
+        ProbeBody, caller_code, decode_data, encode_data, ident_callsign, identification_frames,
+        is_acceptance, is_identification, level_of, pack_callsign, pieces, unpack_callsign,
     },
     rate::{
         AWGN_THRESHOLD_DB, FRAME_S, NARROW_AWGN_THRESHOLD_DB, NARROW_FRAME_S, NARROW_PAYLOAD_BYTES,
@@ -412,6 +412,40 @@ fn accept_frame(doc: &Value) -> AcceptFrame {
         identifier_s: doc["identifier_s"].as_f64().expect("identifier"),
         compression: doc["compression"].as_bool().expect("compression"),
     }
+}
+
+/// The data identifier's frame (ADR-0127): the callsign as sent, each frame's bytes and what
+/// it decodes to, and the control frames it must never be taken for.
+#[test]
+fn ident_frames_match_the_model() {
+    let mut checked = 0;
+    for case in vectors()["ident_frames"].as_array().expect("ident frames") {
+        if let Some(others) = case["not_identifications"].as_array() {
+            for hex in others {
+                let bytes = from_hex(hex.as_str().expect("hex"));
+                assert!(!is_identification(&bytes), "{hex} taken for an identification");
+                assert!(IdentFrame::decode(&bytes).is_err(), "{hex} decoded");
+            }
+            let empty = from_hex(case["empty"].as_str().expect("empty"));
+            assert!(IdentFrame::decode(&empty).is_err(), "an empty frame decoded");
+            continue;
+        }
+        let call = case["call"].as_str().expect("call");
+        assert_eq!(ident_callsign(call), case["sent_as"].as_str().expect("sent_as"));
+        let want = case["frames"].as_array().expect("frames");
+        let got = identification_frames(call);
+        assert_eq!(got.len(), want.len(), "{call}: frames");
+        for (frame, w) in got.iter().zip(want) {
+            assert_eq!(frame.text, w["text"].as_str().expect("text"), "{call}");
+            assert_eq!(Some(frame.more), w["more"].as_bool(), "{call}");
+            let bytes = from_hex(w["encoded"].as_str().expect("encoded"));
+            assert_eq!(frame.encode().expect("encode").to_vec(), bytes, "{call}: bytes");
+            assert!(is_identification(&bytes));
+            assert_eq!(&IdentFrame::decode(&bytes).expect("decode"), frame, "{call}: decoded");
+        }
+        checked += 1;
+    }
+    assert!(checked >= 9, "only {checked} callsigns");
 }
 
 /// The capped call's acceptance (ADR-0126): bytes, the fields read back, and the session

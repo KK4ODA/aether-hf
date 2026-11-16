@@ -1298,3 +1298,136 @@ mod tests {
         ));
     }
 }
+
+// ── the identification frame (ADR-0127) ─────────────────────────────
+
+/// Characters of the callsign one identification frame carries.
+pub const IDENT_CHARS: usize = 6;
+
+/// The longest callsign the data identifier sends: two frames back to back.
+pub const IDENT_MAX_CHARS: usize = 2 * IDENT_CHARS;
+
+/// The callsign as an identifier sends it — the Morse identifier's rule (`cwid::sent_as`,
+/// ADR-0076): upper case, no SSID, `-T` or `-R`, every `/` part kept.
+#[must_use]
+pub fn ident_callsign(call: &str) -> String {
+    call.trim()
+        .to_ascii_uppercase()
+        .split('/')
+        .map(|part| part.split('-').next().unwrap_or_default())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// An identification frame: a DISC whose session field is 0, which no session's control frame
+/// has (session numbers keep their low seven bits set).
+#[must_use]
+pub fn is_identification(payload: &[u8]) -> bool {
+    payload.len() >= CONTROL_BYTES
+        && payload[1] >> 1 == 0
+        && GrantKind::from_bits(payload[0] >> 6) == GrantKind::Disc
+}
+
+/// The data identifier (ADR-0127 §2.2): a DISC with session field 0, the callsign in 7-bit
+/// ASCII (ITU-T T.50).
+///
+/// ```text
+/// 0: kind DISC (2) | more (1) | 0 (3) | characters, bits 41–40
+/// 1: 0 (7) | 0 (1)
+/// 2–6: characters, bits 39–0
+/// ```
+///
+/// The 42-bit character field holds six characters, the first in its top seven bits; a
+/// callsign shorter than six ends at the first NUL. `more`: one frame more of the callsign
+/// follows, back to back. The four zero bits are reserved: sent as 0, ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentFrame {
+    /// Up to six characters of the callsign.
+    pub text: String,
+    /// One frame more of the callsign follows.
+    pub more: bool,
+}
+
+impl IdentFrame {
+    /// Serialise into exactly [`CONTROL_BYTES`] bytes.
+    ///
+    /// # Errors
+    /// [`FrameError::BadCallsign`] for more than six characters or one outside 7-bit ASCII.
+    pub fn encode(&self) -> Result<[u8; CONTROL_BYTES], FrameError> {
+        if self.text.len() > IDENT_CHARS || !self.text.is_ascii() {
+            return Err(FrameError::BadCallsign);
+        }
+        let mut field: u64 = 0;
+        for (i, byte) in self.text.bytes().enumerate() {
+            field |= u64::from(byte) << (7 * (IDENT_CHARS - 1 - i));
+        }
+        let mut out = [0u8; CONTROL_BYTES];
+        out[0] = (GrantKind::Disc.to_bits() << 6) | (u8::from(self.more) << 5) | (field >> 40) as u8;
+        for (i, byte) in out[2..].iter_mut().enumerate() {
+            *byte = (field >> (8 * (4 - i))) as u8;
+        }
+        Ok(out)
+    }
+
+    /// Parse an identification frame.
+    ///
+    /// # Errors
+    /// [`FrameError::TooShort`] or [`FrameError::UnknownKind`] for another control frame,
+    /// [`FrameError::BadCallsign`] for no characters or one not printable.
+    pub fn decode(payload: &[u8]) -> Result<Self, FrameError> {
+        if payload.len() < CONTROL_BYTES {
+            return Err(FrameError::TooShort);
+        }
+        if !is_identification(payload) {
+            return Err(FrameError::UnknownKind(payload[0] >> 6));
+        }
+        let field = (u64::from(payload[0] & 0x03) << 40)
+            | payload[2..CONTROL_BYTES]
+                .iter()
+                .fold(0u64, |acc, &b| (acc << 8) | u64::from(b));
+        let mut text = String::new();
+        for i in 0..IDENT_CHARS {
+            let code = ((field >> (7 * (IDENT_CHARS - 1 - i))) & 0x7F) as u8;
+            if code == 0 {
+                break;
+            }
+            if !(0x21..0x7F).contains(&code) {
+                return Err(FrameError::BadCallsign);
+            }
+            text.push(char::from(code));
+        }
+        if text.is_empty() {
+            return Err(FrameError::BadCallsign);
+        }
+        Ok(Self {
+            text,
+            more: payload[0] & 0x20 != 0,
+        })
+    }
+}
+
+/// The identification frames of `call`: one for up to six characters as it is sent
+/// ([`ident_callsign`]), two back to back for seven to twelve. Longer callsigns are cut.
+#[must_use]
+pub fn identification_frames(call: &str) -> Vec<IdentFrame> {
+    let text: String = ident_callsign(call)
+        .chars()
+        .filter(char::is_ascii)
+        .take(IDENT_MAX_CHARS)
+        .collect();
+    let pieces: Vec<String> = text
+        .as_bytes()
+        .chunks(IDENT_CHARS)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect();
+    let last = pieces.len().saturating_sub(1);
+    pieces
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| IdentFrame {
+            text,
+            more: i < last,
+        })
+        .collect()
+}
