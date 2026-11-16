@@ -1,9 +1,9 @@
 # ADR-0128: The first burst after a call starts safe and tries the bold rung with one frame
 
-**Status:** proposed, 2026-11-16 — behind `GrantConfig.first_burst_try`, off by default, judged on
-the scenario harness against criteria registered before any run (`docs/research/first-burst/00-plan.md`).
-An exception the author approved to the rule of no more patches to the rate controller; no review
-follows it. Results: `docs/research/first-burst/01-results.md`.
+**Status:** proposed, 2026-11-16 — **results in, awaiting the author.** It fails the registered
+criteria (F2, F3, F4; `docs/research/first-burst/01-results.md`). It is behind
+`GrantConfig.first_burst_try`, off by default, and nothing ships. An exception the author approved to
+the rule of no more patches to the rate controller; no review follows it.
 
 ## 1. Context
 
@@ -39,4 +39,16 @@ optimistic prior.
 
 ## 4. Consequences
 
-To be filled from the results: the criteria F1–F6 of `00-plan.md` §4.
+Measured on the harness, 25 scenarios and 114 paired runs an arm, with the flagged scenarios run
+again (`01-results.md`):
+
+* The first burst works as intended. First-burst blocks sent again went from 36.8 % to 22.6 %, and
+  the air of their later copies from 486 to 219 s. The 500 Hz NVIS and edge scenarios ran ×0.93–1.00.
+* The rest of the session pays. Air is ×1.083 pooled, and six scenarios are confirmed ×1.19–1.40
+  (Trimode gateway, equatorial flutter, QSB, 500 Hz Winlink, 500 Hz DX, 2 300 Hz steady mail). Test
+  messages are ×0.873 pooled, and the low-reading start pair's message is ×0.67.
+* Completion and safety hold: 113 passes against 112, no new radiated overlap, no invariant broken.
+
+The cause: the one bold frame measured the bold rung, but one frame outweighs nothing against the
+prior, so the station then climbs from the safe rung one try (three frames) a rung. The same cost
+rejected October's cautious start (`rate-control/04-results.md` §3.6).
