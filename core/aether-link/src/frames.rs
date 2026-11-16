@@ -1056,7 +1056,12 @@ mod tests {
 
     #[test]
     fn an_acceptance_is_never_a_session_control_frame() {
-        for kind in [GrantKind::Header, GrantKind::Answer, GrantKind::Disc, GrantKind::DiscAck] {
+        for kind in [
+            GrantKind::Header,
+            GrantKind::Answer,
+            GrantKind::Disc,
+            GrantKind::DiscAck,
+        ] {
             for session in 1..=127_u8 {
                 let frame = GrantFrame::new(kind, session);
                 assert!(!is_acceptance(&frame.encode()), "{kind:?} {session}");

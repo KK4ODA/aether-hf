@@ -419,7 +419,10 @@ fn accept_frame(doc: &Value) -> AcceptFrame {
 #[test]
 fn accept_frames_match_the_model() {
     let mut checked = 0;
-    for case in vectors()["accept_frames"].as_array().expect("accept frames") {
+    for case in vectors()["accept_frames"]
+        .as_array()
+        .expect("accept frames")
+    {
         if let Some(others) = case["not_acceptances"].as_array() {
             for hex in others {
                 let bytes = from_hex(hex.as_str().expect("hex"));
@@ -433,7 +436,11 @@ fn accept_frames_match_the_model() {
         assert_eq!(frame.encode().to_vec(), expected, "{frame:?}: bytes");
         assert!(is_acceptance(&expected), "{frame:?}: not an acceptance");
         let decoded = AcceptFrame::decode(&expected).expect("decode");
-        assert_eq!(decoded, accept_frame(&case["decoded"]), "{frame:?}: decoded");
+        assert_eq!(
+            decoded,
+            accept_frame(&case["decoded"]),
+            "{frame:?}: decoded"
+        );
         assert_eq!(
             usize::from(decoded.capabilities()),
             int(&case["decoded"], "capabilities"),
