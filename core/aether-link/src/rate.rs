@@ -210,6 +210,80 @@ pub const WIDE_PRIOR_MARGIN_DB: f64 = 1.0;
 /// model's `WIDE_FAMILY_GAIN_DB`).
 pub const WIDE_FAMILY_GAIN_DB: f64 = 1.0;
 
+/// What each rung's 10 % point moves by on ITU-R F.1487's Good, Moderate and Poor channels, dB over
+/// its AWGN point, on the 2 300 Hz ladder: the four channels' mean prior ADR-0127's first rung is
+/// chosen by (the model's `WIDE_CLASS_PENALTY_DB`, held to it by the link vectors).
+pub const WIDE_CLASS_PENALTY_DB: [[f64; 3]; 20] = [
+    [7.3, 5.8, 4.5],
+    [8.5, 7.0, 6.4],
+    [7.4, 4.8, 4.2],
+    [8.5, 6.0, 6.7],
+    [6.6, 4.9, 4.7],
+    [8.0, 6.9, 7.1],
+    [7.1, 6.3, 4.8],
+    [7.4, 7.4, 5.0],
+    [7.3, 6.6, 4.1],
+    [7.4, 7.4, 5.0],
+    [7.3, 7.1, 4.6],
+    [7.4, 7.4, 5.0],
+    [7.0, 7.6, 5.0],
+    [7.4, 7.4, 5.0],
+    [7.7, 6.7, 6.5],
+    [7.4, 7.4, 5.0],
+    [7.8, 9.9, 5.0],
+    [7.4, 7.4, 5.0],
+    [7.4, 7.4, 5.0],
+    [7.9, 7.4, 5.0],
+];
+
+/// The 500 Hz ladder's [`WIDE_CLASS_PENALTY_DB`] (the model's `NARROW_CLASS_PENALTY_DB`).
+pub const NARROW_CLASS_PENALTY_DB: [[f64; 3]; 15] = [
+    [7.3, 5.8, 4.5],
+    [8.5, 7.0, 6.4],
+    [6.6, 4.1, 3.5],
+    [9.4, 6.8, 5.8],
+    [10.4, 8.9, 7.3],
+    [9.2, 8.7, 5.2],
+    [9.1, 8.6, 7.6],
+    [9.1, 10.1, 6.6],
+    [9.5, 9.8, 6.9],
+    [9.1, 9.6, 8.1],
+    [10.0, 12.0, 6.9],
+    [10.5, 9.8, 6.9],
+    [10.1, 9.8, 6.9],
+    [9.2, 9.8, 6.9],
+    [10.6, 9.8, 6.9],
+];
+
+/// The penalty table for a ladder of `rungs` rungs (the model's `CLASS_PENALTY_DB`), if there is one.
+#[must_use]
+pub fn class_penalty_db(rungs: usize) -> &'static [[f64; 3]] {
+    match rungs {
+        20 => &WIDE_CLASS_PENALTY_DB,
+        15 => &NARROW_CLASS_PENALTY_DB,
+        _ => &[],
+    }
+}
+
+/// The chance a frame decodes at `snr_db` on a path not yet measured: the mean of the steady
+/// channel's curve and the three fading channels' (the model's `path_decode_probability`, added
+/// in the same order).
+#[must_use]
+pub fn path_decode_probability(
+    snr_db: f64,
+    threshold_db: f64,
+    penalties: &[f64],
+    slope_db: f64,
+) -> f64 {
+    let mut total = decode_probability(snr_db, threshold_db, slope_db);
+    for p in penalties {
+        total += decode_probability(snr_db, threshold_db + p, slope_db);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = (penalties.len() + 1) as f64;
+    total / n
+}
+
 /// A rung's measured delivery, decayed: data bytes delivered, seconds of air spent, frames.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Account {
@@ -282,6 +356,14 @@ pub struct RateController {
     families: Option<(bool, bool)>,
     /// The last OFDM frames observed delivered nothing ([`judge_family`](Self::judge_family)).
     ofdm_failed: bool,
+    /// By rung, its fading channels' 10 % points over its AWGN one ([`class_penalty_db`]); empty
+    /// for a table that has none.
+    penalties: Vec<[f64; 3]>,
+    /// ADR-0127 (proposed, off): the first rung by the four channels' mean prior, one frame of the
+    /// first transmission tried at the rung the optimistic prior starts at.
+    first_try: bool,
+    /// The rung of the first transmission's try, until its outcome comes back.
+    first_try_rung: Option<usize>,
 }
 
 impl RateController {
@@ -338,7 +420,29 @@ impl RateController {
             burst_frames: Vec::new(),
             families: None,
             ofdm_failed: false,
+            penalties: class_penalty_db(n).to_vec(),
+            first_try: false,
+            first_try_rung: None,
         }
+    }
+
+    /// The same controller with ADR-0127's first burst on or off (the model's `first_try`).
+    #[must_use]
+    pub const fn with_first_try(mut self, on: bool) -> Self {
+        self.first_try = on;
+        self
+    }
+
+    /// How many full transmissions at `mode` the next try of it waits.
+    #[must_use]
+    pub fn try_wait(&self, mode: usize) -> usize {
+        self.wait(mode)
+    }
+
+    /// Whether ADR-0127's first burst is on.
+    #[must_use]
+    pub const fn first_try(&self) -> bool {
+        self.first_try
     }
 
     /// The same controller with the guess's settings for its air (ADR-0111): on the 2 300 Hz air
@@ -467,6 +571,18 @@ impl RateController {
         decode_probability(
             snr_db - offset - self.prior_margin_db,
             self.thresholds[mode],
+            self.slope_db,
+        )
+    }
+
+    /// The four channels' mean prior (the model's `_prior_p` with `prior_margin_db` `None`).
+    fn mean_prior_p(&self, mode: usize, snr_db: f64) -> f64 {
+        let offset = self.family[usize::from(mode >= self.floor_modes)];
+        let penalties = self.penalties.get(mode).map_or(&[][..], |p| &p[..]);
+        path_decode_probability(
+            snr_db - offset,
+            self.thresholds[mode],
+            penalties,
             self.slope_db,
         )
     }
@@ -657,7 +773,9 @@ impl RateController {
                 self.judge_try(mode);
             }
         }
-        if let Some(probe) = self.probing {
+        if let Some(tried) = self.first_try_rung {
+            self.end_first_try(tried, frames);
+        } else if let Some(probe) = self.probing {
             self.probe_tries += 1;
             self.try_frames += frames.iter().filter(|f| f.mode == probe).count();
             if self.try_over() {
@@ -678,6 +796,7 @@ impl RateController {
 
     const fn cancel_try(&mut self) {
         self.probing = None;
+        self.first_try_rung = None;
         self.probe_tries = 0;
         self.try_frames = 0;
     }
@@ -822,14 +941,84 @@ impl RateController {
         self.modes[best.map_or(0, |(i, _)| i)]
     }
 
+    /// ADR-0127's first rung: the best by the four channels' mean prior at `snr_db`, never above
+    /// [`first_mode`](Self::first_mode)'s (the model's `safe_first_mode`).
+    #[must_use]
+    pub fn safe_first_mode(&self, snr_db: f64) -> usize {
+        let mut best: Option<(usize, f64)> = None;
+        for i in 0..self.modes.len() {
+            if self.echo_out(i) {
+                continue;
+            }
+            let mode = self.modes[i];
+            let cap = self.capacity.get(mode).copied().unwrap_or(0);
+            let air = self.frame_s.get(mode).copied().unwrap_or(1.0);
+            #[allow(clippy::cast_precision_loss)]
+            let prior = cap as f64 * self.mean_prior_p(mode, snr_db);
+            let acc = self.account(mode);
+            let w = self.prior_frames;
+            let value = self.priced(mode, (acc.bytes + w * prior) / (acc.air_s + w * air));
+            if best.is_none_or(|(_, b)| value > b) {
+                best = Some((i, value));
+            }
+        }
+        self.modes[best.map_or(0, |(i, _)| i)].min(self.first_mode(snr_db))
+    }
+
+    /// The rung of the first transmission's try (ADR-0127): the fastest usable rung of `safe`'s
+    /// family above it and no faster than `bold`; across the floor's edge, none (the model's
+    /// `first_try_mode`).
+    #[must_use]
+    pub fn first_try_mode(&self, safe: usize, bold: usize) -> Option<usize> {
+        let floor = safe < self.floor_modes;
+        (0..self.modes.len())
+            .filter(|&i| {
+                let m = self.modes[i];
+                safe < m && m <= bold && (m < self.floor_modes) == floor && self.usable(i)
+            })
+            .map(|i| self.modes[i])
+            .next_back()
+    }
+
+    /// The first transmission's try decided by its one frame (ADR-0127): decoded, the try ends
+    /// and the climb on clean frames goes on; lost, its next try waits twice as long; not sent,
+    /// no verdict (the model's `_end_first_try`).
+    fn end_first_try(&mut self, tried: usize, frames: &[FrameOutcome]) {
+        let mut at = frames.iter().filter(|f| f.mode == tried).peekable();
+        let sent = at.peek().is_some();
+        let decoded = at.any(|f| f.decoded);
+        self.cancel_try();
+        if !sent {
+            return;
+        }
+        if decoded {
+            self.probe_wait[tried] = Some(self.probe_every);
+        } else {
+            let wait = self.wait(tried);
+            self.probe_wait[tried] = Some(self.probe_wait_max.min(2 * wait));
+            self.since_probe[tried] = Some(0.0);
+        }
+    }
+
     /// Start from the connect frame's reading, before anything has been observed.
     pub fn seed(&mut self, snr_db: f64) {
         if self.smoothed_snr_db.is_some() {
             return;
         }
         self.smoothed_snr_db = Some(snr_db);
-        let first = self.first_mode(snr_db);
-        self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
+        if !self.first_try {
+            let first = self.first_mode(snr_db);
+            self.index = self.modes.iter().position(|&m| m == first).unwrap_or(0);
+            return;
+        }
+        let bold = self.first_mode(snr_db);
+        let safe = self.safe_first_mode(snr_db);
+        self.index = self.modes.iter().position(|&m| m == safe).unwrap_or(0);
+        if let Some(tried) = self.first_try_mode(safe, bold) {
+            self.probing = Some(tried);
+            self.first_try_rung = Some(tried);
+            self.since_probe[tried] = Some(0.0);
+        }
     }
 }
 

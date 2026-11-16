@@ -405,7 +405,9 @@ impl<P: Ptt> Station<P> {
         {
             let remote = remote.trim().to_ascii_uppercase();
             let after = match self.narrow_after_tries() {
-                Some(tries) if ours == 2300 => format!("; at 500 Hz after {tries} unanswered tries"),
+                Some(tries) if ours == 2300 => {
+                    format!("; at 500 Hz after {tries} unanswered tries")
+                }
                 _ => String::new(),
             };
             self.note(

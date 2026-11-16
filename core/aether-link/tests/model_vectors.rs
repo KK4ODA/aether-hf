@@ -419,7 +419,10 @@ fn accept_frame(doc: &Value) -> AcceptFrame {
 #[test]
 fn accept_frames_match_the_model() {
     let mut checked = 0;
-    for case in vectors()["accept_frames"].as_array().expect("accept frames") {
+    for case in vectors()["accept_frames"]
+        .as_array()
+        .expect("accept frames")
+    {
         if let Some(others) = case["not_acceptances"].as_array() {
             for hex in others {
                 let bytes = from_hex(hex.as_str().expect("hex"));
@@ -433,7 +436,11 @@ fn accept_frames_match_the_model() {
         assert_eq!(frame.encode().to_vec(), expected, "{frame:?}: bytes");
         assert!(is_acceptance(&expected), "{frame:?}: not an acceptance");
         let decoded = AcceptFrame::decode(&expected).expect("decode");
-        assert_eq!(decoded, accept_frame(&case["decoded"]), "{frame:?}: decoded");
+        assert_eq!(
+            decoded,
+            accept_frame(&case["decoded"]),
+            "{frame:?}: decoded"
+        );
         assert_eq!(
             usize::from(decoded.capabilities()),
             int(&case["decoded"], "capabilities"),
@@ -603,6 +610,28 @@ mod controller_traces {
             &echo_limit,
         )
         .for_air(trace["wide"].as_bool().expect("wide"));
+        // ADR-0127 (proposed, off): a trace that says so runs with it, and holds the port's
+        // penalty tables to the model's
+        if trace
+            .get("first_try")
+            .is_some_and(|v| v.as_bool() == Some(true))
+        {
+            c = c.with_first_try(true);
+            let penalties = trace["penalties"].as_array().expect("penalties");
+            let table = aether_link::rate::class_penalty_db(thresholds.len());
+            assert_eq!(
+                penalties.len(),
+                table.len(),
+                "trace {n}: the penalty table's rungs"
+            );
+            for (mode, row) in penalties.iter().enumerate() {
+                assert_eq!(
+                    floats(row),
+                    table[mode].to_vec(),
+                    "trace {n}: rung {mode}'s penalties"
+                );
+            }
+        }
         let control = floats(&trace["control_s"]);
         if let [floor, ordinary] = control[..] {
             c.price_exchanges(
@@ -638,6 +667,16 @@ mod controller_traces {
             "{at}: smoothed SNR"
         );
         assert!(close_opt(ctl.echo(), opt(&op["echo"])), "{at}: echo");
+        if let Some(waits) = op.get("waits") {
+            assert_eq!(
+                ctl.modes()
+                    .iter()
+                    .map(|&m| ctl.try_wait(m))
+                    .collect::<Vec<_>>(),
+                ints(waits),
+                "{at}: the tries' waits"
+            );
+        }
         let want = floats(&op["estimates"]);
         let values = floats(&op["values"]);
         for (k, &mode) in ctl.modes().iter().enumerate() {

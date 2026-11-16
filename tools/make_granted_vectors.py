@@ -140,6 +140,9 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "on_time_to_lower": c.on_time_to_lower,
         "need_ease_after": c.need_ease_after,
     }
+    if c.first_burst_try:
+        # ADR-0127 (proposed, off): said only when on, so the sessions before it stay as they were
+        doc["first_burst_try"] = True
     return doc
 
 
@@ -452,6 +455,23 @@ def fading_field(
             fading=_fading(air, channel, seed),
             **_station_model(rng, a.timing),
         )
+        _exchange(sim, a, b, _message(rng, size), _message(rng, size // 4))
+        return [ra, rb]
+
+    return run
+
+
+def first_burst(
+    air: AirInterface, channel: str | None, snr: float, seed: int, size: int
+) -> Callable[[], list[Recorder]]:
+    """ADR-0127 (proposed, off by default) on: each station's first data transmission at the
+    four channels' mean prior's rung, one frame of it at the rung today's prior would start at."""
+
+    def run() -> list[Recorder]:
+        a, b, ra, rb = _pair(air, latency=0.35, first_burst_try=True)
+        rng = random.Random(seed)
+        fading = {} if channel is None else {"fading": _fading(air, channel, seed)}
+        sim = TwoStationSim(a, b, snr_db=snr, seed=seed, **fading, **_station_model(rng, a.timing))
         _exchange(sim, a, b, _message(rng, size), _message(rng, size // 4))
         return [ra, rb]
 
@@ -1367,6 +1387,10 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "calls": calls,
     "call-six": call_six,
     "call-again": call_again,
+    # the first burst starts safe and tries the bold rung with one frame (ADR-0127, proposed)
+    "first-burst-clean": first_burst(WIDE, None, 20.0, 61, 3000),
+    "first-burst-moderate": first_burst(WIDE, "moderate", 8.0, 62, 2000),
+    "first-burst-narrow": first_burst(NARROW, "good", 10.0, 63, 1500),
 }
 
 
