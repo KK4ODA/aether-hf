@@ -132,4 +132,4 @@ context → decision → alternatives considered → consequences.
 | [0125](0125-legacy-packet-beside-aether-fm.md) | Legacy packet runs beside Aether FM, built from public specifications (FM-13) | proposed |
 | [0126](0126-the-capped-call.md) | The capped call — a call in control frames, chosen by what was heard, over in 20 s (link protocol 13) | accepted: the default from beta.160 (§10), today's call deleted; the harness's second round (§9) and its remaining costs accepted by the author |
 | [0127](0127-identify-in-the-data-signal.md) | A station may identify in its data signal instead of Morse (a Setup choice) | accepted for building; its reading confirmed, Morse the default |
-| [0128](0128-the-first-burst-starts-safe.md) | The first burst after a call starts safe and tries the bold rung with one frame | proposed: behind a switch, off; results in — fails F2–F4, awaiting the author |
+| [0128](0128-the-first-burst-starts-safe.md) | The first burst after a call starts safe and tries the bold rung with one frame | proposed: behind switches, off; results in — fails F2–F4 as built and as variant J, awaiting the author |

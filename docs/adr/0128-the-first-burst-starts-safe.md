@@ -5,7 +5,8 @@ criteria (F2, F3, F4; `docs/research/first-burst/01-results.md`). It is behind
 `GrantConfig.first_burst_try`, off by default, and nothing ships. An exception the author approved to
 the rule of no more patches to the rate controller; no review follows it. **A variant (J)**, moving
 straight to the bold rung when its one frame decodes, was registered on 2026-11-16 at the author's
-request (`00-plan.md` §5); its results are pending.
+request (`00-plan.md` §5); it fails F2–F4 too, by less
+(`01-results.md` §8).
 
 ## 1. Context
 
@@ -54,3 +55,9 @@ again (`01-results.md`):
 The cause: the one bold frame measured the bold rung, but one frame outweighs nothing against the
 prior, so the station then climbs from the safe rung one try (three frames) a rung. The same cost
 rejected October's cautious start (`rate-control/04-results.md` §3.6).
+
+**Variant J** (moving straight to the bold rung when its one frame decodes; `01-results.md` §8):
+first-burst resends 37.3 % → 20.1 %, but air is ×1.051 pooled, four scenarios are confirmed
+×1.28–1.33 and Test messages are ×0.855. The loss is entirely the starts on the floor where today's
+first rung is OFDM (×1.14 over 39 runs; every other start ×1.006). Those same starts hold J's gains
+on the 500 Hz NVIS edge (×0.83–0.89).
