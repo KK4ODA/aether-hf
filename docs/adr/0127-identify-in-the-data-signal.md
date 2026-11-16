@@ -1,9 +1,9 @@
 # ADR-0127: A station may identify in its data signal instead of Morse
 
-**Status:** proposed, 2026-11-16. The author asked for it after the exchange-timing study of the
-same day (§1): identification is to be a Setup choice, Morse or the data signal, never both. §3's
-regulatory reading is the author's to confirm as licensee, as he confirmed ADR-0123 §3's for FM.
-Nothing is built. The open questions are in §9.
+**Status:** accepted for building, 2026-11-16. The author asked for it after the exchange-timing
+study of the same day (§1): identification is to be a Setup choice, Morse or the data signal,
+never both. The same day the author, as licensee, confirmed §3's regulatory reading and answered
+§9's five questions. Nothing is built yet; §6's criteria judge it.
 
 ## 1. Context
 
@@ -40,7 +40,8 @@ their jobs:
   says how. The program cannot turn Morse back on: `CWID` is not in VARA's published command
   list, and the programs that send it want the station to identify, not a particular emission.
 
-The default is `morse`: today's behaviour, until the author decides otherwise (§9).
+The default is `morse`: today's behaviour, so nothing changes for an operator who does nothing
+(the author's answer, §9).
 
 ### 2.2 The identification frame
 
@@ -98,7 +99,7 @@ like any other frame (ADR-0018). It also checks, before keying, that the callsig
 carries is one the station is licensed to send (the session's callsign, `sent_as`). It is not
 judged as CW, so the 20 wpm cap does not apply.
 
-## 3. The reading, for the author to confirm
+## 3. The reading, confirmed by the author (2026-11-16)
 
 **The reading.** A callsign in ASCII (§97.309(a)(3)), sent in a publicly documented data format
 (§97.309(a)(4)), at the end of a communication that was itself data, identifies the station "by a
@@ -118,7 +119,7 @@ author confirmed it on 2026-11-14.
 code, so this ADR adds a frame in ASCII instead of leaning on the packing. Only that frame is
 proposed as identification.
 
-**If the reading is not confirmed,** the option is not built, and Morse stays the only way on HF.
+**Confirmed** by the author, as licensee, on 2026-11-16, as he confirmed ADR-0123 §3 for FM.
 
 ## 4. What it saves, and what it does not
 
@@ -139,9 +140,9 @@ fading pipe; the harness measures it (§6, C5).
 
 **What it does not do.**
 - **Identify during a long session.** ADR-0075 §3 found that nothing in Aether identifies a
-  session between its call and its end, and this ADR keeps that. Identifying every ten minutes
-  with one frame of 0.43 s would now be cheap, but it is a separate decision: a frame inside a
-  session needs a slot, and ADR-0075 removed the in-session identifier.
+  session between its call and its end. That stays so: by the author's answer (§9), Aether adds no
+  identifier inside a session, with either method. Identifying during a long session stays with
+  the host programs and the operator, as `fcc-regulatory-controls.md` says.
 - **Change Morse.** Morse is untouched, and it stays the default.
 
 ## 5. What it removes and adds
@@ -197,12 +198,14 @@ Setup step 4's words, its screenshot and a change-log row. The Morse identifier'
 reading of §3, and the operator's choice. *What identifies a long session* changes only to say
 that the data identifier is also at the end only.
 
-## 9. For the author
+## 9. The author's answers (2026-11-16)
 
-1. **The reading of §3:** confirm it, as for FM (ADR-0123 §3), or leave HF on Morse.
-2. **The default:** `morse` (proposed: no change for anyone who does nothing) or `data`.
-3. **The SSID:** sent without it, as the Morse identifier is (proposed), or as written (as
-   ADR-0123 does on FM).
-4. **A program's `CWID ON`:** means "identify, by the station's choice" (proposed), or forces
-   Morse.
-5. **Identifying during a long session** with this frame: a separate ADR, or not at all.
+1. **The reading of §3:** confirmed, as for FM (ADR-0123 §3).
+2. **The default:** `morse`. No change for an operator who does nothing; the data signal is chosen
+   in Setup step 4.
+3. **The SSID:** sent without it, as the Morse identifier is (`cwid::sent_as`). Every US callsign
+   fits one frame.
+4. **A program's `CWID ON`:** means "identify", by the station's choice (§2.1). RMS Trimode says
+   `CWID ON` at every start, so forcing Morse would have undone the setting on every gateway.
+5. **Identifying during a long session:** not at all. Aether adds no in-session identifier with
+   either method (§4).
