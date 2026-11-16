@@ -5,8 +5,10 @@ model bench ("results accepted, go ahead"), its one narrow miss (§7.3) accepted
 Its first design (§2.1's call frame, the codes, the details at the head of the data: §2–§6) was
 benched and failed R2 and R3 (§6); it is removed from the model and lives in the history at
 `343be84`. The capped call is in the model and the port behind `GrantConfig.capped_call`, off by
-default, with the number of tries a setting (§7.4); next are the harness's A/B (§8, registered)
-and the air, before it becomes the default and link protocol 13 ships.
+default, with the number of tries a setting (§7.4). The harness's A/B (§8) ran on 2026-11-16 and
+failed H2–H5 with a narrow miss on H1 (§8.4): three causes, each with a change for the author to
+choose, before the A/B is run again; then the air, before it becomes the default and link protocol
+13 ships.
 
 ## 1. Context
 
@@ -389,3 +391,25 @@ draws. One row a run goes to `docs/research/calling/data/capped-T.csv` and `capp
 
 A narrow miss goes to the author with its trace, and does not pass by rule. The harness's whole-
 second air clock and its scanning Trimode stand-in (`01-results.md` §3.1) apply to both arms.
+
+### 8.4 What the harness found (2026-11-16)
+
+`docs/research/calling/02-capped-call.md` §6 has every table; one row a run is in
+`docs/research/calling/data/capped-T.csv` and `capped-C.csv`.
+
+| criterion | result |
+|---|---|
+| H1 | narrow miss: two tries, 12.9 s radiated, both airs; the span 36.1 s at 2 300 Hz against 33 s (32.8 s at 500 Hz), the 3.2 s the busy detector held the try §8.1's move made; today 8 tries over 212–215 s |
+| H2 | fails: (a) 22 runs against 24 and (c) 1 560 s against 1 522 s, both `80m-vox-caller-learned-gap-500` (3 calls lost); (b) 1 overlap against 0. The other seven: 641 s against 1 333 s |
+| H3 | (a) 12 against 12 and (b) a median 10.5 s against 22 s pass; (c) fails, 58 overlaps against 35 (the hidden loser's two tries and its closing identifier over the winner's session) |
+| H4 | fails: 11 s, not connected, 11 s against 78, 23, 23 s |
+| H5 | fails: 62 of 64 against 64 (`80m-band-closes-2300`, the VOX scenario); no invariant, no overlap; air 0.987 of today's at the median, first calls 11 s against 15 s |
+| K2 (reported) | 2 of 10 draws with a session against 10 of 10 |
+
+The failures have three causes: §8.1's move to 500 Hz before the last try (H1, H4 and
+`80m-band-closes-2300`: a 2 300 Hz station reads only the tone floor of a 500 Hz call); the 0.43 s
+OFDM acceptance, lost whole in a VOX radio's hold and through an NVIS echo, with two tries too few
+to teach the gap (H2, H5); and no random wait (K2, H3 (c)). The changes they point to — no move for
+a call of fewer than five tries, a try heard again answered on the floor, a pause made a little
+random — are the author's call; whichever are taken go into the model first, and the A/B is run
+again on the same draws.

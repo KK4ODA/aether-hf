@@ -219,3 +219,138 @@ back in about 22 s instead of about 205 s when nobody answers, connects a good p
 when the station was heard strong) instead of 11.5 s, a weak one in 9.3–10.4 s, and reaches as often
 except on Good's slowest fades at −16 dB and below, where a second call does not always make up for
 today's eight tries. The harness's tests (contention, a station 200 Hz off) and the port remain.
+
+## 6. The harness's A/B (ADR-0126 §8)
+
+Run 2026-11-16 in a cloud container (Linux, 4 cores), two runs at a time, on two daemons built from
+`08432a0`: **T** as committed (today's call) and **C** with `capped_call: true` in
+`GrantConfig::default`. Both ran the same draws, the commands of ADR-0126 §8.2, with
+`--drop-passing-audio`. One row a run is in `data/capped-T.csv` and `data/capped-C.csv`; the `bench`
+column names the criterion, `H5r` the two extra draws H5 asks for. The capped call works in the
+daemon: on `quick-awgn-2300` one both-ways try and an OFDM acceptance, connected at 11 s against 15 s.
+
+### 6.1 The results
+
+**H1, nobody answers** (3 draws each; the same in every draw):
+
+| | tries | radiated | first try's start to last try's end |
+|---|---|---|---|
+| T, 2 300 Hz | 8 | 25.8 s | 215.4 s |
+| T, 500 Hz | 8 | 25.8 s | 212.1 s |
+| C, 2 300 Hz | 2 | 12.9 s | **36.1 s** |
+| C, 500 Hz | 2 | 12.9 s | 32.8 s |
+
+At 2 300 Hz the second try went at 500 Hz (§8.1's move) and waited 3.24 s for the busy detector the
+move rebuilt (`held_s` in `channel.json`; ADR-0088's wait after a rebuild). At 500 Hz there is no
+move and no wait. The tries' count and air pass; the span misses 33 s by 3.1 s, all of it that wait.
+
+**H2, the calls retried today** (3 draws each):
+
+| scenario | passed T / C | calls' time T / C |
+|---|---|---|
+| `40m-gateway-busy-when-called-2300` | 3 / 3 | 317 / 267 s |
+| `40m-gateway-three-clients-2300` | 3 / 3 | 145 / 86 s |
+| `40m-trimode-gateway-2300` | 3 / 3 | 73 / 33 s |
+| `40m-wide-calls-narrow-unprobed` | 3 / 3 | 352 / 126 s |
+| `80m-gateway-fq-hangup-2300` | 3 / 3 | 75 / 33 s |
+| `80m-trimode-gateway-client-vanishes-500` | 3 / 3 | 326 / 63 s |
+| `80m-vox-caller-learned-gap-500` | 3 / **1** | 189 / **919 s** (3 calls lost, at 240 s each) |
+| `quick-awgn-2300` | 3 / 3 | 45 / 33 s |
+| all | 24 / 22 | 1 522 / 1 560 s |
+
+No invariant broken in either arm; radiated overlaps 0 against 1. Without the VOX scenario the capped
+call's calls took 641 s against 1 333 s, and the Trimode stand-in's deaf second cost it nothing.
+
+**H3, two hidden callers, the second N s after the first** (3 draws each):
+
+| N | first session, T | first session, C | overlaps T / C |
+|---|---|---|---|
+| 3 s | 22, 22, 22 s | 11, 10, 11 s | 6 / 14 |
+| 7 s | 19, 19, 19 s | 11, 10, 10 s | 14 / 27 |
+| 12 s | 41, 18, 41 s | 11, 11, 10 s | 8 / 10 |
+| 18 s | 22, 22, 22 s | 10, 11, 10 s | 7 / 7 |
+| all | 12 of 12, median 22 s | 12 of 12, median 10.5 s | **35 / 58** |
+
+Every overlap is the losing client, which cannot hear the winner, over the winner's session (or the
+two callers' tries over each other):
+
+| on the air together | T | C |
+|---|---|---|
+| the loser's tries over the session | 25, 14.9 s | 29, 26.9 s |
+| the loser's closing Morse identifier over the session | 2, 0.2 s | 23, 3.0 s |
+| the two callers' tries over each other | 8, 12.5 s | 3, 10.2 s |
+
+C's loser makes two tries, both inside the winner's first exchanges, and ends its call in about 37 s,
+so its identifier falls inside the run (each dit is one overlap). T's loser spreads eight tries over
+about 200 s, mostly over an idle session, and is still calling when the run stops.
+
+**H4, 200 Hz off** (3 draws): T 78, 23 and 23 s; C 11 s, **not connected**, 11 s. In seed 1065 the
+called station decoded neither try: the first try's OFDM part was lost on the Good path, the second
+try had moved to 500 Hz, and a 2 300 Hz station reads only the tone floor of a 500 Hz call, which at
+200 Hz is beyond the tone detector's ±150 Hz. T connected on its second ordinary try.
+
+**H5, every scenario, one draw** (the eight of H2 at variant 0 included): T passed 64 of 64, C 62.
+No invariant broken, no radiated overlap in either. The two C failed:
+
+* `80m-vox-caller-learned-gap-500`, as in H2.
+* `80m-band-closes-2300` (NVIS, +10 dB): the called station read the first try and accepted it in
+  OFDM, which the 7 ms echo kept from the caller; the second try had moved to 500 Hz, and the called
+  station, already in the session its acceptance opened, could not move and ignored it as another
+  bandwidth's. The caller gave up; the called station stayed in the session. The two extra draws
+  (`H5r`): T 3 of 3 (15 s each), C 2 of 3 (14 and 11 s; one acceptance on the floor, one in OFDM).
+
+Over the 62 scenarios both passed, the air was 15 497 s against 15 748 s (median ratio 0.987), and
+the first calls connected at a median 11 s against 15 s (45 calls, 598 s against 840 s). C's first
+call was slower in three, all at 500 Hz: `80m-agc-carrier-inside-500` (NVIS), and
+`80m-disconnect-slow-drain-500` and `80m-poor-500-pactor-signalink` (VOX holds of 600 and 400 ms) —
+37–41 s against 12–16 s, each the first acceptance in OFDM lost and the second try answered.
+
+**K2 as registered** (reported; both clients dial at the same second): T 10 of 10 draws with a
+session, median 22 s, 19 overlaps; C 2 of 10, 149 overlaps. With no random wait the two clients'
+tries meet at the gateway every time.
+
+### 6.2 Verdicts
+
+| criterion | verdict |
+|---|---|
+| H1, nobody answers | narrow miss at 2 300 Hz: 36.1 s against 33 s, the move's 3.2 s wait; tries and air pass |
+| H2, the calls retried today | fails: (a) 22 against 24, (c) 1 560 s against 1 522 s, both the VOX scenario; (b) passes |
+| H3, hidden callers apart | (a) and (b) pass: 12 against 12, 10.5 s against 22 s; (c) fails: 58 overlaps against 35 |
+| H4, 200 Hz off | fails: one draw of three not connected |
+| H5, no harm elsewhere | fails: 62 against 64 (`80m-band-closes-2300`, the VOX scenario); (b) and (c) pass |
+
+### 6.3 What the failures come from
+
+Three causes, each seen more than once:
+
+1. **The move to 500 Hz before the last try** (§8.1, added for the port). It is behind H1's miss,
+   H4's lost call and `80m-band-closes-2300`. A 2 300 Hz station reads only the tone floor of a 500 Hz
+   call, so the moved try loses its OFDM half to every station not known to run 500 Hz; a station
+   that accepted the first try is in its session and cannot move to read the second; and the move
+   costs the busy detector's wait. It buys `40m-wide-calls-narrow-unprobed` (126 s against 352 s);
+   among H5's other 56 scenarios a call moved only once, in the band that closed.
+2. **The short OFDM acceptance.** 0.43 s long, keyed right after the try, it is lost whole inside a
+   VOX radio's hold (400–900 ms) and does not get back through an NVIS echo the try itself came
+   through. Today's call alternates families, so half its acceptances go on the floor (3.2 s, longer
+   than any hold), and its eight tries teach the called station the caller's gap (ADR-0054, 250 ms a
+   step); two tries teach one step a call. A called station that answered a try and hears the same
+   call again knows its acceptance was lost, and answers in OFDM again.
+3. **No random wait.** Two callers that start together meet at every try (K2), and a hidden loser's
+   two tries fall in the winner's first exchanges (H3 (c)).
+
+### 6.4 What it points to (not built, not benched)
+
+* **No move for a call of fewer than five tries**, or a move only with the tries setting at 6 or
+  more: a 2 300 Hz station calling a 500 Hz station it has not heard then shows that station the
+  mismatch banner (ADR-0035) instead of moving; a probe, or the heard list, still moves it.
+* **A try heard again is answered on the floor**, and its caller listens for that: the floor's
+  acceptance outlasts a hold and comes through an echo. The VOX scenario's calls should then connect
+  on their second try, about 37 s, instead of failing (expected, not measured).
+* **The pause made a little random** (15 s plus up to one try's length), so that two callers who met
+  on their first try do not meet on the second.
+* The phantom session a failed call leaves at the called station (it stays until its link timeout,
+  about 6 minutes in the VOX scenario) is today's too, but a call that gives up after two tries makes
+  it commoner.
+
+Each is the author's call; whichever are taken go into the model first, and the A/B is run again on
+the same draws.
