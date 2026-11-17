@@ -3260,6 +3260,27 @@ scratch copy's buttons are pressed through their accessibility default action
 click does nothing: WinForms checks the real cursor. The one-time beacon is a right click on the
 beacon button, which a posted `WM_RBUTTONDOWN`/`UP` does.
 
+**RadioPost mail on 40 m to the scanning gateway (2026-11-17, `docs/research/link-architecture/
+18-radiopost-40m-beta162.md`).** Nine sessions at 2300 Hz from the mobile (station `KK4ODA-2`,
+beta.161, RTS keying, calling as `WD5EMA` or `KK4ODA`) to `KK4ODA-1` (beta.162, RadioPost Gateway
+scanning 7.101 and 3.590 MHz), both sides with audio. No overlaps (0.521 s the least clear air);
+a 51.9 kB binary at about 920 bit/s at rungs 9–12. Found, each waiting on the author:
+- **The gateway's replies are small blocks sent at 64-QAM.** C1's guess at the mobile's 15 dB
+  reading put them at rungs 17–19, and 0 of 9 first copies decoded; each block took three copies.
+  An OFDM frame is 1.054 s at any rung, so a slower rung would have cost nothing. This is a
+  common-case loss in 7 of 7 sessions; the proposal is the most robust rung that carries a
+  transmission in the same number of frames (the rate controller rule applies).
+- **`move_scan` drops a dial for good on any error.** A read-back the FTDX10 did not answer, 5 ms
+  after a release, ended the scan. A no-answer should keep the dial.
+- **P2P to the gateway's callsign reaches RadioPost Gateway.** Its welcome carries no client's
+  proof, so the calling client leaves.
+- **The mobile's declared dial was 3.590 MHz while it ran on 7.101.**
+
+`field_ingest.py` no longer works out a plain session's goodput: the sidecar's counters run for
+the daemon's life. On this PC the upload read key is in the user environment; a session started
+before it was set reads it with `[Environment]::GetEnvironmentVariable('AETHER_UPLOAD_READ_KEY',
+'User')`.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
