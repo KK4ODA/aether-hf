@@ -856,7 +856,11 @@ deadline. The rules, numbered as in the formal specification
    never heard included, against a prior from the other station's reports of how it hears this
    one (byte 2); capped by its own regulatory ceiling (below), its `max_mode` and a pinned rung.
    No station recommends a rung to the other. It may send one new frame of a transmission at the
-   usable rung above its choice, to try it. Every control frame says how many data frames of the
+   usable rung above its choice, to try it. The transmission's other new blocks go at the most
+   robust usable rung of the choice's family, no faster than the choice, that carries them in no
+   more frames than the choice would (ADR-0130): every data frame of a family takes the same air,
+   so a short transmission costs no more at a slower rung. A pinned rung is kept, and a block's
+   copies keep the rung it was cut at. Every control frame says how many data frames of the
    other station's last transmission its sender never detected (byte 6, `missed`), which only the
    receiver can know; a sender records it. The master sizes the slave's slot in the family the
    slave last stated its data goes in, and says which (byte 6 bit 7): the slave reckons its room

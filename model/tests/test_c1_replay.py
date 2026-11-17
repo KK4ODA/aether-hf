@@ -26,6 +26,7 @@ def test_a_session_past_256_frames_is_replayed_direction_by_direction(tmp_path: 
     data = [tx for tx in reading.directions[0].txs if tx.data and not tx.measure]
     assert 0 < down.data_transmissions <= len(data)
     assert 0 <= down.agree <= down.data_transmissions
+    assert 0 <= down.below <= down.data_transmissions - down.agree
     assert len(down.states) == len(reading.directions[0].txs)
     assert 0.0 <= down.blocked_s <= down.exchange_s
     for t in down.tries:

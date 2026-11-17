@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.4.0 |
+| **Version** | 1.5.0 |
 | **Updated** | 2026-11-17 |
 | **Describes** | Aether HF 0.2.0-beta.162 |
 | **Licence** | CC BY 4.0 |
@@ -155,7 +155,10 @@ through even when the signal is well under the noise. The faster steps send many
 chooses the rung for its own data. It counts how much data each rung really delivered for the
 time it spent on the air, from what the other station acknowledges, and now and then tries the
 next rung up with one frame. So the link settles on the rung that moves the most data on this
-path. [Speeds: the rungs](#16-speeds-the-rungs) shows them all.
+path. A short message that would fill only part of its frames goes at the slowest rung of the
+same kind that still carries it in as many frames: it takes the same time on the air and gets
+through more surely, so the header's rung can read lower while short replies go. [Speeds: the
+rungs](#16-speeds-the-rungs) shows them all.
 
 ### The window and the modem
 
@@ -1509,3 +1512,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.2.0 | 2026-11-16 | The identifier in the data signal (ADR-0127): Setup step 4's **Identify by** (Morse or Data signal) in place of **Morse ID**, the Morse speed on its own row, and the goodbye, the rules and the host programs' `CWID ON` in those words. |
 | 1.3.0 | 2026-11-17 | Scanning (ADR-0129): the **Radio dial** box's **Scanning** row with **Stop**, while a program such as RadioPost Gateway scans the station's dials; what holds the radio on a dial, and what ends a scan. |
 | 1.4.0 | 2026-11-17 | Scanning: up to four dials; 4 to 5 s on a quiet dial, and about 19 s where a call is heard under way (ADR-0129 §11). |
+| 1.5.0 | 2026-11-17 | A short message goes at the slowest rung of its kind that carries it in as many frames (ADR-0130): **Slow and sure, or fast** says so, and why the header's rung can read lower while short replies go. |

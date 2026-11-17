@@ -1595,7 +1595,7 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
     header, and the slave, which believes a count only from a copy that decoded alone (R2), could
     grant itself nothing: eight silent slots. R7 now leaves a header out only when an RV 0 copy
     goes with it (ADR-0073). Here the master's data fades out mid-transfer, as a path does, and
-    the frames on the air when it went are sent again at their rung until re-encoded."""
+    the frame on the air when it went is sent again at its rung until re-encoded."""
     a, b = _pair(NARROW)
     fade = {"on": True}
 
@@ -1605,8 +1605,10 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
             return 0.0
         return -30.0 if decode_data(frame.payload)[0].kind is DataKind.DATA else 0.0
 
-    # seed 20: the call of protocol 13 starts the session otherwise; 51 seeds of 60 send a frame
-    # again past its RV 0 copies, 21 among the nine that do not
+    # a block small enough to go whole at the floor's rungs: 30 seeds of 30 send it again past
+    # its RV 0 copies. Since ADR-0130 a longer message is cut at the most robust rung that
+    # carries it, and its blocks, too long for the floor's slowest rungs, end in pieces, which
+    # always go at RV 0 (ADR-0086) — 100 bytes did so on 60 seeds of 60
     sim = TwoStationSim(a, b, snr_db=8.0, seed=20, frame_snr_offset=faded)
     sent: list[list[TxFrame]] = []
     orig = sim._launch
@@ -1617,8 +1619,8 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
         orig(who, at, tx)  # type: ignore[arg-type]
 
     sim._launch = spy  # type: ignore[method-assign]
-    # a few frames, all of them on the air when the path goes: nothing new to send beside them
-    message = _message(random.Random(20), 100)
+    # a frame on the air when the path goes: nothing new to send beside it
+    message = _message(random.Random(20), 40)
     a.connect("KK4XYZ")
     a.send(message)
     sim.run(until=150.0)
@@ -1690,6 +1692,108 @@ def test_a_body_that_fits_no_rung_up_to_the_recommendation_goes_in_the_fewest_pi
     # and 7, six at rung 5; below rung 0, nowhere
     assert a._split_rung(body(12), 12, 7) == 6
     assert a._split_rung(10, 0, 0) is None
+
+
+@pytest.mark.parametrize("air", AIRS)
+def test_a_short_transmission_goes_at_the_most_robust_rung_that_carries_it(air: str) -> None:
+    """Report 18: RadioPost Gateway's replies — a block of a few dozen bytes — went at 64-QAM,
+    where the guess at the mobile's 15 dB reading put them, and none of nine first copies
+    decoded. Every data frame of a family takes the same air, so what a transmission carries
+    goes at the most robust usable rung of the choice's family that carries it in as many frames
+    (ADR-0130)."""
+    a, _ = _pair(AIRS[air])
+    a.rate.seed(15.0)
+    chosen = a._own_choice()
+    a.send(bytes(40))
+    frames = a._data_frames(math.inf)
+    robust = {"2300": 7, "500": 9}[
+        air
+    ]  # BPSK 1/3 (43 bytes); QPSK 2/3 (50), the least that holds 40
+    assert [f.mode for f in frames] == [robust]
+    assert robust < chosen and not a.timing.is_floor(chosen)
+    assert a.timing.data_frame_s_for(robust) == a.timing.data_frame_s_for(chosen)
+    # what fills two frames at the choice goes in two at the most robust rung that holds it
+    two = data_capacity(a.timing.capacity(chosen)) + 1
+    b, _ = _pair(AIRS[air])
+    b.rate.seed(15.0)
+    b.send(bytes(two))
+    modes = [f.mode for f in b._data_frames(math.inf)]
+    assert len(modes) == 2 and len(set(modes)) == 1 and modes[0] < chosen
+    below = [m for m in b.rate.modes if modes[0] > m and not b.timing.is_floor(m)]
+    assert all(
+        granted_module.cut(two, data_capacity(b.timing.capacity(m)), 2)[1] < two for m in below
+    )
+
+
+@pytest.mark.parametrize("air", AIRS)
+def test_a_transmission_its_blocks_fill_goes_at_the_choice(air: str) -> None:
+    """Nothing slower carries as much in as many frames: a transmission whose new blocks fill
+    it goes at the rate controller's choice, as before (ADR-0130)."""
+    a, _ = _pair(AIRS[air])
+    a.rate.seed(15.0)
+    chosen = a._own_choice()
+    a.send(bytes(20_000))
+    frames = a._data_frames(math.inf)
+    assert len(frames) == a.burst_capacity(a.timing.data_frame_s_for(chosen))
+    assert {f.mode for f in frames} == {chosen}
+
+
+def test_a_try_keeps_its_rung_and_the_rest_goes_robustly() -> None:
+    """A try — one frame of the transmission at the rung above the choice — is the rate
+    controller's measurement and keeps its rung; what the transmission carries after it goes at
+    the most robust rung that carries it in as many frames (ADR-0130)."""
+    a, _ = _pair(WIDE)
+    a.rate.seed(15.0)
+    assert a._own_choice() == 17
+    a.rate._probing = 18
+    # 655 bytes in the try's frame at rung 18, 145 left: one frame at the choice, rung 17, and one
+    # at rung 11 (190 bytes; rung 10's 141 do not hold them)
+    a.send(bytes(800))
+    assert [f.mode for f in a._data_frames(math.inf)] == [18, 11]
+
+
+def test_a_short_transmission_keeps_its_family_and_a_pinned_rung() -> None:
+    """Never into the tone floor, five times as long, under an OFDM choice; on the floor, down
+    to its most robust rung; and a pinned rung — a bench's, a test's — is kept (ADR-0130)."""
+    a, _ = _pair(WIDE)
+    a.rate.seed(15.0)
+    a.rate._index = a.rate.modes.index(7)
+    a.send(bytes(10))
+    assert [f.mode for f in a._data_frames(math.inf)] == [7]
+    b, _ = _pair(WIDE)
+    b.rate.seed(15.0)
+    b.rate._index = b.rate.modes.index(4)
+    # 19 bytes fit tone-24's 21; 20 would not (a body one byte short of a full frame cannot be
+    # carried), and go at tone-36
+    b.send(bytes(19))
+    assert [f.mode for f in b._data_frames(math.inf)] == [0]
+    c, _ = _pair(WIDE)
+    c.rate.seed(15.0)
+    c.pin_mode(17)
+    c.send(bytes(40))
+    assert [f.mode for f in c._data_frames(math.inf)] == [17]
+
+
+def test_frames_sent_robustly_are_counted_at_their_rung() -> None:
+    """The rate controller learns from the rung frames go at: a short reply sent at the most
+    robust rung that carries it is that rung's measurement, and the choice — never sent at — is
+    left to its guess (ADR-0130)."""
+    a, b = _pair(WIDE)
+    sim = TwoStationSim(a, b, snr_db=20.0, seed=3)
+    sent = _spy_data(sim, 1)
+    a.connect("KK4XYZ")
+    sim.run(until=30.0)
+    assert b.connected and b.rate.snr_db is not None
+    chosen = b._own_choice()
+    reply = _message(random.Random(3), 40)
+    b.send(reply)
+    while sim.delivered(0) != reply and sim.t < 120.0:
+        sim.run(until=sim.t + 5.0)
+    assert sim.delivered(0) == reply
+    assert [[f.mode for f in tx] for tx in sent] == [[7]]
+    assert chosen > 7
+    assert b.rate._accounts[7].frames == 1.0
+    assert chosen not in b.rate._accounts
 
 
 def test_a_stuck_frame_goes_in_pieces_and_its_block_arrives() -> None:

@@ -134,3 +134,4 @@ context → decision → alternatives considered → consequences.
 | [0127](0127-identify-in-the-data-signal.md) | A station may identify in its data signal instead of Morse (a Setup choice) | accepted and built (C1–C6 pass), beta.161; Morse the default |
 | [0128](0128-the-first-burst-starts-safe.md) | The first burst after a call starts safe and tries the bold rung with one frame | proposed: behind switches, off; results in — fails F2–F4 as built and as variant J, awaiting the author |
 | [0129](0129-the-station-scans-for-a-program.md) | The station scans its channels for the program that asks, and never leaves one a caller may be on | accepted for building (§8): the harness first (§6), then the air |
+| [0130](0130-a-short-transmission-goes-at-the-most-robust-rung-that-carries-it.md) | A short transmission goes at the most robust rung that carries it | accepted |

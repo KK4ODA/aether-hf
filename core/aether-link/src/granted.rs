@@ -247,6 +247,33 @@ impl Draws {
     }
 }
 
+/// How many of `left` queued bytes one new block takes at a rung whose frame carries `capacity`
+/// data bytes: as many as it holds, less one when that leaves a body one byte short of a full
+/// frame — the one length the container cannot carry (the model's `block_size`).
+const fn block_size(capacity: usize, left: usize) -> usize {
+    let take = if capacity < left { capacity } else { left };
+    if take > 0 && take + 1 == capacity {
+        take - 1
+    } else {
+        take
+    }
+}
+
+/// `nbytes` queued bytes cut into blocks of `capacity` ([`block_size`]), at most `most` of them:
+/// how many blocks, and how many bytes they carry (the model's `cut`).
+fn cut(nbytes: usize, capacity: usize, most: usize) -> (usize, usize) {
+    let (mut blocks, mut left) = (0, nbytes);
+    while left > 0 && blocks < most {
+        let take = block_size(capacity, left);
+        if take == 0 {
+            break;
+        }
+        left -= take;
+        blocks += 1;
+    }
+    (blocks, nbytes - left)
+}
+
 /// A measurement frame's filler: `SplitMix64` from the session and the frame's index, so a frame
 /// of every rung carries bytes that look like data — a body of zeros is not what data sends, and
 /// on the four-tone kinds it is a lopsided spectrum (12-two-paths-80m.md §9).
@@ -4341,6 +4368,46 @@ impl GrantedEngine {
         seqs
     }
 
+    /// The rung the new blocks of this transmission go at (ADR-0130): of the usable rungs of
+    /// `mode`'s family up to it, the most robust at which what they carry takes no more frames
+    /// than at `mode`. Every data frame of a family takes the same air, so such a rung costs
+    /// nothing, as a stranded frame's target costs nothing (ADR-0085); the choice is the rate
+    /// controller's guess for a transmission filled to its rung, and short replies sent at it
+    /// went at 64-QAM where nothing decoded alone (report 18 §4).
+    ///
+    /// `room` is the frames the transmission has left for new blocks. A try's frame (`probe`)
+    /// keeps its rung and goes first: it is the controller's measurement. A pinned rung is kept,
+    /// as is a transmission its new blocks fill (the model's `_carrying_rung`).
+    fn carrying_rung(&self, mode: usize, probe: Option<usize>, room: usize) -> usize {
+        if self.pinned.is_some() {
+            return mode;
+        }
+        let mut frames = room.min(WINDOW.saturating_sub(seq_distance(self.tx_next, self.tx_base)));
+        let mut left = self.tx_queue.len();
+        if let Some(rung) = probe
+            && frames > 0
+        {
+            left -= block_size(data_capacity(self.timing.capacity(rung)), left);
+            frames -= 1;
+        }
+        if frames == 0 || left == 0 {
+            return mode;
+        }
+        let (count, carried) = cut(left, data_capacity(self.timing.capacity(mode)), frames);
+        let floor = self.timing.is_floor(mode);
+        self.rate
+            .modes()
+            .iter()
+            .copied()
+            .take_while(|&m| m < mode)
+            .find(|&m| {
+                self.timing.is_floor(m) == floor
+                    && m < self.timing.data_capacity.len()
+                    && cut(carried, data_capacity(self.timing.capacity(m)), count).1 == carried
+            })
+            .unwrap_or(mode)
+    }
+
     /// Whether a new block can be cut for this transmission: data queued, the window open, no
     /// measurement asked for.
     fn can_cut(&self) -> bool {
@@ -4505,6 +4572,11 @@ impl GrantedEngine {
         seqs.truncate(room);
         // a measurement asked for waits only for what is in flight: nothing new goes before it
         let new_frames = family == self.timing.is_floor(mode) && self.measure_ask.is_none();
+        if new_frames && !across {
+            // what the transmission carries goes as robustly as it fits (ADR-0130); a try across
+            // the floor's edge is the whole transmission's, a measurement of its rung
+            mode = self.carrying_rung(mode, probe, room - seqs.len());
+        }
         while new_frames
             && seqs.len() < room
             && seq_distance(self.tx_next, self.tx_base) < WINDOW
@@ -4512,14 +4584,11 @@ impl GrantedEngine {
         {
             // a try is one new frame of the transmission
             let at = probe.take().unwrap_or(mode);
-            let cap = data_capacity(self.timing.capacity(at));
-            let mut take = cap.min(self.tx_queue.len());
+            let mut take = self.tx_queue.len();
             if let Some(body) = self.pin_body {
                 take = take.min(body);
             }
-            if take + 1 == cap {
-                take -= 1; // the one length the container cannot carry
-            }
+            let take = block_size(data_capacity(self.timing.capacity(at)), take);
             let body: Vec<u8> = self.tx_queue.drain(..take).collect();
             let seq = self.tx_next;
             self.records.insert(
@@ -5520,6 +5589,48 @@ mod tests {
         // 8 and 9, three at rung 7; below rung 0, nowhere
         assert_eq!(engine.split_rung(100, 12, 9), Some(8));
         assert_eq!(engine.split_rung(10, 0, 0), None);
+    }
+
+    /// The wide engine with a reading of 15 dB, as the model's tests seed it: C1 chooses rung 17
+    /// (64-QAM 2/3), and `queued` bytes wait to go.
+    fn seeded(queued: usize) -> GrantedEngine {
+        let mut engine = GrantedEngine::new("W4ODA", wide(), GrantConfig::default(), 1);
+        engine.rate.seed(15.0);
+        engine.send(&vec![0; queued]);
+        engine
+    }
+
+    #[test]
+    fn a_short_transmission_goes_at_the_most_robust_rung_that_carries_it() {
+        // ADR-0130, as test_granted.py has it: 40 bytes go at BPSK 1/3 (43 bytes), not at the
+        // choice; 583 bytes, two frames at rung 17, at rung 15 (386 a frame)
+        let engine = seeded(40);
+        assert_eq!(engine.own_choice(), 17);
+        assert_eq!(engine.carrying_rung(17, None, 6), 7);
+        assert_eq!(seeded(583).carrying_rung(17, None, 6), 15);
+        // what fills its frames goes at the choice
+        assert_eq!(seeded(20_000).carrying_rung(17, None, 6), 17);
+        // never into the floor under an OFDM choice; on the floor down to tone-24, and a body
+        // one byte short of its frame (20 of 21 bytes) goes at tone-36
+        assert_eq!(seeded(10).carrying_rung(7, None, 6), 7);
+        assert_eq!(seeded(19).carrying_rung(4, None, 6), 0);
+        assert_eq!(seeded(20).carrying_rung(4, None, 6), 1);
+    }
+
+    #[test]
+    fn a_try_keeps_its_rung_and_the_rest_goes_robustly() {
+        // ADR-0130: the try's frame at rung 18 takes 655 of 800 bytes; the 145 left go at rung 11
+        // (190 bytes; rung 10's 141 do not hold them)
+        let mut engine = seeded(800);
+        assert_eq!(engine.carrying_rung(17, Some(18), 6), 11);
+        engine
+            .pin_mode(Some(17), None)
+            .expect("rung 17 is in the table");
+        assert_eq!(
+            engine.carrying_rung(17, None, 6),
+            17,
+            "a pinned rung is kept"
+        );
     }
 
     #[test]

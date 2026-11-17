@@ -186,7 +186,9 @@ def test_j_does_nothing_without_the_first_try() -> None:
 def test_j_a_session_goes_on_at_the_bold_rung_after_its_frame_decodes() -> None:
     a, b = _engine(WIDE, True, jump=True), _engine(WIDE, True, "KK4XYZ", 12, jump=True)
     seen = _first_data(a)
-    payload = bytes((i * 37) % 256 for i in range(6000))
+    # enough that the second transmission fills its frames: one that does not goes at the most
+    # robust rung that carries it in as many frames (ADR-0130), 6 000 bytes' second at rung 18
+    payload = bytes((i * 37) % 256 for i in range(12000))
     sim = TwoStationSim(a, b, snr_db=20.0, seed=5)
     a.connect("KK4XYZ")
     a.send(payload)

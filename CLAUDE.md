@@ -3315,6 +3315,28 @@ the daemon's life. On this PC the upload read key is in the user environment; a 
 before it was set reads it with `[Environment]::GetEnvironmentVariable('AETHER_UPLOAD_READ_KEY',
 'User')`.
 
+**A short transmission goes at the most robust rung that carries it (2026-11-17, ADR-0130; the
+author's decision on report 18 §4, the first change under *The rate controller waits for the
+air*; no wire change).** RadioPost Gateway's replies (a block of a few dozen bytes) went at 64-QAM
+where C1's guess from the mobile's 15 dB reading put them; no first copy decoded, and each block
+took three, half of a short session. Every data frame of a family takes the same air, so a
+transmission's new blocks now go at the most robust usable rung of the choice's family, no faster
+than it, that cuts them into no more frames than the choice would (`GrantedEngine._carrying_rung` /
+`carrying_rung`; `cut` and `block_size`, the cut's own rule, which the new-block loop now shares).
+A try's frame keeps its rung and goes first; a try across the floor's edge and a pinned rung are
+kept whole; never across a family's edge; first copies only (a block keeps its rung, so copies
+combine). C1 learns at the rung frames went at (the block's `origin`), so the choice, never sent
+at, keeps its guess: a short block no longer measures it, and when a short block opens a long
+transfer on a path the guess overrates, the first full transmission pays a round where the short
+block paid copies (ADR-0130 §5; the review's question, not this rule's). Link bench: the 217 points
+with nothing eased identical, eased points ×0.978. Harness, 14 scenarios × 3 draws against
+`87bc2e4`: 40 → 41 of 42 passed, no radiated overlap, air ×0.960, short-reply exchanges 5–23 %
+shorter, bulk mail unchanged. Two tests moved to transfers that still exercise them (ADR-0128's
+variant J, ADR-0073's header). `tools/c1_replay.py` counts a transmission under the choice in its
+family apart (`below`). To find what part two harness builds on one draw, compare the sidecars'
+`sent` data frames (mode, RV, seq) in order: the first difference says whether a rule acted or the
+draw did.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

@@ -269,6 +269,28 @@ class Draws:
         return self.next_u64() % n
 
 
+def block_size(capacity: int, left: int) -> int:
+    """How many of ``left`` queued bytes one new block takes at a rung whose frame carries
+    ``capacity`` data bytes: as many as it holds, less one when that leaves a body one byte short
+    of a full frame — the one length the container cannot carry (a partial frame's two length
+    bytes do not fit)."""
+    take = min(capacity, left)
+    return take - 1 if 0 < take == capacity - 1 else take
+
+
+def cut(nbytes: int, capacity: int, most: int) -> tuple[int, int]:
+    """``nbytes`` queued bytes cut into blocks of ``capacity`` (:func:`block_size`), at most
+    ``most`` of them: how many blocks, and how many bytes they carry."""
+    blocks, left = 0, nbytes
+    while left > 0 and blocks < most:
+        take = block_size(capacity, left)
+        if take <= 0:
+            break
+        left -= take
+        blocks += 1
+    return blocks, nbytes - left
+
+
 def measure_body(session: int, index: int, length: int) -> bytes:
     """A measurement frame's filler: SplitMix64 from the session and the frame's index, so a
     frame of every rung carries bytes that look like data — a body of zeros is not what data
@@ -3084,6 +3106,10 @@ class GrantedEngine:
         seqs = seqs[:room]
         # a measurement asked for waits only for what is in flight: nothing new goes before it
         new_frames = family == self.timing.is_floor(mode) and self._measure_ask is None
+        if new_frames and not across:
+            # what the transmission carries goes as robustly as it fits (ADR-0130); a try across
+            # the floor's edge is the whole transmission's, a measurement of its rung
+            mode = self._carrying_rung(mode, probe, room - len(seqs))
         while (
             new_frames
             and len(seqs) < room
@@ -3093,12 +3119,10 @@ class GrantedEngine:
             at = mode
             if probe is not None:
                 at, probe = probe, None  # a try is one new frame of the transmission
-            cap = data_capacity(self.timing.capacity(at))
-            take = min(cap, len(self._tx_queue))
+            take = len(self._tx_queue)
             if self._pin_body is not None:
                 take = min(take, self._pin_body)
-            if take == cap - 1:
-                take -= 1  # the one length the container cannot carry
+            take = block_size(data_capacity(self.timing.capacity(at)), take)
             body = bytes(self._tx_queue[:take])
             del self._tx_queue[:take]
             rec = _TxRecord(self._tx_next, body, at, origin=at)
@@ -3126,6 +3150,41 @@ class GrantedEngine:
             self._sent_copies.append((rec.seq, origin, air))
         self.stats.frames_sent += len(frames)
         return frames
+
+    def _carrying_rung(self, mode: int, probe: int | None, room: int) -> int:
+        """The rung the new blocks of this transmission go at (ADR-0130): of the usable rungs of
+        ``mode``'s family up to it (:attr:`RateController.modes`), the most robust at which what
+        they carry takes no more frames than at ``mode``. Every data frame of a family takes the
+        same air, so such a rung costs nothing, as a stranded frame's target costs nothing
+        (ADR-0085); and the choice is the rate controller's guess for a transmission filled to its
+        rung. RadioPost Gateway's replies — a block of a few dozen bytes — went at 64-QAM, where
+        the guess at the mobile's 15 dB reading put them: none of nine first copies decoded, and
+        each block took three copies, half of a short session (report 18 §4).
+
+        ``room`` is the frames the transmission has left for new blocks. A try's frame
+        (``probe``) keeps its rung and goes first: it is the controller's measurement. A pinned
+        rung — a bench's, a test's — is kept, as is a transmission its new blocks fill: nothing
+        slower carries as much in as many frames."""
+        if self._pinned is not None:
+            return mode
+        frames = min(room, WINDOW - seq_distance(self._tx_next, self._tx_base))
+        left = len(self._tx_queue)
+        if probe is not None and frames > 0:
+            left -= block_size(data_capacity(self.timing.capacity(probe)), left)
+            frames -= 1
+        if frames <= 0 or left <= 0:
+            return mode
+        count, carried = cut(left, data_capacity(self.timing.capacity(mode)), frames)
+        floor = self.timing.is_floor(mode)
+        for m in self.rate.modes:
+            if m >= mode:
+                break
+            if (
+                self.timing.is_floor(m) == floor
+                and cut(carried, data_capacity(self.timing.capacity(m)), count)[1] == carried
+            ):
+                return m
+        return mode
 
     def _can_cut(self) -> bool:
         """Whether a new block can be cut for this transmission: data queued, the window open,
