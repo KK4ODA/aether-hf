@@ -523,10 +523,11 @@ fn replay_station(replay: &Replay<'_>, session: &str, doc: &Value) {
         let at = format!("{at} ({name})");
         match name {
             "connect" => engine
-                .connect_heard(
+                .connect_lasting(
                     entry["remote"].as_str().expect("remote"),
                     entry["as"].as_str(),
                     opt(&entry["heard"]),
+                    opt(&entry["call_s"]),
                 )
                 .expect("connect"),
             "probe" => engine
@@ -635,4 +636,33 @@ fn replay_file(file: &str, generator: &str, at_least: usize) {
 #[test]
 fn the_port_does_what_the_model_does_input_by_input() {
     replay_file("granted_vectors.json", "make_granted_vectors.py", 10);
+}
+
+/// A call's own timing (ADR-0129): every plan's try starts, the longest gaps a scanning station's
+/// dwell and linger come from, and the tries a call asked to last makes, each air with and
+/// without a turnaround, an answer gap and a keying latency.
+#[test]
+fn the_port_times_a_call_as_the_model_does() {
+    let doc = vectors("granted_vectors.json", "make_granted_vectors.py");
+    let cases = doc["call_timing"].as_array().expect("call_timing");
+    assert!(cases.len() >= 4, "too few call timings to mean anything");
+    for (k, case) in cases.iter().enumerate() {
+        let call = case["call"].as_str().expect("call");
+        let engine = GrantedEngine::new(call, timing(&case["timing"]), config(&case["config"]), 1);
+        for (plan, want) in case["offsets"].as_object().expect("offsets") {
+            let got = engine.call_offsets(plan.as_bytes());
+            let want: Vec<f64> = want.as_array().expect("starts").iter().map(num).collect();
+            assert_eq!(got.len(), want.len(), "case {k}, plan {plan}");
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                assert!(close(*g, *w), "case {k}, plan {plan}, try {i}: {g} against {w}");
+            }
+        }
+        let (before, longest) = engine.call_gaps();
+        assert!(close(before, num(&case["gaps"][0])), "case {k}: {before}");
+        assert!(close(longest, num(&case["gaps"][1])), "case {k}: {longest}");
+        for row in case["lasting"].as_array().expect("lasting") {
+            let tries = engine.tries_lasting(opt(&row["call_s"]), opt(&row["heard"]));
+            assert_eq!(tries, int(&row["tries"]), "case {k}: {row}");
+        }
+    }
 }

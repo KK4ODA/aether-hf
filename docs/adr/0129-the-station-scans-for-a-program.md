@@ -1,9 +1,10 @@
 # ADR-0129: The station scans its channels for the program that asks, and never leaves one a caller may be on
 
-**Status:** proposed, 2026-11-17. This answers the author's question of how RadioPost Gateway should
-scan, as Winlink gateways do with RMS Trimode. Nothing is built. The timing is estimated on the
-model's own call in `docs/research/scanning/00-timing.md`, and the harness judges the design (§6)
-before any of it ships. RadioPost's side, with drafts for RP-4 and RP-5, is its
+**Status:** accepted for building, 2026-11-17. The author agreed the design and §7's four
+answers the same day (§8). Proposed earlier the same day in answer to the author's question of how
+RadioPost Gateway should scan, as Winlink gateways do with RMS Trimode. The timing is estimated on
+the model's own call in `docs/research/scanning/00-timing.md`, and the harness judges the design
+(§6) before it ships. RadioPost's side, with drafts for RP-4 and RP-5, is its
 `docs/design/03-scanning.md` (wish W50).
 
 ## 1. Context
@@ -223,3 +224,11 @@ d1,d2,…`, and a caller placed on one of the dials. The Trimode stand-in stays 
    several channels. Proposed: not now.
 4. **Step 0** is harness work that must come before any criterion can run. The air could come
    first, with the harness after.
+
+## 8. The author's answers (2026-11-17)
+
+1. **The operator wins** (rule 9): another program's `frequency.set`, or the knob, stops the scan,
+   and its owner is told.
+2. **At most 11 channels.**
+3. **The panel does not start scans of its own**, for now.
+4. **The harness first**: step 0 and the criteria before the air.

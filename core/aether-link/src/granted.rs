@@ -195,6 +195,9 @@ pub const HEADER_UNDECODABLE_SHARE: f64 = 0.4;
 pub const READABLE_ALONE_RVS: [u8; 1] = [0];
 /// An idle link's open window, after an ordinary and after a floor header.
 pub const OPEN_WINDOW_S: [f64; 2] = [4.0, 10.0];
+/// The most tries a call makes: Setup's largest choice (ADR-0126 §7.4), and the most a call asked
+/// to last (`call_s`, ADR-0129) is given.
+pub const MAX_CALL_TRIES: usize = 15;
 
 /// The reasons a session ends that leave the other station in it: its frames are answered with
 /// a DISC for a link timeout after (ADR-0052).
@@ -1670,6 +1673,22 @@ impl GrantedEngine {
         as_call: Option<&str>,
         heard_db: Option<f64>,
     ) -> Result<(), &'static str> {
+        self.connect_lasting(remote_call, as_call, heard_db, None)
+    }
+
+    /// [`connect_heard`](Self::connect_heard), with the call's tries to keep starting for at
+    /// least `call_s` seconds (ADR-0129): a call to a station that scans its channels makes
+    /// [`tries_lasting`](Self::tries_lasting) tries.
+    ///
+    /// # Errors
+    /// As [`connect`](Self::connect).
+    pub fn connect_lasting(
+        &mut self,
+        remote_call: &str,
+        as_call: Option<&str>,
+        heard_db: Option<f64>,
+        call_s: Option<f64>,
+    ) -> Result<(), &'static str> {
         if self.state != State::Idle {
             return Err("already in a session");
         }
@@ -1692,7 +1711,7 @@ impl GrantedEngine {
         self.state = State::Connecting;
         self.role = Role::None;
         self.connect_tries = 0;
-        self.call_plan = self.plan_for(heard_db);
+        self.call_plan = self.plan_for(heard_db, Some(self.tries_lasting(call_s, heard_db)));
         self.left = None;
         self.deadlines.remove(Timer::Leave);
         self.reset_session();
@@ -2804,11 +2823,12 @@ impl GrantedEngine {
         self.send_connect();
     }
 
-    /// A call's tries (ADR-0126 §2.3, §7.4), `call_tries` of them: both-ways tries when
-    /// the station called was not heard lately; three quick tries and one fewer floor try when it
-    /// was heard strong; floor tries when it was heard weak. With two: H H, C C C S, S S.
-    fn plan_for(&self, heard_db: Option<f64>) -> Vec<u8> {
-        let n = self.config.call_tries.max(1);
+    /// A call's tries (ADR-0126 §2.3, §7.4), `call_tries` of them unless `tries` says:
+    /// both-ways tries when the station called was not heard lately; three quick tries and one
+    /// fewer floor try when it was heard strong; floor tries when it was heard weak. With two:
+    /// H H, C C C S, S S.
+    fn plan_for(&self, heard_db: Option<f64>, tries: Option<usize>) -> Vec<u8> {
+        let n = tries.unwrap_or(self.config.call_tries).max(1);
         if self.timing.floor_modes == 0 {
             return vec![b'C'; n];
         }
@@ -2837,6 +2857,102 @@ impl GrantedEngine {
         } else {
             0.0
         }
+    }
+
+    /// How many tries a call makes when its tries are to keep starting for at least `call_s`
+    /// seconds (ADR-0129 §2.5): the fewest, from `call_tries` to [`MAX_CALL_TRIES`], whose
+    /// tries before the pause start that far apart, the first to the last, in the plan
+    /// `heard_db` chooses; `call_tries` with no `call_s`, and [`MAX_CALL_TRIES`] when even
+    /// that many do not last so long.
+    #[must_use]
+    pub fn tries_lasting(&self, call_s: Option<f64>, heard_db: Option<f64>) -> usize {
+        let least = self.config.call_tries.max(1);
+        let Some(call_s) = call_s.filter(|&s| s > 0.0) else {
+            return least;
+        };
+        for n in least..=MAX_CALL_TRIES {
+            let starts = self.call_offsets(&self.plan_for(heard_db, Some(n)));
+            if starts.len() >= 2 && starts[starts.len() - 2] - starts[0] >= call_s - 1e-9 {
+                return n;
+            }
+        }
+        least.max(MAX_CALL_TRIES)
+    }
+
+    /// When each try of a call of `plan` (`C`, `S` and `H` tries) starts, in seconds from the
+    /// first's start, as this engine schedules a call nobody answers (ADR-0129 §2.3): each try's
+    /// frames from its own latency, the slot it grants its acceptance at the try's level, the
+    /// wait out of that slot as [`slot_close`](Self::slot_close) reckons it for a session that
+    /// has not begun, and before the last try the pause at its longest. What a scanning station
+    /// derives its dwell and linger from ([`call_gaps`](Self::call_gaps)), and
+    /// [`tries_lasting`](Self::tries_lasting).
+    #[must_use]
+    pub fn call_offsets(&self, plan: &[u8]) -> Vec<f64> {
+        let cfg = &self.config;
+        let top = cfg.levels_s.len() - 1;
+        let turnaround = self.declared_turnaround();
+        let wait = cfg.answer_gap_s.max(0.0); // no turnaround heard from the other station yet
+        let mut starts = vec![0.0];
+        let Some(before_last) = plan.len().checked_sub(1) else {
+            return starts;
+        };
+        for (i, &kind) in plan[..before_last].iter().enumerate() {
+            let level = top.min(i / 2);
+            let floors: &[bool] = match kind {
+                b'C' => &[false],
+                b'S' => &[true],
+                _ => &[false, true],
+            };
+            let start = starts[starts.len() - 1];
+            let end = start + self.own_latency() + self.try_s(kind);
+            let slot = self.slot_start(end, kind != b'C', level, turnaround);
+            let grant = floors.iter().map(|&f| self.ctl_s(f)).fold(0.0, f64::max);
+            let end_max = slot + grant + cfg.slack_s;
+            let mut due = self.after(end_max, floors.contains(&true), wait);
+            if i + 2 == plan.len() {
+                due += cfg.call_pause_s + self.try_s(plan[before_last]);
+            }
+            starts.push(due);
+        }
+        starts
+    }
+
+    /// Over every call this engine makes — each plan, 2 to [`MAX_CALL_TRIES`] tries — the
+    /// longest gap between two tries' starts before the pause, and the longest of all (the
+    /// pause's, at its longest): a scanning station's dwell and linger before its own move's
+    /// deafness (ADR-0129 §2.3, rules 3 and 5).
+    #[must_use]
+    pub fn call_gaps(&self) -> (f64, f64) {
+        let (mut before, mut longest) = (0.0_f64, 0.0_f64);
+        for n in 2..=MAX_CALL_TRIES {
+            for heard in [None, Some(f64::INFINITY), Some(f64::NEG_INFINITY)] {
+                let starts = self.call_offsets(&self.plan_for(heard, Some(n)));
+                let gaps: Vec<f64> = starts.windows(2).map(|w| w[1] - w[0]).collect();
+                if let Some((_, first)) = gaps.split_last() {
+                    before = first.iter().copied().fold(before, f64::max);
+                }
+                longest = gaps.iter().copied().fold(longest, f64::max);
+            }
+        }
+        (before, longest)
+    }
+
+    /// This station's turnaround as a call states it: the connect body's quantised value, which
+    /// is what the slot a try grants is reckoned from.
+    fn declared_turnaround(&self) -> f64 {
+        let body = ConnectBody {
+            src: self.my_call.clone(),
+            dst: self.my_call.clone(),
+            caps: self.config.capabilities,
+            version: PROTOCOL_VERSION,
+            snr_db: None,
+            turnaround_s: self.config.turnaround_s,
+            identifier_s: 0.0,
+        };
+        body.encode()
+            .ok()
+            .and_then(|b| ConnectBody::decode(&b).ok())
+            .map_or(self.config.turnaround_s, |b| b.turnaround_s)
     }
 
     /// A try's length: its OFDM part, its floor part, or both.

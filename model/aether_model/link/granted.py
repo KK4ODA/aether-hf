@@ -51,6 +51,7 @@ allow asks for a gap level in its answers.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import math
 import random
 from collections.abc import Sequence
@@ -232,6 +233,10 @@ and 2 never decode alone, and RV 3 only on the rungs whose RV 3 carries every sy
 went silent, eight of the 21 silent slots (ADR-0073)."""
 OPEN_WINDOW_S = (4.0, 10.0)
 """An idle link's open window, after an ordinary and after a floor header."""
+
+MAX_CALL_TRIES = 15
+"""The most tries a call makes: Setup's largest choice (ADR-0126 §7.4), and the most a call asked
+to last (``call_s``, ADR-0129) is given."""
 
 
 _MASK64 = (1 << 64) - 1
@@ -926,12 +931,18 @@ class GrantedEngine:
             raise ValueError(f"{as_call.upper()} is not one of this station's callsigns")
 
     def connect(
-        self, remote_call: str, as_call: str | None = None, heard_db: float | None = None
+        self,
+        remote_call: str,
+        as_call: str | None = None,
+        heard_db: float | None = None,
+        call_s: float | None = None,
     ) -> None:
         """Call a station; the caller is the session's master once it reads the acceptance.
         The first try goes once the last slot this station granted can no longer be in use.
         ``heard_db``: the SNR this station last read the one it calls at, if
-        lately (the daemon's heard list); it chooses the call's tries (ADR-0126 §2.3)."""
+        lately (the daemon's heard list); it chooses the call's tries (ADR-0126 §2.3).
+        ``call_s``: the call's tries keep starting for at least this long (ADR-0129): a call to
+        a station that scans its channels makes :meth:`tries_lasting` tries."""
         if self.state is not State.IDLE:
             raise RuntimeError("already in a session")
         self._calling_as(as_call)
@@ -948,7 +959,7 @@ class GrantedEngine:
         self.state = State.CONNECTING
         self.role = Role.NONE
         self._connect_tries = 0
-        self._call_plan = self._plan_for(heard_db)
+        self._call_plan = self._plan_for(heard_db, self.tries_lasting(call_s, heard_db))
         self._left = None
         self._disarm("leave")
         self._reset_session()
@@ -1834,12 +1845,12 @@ class GrantedEngine:
             return
         self._send_connect()
 
-    def _plan_for(self, heard_db: float | None) -> str:
-        """A call's tries (ADR-0126 §2.3, §7.4), ``call_tries`` of them: both-ways tries
-        when the station called was not heard lately; three quick tries and one fewer floor try
-        when it was heard strong; floor tries when it was heard weak. With two: H H, C C C S,
-        S S."""
-        n = max(1, self.cfg.call_tries)
+    def _plan_for(self, heard_db: float | None, tries: int | None = None) -> str:
+        """A call's tries (ADR-0126 §2.3, §7.4), ``call_tries`` of them unless ``tries`` says:
+        both-ways tries when the station called was not heard lately; three quick tries and one
+        fewer floor try when it was heard strong; floor tries when it was heard weak. With two:
+        H H, C C C S, S S."""
+        n = max(1, self.cfg.call_tries if tries is None else tries)
         if self.timing.floor_modes <= 0:
             return "C" * n
         if self._floor_only():
@@ -1858,6 +1869,74 @@ class GrantedEngine:
         if len(plan) > 1 and self._connect_tries == len(plan) - 1:
             return self.cfg.call_pause_s + self.rng.uniform(0.0, self._try_s(plan[-1]))
         return 0.0
+
+    def tries_lasting(self, call_s: float | None, heard_db: float | None = None) -> int:
+        """How many tries a call makes when its tries are to keep starting for at least
+        ``call_s`` seconds (ADR-0129 §2.5): the fewest, from ``call_tries`` to
+        :data:`MAX_CALL_TRIES`, whose tries before the pause start that far apart, the first
+        to the last, in the plan ``heard_db`` chooses; ``call_tries`` with no ``call_s``, and
+        :data:`MAX_CALL_TRIES` when even that many do not last so long."""
+        least = max(1, self.cfg.call_tries)
+        if call_s is None or call_s <= 0.0:
+            return least
+        for n in range(least, MAX_CALL_TRIES + 1):
+            starts = self.call_offsets(self._plan_for(heard_db, n))
+            if len(starts) >= 2 and starts[-2] - starts[0] >= call_s - 1e-9:
+                return n
+        return max(least, MAX_CALL_TRIES)
+
+    def call_offsets(self, plan: str) -> list[float]:
+        """When each try of a call of ``plan`` (``C``, ``S`` and ``H`` tries) starts, in seconds
+        from the first's start, as this engine schedules a call nobody answers (ADR-0129 §2.3):
+        each try's frames from its own latency, the slot it grants its acceptance at the try's
+        level, the wait out of that slot as :meth:`_slot_close` reckons it for a session that
+        has not begun, and before the last try the pause at its longest. What a scanning station
+        derives its dwell and linger from (:meth:`call_gaps`), and :meth:`tries_lasting`."""
+        cfg = self.cfg
+        top = len(cfg.levels_s) - 1
+        turnaround = self._declared_turnaround()
+        wait = max(0.0, cfg.answer_gap_s)  # no turnaround heard from the other station yet
+        starts = [0.0]
+        for i, kind in enumerate(plan[:-1]):
+            level = min(top, i // 2)
+            floors = (False,) if kind == "C" else (True,) if kind == "S" else (False, True)
+            end = starts[-1] + self._own_latency() + self._try_s(kind)
+            slot = self._slot_start(end, kind != "C", level, turnaround)
+            end_max = slot + max(self._ctl_s(f) for f in floors) + cfg.slack_s
+            due = self._after(end_max, any(floors), wait)
+            if i == len(plan) - 2:
+                due += cfg.call_pause_s + self._try_s(plan[-1])
+            starts.append(due)
+        return starts
+
+    def call_gaps(self) -> tuple[float, float]:
+        """Over every call this engine makes — each plan, 2 to :data:`MAX_CALL_TRIES` tries —
+        the longest gap between two tries' starts before the pause, and the longest of all (the
+        pause's, at its longest): a scanning station's dwell and linger before its own move's
+        deafness (ADR-0129 §2.3, rules 3 and 5)."""
+        before = longest = 0.0
+        for n in range(2, MAX_CALL_TRIES + 1):
+            for heard in (None, math.inf, -math.inf):
+                starts = self.call_offsets(self._plan_for(heard, n))
+                gaps = [b - a for a, b in itertools.pairwise(starts)]
+                if len(gaps) > 1:
+                    before = max(before, *gaps[:-1])
+                if gaps:
+                    longest = max(longest, *gaps)
+        return before, longest
+
+    def _declared_turnaround(self) -> float:
+        """This station's turnaround as a call states it: the connect body's quantised
+        value, which is what the slot a try grants is reckoned from."""
+        body = ConnectBody(
+            self.my_call,
+            self.my_call,
+            caps=self.cfg.capabilities,
+            version=PROTOCOL_VERSION,
+            turnaround_s=self.cfg.turnaround_s,
+            identifier_s=0.0,
+        ).encode()
+        return ConnectBody.decode(body).turnaround_s
 
     def _try_s(self, kind: str) -> float:
         """A try's length: its OFDM part, its floor part, or both."""

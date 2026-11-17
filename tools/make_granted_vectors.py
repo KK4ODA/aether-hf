@@ -323,10 +323,11 @@ def frame_doc(frame: Any, calls: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 INPUTS: dict[str, Callable[..., dict[str, Any]]] = {
-    "connect": lambda remote, as_call=None, heard_db=None: {
+    "connect": lambda remote, as_call=None, heard_db=None, call_s=None: {
         "remote": remote,
         "as": as_call,
         **({} if heard_db is None else {"heard": bits(heard_db)}),
+        **({} if call_s is None else {"call_s": bits(call_s)}),
     },
     "probe": lambda remote, as_call=None: {"remote": remote, "as": as_call},
     "disconnect": lambda drain_s=None: {"drain_s": bits(drain_s)},
@@ -1457,6 +1458,56 @@ def call_six() -> list[Recorder]:
     return [ra, rb]
 
 
+def call_lasting() -> list[Recorder]:
+    """A call asked to last (ADR-0129): to a station that scans, the tries keep starting for
+    ``call_s`` — one nobody hears (both-ways tries, as many as last that long), one heard weak
+    (floor tries), and one that the path, coming back, answers on a later try."""
+    a, b, ra, rb = _pair(WIDE, turnaround_s=0.2)
+    sim = TwoStationSim(a, b, snr_db=-60.0, seed=57)
+    a.connect("KK4XYZ", call_s=40.0)
+    _until_idle(sim, a, b, limit=200.0)
+    a.connect("KK4XYZ", heard_db=-14.0, call_s=27.0)
+    _until_idle(sim, a, b, limit=sim.t + 200.0)
+    a.connect("KK4XYZ", call_s=54.0)
+    sim.run(until=sim.t + 35.0)
+    sim.set_snr(6.0)
+    sim.run(until=sim.t + 60.0)
+    a.disconnect()
+    _until_idle(sim, a, b, limit=sim.t + 120.0)
+    return [ra, rb]
+
+
+def call_timing() -> list[dict[str, Any]]:
+    """Each air's call timing (ADR-0129), at the defaults and with a turnaround, an answer gap
+    and a keying latency: when each try of every plan starts (``call_offsets``), the longest
+    gaps (``call_gaps``), and the tries a call asked to last makes (``tries_lasting``)."""
+    out = []
+    for air, extra in (
+        (WIDE, {}),
+        (NARROW, {}),
+        (WIDE, {"turnaround_s": 0.6, "answer_gap_s": 0.9, "latency": 0.12}),
+        (NARROW, {"turnaround_s": 0.2, "call_tries": 6, "latency": 0.3}),
+    ):
+        latency = float(extra.pop("latency", 0.0))
+        a, _, _, _ = _pair(air, latency=latency, **extra)
+        plans = sorted({a._plan_for(h, n) for n in range(1, 16) for h in (None, 15.0, -14.0)})
+        out.append(
+            {
+                "timing": timing_doc(a.timing),
+                "config": config_doc(a.cfg),
+                "call": a.my_call,
+                "offsets": {p: [bits(x) for x in a.call_offsets(p)] for p in plans},
+                "gaps": [bits(x) for x in a.call_gaps()],
+                "lasting": [
+                    {"call_s": s, "heard": h, "tries": a.tries_lasting(s, h)}
+                    for s in (None, 0.0, 13.5, 27.0, 40.5, 81.0, 160.0, 1000.0)
+                    for h in (None, 15.0, -14.0)
+                ],
+            }
+        )
+    return out
+
+
 def call_again() -> list[Recorder]:
     """A try heard again (ADR-0126 §9): the OFDM acceptance does not get back, so a both-ways
     try's second is answered on the floor and connects; a quick try's are answered in OFDM again
@@ -1539,6 +1590,9 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "first-burst-jump-clean": first_burst(WIDE, None, 20.0, 64, 3000, jump=True),
     "first-burst-jump-moderate": first_burst(WIDE, "moderate", 8.0, 65, 2000, jump=True),
     "first-burst-jump-narrow": first_burst(NARROW, "good", 10.0, 66, 1500, jump=True),
+    # a call asked to last, to a station that scans (ADR-0129); last, so that the blob table's
+    # indices of every session before it stay as they were
+    "call-lasting": call_lasting,
 }
 
 
@@ -1558,6 +1612,7 @@ def main() -> int:
         "are indices into blobs.",
         "blobs": BLOBS.table,
         "sessions": sessions,
+        "call_timing": call_timing(),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
