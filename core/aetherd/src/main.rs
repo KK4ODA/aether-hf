@@ -396,7 +396,13 @@ fn run() -> Result<Exit, String> {
     // a harness's channel server is a simulated channel too (ADR-0042)
     let simulated = sim.is_some() || args.channel.is_some();
     daemon.simulated = simulated || args.dry_run;
-    let ptt = keying(&config, args.dry_run || simulated, &mut daemon);
+    let (ptt, harness) = radio_and_harness(
+        args.channel.as_deref(),
+        args.dry_run,
+        &config,
+        simulated,
+        &mut daemon,
+    )?;
     let mut station = Station::new(
         station_config(&config, &daemon.path, simulated),
         ptt,
@@ -420,8 +426,8 @@ fn run() -> Result<Exit, String> {
 
     say_debug_mode(&config, &mut daemon);
 
-    let mut audio = match &args.channel {
-        Some(address) => harness_channel(address, &config, &mut daemon)?,
+    let mut audio: Box<dyn AudioIo> = match harness {
+        Some(link) => Box::new(link),
         None => sound(&config, args.dry_run, sim.as_ref(), &mut daemon)?,
     };
     daemon
@@ -1627,6 +1633,10 @@ fn publish_station(
         if name == "bandwidth" {
             control.publish(&Event::new("bandwidth", station.bandwidth_status()));
         }
+        // a scan started, changed or ended (ADR-0129): its owner learns why it ended
+        if name == "scan" {
+            control.publish(&Event::new("scan", station.scan_event()));
+        }
         // a call or probe to this station in a bandwidth whose calls it does not answer
         // (ADR-0035): the panel puts it where the operator is looking, with the fix
         if name == "mismatch"
@@ -2111,6 +2121,29 @@ fn keying(config: &Config, keys_nothing: bool, daemon: &mut DaemonState) -> Box<
     }
 }
 
+/// The radio, and a harness's channel server when the daemon runs on one: opened first, since
+/// its radio has a dial, which the server joins stations by (ADR-0129).
+///
+/// # Errors
+/// If the channel server cannot be reached.
+fn radio_and_harness(
+    channel: Option<&str>,
+    dry_run: bool,
+    config: &Config,
+    simulated: bool,
+    daemon: &mut DaemonState,
+) -> Result<(Box<dyn Ptt>, Option<aetherd::channel_link::ChannelLink>), String> {
+    let harness = match channel {
+        Some(address) => Some(harness_channel(address, config, daemon)?),
+        None => None,
+    };
+    let ptt: Box<dyn Ptt> = match &harness {
+        Some(link) if !dry_run => Box::new(link.rig()),
+        _ => keying(config, dry_run || simulated, daemon),
+    };
+    Ok((ptt, harness))
+}
+
 /// A scenario harness's channel server, in place of a sound card (ADR-0042).
 ///
 /// # Errors
@@ -2119,7 +2152,7 @@ fn harness_channel(
     address: &str,
     config: &Config,
     daemon: &mut DaemonState,
-) -> Result<Box<dyn AudioIo>, String> {
+) -> Result<aetherd::channel_link::ChannelLink, String> {
     let link = aetherd::channel_link::ChannelLink::open(
         address,
         &config.callsign,
@@ -2127,7 +2160,7 @@ fn harness_channel(
     )
     .map_err(|e| format!("cannot reach the channel server at {address}: {e}"))?;
     daemon.audio.clone_from(&link.description);
-    Ok(Box::new(link))
+    Ok(link)
 }
 
 /// The audio to run on — or silence that says why there is none.

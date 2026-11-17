@@ -94,6 +94,8 @@ pub fn is_mutating(method: &str) -> bool {
             | "counters.reset"
             | "frequencies.set"
             | "frequency.set"
+            | "scan.start"
+            | "scan.stop"
             | "rate.pin"
             | "share.include"
     ) || crate::control::profiles::is_mutating(method)
@@ -1206,7 +1208,9 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "constellation" => Response::ok(id, constellation(station)),
         "connect" => connect(station, request),
         "probe" => probe(station, params, id),
-        "frequency.set" => tune_to(station, params, id),
+        "frequency.set" => tune_to(station, request),
+        "scan.start" => scan_start(station, request),
+        "scan.stop" => scan_stop(station, request),
         "counters.reset" => {
             station.reset_counters();
             Response::ok(id, json!({ "counters": counters(station) }))
@@ -1465,9 +1469,18 @@ fn connect<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
         .get("keep_bandwidth")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // a call to a station that scans its channels keeps trying that long (ADR-0129)
+    let call_s = params.get("call_s").and_then(Value::as_f64);
     // a program calls as its own callsigns, and the call is its own (ADR-0106)
-    match station.connect_for(request.connection, remote, as_call, keep_bandwidth) {
-        Ok(()) => Response::ok(id, json!({ "session": station.engine().session() })),
+    match station.connect_for(request.connection, remote, as_call, keep_bandwidth, call_s) {
+        Ok(()) => Response::ok(
+            id,
+            json!({
+                "session": station.engine().session(),
+                // how many tries the call makes: more when asked to last (ADR-0129)
+                "tries": station.engine().call_plan().len(),
+            }),
+        ),
         Err(reason) => Response::failed(
             id,
             ApiError::new(
@@ -1675,8 +1688,9 @@ fn drive_set<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String
     }
 }
 
-fn tune_to<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
-    let Some(hz) = params.get("hz").and_then(Value::as_u64) else {
+fn tune_to<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let Some(hz) = request.params.get("hz").and_then(Value::as_u64) else {
         return Response::failed(
             id,
             ApiError::new(
@@ -1686,7 +1700,8 @@ fn tune_to<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
             ),
         );
     };
-    match station.tune_to(hz) {
+    // the operator wins over a scan: a tune that goes ends it (ADR-0129 rule 9)
+    match station.tune_for(request.connection, hz) {
         Ok(()) => Response::ok(id, json!({ "hz": hz })),
         Err(reason) => Response::failed(
             id,
@@ -1697,6 +1712,52 @@ fn tune_to<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>)
             ),
         ),
     }
+}
+
+/// `scan.start {dials}`: the station scans those dials for the connection that asks
+/// (ADR-0129), the first the home dial; the answer is `status.scan`.
+fn scan_start<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let id = request.id.clone();
+    let dials: Option<Vec<u64>> = request
+        .params
+        .get("dials")
+        .and_then(Value::as_array)
+        .and_then(|dials| dials.iter().map(Value::as_u64).collect());
+    let Some(dials) = dials else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "Dials in hertz are required: {\"dials\": [3590000, 7101000]}.",
+                false,
+            ),
+        );
+    };
+    let Some(owner) = request.connection else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "A scan needs a connection to belong to.",
+                false,
+            ),
+        );
+    };
+    match station.scan_start(owner, &dials) {
+        Ok(scan) => Response::ok(id, scan),
+        Err(refusal) => {
+            Response::failed(id, ApiError::new(refusal.code(), refusal.message(), false))
+        }
+    }
+}
+
+/// `scan.stop`: the asking connection's scan ends, and the radio goes to its home dial once
+/// nothing holds it where it is (ADR-0129).
+fn scan_stop<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
+    let stopped = request
+        .connection
+        .is_some_and(|owner| station.scan_stop(owner));
+    Response::ok(request.id.clone(), json!({ "stopped": stopped }))
 }
 
 /// A probe (ADR-0006): the question a session would answer, without the session.
@@ -2182,6 +2243,8 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         "ptt": station.ptt_description(),
         "ptt_fault": station.ptt_fault(),
         "can_tune": station.can_tune(),
+        // the scan a program asked for (ADR-0129), null when none runs
+        "scan": station.scan_status(),
         "queued_bytes": station.queued_bytes(),
         "version": env!("CARGO_PKG_VERSION"),
         "link": link_json(station),

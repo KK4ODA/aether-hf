@@ -302,6 +302,13 @@
             </div>
             <span class="sub numerals" id="dial-reading" title="What the radio reads now, over CAT, rigctld or FLRig" role="status" aria-live="polite"></span>
           </div>
+          <!-- a program scans the station's dials (ADR-0129): where the radio is, and Stop -->
+          <div class="tool-row inset-row scan-row" id="scan-row" title="A program is scanning: the station moves the radio over the program's dials, a while on each, and never leaves one while a frame is arriving, a call or a session is up, or the identifier is owed there. Answering stays on throughout. Stop ends the scan and leaves the radio where it is; the program is told and does not start it again by itself. The dial list is held while it runs" hidden>
+            <label id="scan-label" title="A program is scanning the station's dials">Scanning</label>
+            <span class="numerals" id="scan-at" title="The dial the radio is on now, its place in the scan's list, and the program scanning" role="status" aria-live="polite"></span>
+            <span class="sub" id="scan-held" title="What keeps the radio on this dial now: a frame arriving, a call, a session or the identifier; or a linger after a frame it could not read, for the caller's next try"></span>
+            <button id="btn-scan-stop" class="quiet" title="End the scan and leave the radio where it is; the program that started it is told">Stop</button>
+          </div>
           <div class="tool-row inset-row" id="memory-form" title="A dial to add to the list" hidden>
             <label for="memory-mhz">New dial</label>
             <input id="memory-mhz" title="Dial frequency in MHz, for example 14.107" type="text" inputmode="decimal" class="mhz" placeholder="14.107" autocomplete="off" aria-label="Dial frequency in MHz" />

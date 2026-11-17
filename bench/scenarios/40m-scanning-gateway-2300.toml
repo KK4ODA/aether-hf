@@ -1,0 +1,33 @@
+name = "40m-scanning-gateway-2300"
+description = "A gateway scans three dials (ADR-0129); a client on the third calls it for as long as its scan says, and carries a message each way. Every acceptance must answer a call on its own dial, heard with the gateway still there (S1)."
+tags = ["scan"]
+bandwidth = 2300
+seconds = 420
+seed = 1
+
+[stations.a]
+callsign = "W4ODA"
+dial_hz = 10_145_000
+[stations.b]
+callsign = "KK4XYZ-10"
+
+[path]
+profile = "awgn"
+snr_db = 10.0
+
+[script]
+steps = [
+  "scan b 3590000,7101000,10145000",
+  "wait 7",
+  "connect call_s=scan",
+  "message 2000",
+  "reply 600",
+  "disconnect",
+  "wait 20",
+]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+max_collisions = 0

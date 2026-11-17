@@ -126,6 +126,7 @@ function setLink(up) {
     "memory",
     "btn-memory-add",
     "btn-memory-remove",
+    "btn-scan-stop",
   ]) {
     $(id).disabled = !up;
   }
@@ -198,6 +199,10 @@ function onEvent(frame) {
       break;
     case "dial":
       // the radio's dial moved: the readout, the list and the rules' verdict follow now
+      refreshStatus();
+      break;
+    case "scan":
+      // a program's scan started, changed or ended (ADR-0129)
       refreshStatus();
       break;
     case "bandwidth":
@@ -1760,11 +1765,44 @@ function applyDial(status) {
     hero.textContent = "—";
     source("", "Reading the dial needs CAT, rigctld or FLRig keying (Setup step 2)");
   }
+  applyScan(status.scan ?? null);
   dialHeld =
     status.probing === true ||
     (status.test !== null && status.test !== undefined) ||
-    status.transmitting === true;
+    status.transmitting === true ||
+    (status.scan !== null && status.scan !== undefined);
   updateDialList();
+}
+
+// A program's scan of the station's dials (ADR-0129): the dial it is on, its place in the
+// list and the program; what holds it there, or that it lingers for a caller's next try.
+function applyScan(scan) {
+  const row = $("scan-row");
+  row.hidden = scan === null;
+  if (scan === null) return;
+  const index = scan.dials.indexOf(scan.at_hz);
+  const at = scan.at_hz ? `${(scan.at_hz / 1e6).toFixed(4)} MHz` : "—";
+  $("scan-at").textContent = `${at} · ${index + 1} of ${scan.dials.length} · ${scan.app}`;
+  const held = $("scan-held");
+  if (scan.held) {
+    held.textContent = "held";
+    held.title = `Held on this dial: ${scan.held}`;
+  } else if (scan.lingering_until_ms) {
+    held.textContent = "lingering";
+    held.title = "Staying on this dial after a frame it could not read, or a contact, for the caller's next try";
+  } else {
+    held.textContent = "";
+    held.title = "";
+  }
+}
+
+async function stopScan() {
+  try {
+    await call("scan.stop");
+  } catch (error) {
+    log(error.message, true);
+  }
+  refreshStatus();
 }
 
 function parseMhz(text) {
@@ -6369,6 +6407,7 @@ function wire() {
   $("memory").addEventListener("change", pickDial);
   $("btn-memory-add").addEventListener("click", openMemoryForm);
   $("btn-memory-remove").addEventListener("click", removeMemory);
+  $("btn-scan-stop").addEventListener("click", stopScan);
   $("btn-memory-save").addEventListener("click", saveMemoryForm);
   $("btn-memory-cancel").addEventListener("click", closeMemoryForm);
   for (const id of ["memory-mhz", "memory-name"]) {

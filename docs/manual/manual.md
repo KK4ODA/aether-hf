@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.2.0 |
-| **Updated** | 2026-11-16 |
+| **Version** | 1.3.0 |
+| **Updated** | 2026-11-17 |
 | **Describes** | Aether HF 0.2.0-beta.161 |
 | **Licence** | CC BY 4.0 |
 
@@ -594,6 +594,23 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
   one. When the radio's own dial matches an entry, the list follows it.
 - **Dial is at**: shown when the radio cannot report its dial. Type where it is and press **Set**.
   The rules judge every transmission against it until you change it.
+- **Scanning**: shown while a program, such as RadioPost Gateway, has Aether scan its channels.
+  It names the dial the radio is on, its place in the program's list, and the program. Aether
+  moves the radio to the next dial after about 13 s on each. It never moves while a frame is
+  arriving, while a call or a session is up, or while your identifier is still to go out there.
+  After a frame it could not read, or a contact, it stays about half a minute for the caller's
+  next try. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
+  is; so does turning the radio's knob, or tuning from anywhere else. The program is told, and
+  does not start the scan again by itself. The dial list is held while a scan runs.
+
+![The Radio dial box while RadioPost Gateway scans three dials: the radio on the second](screens/scanning.png)
+
+*Figure 15. The Radio dial box while a program scans: the dial the radio is on, its place in the list, and Stop.*
+
+Every dial in a scan has to suit your antenna without a tuning cycle: a resonant antenna for each
+band, or a tuner that remembers each band. A station calling one that scans needs more tries than
+the usual two; the program that publishes the scan tells the caller's program how long to keep
+calling.
 
 When a host program keys the radio, this box says so and hides the dial list: choose the
 frequency in the program.
@@ -634,7 +651,7 @@ Click the box's heading to open it.
 
 ![The Keying and drive box open: Key 1 s, Tuner tone, Set drive, the transmit level slider and the last transmit peak](screens/drive.png)
 
-*Figure 15. Keying and drive, open.*
+*Figure 16. Keying and drive, open.*
 
 - **Key 1 s**: keys the radio for one second with no audio, to check the keying. The Log then says
   whether the radio's receive audio changed while it was keyed. A radio that transmits goes quiet
@@ -693,7 +710,7 @@ the air should carry ([Reporting a problem](#29-reporting-a-problem)).
 
 ![The Status tab during a session: Link and Channel readings, the History chart with the speed, the Channel and activity chart, and the counters](screens/status.png)
 
-*Figure 16. The Status tab during a session.*
+*Figure 17. The Status tab during a session.*
 
 - **Link**: the rung, the SNR, the throughput and the session (who, and for how long).
 - **Channel**: signal above noise, tuning offset, receive level, bytes still queued, and the
@@ -722,7 +739,7 @@ What each reading means is in [What the readings mean](#27-what-the-readings-mea
 
 ![The Stations tab: the stations heard, with their bandwidth, and the sessions with each](screens/stations.png)
 
-*Figure 17. The stations heard, and the sessions.*
+*Figure 18. The stations heard, and the sessions.*
 
 - **Stations heard**: every station whose frame carried a callsign (a beacon, a call, a probe, an
   answer, a KISS frame, or the other end of a session), one line per callsign, the 200 most recent.
@@ -741,7 +758,7 @@ touched.
 
 ![The Diagnostics tab: the constellation, the spectrum with two red lines at the signal's edges, the waterfall, the receiver's readings and the frames table](screens/diagnostics.png)
 
-*Figure 18. Diagnostics: the signal as the receiver sees it.*
+*Figure 19. Diagnostics: the signal as the receiver sees it.*
 
 - **Signal analysis**: the constellation, the spectrum and the waterfall.
   - The **constellation** shows the last OFDM frame's points. A tone frame has none.
@@ -771,7 +788,7 @@ touched.
 
 ![The undocked signal window: constellation, spectrum and waterfall, with a Busy lamp and a Tune button](screens/signal.png)
 
-*Figure 19. The signal window, undocked.*
+*Figure 20. The signal window, undocked.*
 
 - It has its own **Full** (the whole card), **Compact** (the spectrum and the waterfall) and
   **Mini** (the waterfall alone, with a frequency scale, for a corner of the screen while another
@@ -785,7 +802,7 @@ touched.
 
 ![The Log tab: one entry a line, with tags and filters](screens/log.png)
 
-*Figure 20. The Log tab.*
+*Figure 21. The Log tab.*
 
 The **Log** is everything the modem and the window reported since the window opened, newest last,
 one entry a line. Hold the mouse over a line for the whole of it. Filters: *All*, *Problems*,
@@ -809,7 +826,7 @@ nothing you typed in Send or Received is included.
 
 ![The Send files form, set to send my files to the Aether project: which station, how far back, and whether to include the audio](screens/share.png)
 
-*Figure 21. Send files: one zip of your logs and recordings.*
+*Figure 22. Send files: one zip of your logs and recordings.*
 
 Choose what to do:
 
@@ -830,7 +847,7 @@ that offer them: RadioPost and RadioPost Gateway do (`radiopost.log`, `gateway.l
 
 ![The Help tab: About with the version and folders, and short guides](screens/help.png)
 
-*Figure 22. The Help tab.*
+*Figure 23. The Help tab.*
 
 - **About** shows the version, the modem, the update channel and the latest release, and where
   this station keeps its settings, logs and recordings.
@@ -884,7 +901,7 @@ You do not need this to operate, but it explains what you see on the lamps and i
 
 ![Two lanes over time: N1CALL calls on the tone floor, N2CALL accepts; N1CALL sends a header and data, N2CALL answers in its slot; at the end each says goodbye and the Morse IDs come last](fig/session.svg)
 
-*Figure 23. A session, transmission by transmission.*
+*Figure 24. A session, transmission by transmission.*
 
 - **The call** goes on the tone floor, which gets through the weakest paths. If it is not
   answered, Aether calls again. The called station accepts it.
@@ -906,7 +923,7 @@ the fast ones need a clean path.
 
 ![A chart of data rate against the signal each rung needs, for both bandwidths: the tone rungs on the left under the noise, the OFDM rungs climbing to the right](fig/ladder.svg)
 
-*Figure 24. Every rung's data rate against the signal it needs.*
+*Figure 25. Every rung's data rate against the signal it needs.*
 
 - The **SNR it needs** is where nine frames in ten get through on a steady path, in a 3 kHz noise
   bandwidth. A fading path needs several decibels more.
@@ -974,7 +991,7 @@ The tables below are made from the modem's own figures every time the manual is 
 
 ![Two strips over the radio's audio from 0 to 3500 Hz: the 2300 Hz signal fills most of a 2.4 kHz SSB filter, the 500 Hz signal sits in its middle](fig/bandwidth.svg)
 
-*Figure 25. Where Aether's two signals sit in the radio's audio.*
+*Figure 26. Where Aether's two signals sit in the radio's audio.*
 
 - **2300 Hz** carries the most data: use it for Winlink and Pat, and whenever both stations can.
   It needs a receive filter 2.4 kHz or wider, centred.
@@ -1007,7 +1024,7 @@ press **Test session**. The other station only has to be listening.
 
 ![Six steps in a row: probe, call, message, file, ladder, disconnect, over a time bar of about five minutes](fig/test.svg)
 
-*Figure 26. The six steps of a Test session.*
+*Figure 27. The six steps of a Test session.*
 
 1. **Probe.** If you probed the same station on the same dial in the last minute and were answered,
    that probe counts and no new one goes.
@@ -1022,7 +1039,7 @@ press **Test session**. The other station only has to be listening.
 
 ![The Session tab during a Test session: the progress bar, the step, and the rung under test](screens/session-test.png)
 
-*Figure 27. A Test session in progress.*
+*Figure 28. A Test session in progress.*
 
 The message and file go first, so the speeds the Test reports are the speeds you would get. It
 takes about five minutes and stops itself at ten. If you wait for a clear channel, the probe and the
@@ -1035,7 +1052,7 @@ bandwidths: the Test then runs at 500 Hz. The result is saved as two files endin
 
 ![A transmission goes to the rules check (licence class, band segment, both edges of the signal, control, its width); legal, the radio is keyed; not allowed, nothing goes out and the badge says why](fig/rules.svg)
 
-*Figure 28. Every transmission is judged against the rules before the radio is keyed.*
+*Figure 29. Every transmission is judged against the rules before the radio is keyed.*
 
 With *United States — FCC Part 97* chosen in Setup step 1, Aether judges every transmission before
 it keys the radio: your licence class, the band segment at the dial, both edges of the signal, the
@@ -1064,7 +1081,7 @@ Programs reach Aether through ports on the same computer. Each kind has its own.
 
 ![Aether's window and RadioPost on the control port 8515; Winlink Express, Pat, VarAC and RMS Trimode on the host port 8300 and 8301; packet programs on the KISS port 8100; all into the modem, then the radio](fig/programs.svg)
 
-*Figure 29. The programs that use Aether and the ports they connect to.*
+*Figure 30. The programs that use Aether and the ports they connect to.*
 
 | Port | What it is | Who uses it |
 |---|---|---|
@@ -1108,7 +1125,7 @@ screen by screen.
 
 ![Two rows. Winlink: your station with Winlink Express and Aether, by radio to a gateway with RMS Trimode and Aether, then the Internet to Winlink's servers. RadioPost: your station with RadioPost and Aether, by radio to RadioPost Gateway and Aether, then the Internet to your post office](fig/mail.svg)
 
-*Figure 30. Mail by radio, through a gateway: Winlink above, RadioPost below.*
+*Figure 31. Mail by radio, through a gateway: Winlink above, RadioPost below.*
 
 An Aether gateway runs RMS Trimode beside Aether; a station in the field runs Winlink Express with
 Aether. Set the gateway's Aether to *Automatic* control (Setup step 1) when nobody is at its radio.
@@ -1218,7 +1235,7 @@ is to carry RadioPost's email over FM, simplex and through repeaters.
 
 ![Aether FM as planned: simplex between two FM radios through the voice path or a 9600 data port; the far station measuring your level and telling you; through a repeater, off by default; and packet radio](fig/fm.svg)
 
-*Figure 31. Aether FM as planned.*
+*Figure 32. Aether FM as planned.*
 
 What has been decided:
 
@@ -1318,7 +1335,7 @@ frames at a good SNR, check the receive level, the drive and the receive filter.
 
 ![Three panels: the radio's filter passing all of Aether's signal; a filter moved down that cuts the top; a filter moved up that cuts the bottom, with the knob to turn for each](fig/filter.svg)
 
-*Figure 32. When the radio's receive filter cuts the signal.*
+*Figure 33. When the radio's receive filter cuts the signal.*
 
 **The receive filter banner says the top of the signal is cut.** The radio's passband ends below the top
 of Aether's signal. Usually the IF shift (or passband tuning) has moved the passband down: centre it.
@@ -1489,3 +1506,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.0.0 | 2026-11-15 | First edition: the illustrated manual in place of `docs/user/manual.md`, with Parts, schematics and screenshots, the rung tables from the model, a chapter on RadioPost, and Aether FM as planned. |
 | 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
 | 1.2.0 | 2026-11-16 | The identifier in the data signal (ADR-0127): Setup step 4's **Identify by** (Morse or Data signal) in place of **Morse ID**, the Morse speed on its own row, and the goodbye, the rules and the host programs' `CWID ON` in those words. |
+| 1.3.0 | 2026-11-17 | Scanning (ADR-0129): the **Radio dial** box's **Scanning** row with **Stop**, while a program such as RadioPost Gateway scans the station's dials; what holds the radio on a dial, and what ends a scan. |

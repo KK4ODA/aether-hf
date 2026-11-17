@@ -32,6 +32,7 @@ mod keyed_audio;
 mod latency;
 mod radio_reads;
 mod reserve;
+mod scan;
 pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
 };
@@ -1229,6 +1230,8 @@ pub struct Station<P: Ptt> {
     /// The engine's acknowledged-plus-delivered count when `moved` was last fed.
     crossed: usize,
     frequency: FrequencyCache,
+    /// The scan a program asked for, and the radio's way home after one (ADR-0129).
+    scanner: scan::Scanner,
     compressor: Compressor,
     decompressor: Decompressor,
     /// Application bytes waiting for a session to negotiate compression.
@@ -1403,6 +1406,7 @@ impl<P: Ptt> Station<P> {
             data_heard: None,
             crossed: 0,
             frequency: FrequencyCache::default(),
+            scanner: scan::Scanner::default(),
             // Nothing is compressed until a session negotiates it. Before that the two ends
             // have not agreed on anything, and a guess would produce a stream the peer
             // cannot read.
@@ -1850,14 +1854,16 @@ impl<P: Ptt> Station<P> {
     /// # Errors
     /// If a session is already up, or the callsign is not one of this station's.
     pub fn connect_as(&mut self, remote: &str, as_call: Option<&str>) -> Result<(), &'static str> {
-        self.connect_keeping(remote, as_call, false)
+        self.connect_keeping(remote, as_call, false, None)
     }
 
     /// Call a station as one of this station's callsigns; with `keep_bandwidth`, in the
     /// bandwidth the station runs now, not the one remembered for the station called. A host
     /// program that said `BW2300` chose it (ADR-0102): KK4ODA's Winlink Express asked for
     /// 2 300 Hz and the call went at 500 Hz, to a gateway remembered at 500 Hz that ran 2 300.
-    /// An unanswered call still goes on at 500 Hz after four tries (ADR-0058).
+    /// An unanswered call still goes on at 500 Hz after four tries (ADR-0058). With `call_s`,
+    /// the call's tries keep starting for at least that long: a call to a station that scans
+    /// its channels (ADR-0129).
     ///
     /// # Errors
     /// If a session is already up, or the callsign is not one of this station's.
@@ -1866,6 +1872,7 @@ impl<P: Ptt> Station<P> {
         remote: &str,
         as_call: Option<&str>,
         keep_bandwidth: bool,
+        call_s: Option<f64>,
     ) -> Result<(), &'static str> {
         if self.config.answer_only {
             return Err("this station is answer-only: it takes calls and makes none");
@@ -1883,7 +1890,8 @@ impl<P: Ptt> Station<P> {
         }
         // how well the station called was read lately chooses a capped call's tries (ADR-0126)
         let heard_db = self.heard_lately(remote, self.now());
-        self.engine.connect_heard(remote, as_call, heard_db)?;
+        self.engine
+            .connect_lasting(remote, as_call, heard_db, call_s)?;
         if idle && keep_bandwidth {
             // after the call is placed: it says after how many of its tries it moves
             self.note_kept_bandwidth(remote);
@@ -2442,6 +2450,29 @@ impl<P: Ptt> Station<P> {
     /// # Errors
     /// With the reason, in a sentence for the operator.
     pub fn tune_to(&mut self, hz: u64) -> Result<(), String> {
+        self.dial_movable()?;
+        self.ptt
+            .inner_mut()
+            .set_frequency_hz(hz)
+            .map_err(|e| match e {
+                crate::ptt::PttError::Backend(message) => message,
+                other @ crate::ptt::PttError::WatchdogTripped => other.to_string(),
+            })?;
+        // what the radio now reads, and a fresh reading soon after
+        let now = self.now();
+        self.read_dial(hz, now);
+        self.frequency.next_ask_s = now + 2.0;
+        self.refresh_ceiling(true);
+        self.note("tune", &format!("dial set to {hz} Hz"));
+        Ok(())
+    }
+
+    /// Whether the radio may leave its dial now: what [`Self::tune_to`] refuses for, and what
+    /// holds a scan where it is (ADR-0129).
+    ///
+    /// # Errors
+    /// What holds it, in a sentence for the operator.
+    pub(crate) fn dial_movable(&self) -> Result<(), String> {
         if self.transmitting || !self.playback.is_empty() {
             return Err("a transmission is on the air".into());
         }
@@ -2469,19 +2500,6 @@ impl<P: Ptt> Station<P> {
         if let Some(what) = self.pending.iter().find_map(holds_the_dial) {
             return Err(format!("{what} is waiting to go out on this frequency"));
         }
-        self.ptt
-            .inner_mut()
-            .set_frequency_hz(hz)
-            .map_err(|e| match e {
-                crate::ptt::PttError::Backend(message) => message,
-                other @ crate::ptt::PttError::WatchdogTripped => other.to_string(),
-            })?;
-        // what the radio now reads, and a fresh reading soon after
-        let now = self.now();
-        self.read_dial(hz, now);
-        self.frequency.next_ask_s = now + 2.0;
-        self.refresh_ceiling(true);
-        self.note("tune", &format!("dial set to {hz} Hz"));
         Ok(())
     }
 
@@ -3249,6 +3267,7 @@ impl<P: Ptt> Station<P> {
         self.advance_beacons(now);
         self.advance_call_bandwidth(now);
         self.advance_bandwidth(now);
+        self.advance_scan(now);
         self.read_radio(now);
         Ok(())
     }
@@ -4194,6 +4213,7 @@ impl<P: Ptt> Station<P> {
             self.rx_until = self.rx_until.max(now + 0.5);
         }
         self.note_session_frame(&report, rung, now);
+        self.scan_heard(&report, now);
         self.reports.push(report);
     }
 
@@ -5191,6 +5211,8 @@ impl<P: Ptt> Station<P> {
             // ordinary connect frames is five times as long (ADR-0012)
             let frame_s = pending.length_s;
             self.rx_until = self.rx_until.max(now + frame_s.max(data_frame_s));
+            // a scan does not leave a frame arriving (ADR-0129 rule 4)
+            self.scan_arriving(end_s);
             self.engine.on_preamble(start_s, now, Some(frame_s));
         }
     }
@@ -11302,7 +11324,9 @@ mod tests {
         air.a = caller_on(WIDE_2300);
         air.a.learn_bandwidth("KK4XYZ", 500);
         assert_eq!(air.a.host_bandwidth(Some(2300)), Ok(2300));
-        air.a.connect_keeping("KK4XYZ", None, true).expect("idle");
+        air.a
+            .connect_keeping("KK4XYZ", None, true, None)
+            .expect("idle");
         assert_eq!(air.a.bandwidth_hz(), 2300);
         let events = air.a.take_events();
         assert!(
@@ -11341,7 +11365,9 @@ mod tests {
         air.a = caller_on(WIDE_2300);
         air.a.engine.set_call_tries(6);
         assert_eq!(air.a.host_bandwidth(Some(2300)), Ok(2300));
-        air.a.connect_keeping("KK4XYZ", None, true).expect("idle");
+        air.a
+            .connect_keeping("KK4XYZ", None, true, None)
+            .expect("idle");
         air.run(400.0, |a, b| a.connected() && b.connected());
         assert!(
             air.a.connected() && air.b.connected(),
@@ -11837,7 +11863,7 @@ mod tests {
         // a program calls only as its own callsigns
         assert_eq!(
             air.b
-                .connect_for(Some(HOST_PROGRAM), "W4ODA", Some("KK4XYZ-10"), false),
+                .connect_for(Some(HOST_PROGRAM), "W4ODA", Some("KK4XYZ-10"), false, None),
             Err(NOT_HELD)
         );
     }
@@ -11857,7 +11883,7 @@ mod tests {
             .claim(client, Some("RadioPost client"), &["W4ODA".to_owned()])
             .expect("valid");
         air.a
-            .connect_for(Some(client), "KK4XYZ", None, false)
+            .connect_for(Some(client), "KK4XYZ", None, false, None)
             .expect("idle");
         air.run(90.0, |a, b| a.connected() && b.connected());
         assert_eq!(air.a.owner(), Some(client));
@@ -11905,7 +11931,7 @@ mod tests {
         // nobody answers: the call keeps going until the program goes
         claim_for_host(&mut air.b, &["KK4XYZ"], false);
         air.a
-            .connect_for(Some(client), "KK4XYZ", None, false)
+            .connect_for(Some(client), "KK4XYZ", None, false, None)
             .expect("idle");
         air.run(10.0, |_, _| false);
         assert_eq!(air.a.state(), State::Connecting);

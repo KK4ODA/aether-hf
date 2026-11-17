@@ -119,6 +119,12 @@ DEVICE_LATENCY_S = 0.25
 """From the daemon (``audio::DEVICE_LATENCY_S``): played to on the air."""
 
 MSG_BLOCK, MSG_PLAY, MSG_READY, MSG_CLEAR, MSG_TAG, MSG_GAP, MSG_SKIP = 1, 2, 3, 4, 5, 6, 7
+# the radio's dial, both ways, to a daemon that said ``AEC4`` (ADR-0129): the station tuned there,
+# or the server says where the radio is — the scenario's ``dial_hz``, a knob turned at the radio
+MSG_DIAL = 8
+DEFAULT_DIAL_HZ = 7_101_000
+"""Where a station's radio sits unless its scenario says ``dial_hz``: every station on one dial,
+as every scenario before dials had them."""
 RADIATED_BLOCK = 48
 """Samples a radiated block: 1 ms. A block with any signal in it radiates — a waveform crosses
 zero, a keyed lead or tail of silence is all zeros."""
@@ -429,6 +435,13 @@ class Station:
     # the last block went, where each skip began and how long it was; the daemon reads MSG_SKIP
     # (it said ``AEC3``) as a capture callback's timestamps
     reads_skips: bool = False
+    # its radio's dial (ADR-0129): where it is, what the daemon was last told or told the
+    # server, and every change with the air time it took effect; the daemon reads MSG_DIAL and
+    # sends it (it said ``AEC4``)
+    reads_dials: bool = False
+    dial: int = DEFAULT_DIAL_HZ
+    dial_told: int | None = None
+    dials: list[list[float]] = field(default_factory=list)
     skip_every: float = 0.0
     skip_range: tuple[float, float] = (0.0, 0.0)
     skip_rng: np.random.Generator | None = None
@@ -501,6 +514,9 @@ class Station:
                 # next one played, and the accounts of what was dropped go with it
                 self.queued_total = self.consumed
                 self.tags_waiting.clear()
+            elif kind == MSG_DIAL:
+                (hz,) = struct.unpack("<Q", self.read_exact(8))
+                self.dial = self.dial_told = int(hz)
             elif kind == MSG_TAG:
                 (n,) = struct.unpack("<I", self.read_exact(4))
                 raw = self.read_exact(n).decode("utf-8", errors="replace")
@@ -574,6 +590,10 @@ class Station:
         if stalled:
             self.backlog.append(samples)
             return
+        if self.reads_dials and self.dial_told != self.dial:
+            # where the radio is: the scenario's dial at the start, the knob turned since
+            self.sock.sendall(struct.pack("<BQ", MSG_DIAL, self.dial))
+            self.dial_told = self.dial
         if self.backlog:
             pile = np.concatenate([*self.backlog, samples])
             self.backlog.clear()
@@ -725,7 +745,7 @@ class Server:
         while st.tags_waiting and st.tags_waiting[0][0] < st.consumed:
             offset, tag = st.tags_waiting.pop(0)
             at = self.t + self.latency + max(0, offset - before)
-            st.transmissions.append({"air_s": round(at / AUDIO_RATE, 3), **tag})
+            st.transmissions.append({"air_s": round(at / AUDIO_RATE, 3), "dial": st.dial, **tag})
         st.air = np.concatenate((st.air, played))
         st.air_keyed = np.concatenate((st.air_keyed, real))
         audio, keyed = st.air[:TICK].copy(), st.air_keyed[:TICK].copy()
@@ -770,6 +790,9 @@ class Server:
                 st.until_ready()
                 st.owed -= 1
         self.doing = "making the air"
+        for st in self.stations.values():
+            if not st.dials or st.dials[-1][1] != st.dial:
+                st.dials.append([round(self.t / AUDIO_RATE, 3), st.dial])
         audio: dict[str, np.ndarray] = {}
         keyed: dict[str, np.ndarray] = {}
         signal: dict[str, np.ndarray] = {}
@@ -780,16 +803,25 @@ class Server:
                 audio[who] = np.zeros_like(audio[who])
             self._note_radiated(st, signal[who])
         heard: dict[str, np.ndarray] = {}
+
+        # a receiver hears only the stations on its own dial (ADR-0129); every path still runs,
+        # on silence, so its fading and noise stay as they would have been
+        def on(tx: str, rx: str, x: np.ndarray) -> np.ndarray:
+            return x if self.stations[tx].dial == self.stations[rx].dial else np.zeros_like(x)
+
         for rx, st in self.stations.items():
             main = main_peer(rx)
-            out = self.paths[(main, rx)].process(audio[main])
+            out = self.paths[(main, rx)].process(on(main, rx, audio[main]))
             for tx in self.stations:
                 if tx not in (rx, main):
-                    out = out + self.paths[(tx, rx)].process(audio[tx] * self.gains[(tx, rx)])
+                    out = out + self.paths[(tx, rx)].process(
+                        on(tx, rx, audio[tx]) * self.gains[(tx, rx)]
+                    )
             deaf = self._deaf(st, keyed[rx])
             out[deaf] = 0.0
             if self.t >= self.outage_until:
-                self._note_deaf_hits(st, rx, main, signal, keyed, vox, deaf)
+                heard_signal = {**signal, main: on(main, rx, signal[main])}
+                self._note_deaf_hits(st, rx, main, heard_signal, keyed, vox, deaf)
             if st.rx_sos is not None:
                 out, st.rx_zi = sosfilt(st.rx_sos, out, zi=st.rx_zi)
             if st.agc is not None:
@@ -799,13 +831,24 @@ class Server:
             if st.rx_gain != 1.0:
                 out = np.clip(out * st.rx_gain, -1.0, 1.0)
             heard[rx] = out.astype(np.float32)
-        # two or more transmitters keyed at once
-        both = np.sum(np.stack(list(keyed.values())), axis=0) >= 2
+        # two or more transmitters keyed at once on one dial
+        dials = {st.dial for st in self.stations.values()}
+
+        def together(by: dict[str, np.ndarray]) -> np.ndarray:
+            return np.any(
+                [
+                    np.sum([by[w] for w, s in self.stations.items() if s.dial == d], axis=0) >= 2
+                    for d in dials
+                ],
+                axis=0,
+            )
+
+        both = together(keyed)
         if self.t < self.outage_until:
             both[:] = False  # neither hears the other: not a collision on this path
         self.both_keyed += int(both.sum())
         # what the keyed overlap was: signal from two at once, a VOX's hold, or a keyed silence
-        radiated = np.sum(np.stack(list(signal.values())), axis=0) >= 2
+        radiated = together(signal)
         held = np.any(np.stack(list(vox.values())), axis=0)
         split = np.where(radiated, 0, np.where(held, 1, 2))
         for i in np.flatnonzero(both):
@@ -827,6 +870,33 @@ class Server:
             self.doing = f"sending {st.name} its block"
             st.deliver(self.t + TICK, heard[who], stalled[who])
         self.t += TICK
+
+    def dial_faults(self) -> list[str]:
+        """ADR-0129 S1, from the air: every acceptance answers a call on its own dial, heard with
+        the station still on that dial. An acceptance with no call on its dial in the minute
+        before it, or after its station moved since that call, answered a call heard elsewhere."""
+        faults = []
+        calls = sorted(
+            (tx["air_s"], tx.get("dial"), st.name)
+            for st in self.stations.values()
+            for tx in st.transmissions
+            if any(f.get("kind") == "ConnectReq" for f in tx.get("frames", []))
+        )
+        for st in self.stations.values():
+            for tx in st.transmissions:
+                if not any(f.get("kind") == "Accept" for f in tx.get("frames", [])):
+                    continue
+                at, dial = tx["air_s"], tx.get("dial")
+                heard = [
+                    c for c in calls if c[2] != st.name and c[1] == dial and at - 60 < c[0] < at
+                ]
+                if not heard:
+                    faults.append(f"{st.name} accepted at {at:.1f} s on {dial} with no call there")
+                    continue
+                since = heard[-1][0]
+                if any(since < t <= at for t, _ in st.dials[1:]):
+                    faults.append(f"{st.name} accepted at {at:.1f} s after moving since the call")
+        return faults
 
     def _note_radiated(self, st: Station, signal: np.ndarray) -> None:
         """Extend the station's radiated intervals by this tick, a radiated block at a time."""
@@ -880,9 +950,11 @@ class Server:
                     "capture_skips": [[round(x, 3) for x in iv] for iv in st.skips],
                     "deaf_hits_s": {k: seconds(v) for k, v in st.deaf_hits.items()},
                     "transmissions": st.transmissions,
+                    "dials": st.dials,
                 }
                 for st in self.stations.values()
             },
+            "dial_faults": self.dial_faults(),
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
             "overlap_s": {k: seconds(v) for k, v in self.overlap.items()},
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
@@ -982,10 +1054,11 @@ def accept_station(listener: socket.socket, radios: dict) -> Station:
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     st = Station("?", sock, 0, 0, 0)
     magic = st.read_exact(4)
-    if magic not in (b"AEC1", b"AEC2", b"AEC3"):
+    if magic not in (b"AEC1", b"AEC2", b"AEC3", b"AEC4"):
         raise SystemExit(f"not a daemon: {magic!r}")
-    st.reads_gaps = magic in (b"AEC2", b"AEC3")
-    st.reads_skips = magic == b"AEC3"
+    st.reads_gaps = magic in (b"AEC2", b"AEC3", b"AEC4")
+    st.reads_skips = magic in (b"AEC3", b"AEC4")
+    st.reads_dials = magic == b"AEC4"
     rate, length = struct.unpack("<IH", st.read_exact(6))
     if rate != AUDIO_RATE:
         raise SystemExit(f"a daemon at {rate} Hz; the channel runs at {AUDIO_RATE}")
@@ -1010,7 +1083,8 @@ def main() -> int:
         type=Path,
         help=(
             "read every second of air for new lines: `outage S` cuts the path both ways for "
-            "S s, `stall WHO S` stops a station's loop for S s"
+            "S s, `stall WHO S` stops a station's loop for S s, `knob WHO HZ` turns a station's "
+            "dial at its radio"
         ),
     )
     args = ap.parse_args()
@@ -1035,6 +1109,7 @@ def main() -> int:
         st.tx_delay = round(float(radio.get("tx_delay_ms", 0)) * AUDIO_RATE / 1000)
         st.vox_hold = round(float(radio.get("vox_hold_ms", 0)) * AUDIO_RATE / 1000)
         st.recovery = round(float(radio.get("rx_recovery_ms", 0)) * AUDIO_RATE / 1000)
+        st.dial = int(stations.get(who, {}).get("dial_hz", DEFAULT_DIAL_HZ))
         machine(st, stations.get(who, {}).get("machine", {}), int(scenario.get("seed", 1)), who)
     server = Server(scenario, on_air)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
@@ -1069,6 +1144,10 @@ def main() -> int:
                             who, _, length = arg.partition(" ")
                             if who in on_air:
                                 on_air[who].stall(server.t, round(float(length) * AUDIO_RATE))
+                        if word == "knob":
+                            who, _, hz = arg.partition(" ")
+                            if who in on_air:
+                                on_air[who].dial = int(hz)
                         if word == "outage":
                             server.outage_until = server.t + round(float(arg) * AUDIO_RATE)
                             server.outages.append(

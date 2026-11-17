@@ -13,12 +13,14 @@
 //!
 //! The wire, little-endian:
 //!
-//! * station → server, once: `AEC3` (`AEC2` from a daemon that reads no skip, `AEC1` from one
-//!   that reads no gap either), `u32` sample rate, `u16` length, the station's name;
+//! * station → server, once: `AEC4` (`AEC3` from a daemon that has no dial, `AEC2` from one that
+//!   reads no skip either, `AEC1` from one that reads no gap), `u32` sample rate, `u16` length,
+//!   the station's name;
 //! * station → server: `2` `u32 n` then `n` `f32` samples to play; `3` ready for the next
 //!   block (the last one has been processed); `4` drop what is queued and not yet played;
 //!   `5` `u32 n` then `n` bytes of UTF-8: the account of the transmission whose samples come
-//!   next (`AudioIo::annotate`), which the server puts on the air with them;
+//!   next (`AudioIo::annotate`), which the server puts on the air with them; `8` `u64` the radio
+//!   was tuned to that dial, in hertz ([`ChannelRig`], ADR-0129);
 //! * server → station: `1`, `u64` the playback clock — samples the station's device has
 //!   played through this block, silence included, as a sound card counts them —, `u64` the
 //!   samples of its queue played so far, `u32 n`, then `n` `f32` samples heard; and, to an
@@ -26,7 +28,10 @@
 //!   it, as a capture queue loses its oldest when the loop has fallen behind (a stall); and, to
 //!   an `AEC3` station, `7` `u64 n` ahead of a block: the sound card's capture skipped `n`
 //!   samples just before it, as its callback's timestamps say, which the station puts back as
-//!   silence as the capture callback does (ADR-0089).
+//!   silence as the capture callback does (ADR-0089); and, to an `AEC4` station, `8` `u64` ahead
+//!   of a block: the radio's dial is that, in hertz — where the scenario put it, and the knob
+//!   turned at the radio — which the station reads back as a radio's dial (ADR-0129). The server
+//!   joins only stations on one dial.
 //!
 //! Nothing here is used on the air: `--channel` is for the harness, and a daemon on it keys
 //! no transmitter.
@@ -34,6 +39,7 @@
 use std::{
     io::{Read as _, Write as _},
     net::TcpStream,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -62,6 +68,8 @@ pub struct ChannelLink {
     skips: crate::audio::CaptureSkips,
     /// The audio's sample rate.
     rate: f64,
+    /// The radio's dial, as the server last said it or the station last set it.
+    dial: Arc<Mutex<Option<u64>>>,
     /// Human-readable, for the log.
     pub description: String,
 }
@@ -92,7 +100,7 @@ impl ChannelLink {
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(BLOCK_WAIT))?;
         let name = name.as_bytes();
-        let mut hello = b"AEC3".to_vec();
+        let mut hello = b"AEC4".to_vec();
         hello.extend_from_slice(&sample_rate.to_le_bytes());
         hello.extend_from_slice(&u16::try_from(name.len()).unwrap_or(0).to_le_bytes());
         hello.extend_from_slice(&name[..name.len().min(usize::from(u16::MAX))]);
@@ -107,8 +115,20 @@ impl ChannelLink {
             last_len: None,
             skips: crate::audio::CaptureSkips::default(),
             rate: f64::from(sample_rate),
+            dial: Arc::new(Mutex::new(None)),
             description: format!("channel server at {address}, in lockstep"),
         })
+    }
+
+    /// The station's radio on this channel: it keys nothing (the transmission is the audio the
+    /// server is handed) and has a dial, which the server joins stations by (ADR-0129).
+    #[must_use]
+    pub fn rig(&self) -> ChannelRig {
+        ChannelRig {
+            dial: Arc::clone(&self.dial),
+            stream: self.stream.as_ref().and_then(|s| s.try_clone().ok()),
+            readings: Vec::new(),
+        }
     }
 
     /// Whether the server is still there.
@@ -132,15 +152,22 @@ impl ChannelLink {
         };
         let mut head = [0u8; 21];
         stream.read_exact(&mut head[..1])?;
-        // audio lost ahead of the block that follows: by the queue (6) or the capture (7)
-        while head[0] == 6 || head[0] == 7 {
-            let mut lost = [0u8; 8];
-            stream.read_exact(&mut lost)?;
-            let lost = usize::try_from(u64::from_le_bytes(lost)).unwrap_or(0);
-            if head[0] == 6 {
-                self.gap += lost;
-            } else {
-                self.skip += lost;
+        // audio lost ahead of the block that follows: by the queue (6) or the capture (7); or
+        // the radio's dial (8)
+        while matches!(head[0], 6..=8) {
+            let mut word = [0u8; 8];
+            stream.read_exact(&mut word)?;
+            let value = u64::from_le_bytes(word);
+            let lost = usize::try_from(value).unwrap_or(0);
+            match head[0] {
+                6 => self.gap += lost,
+                7 => self.skip += lost,
+                _ => {
+                    *self
+                        .dial
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(value);
+                }
             }
             stream.read_exact(&mut head[..1])?;
         }
@@ -257,6 +284,79 @@ impl AudioIo for ChannelLink {
     }
 }
 
+/// The station's radio on a harness's channel (ADR-0129): it keys nothing, since the server puts
+/// what the station hands it on the air, and it has a dial, which a scan or a tune moves and the
+/// server joins stations by. The knob turned at the radio is the server's: a dial it says.
+#[derive(Debug)]
+pub struct ChannelRig {
+    dial: Arc<Mutex<Option<u64>>>,
+    stream: Option<TcpStream>,
+    readings: Vec<crate::ptt::Readings>,
+}
+
+impl ChannelRig {
+    fn dial(&self) -> Option<u64> {
+        *self
+            .dial
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl crate::ptt::Ptt for ChannelRig {
+    fn key(&mut self) -> Result<(), crate::ptt::PttError> {
+        Ok(())
+    }
+
+    fn unkey(&mut self) -> Result<(), crate::ptt::PttError> {
+        Ok(())
+    }
+
+    fn describe(&self) -> String {
+        "the harness's radio (keys nothing; has a dial)".to_owned()
+    }
+
+    fn frequency_hz(&mut self) -> Option<u64> {
+        self.dial()
+    }
+
+    fn can_tune(&self) -> bool {
+        self.stream.is_some()
+    }
+
+    fn set_frequency_hz(&mut self, hz: u64) -> Result<(), crate::ptt::PttError> {
+        let Some(stream) = self.stream.as_mut() else {
+            return Err(crate::ptt::PttError::Backend(
+                "the channel server has gone".into(),
+            ));
+        };
+        let mut bytes = vec![8u8];
+        bytes.extend_from_slice(&hz.to_le_bytes());
+        stream
+            .write_all(&bytes)
+            .map_err(|e| crate::ptt::PttError::Backend(format!("the channel server: {e}")))?;
+        *self
+            .dial
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hz);
+        Ok(())
+    }
+
+    fn request_readings(&mut self, asked: crate::ptt::Asked) {
+        self.readings.push(crate::ptt::Readings {
+            at: std::time::Instant::now(),
+            asked,
+            meter: None,
+            dial_hz: if asked.dial { self.dial() } else { None },
+            settings: Vec::new(),
+        });
+    }
+
+    fn take_readings(&mut self) -> Vec<crate::ptt::Readings> {
+        std::mem::take(&mut self.readings)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +366,10 @@ mod tests {
     const LOST: u64 = 37;
     /// Samples it says the capture skipped ahead of its fifth: 12.5 ms, a skip put back.
     const SKIPPED: u64 = 600;
+    /// The dial it says the radio is on, ahead of its second block, and the one the station
+    /// tunes to after.
+    const DIAL: u64 = 7_101_000;
+    const TUNED: u64 = 3_590_000;
 
     /// A server that plays the station's queue back to it a block later, as a mirror, and
     /// says [`LOST`] samples went missing ahead of its fourth block and that the capture
@@ -274,7 +378,11 @@ mod tests {
         let (mut stream, _) = listener.accept().expect("accept");
         let mut hello = [0u8; 10];
         stream.read_exact(&mut hello).expect("hello");
-        assert_eq!(&hello[..4], b"AEC3", "a daemon that reads gaps and skips");
+        assert_eq!(
+            &hello[..4],
+            b"AEC4",
+            "a daemon that reads gaps, skips and dials"
+        );
         let name_len = u16::from_le_bytes([hello[8], hello[9]]) as usize;
         let mut name = vec![0u8; name_len];
         stream.read_exact(&mut name).expect("name");
@@ -308,10 +416,21 @@ mod tests {
                         let mut tag = vec![0u8; u32::from_le_bytes(n) as usize];
                         stream.read_exact(&mut tag).expect("tag");
                     }
+                    8 => {
+                        // the station tuned its radio: the mirror's own dial follows
+                        let mut hz = [0u8; 8];
+                        stream.read_exact(&mut hz).expect("dial");
+                        assert_eq!(u64::from_le_bytes(hz), TUNED);
+                    }
                     other => panic!("message {other}"),
                 }
             }
             let mut message = Vec::new();
+            if index == 1 {
+                // the radio's dial, as the scenario puts it (ADR-0129)
+                message.push(8u8);
+                message.extend_from_slice(&DIAL.to_le_bytes());
+            }
             if index == 3 {
                 message.push(6u8);
                 message.extend_from_slice(&LOST.to_le_bytes());
@@ -343,6 +462,12 @@ mod tests {
         let address = listener.local_addr().expect("addr").to_string();
         let server = std::thread::spawn(move || mirror(&listener, 6, 100));
         let mut link = ChannelLink::open(&address, "W4ODA", 48_000).expect("open");
+        let mut rig = link.rig();
+        assert_eq!(
+            crate::ptt::Ptt::frequency_hz(&mut rig),
+            None,
+            "no dial said yet"
+        );
         assert!(link.capture().iter().all(|&s| s == 0.0), "silence first");
         let burst: Vec<f32> = (1..=150).map(|i| i as f32).collect();
         link.playback(&burst);
@@ -350,9 +475,16 @@ mod tests {
         assert_eq!(link.drains_at(), 150);
         let mut heard = Vec::new();
         let mut gaps = Vec::new();
-        for _ in 0..5 {
+        for i in 0..5 {
             heard.extend(link.capture());
             gaps.push(link.capture_gap());
+            if i == 0 {
+                // the server said where the radio is; the station tunes it elsewhere
+                assert_eq!(crate::ptt::Ptt::frequency_hz(&mut rig), Some(DIAL));
+                assert!(crate::ptt::Ptt::can_tune(&rig));
+                crate::ptt::Ptt::set_frequency_hz(&mut rig, TUNED).expect("tuned");
+                assert_eq!(crate::ptt::Ptt::frequency_hz(&mut rig), Some(TUNED));
+            }
         }
         // the loss is said ahead of the block it preceded, once
         assert_eq!(gaps, [0, 0, LOST as usize, 0, 0]);

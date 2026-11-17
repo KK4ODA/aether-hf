@@ -1577,6 +1577,12 @@ impl GrantedEngine {
         self.call_plan.len()
     }
 
+    /// The tries of the call under way, or of the last one: `C`, `S` and `H` (ADR-0126 §2.2).
+    #[must_use]
+    pub fn call_plan(&self) -> &[u8] {
+        &self.call_plan
+    }
+
     /// When the call's next try falls due, while it waits.
     #[must_use]
     pub fn connect_due(&self) -> Option<f64> {

@@ -264,6 +264,9 @@ class Run:
     final_states: list[str] = field(default_factory=list)
     exited: list[str] = field(default_factory=list)
     hosts: dict[str, Host] = field(default_factory=dict)
+    # a program's connection to a station that scans, held for the scan's life (ADR-0129)
+    scanners: dict[str, object] = field(default_factory=dict)
+    scan_s: float | None = None
     outage_until: float = 0.0
     resources: dict[str, list[tuple[float, int, int]]] = field(default_factory=dict)
     air_read: float = 0.0
@@ -783,9 +786,47 @@ def step(run: Run, text: str) -> bool:
         answered = run.wait("probe answered", lambda: a.counter("probe_replies") > before, 30)
         run.probe = "answered" if answered else "unanswered"
         return True  # a probe is one frame and no retry: reported, not required
+    if word == "scan":
+        # `scan b 3590000,7101000,10145000`: station b scans those dials for a program holding
+        # a connection to its control API, which the scan belongs to (ADR-0129)
+        from control_ws import ControlSocket
+
+        who, _, dials = arg.partition(" ")
+        owner = run.scanners.get(who)
+        if owner is None:
+            owner = ControlSocket(run.stations[who].control)
+            run.scanners[who] = owner
+            owner.request("hello", {"app": "session_matrix"})
+        got = owner.request("scan.start", {"dials": [int(d) for d in dials.split(",")]})
+        if not got.get("ok"):
+            run.notes.append(f"scan refused: {got.get('error')}")
+            return False
+        run.scan_s = float(got["result"]["scan_s"])
+        return True
+    if word == "scan-stop":
+        owner = run.scanners.get(arg)
+        if owner is not None:
+            owner.request("scan.stop")
+        return True
+    if word == "knob":
+        # `knob b 7074000`: the dial turned at station b's radio
+        who, _, hz = arg.partition(" ")
+        run.command(f"knob {who} {int(hz)}")
+        return True
+    if word == "tune":
+        # `tune b 7074000`: another program, or the panel, tunes station b's radio
+        who, _, hz = arg.partition(" ")
+        call(run.stations[who].control, "frequency.set", {"hz": int(hz)})
+        return True
     if word == "connect":
         began = run.air_s()
-        call(a.control, "connect", {"remote": b.callsign})
+        params: dict = {"remote": b.callsign}
+        # `connect call_s=54`, or `connect call_s=scan`: as long as the station scanned says
+        for option in arg.split():
+            key, _, value = option.partition("=")
+            if key == "call_s":
+                params["call_s"] = run.scan_s if value == "scan" else float(value)
+        call(a.control, "connect", params)
         run.connected = run.wait(
             "connected",
             lambda: a.status()["state"] == "connected" and b.status()["state"] == "connected",
@@ -1126,6 +1167,8 @@ def judge(run: Run, ends: list[str]) -> dict:
     for host in run.hosts.values():
         invariants += host.problems
     invariants += identifier_faults(run, report, last=bool(expect.get("identifiers_last")))
+    # an acceptance keyed on a dial other than its call's, or after a move since (ADR-0129 S1)
+    invariants += [f"dial: {fault}" for fault in report.get("dial_faults", [])]
     clean = all("timeout" not in e and e not in ("none", "unknown") for e in ends)
     idle = all(s == "idle" for s in run.final_states)
     # then what this scenario expects of its path, which one unlucky draw can miss
@@ -1285,6 +1328,8 @@ def run_one(
         # step, and the whole shard went with it — its other runs and its CSV (nightly 34)
         run.faults.append(f"harness: {type(error).__name__}: {error}")
     finally:
+        for owner in run.scanners.values():
+            owner.close()  # type: ignore[attr-defined]
         for who, host in run.hosts.items():
             host.close()
             with contextlib.suppress(OSError):

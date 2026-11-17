@@ -616,6 +616,12 @@ function world(scene) {
     ptt: configured ? "Yaesu CAT on COM6" : "none (vox or receive only)",
     ptt_fault: null,
     can_tune: configured,
+    // a gateway program scanning three dials, the radio on the second (ADR-0129)
+    scan: scene.scan
+      ? {owner: 5, app: "RadioPost Gateway 0.1.0-beta.24", dials: [3_590_000, DIAL, 10_145_000],
+         at_hz: DIAL, dwell_s: 13.514, linger_s: 34.928, scan_s: 28, held: null,
+         lingering_until_ms: null, hops: 41, dropped: [], since_ms: NOW - 520 * MS}
+      : null,
     queued_bytes: kind === "session" ? 54 : 0,
     version: VERSION,
     recording: kind === "session" || kind === "test"
@@ -1007,6 +1013,7 @@ const SCENES = {
   mini: {storage: {"aether.view": "mini"}, view: "mini"},
   light: {storage: {"aether.theme": "light"}, after: [tab("session")]},
   signal: {page: "signal.html", width: 860, height: 640, settle: 52000, hold: "rx"},
+  scanning: {timeline: "idle", scan: true, after: [tab("session")], clip: ["#op-card"]},
   banners: {timeline: "idle", bandwidth: 500, mismatch: true, signal: false,
             filter: {verdict: "top", low_drop_db: 3.4, high_drop_db: 17.6, looks: 120},
             clip: ["#mismatch-banner", "#filter-banner"]},

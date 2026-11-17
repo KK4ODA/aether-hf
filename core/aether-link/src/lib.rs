@@ -22,8 +22,8 @@ pub use frames::{
     is_identification,
 };
 pub use granted::{
-    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, IdentifyBy, LadderRung, ProbeResult,
-    State,
+    Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, IdentifyBy, LadderRung,
+    MAX_CALL_TRIES, ProbeResult, State,
 };
 pub use phy::{Container, HarqBuffer, PhyTiming, SoftFrame, TxFrame};
 pub use rate::{AWGN_THRESHOLD_DB, FrameOutcome, RateController, usable_modes};

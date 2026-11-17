@@ -110,6 +110,10 @@ pub struct Expectation {
     /// Where its receiver moved onto, or off, a station off frequency, in order (ADR-0079).
     /// Empty for most recordings.
     pub centres: Vec<CentreMove>,
+    /// Where its receiver started again because a scan moved the radio (ADR-0129): at the move,
+    /// and once the radio's change had come through the card, in seconds of the recording, in
+    /// order. Empty for most recordings.
+    pub restarts: Vec<f64>,
     /// The frames it announced before they could be decoded, in order. Empty for a recording
     /// from before ADR-0037.
     pub announcements: Vec<Announcement>,
@@ -142,6 +146,7 @@ impl Expectation {
         let mut muted = Vec::new();
         let mut airs = Vec::new();
         let mut centres = Vec::new();
+        let mut restarts = Vec::new();
         let mut announcements = Vec::new();
         let mut keyed_at: Option<f64> = None;
         for event in document["events"].as_array().into_iter().flatten() {
@@ -153,6 +158,15 @@ impl Expectation {
                 {
                     announcements.push(announced);
                 }
+                continue;
+            }
+            if event["event"] == "hop" {
+                restarts.extend(
+                    event["detail"]
+                        .as_str()
+                        .and_then(hop_deaf_s)
+                        .map_or(Vec::new(), |deaf| vec![t, t + deaf]),
+                );
                 continue;
             }
             if event["event"] == "rx_offset" {
@@ -208,6 +222,10 @@ impl Expectation {
             bandwidth_hz,
             airs,
             centres,
+            restarts: {
+                restarts.sort_by(f64::total_cmp);
+                restarts
+            },
             announcements,
             busy_state,
         })
@@ -245,7 +263,10 @@ pub fn replay_expecting(
         params,
         &expectation.muted,
         &airs,
-        &expectation.centres,
+        &Moves {
+            centres: &expectation.centres,
+            restarts: &expectation.restarts,
+        },
         block_s,
     ))
 }
@@ -295,7 +316,7 @@ fn read_audio(wav: &Path, params: WaveformParams) -> Result<Vec<f32>, String> {
 /// it between two top-ups of the sound card. The loop keeps a quarter second queued, so a
 /// block that costs more than that starves the card in the middle of a transmission — the
 /// number a replay can measure without a radio.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BlockTiming {
     /// Blocks fed.
     pub blocks: usize,
@@ -325,29 +346,42 @@ pub fn run_timed(
     muted: &[Muted],
     block_s: f64,
 ) -> (Vec<FrameRecord>, BlockTiming) {
-    run_moving(samples, params, muted, &[], &[], block_s)
+    run_moving(samples, params, muted, &[], &Moves::default(), block_s)
+}
+
+/// How long a scan's move (a `hop` event, "dial <hz> deaf <s>") left the station deaf: the
+/// receiver started again at the move, and again once the radio's change had come through the
+/// card (ADR-0129).
+fn hop_deaf_s(detail: &str) -> Option<f64> {
+    detail
+        .split_whitespace()
+        .nth(3)
+        .and_then(|deaf| deaf.parse::<f64>().ok())
+        .filter(|deaf| deaf.is_finite() && *deaf >= 0.0)
+}
+
+/// What moved the live receiver other than a change of waveform.
+#[derive(Debug, Default, Clone, Copy)]
+struct Moves<'a> {
+    /// The receive mixer's moves (ADR-0079).
+    centres: &'a [CentreMove],
+    /// Where a scan's move started the receiver again (ADR-0129).
+    restarts: &'a [f64],
 }
 
 /// The receiver as the station ran it: a new front end and receiver wherever `airs` says the
 /// station moved to another waveform (ADR-0026), counting from there as the live one did, and
-/// the receive mixer moved wherever `centres` says (ADR-0079) — at the first block from then,
-/// as the live one moved between two of its blocks.
+/// wherever a scan moved the radio (ADR-0129); the receive mixer moved wherever `centres` says
+/// (ADR-0079) — at the first block from then, as the live one moved between two of its blocks.
 fn run_moving(
     samples: &[f32],
     params: WaveformParams,
     muted: &[Muted],
     airs: &[(f64, WaveformParams)],
-    centres: &[CentreMove],
+    moves: &Moves<'_>,
     block_s: f64,
 ) -> (Vec<FrameRecord>, BlockTiming) {
-    let mut timing = BlockTiming {
-        blocks: 0,
-        max_ms: 0.0,
-        max_at_s: 0.0,
-        over_100_ms: 0,
-        over_250_ms: 0,
-        total_ms: 0.0,
-    };
+    let mut timing = BlockTiming::default();
     let started = std::time::Instant::now();
     let mut front = AudioToBaseband::new(params);
     let mut receiver = StreamingReceiver::new(params, 6.0, true);
@@ -357,6 +391,8 @@ fn run_moving(
     let mut baseband_seen = 0usize;
     let mut next_air = 0usize;
     let mut next_centre = 0usize;
+    let mut next_restart = 0usize;
+    let mut running = params;
     // the moves made, each from where it took effect: a frame's offset is read from the one in
     // force where it began
     let mut centred: Vec<(f64, f64)> = Vec::new();
@@ -368,18 +404,32 @@ fn run_moving(
     for chunk in samples.chunks(block) {
         let began = std::time::Instant::now();
         let t = seen as f64 / rate;
-        while let Some(&(_, moved)) = airs.get(next_air).filter(|(at_s, _)| *at_s <= t) {
-            front = AudioToBaseband::new(moved);
-            receiver = StreamingReceiver::new(moved, 6.0, true);
-            air = aether_phy::modes::air_interface(moved);
+        // a move to another waveform, or a scan's move of the radio: a new front end and
+        // receiver, on the dial, as the live ones started; nothing heard before goes on
+        let moved_air = airs
+            .get(next_air)
+            .filter(|(at_s, _)| *at_s <= t)
+            .map(|&(_, p)| p);
+        let restart = moves
+            .restarts
+            .get(next_restart)
+            .is_some_and(|&at_s| at_s <= t);
+        if moved_air.is_some() || restart {
+            next_air += usize::from(moved_air.is_some());
+            next_restart += moves.restarts[next_restart..]
+                .iter()
+                .take_while(|&&at_s| at_s <= t)
+                .count();
+            running = moved_air.unwrap_or(running);
+            front = AudioToBaseband::new(running);
+            receiver = StreamingReceiver::new(running, 6.0, true);
+            air = aether_phy::modes::air_interface(running);
             origin = baseband_seen;
-            next_air += 1;
-            // a new front end starts on the dial, as the live one did
             if centred.last().is_some_and(|&(_, hz)| hz != 0.0) {
                 centred.push((t, 0.0));
             }
         }
-        while let Some(change) = centres.get(next_centre).filter(|c| c.at_s <= t) {
+        while let Some(change) = moves.centres.get(next_centre).filter(|c| c.at_s <= t) {
             front.set_offset_hz(change.hz);
             centred.push((t, change.hz));
             next_centre += 1;
@@ -615,7 +665,8 @@ mod tests {
                     {"t_s": 3.5, "event": "air", "detail": "500", "state": "Idle"},
                     {"t_s": 4.0, "event": "ptt", "detail": "keyed", "state": "Connected"},
                     {"t_s": 4.0, "event": "rx_offset", "detail": "182.500", "state": "Connected"},
-                    {"t_s": 9.0, "event": "rx_offset", "detail": "0.000", "state": "Idle"}
+                    {"t_s": 9.0, "event": "rx_offset", "detail": "0.000", "state": "Idle"},
+                    {"t_s": 12.0, "event": "hop", "detail": "dial 7101000 deaf 0.500", "state": "Idle"}
                 ]
             })
             .to_string(),
@@ -656,6 +707,9 @@ mod tests {
                 CentreMove { at_s: 9.0, hz: 0.0 }
             ]
         );
+        // and where a scan moved the radio: the receiver again at the move and after its
+        // deafness (ADR-0129)
+        assert_eq!(expectation.restarts, vec![12.0, 12.5]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -689,13 +743,23 @@ mod tests {
         audio.extend(vec![0.0f32; narrow.audio_rate]);
         let audio: Vec<f32> = audio.iter().map(|x| x * 0.25).collect();
 
-        let (plain, _) = run_moving(&audio, narrow, &[], &[], &[], BLOCK_S);
+        let (plain, _) = run_moving(&audio, narrow, &[], &[], &Moves::default(), BLOCK_S);
         assert!(!plain.iter().any(|f| f.decoded), "{plain:?}");
         let followed = [CentreMove {
             at_s: 0.5,
             hz: 215.0,
         }];
-        let (found, _) = run_moving(&audio, narrow, &[], &[], &followed, BLOCK_S);
+        let (found, _) = run_moving(
+            &audio,
+            narrow,
+            &[],
+            &[],
+            &Moves {
+                centres: &followed,
+                restarts: &[],
+            },
+            BLOCK_S,
+        );
         let decoded: Vec<&FrameRecord> = found.iter().filter(|f| f.decoded).collect();
         assert_eq!(decoded.len(), 1, "{found:?}");
         let cfo = decoded[0].cfo_hz.expect("a decoded frame's offset");
@@ -726,13 +790,20 @@ mod tests {
         let wide = clip(WIDE_2300);
         let moved_at = wide.len() as f64 / WIDE_2300.audio_rate as f64;
         let audio: Vec<f32> = wide.iter().chain(clip(narrow).iter()).copied().collect();
-        let (found, _) = run_moving(&audio, WIDE_2300, &[], &[(moved_at, narrow)], &[], BLOCK_S);
+        let (found, _) = run_moving(
+            &audio,
+            WIDE_2300,
+            &[],
+            &[(moved_at, narrow)],
+            &Moves::default(),
+            BLOCK_S,
+        );
         let decoded: Vec<&FrameRecord> = found.iter().filter(|f| f.decoded).collect();
         assert_eq!(decoded.len(), 2, "{found:?}");
         assert!(decoded[0].t_s < moved_at, "{found:?}");
         assert!(decoded[1].t_s > moved_at + 0.5, "{found:?}");
         // without the move the wide receiver never decodes the narrow frame
-        let (unmoved, _) = run_moving(&audio, WIDE_2300, &[], &[], &[], BLOCK_S);
+        let (unmoved, _) = run_moving(&audio, WIDE_2300, &[], &[], &Moves::default(), BLOCK_S);
         assert_eq!(
             unmoved.iter().filter(|f| f.decoded).count(),
             1,

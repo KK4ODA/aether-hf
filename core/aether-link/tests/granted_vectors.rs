@@ -654,7 +654,10 @@ fn the_port_times_a_call_as_the_model_does() {
             let want: Vec<f64> = want.as_array().expect("starts").iter().map(num).collect();
             assert_eq!(got.len(), want.len(), "case {k}, plan {plan}");
             for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-                assert!(close(*g, *w), "case {k}, plan {plan}, try {i}: {g} against {w}");
+                assert!(
+                    close(*g, *w),
+                    "case {k}, plan {plan}, try {i}: {g} against {w}"
+                );
             }
         }
         let (before, longest) = engine.call_gaps();

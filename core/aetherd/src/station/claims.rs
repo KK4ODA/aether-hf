@@ -481,6 +481,8 @@ impl<P: Ptt> Station<P> {
     /// claim's line: two of KK4ODA's `RadioPost` sessions lost their program with nothing in
     /// either log to say how (2026-11-12).
     pub fn connection_closed_because(&mut self, connection: ConnectionId, why: Option<&str>) {
+        // its scan ends whether or not it held callsigns (ADR-0129 rule 10)
+        self.scan_connection_closed(connection);
         let index = self
             .claims
             .list
@@ -703,10 +705,11 @@ impl<P: Ptt> Station<P> {
         remote: &str,
         as_call: Option<&str>,
         keep_bandwidth: bool,
+        call_s: Option<f64>,
     ) -> Result<(), &'static str> {
         let claim = connection.and_then(|connection| self.claim_of(connection).cloned());
         let Some(claim) = claim else {
-            return self.connect_keeping(remote, as_call, keep_bandwidth);
+            return self.connect_keeping(remote, as_call, keep_bandwidth, call_s);
         };
         let call = match as_call.map(|call| call.trim().to_ascii_uppercase()) {
             Some(call) => call,
@@ -725,9 +728,22 @@ impl<P: Ptt> Station<P> {
                 },
             );
         }
-        self.connect_keeping(remote, Some(&call), keep_bandwidth)?;
+        self.connect_keeping(remote, Some(&call), keep_bandwidth, call_s)?;
         self.claims.owner = Some(claim.connection);
         Ok(())
+    }
+
+    /// The name a connection's program gave, when it claimed callsigns or said who it is.
+    pub(super) fn program_name(&self, connection: ConnectionId) -> Option<String> {
+        self.claim_of(connection)
+            .map(|claim| claim.app.clone())
+            .or_else(|| {
+                self.claims
+                    .present
+                    .iter()
+                    .find(|present| present.connection == connection)
+                    .map(|present| present.app.clone())
+            })
     }
 
     /// The call just placed is the station's own; a program's sets itself after.

@@ -232,3 +232,52 @@ d1,d2,…`, and a caller placed on one of the dials. The Trimode stand-in stays 
 2. **At most 11 channels.**
 3. **The panel does not start scans of its own**, for now.
 4. **The harness first**: step 0 and the criteria before the air.
+
+## 9. What was built (2026-11-17, steps 1, 2 and 0)
+
+**Step 1, the model and the port.** `GrantedEngine.call_offsets(plan)` gives each try's start of a
+call nobody answers, from the helpers that schedule it, and a test holds it to what the engine does
+through the simulator to a microsecond (both airs, every plan, with a turnaround and an answer gap).
+`call_gaps()` gives the dwell's and the linger's gaps: 13.01 s and 34.43 s today. `tries_lasting`
+and `connect(…, call_s)` are §2.5. The granted vectors gained the `call-lasting` session and a
+`call_timing` table, and a planted fault in the level step fails both suites.
+
+**Step 2, the station** (`core/aetherd/src/station/scan.rs`). §2.3's rules as written, with these
+choices made in building it:
+
+* `tune_to`'s checks are one function, `Station::dial_movable`, which the scan shares, so the two
+  cannot disagree.
+* A move restarts the receiver with `Air::restart_front_end` and `Air::lose_captured(0)`, at once
+  and again `move_deaf_s()` later (the card's 0.25 s and `MOVE_SETTLE_S`, 0.25 s, until the bench
+  measures it). The busy detector relearns on a move of 10 kHz or more, as any dial reading does.
+* **The panel's Stop** is `scan.stop` from a connection with no claim: as the panel acts on any
+  program's call or session (ADR-0106), it stops any program's scan, as the operator. The radio
+  stays where it is, and `why` is a sixth word, `operator`.
+* `connect`'s answer carries `tries`: the call's plan, which depends on how the station called was
+  heard (ADR-0126 §2.3).
+* **The linger starts from a frame the station heeds** (an announcement past the acquisition gate
+  the station's own receive window uses), from its end, and a frame decoded as another station's
+  ends it. Reading back the first build, it started from any frame reported undecoded; on a quiet
+  band the receiver reports a noise candidate every few seconds, and the scan would have lingered
+  on each dial to its cap.
+* A recording carries each move as a `hop` event (`dial <hz> deaf <s>`), and `aetherd --replay`
+  restarts its receiver at both points.
+* The panel's dial box has a **Scanning** row (the dial, its place, the program; *held* or
+  *lingering*; **Stop**), and the dial list is held while a scan runs. The manual (1.3.0) says so.
+
+**Step 0, the harness.** The daemon on a channel server greets `AEC4` and has a radio
+(`channel_link::ChannelRig`) that keys nothing and has a dial: it tells the server where it tuned
+(message 8), and the server tells it where the radio is (the scenario's `dial_hz`, and `knob WHO HZ`
+commands). The server joins only stations on one dial, runs every path on silence otherwise so its
+draws stay as they were, counts collisions per dial, records each station's dials and each
+transmission's, and judges S1 from the air (`dial_faults`): an acceptance with no call on its dial
+in the minute before it, or after its station moved since that call. `session_matrix.py` judges
+those as invariants on every run, and has the steps `scan WHO D1,D2,…` (a program's connection held
+for the scan's life, `tools/control_ws.py`), `scan-stop WHO`, `knob WHO HZ`, `tune WHO HZ` and
+`connect call_s=N|scan`. Every scenario before dials runs with every station on one dial, as before.
+
+The first run (`bench/scenarios/40m-scanning-gateway-2300.toml`, three dials, AWGN +10 dB): the
+gateway left 7.101 MHz for 10.145 MHz at 14.0 s, the caller's first try at 7.7 s went unheard and
+its second at 19.1 s was answered at 26.2 s; no dial fault, no collision. The harness's quick set
+passed unchanged.
+
