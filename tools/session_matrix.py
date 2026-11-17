@@ -1152,6 +1152,62 @@ SESSION_FRAMES = frozenset({"Header", "Answer", "Disc", "DiscAck", "Data"})
 """The frames a session's own transmissions carry: what may not follow its closing identifier."""
 
 
+FILTER_WARNINGS = ("top", "bottom", "both")
+"""The receive filter's verdicts that warn (ADR-0105): the panel's banner says the radio cuts."""
+FILTER_CHANGE = re.compile(
+    r"filter: (?P<from>\w+) -> (?P<to>\w+) \| bottom (?P<bottom>[-\d.]+) dB,"
+    r" top (?P<top>[-\d.]+) dB"
+)
+"""A daemon's log line for a change of the receive filter's verdict (``Station::note_filter``)."""
+
+
+def filter_warnings(run: Run) -> list[str]:
+    """Every station whose radio the scenario gives no receive filter (``[stations.<who>.radio]
+    rx_filter_hz``) and whose reading warned of a cut. Its radio cuts nothing, so each one is a
+    false warning: the harness's other stations' signals read as a cut
+    (``docs/research/receive-filter/05-busy-band.md``). Read from the daemon's log, whose
+    ``filter:`` lines say every change of verdict (idle ones before a recording included), one
+    line a station: ``"<who>: <verdicts> up to <drop> dB at <n> of <m> changes (log)"``; and
+    from its recordings' live readings (``passband.readings``), one line a recording:
+    ``"<who>: <verdicts> up to <drop> dB in <n> of <m> readings (<recording>)"``."""
+    stations = run.scenario.get("stations", {})
+    found = []
+    for who in stations_of(run.scenario):
+        if (stations.get(who, {}).get("radio") or {}).get("rx_filter_hz"):
+            continue
+        changes = []
+        with contextlib.suppress(OSError):
+            log = (run.dir / who / "aetherd.out").read_text(encoding="utf-8", errors="replace")
+            changes = [line for line in log.splitlines() if " filter: " in line]
+        said = [m for m in (FILTER_CHANGE.search(line) for line in changes) if m]
+        to_warning = [m for m in said if m["to"] in FILTER_WARNINGS]
+        if to_warning:
+            verdicts = "/".join(sorted({m["to"] for m in to_warning}))
+            drops = [float(d) for m in to_warning for d in (m["bottom"], m["top"]) if d != "-"]
+            deepest = f" up to {max(drops):.1f} dB" if drops else ""
+            found.append(
+                f"{who}: {verdicts}{deepest} at {len(to_warning)} of {len(said)} changes (log)"
+            )
+        for sidecar in sorted((run.dir / who / "recordings").glob("*.json")):
+            try:
+                side = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            passband = side.get("passband") if isinstance(side, dict) else None
+            readings = (passband or {}).get("readings") or []
+            warned = [r for r in readings if len(r) > 4 and r[2] in FILTER_WARNINGS]
+            if not warned:
+                continue
+            verdicts = "/".join(sorted({r[2] for r in warned}))
+            drops = [v for r in warned for v in r[3:5] if isinstance(v, int | float)]
+            deepest = f" up to {max(drops):.1f} dB" if drops else ""
+            found.append(
+                f"{who}: {verdicts}{deepest} in {len(warned)} of {len(readings)} readings"
+                f" ({sidecar.stem})"
+            )
+    return found
+
+
 def judge(run: Run, ends: list[str]) -> dict:
     sc = run.scenario
     expect = sc.get("expect", {})
@@ -1244,6 +1300,9 @@ def judge(run: Run, ends: list[str]) -> dict:
         "ends": " / ".join(ends),
         "transfers": "; ".join(run.transfers),
         "resources": "; ".join(grew),
+        # the receive filter warning on a radio that cuts nothing (05-busy-band.md H1): reported,
+        # not judged, until the harness shows none on three draws
+        "filter_warnings": "; ".join(filter_warnings(run)),
     }
 
 
@@ -1457,6 +1516,8 @@ def main() -> int:
                 print(f"::error title={r['scenario']}::{r['invariants']}")
             elif not r["pass"]:
                 print(f"::warning title={r['scenario']}::{r['failures']}")
+            if r.get("filter_warnings"):
+                print(f"::warning title={r['scenario']}::receive filter: {r['filter_warnings']}")
     return exit_status(results, args.fail_on)
 
 
