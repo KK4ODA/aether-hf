@@ -105,9 +105,50 @@ for the author.
 
 ## 5. S7, each part earns its place
 
-*Running: linger off on S4's draws; the hold on an announced frame off and the move's restart
-off, each on twenty planted calls whose first try ends 0 to 0.9 s, or starts 0.1 to 1.9 s,
-before the scan's first move (`make_grid.py --planted`).*
+Each part taken out of the daemon at `09662d3` in turn (one line each, in a scratch worktree), and
+run on the same scenario files.
+
+**The linger, on S4's twenty draws.** Off, 6 of 10 at 2300 Hz and 6 of 10 at 500 Hz, against 6 and
+5 with it: 12 of 20 against 11. Paired by draw, linger on won 2300 p4 and 500 p8, linger off won
+2300 p2 and 500 p6 and p7. **The linger fails nothing here, and S4's clause that it does at least
+as well as no linger, paired by draw, misses by one call** (within what two runs of one build
+differ by, ADR-0129 §6 having no room for it). The timing model credited it with taking a weak
+path's calls from 79–89 % to 98–99 %, on the per-try success §4 found to be wrong.
+
+**The hold and the restart, on twenty planted calls** (`make_grid.py --planted`): a caller on the
+gateway's home dial, AWGN +10 dB, its first try timed against the end of the gateway's first
+dwell there. The files aimed ten tries to end 0 to 0.9 s before it and ten to start 0.1 to 1.9 s
+before it, from one run's timing; the scan's start landed 0.2–0.4 s later than that run's in
+these, so below each try is placed by its measured lead, the dwell's end less the try's start.
+
+* **The ten aimed to end before the move** started 6.0–7.7 s before the dwell's end: a try lasts
+  6.4 s, so each was still on the air when the dwell ran out. Its first part (the OFDM call
+  frame) decoded 5 s before, the call held the dial, and every build answered it at once
+  (8.1–8.2 s). They test neither part.
+* **The ten aimed to start before the move**, by measured lead:
+
+| lead | full | hold off | restart off |
+|---|---|---|---|
+| −0.27 to +0.13 s | 39 s (3 calls) | 39 s (3) | 39 s (2) |
+| +0.25 s | — | — | **lost** |
+| +0.33 s | 39 s | 39 s | — |
+| +0.37 to +0.55 s | 8.2 s (1) | 39 s (1) | 8.1 s (2) |
+| +0.71 to +1.23 s | 8.2 s (3) | 39 s (3) | 8.1–8.2 s (3) |
+| +1.33 to +1.47 s | 8.1 s (2) | 8.2 s (2) | 8.1 s (2) |
+| dial faults | 0 | 0 | 0 |
+
+* **A try that begins at least 0.37 s before the dwell's end holds the dial**: by then its call
+  frame is announced, and the gateway stays to read it (8 s to connect). Closer than that, the
+  gateway leaves before the announcement and the caller waits a cycle (39 s).
+* **The hold earns its place, though not as registered.** Without it the gateway left mid-frame
+  whenever the call frame could not also be decoded before the dwell ended (leads up to 1.23 s):
+  four calls took 39 s instead of 8. It gave no S1 fault and lost no call, which is what S7 asked of
+  it; the restart keeps a frame cut by a move from being answered on the next dial.
+* **The restart earns its place, though not as registered.** Without it, at a lead of 0.25 s the
+  receiver went on reading the start of a try heard on the dial it had left after the move, failed
+  it as a trusted frame, and the gateway lingered 42 s on the dial it had moved to while the
+  caller's next try went to the other: the call was lost. S7 expected an S1 fault; the frame never
+  decoded, so nothing was keyed on the wrong dial, and the cost is a lost call.
 
 ## 6. S6, the end: passes
 
