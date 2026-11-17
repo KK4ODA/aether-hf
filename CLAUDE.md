@@ -3230,8 +3230,12 @@ server joins only stations on one dial, counts collisions per dial and judges S1
 dial_hz`, steps `scan WHO D,D,…` (held over `tools/control_ws.py`'s WebSocket), `scan-stop`, `knob
 WHO HZ`, `tune WHO HZ`, `record WHO`, `connect call_s=N|scan`. The S3/S4 grid is
 `docs/research/scanning/scratch/make_grid.py` (calls at ten phases of the cycle) and
-`grid_summary.py`. RadioPost's side (RP-4/RP-5 drafts) is its `docs/design/03-scanning.md` (W50),
-built once the harness criteria pass.
+`grid_summary.py`. The harness passed the amended scan (`02-sense-and-stay.md` §5–§7; S4's
+per-cell count of 8 of 10 is noisier than what it judges, so the pooled count over passes is the
+verdict), and RadioPost's side is on its `main` (RP-4 and RP-5 1.1.0, its
+`docs/design/03-scanning.md`, W50). Open for the author (ADR-0129 §12): a call that does not last
+`scan_s` (the VARA port's hosts, the panel's Connect) reaches a scanning gateway 72/55/43 % of the
+time at 2/3/4 dials; a linger covering a call's pause would raise that and lengthen `scan_s`.
 
 **VarAC's beacons work through Aether (2026-11-17; the organisers of VarAC Wednesday asked).**
 No change to Aether. VarAC 15.0.18's *Send beacons* is `CQFRAME <call>-9 500` on the command
