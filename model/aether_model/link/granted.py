@@ -1925,6 +1925,21 @@ class GrantedEngine:
                     longest = max(longest, *gaps)
         return before, longest
 
+    def call_deferral_s(self) -> float:
+        """The most a try of a call can be moved past a frame heard arriving
+        (:meth:`on_preamble`): the longest frame this station can be told of, from its start, and
+        the wait after it. A scanning station's dwell covers it as well as the gaps between tries
+        (ADR-0129 §9): a tone arrival on noise is heeded, and one had pushed a try past the
+        gateway's visit to the caller's dial."""
+        t = self.timing
+        longest = max(
+            t.data_frame_s,
+            t.control_frame_s,
+            t.floor_data_frame_s or 0.0,
+            t.floor_control_frame_s or 0.0,
+        )
+        return longest + self._budget(True) + self.cfg.guard_s
+
     def _declared_turnaround(self) -> float:
         """This station's turnaround as a call states it: the connect body's quantised
         value, which is what the slot a try grants is reckoned from."""

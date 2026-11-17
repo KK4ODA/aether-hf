@@ -114,3 +114,24 @@ def test_a_call_asked_to_last_too_long_makes_the_most_tries() -> None:
     a, _, _ = _pair(WIDE)
     assert a.tries_lasting(10_000.0) == MAX_CALL_TRIES
     assert a.tries_lasting(10_000.0, -14.0) == MAX_CALL_TRIES
+
+
+def test_a_try_moved_past_a_frame_heard_arriving_moves_at_most_the_deferral() -> None:
+    """ADR-0129 §9: a caller that hears a frame arriving moves its next try past it
+    (``on_preamble``); a frame of the longest kind, starting the moment the try was due, moves it
+    by ``call_deferral_s`` and no more, which a scanning station's dwell covers."""
+    a, _, sim = _pair(WIDE, call_tries=6)
+    a.connect("KK4XYZ")
+    t = 0.0
+    while a.connect_tries < 2:
+        t += 0.05
+        sim.run(until=t)
+    due = a.connect_due
+    assert due is not None
+    timing = a.timing
+    longest = max(timing.data_frame_s, timing.floor_data_frame_s or 0.0)
+    a.on_preamble(due, due, longest)
+    moved = a.connect_due
+    assert moved is not None
+    assert 0.0 < moved - due <= a.call_deferral_s() + 1e-9
+    assert a.call_deferral_s() >= longest

@@ -663,6 +663,11 @@ fn the_port_times_a_call_as_the_model_does() {
         let (before, longest) = engine.call_gaps();
         assert!(close(before, num(&case["gaps"][0])), "case {k}: {before}");
         assert!(close(longest, num(&case["gaps"][1])), "case {k}: {longest}");
+        let deferral = engine.call_deferral_s();
+        assert!(
+            close(deferral, num(&case["deferral"])),
+            "case {k}: {deferral}"
+        );
         for row in case["lasting"].as_array().expect("lasting") {
             let tries = engine.tries_lasting(opt(&row["call_s"]), opt(&row["heard"]));
             assert_eq!(tries, int(&row["tries"]), "case {k}: {row}");

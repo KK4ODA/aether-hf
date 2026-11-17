@@ -1498,6 +1498,7 @@ def call_timing() -> list[dict[str, Any]]:
                 "call": a.my_call,
                 "offsets": {p: [bits(x) for x in a.call_offsets(p)] for p in plans},
                 "gaps": [bits(x) for x in a.call_gaps()],
+                "deferral": bits(a.call_deferral_s()),
                 "lasting": [
                     {"call_s": s, "heard": h, "tries": a.tries_lasting(s, h)}
                     for s in (None, 0.0, 13.5, 27.0, 40.5, 81.0, 160.0, 1000.0)

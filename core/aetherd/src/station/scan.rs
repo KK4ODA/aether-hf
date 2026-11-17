@@ -15,7 +15,9 @@
 //!    answered, on the next.
 //! 3. **The dwell and the linger come from the call** ([`GrantedEngine::call_gaps`]): the
 //!    longest gap between two tries' starts before a call's pause, and the longest of all, each
-//!    with the move's deafness. A visit that long holds the start of a try of any call going on.
+//!    with the most a try can be moved past a frame heard arriving
+//!    ([`GrantedEngine::call_deferral_s`]) and the move's deafness. A visit that long holds the
+//!    start of a try of any call going on.
 //! 4. **A frame heard holds the dial until it is reported**; an answer, a session and its
 //!    identifiers hold it as they always have.
 //! 5. **It lingers** after a frame reported that came to nothing yet passed the gate the station
@@ -31,6 +33,7 @@
 //!     radio goes to the home dial once nothing holds it where it is.
 //!
 //! [`GrantedEngine::call_gaps`]: aether_link::GrantedEngine::call_gaps
+//! [`GrantedEngine::call_deferral_s`]: aether_link::GrantedEngine::call_deferral_s
 
 use serde_json::{Value, json};
 
@@ -234,8 +237,10 @@ impl<P: Ptt> Station<P> {
                 return Err(ScanRefusal::Rules { dial_hz, why });
             }
         }
+        // the longest a caller's tries can stand apart: the gaps its engine schedules, a try
+        // moved past a frame heard arriving (a tone arrival on noise is heeded), and the move
         let (before, longest) = self.engine.call_gaps();
-        let deaf = move_deaf_s();
+        let deaf = move_deaf_s() + self.engine.call_deferral_s();
         let dwell_s = before + deaf;
         let linger_s = longest + deaf;
         let longest_call = self
@@ -845,7 +850,7 @@ mod tests {
         let (mut station, _) = scanning_station();
         let scan = station.scan_start(gateway(), &DIALS).expect("a scan");
         let (before, longest) = station.engine().call_gaps();
-        let deaf = move_deaf_s();
+        let deaf = move_deaf_s() + station.engine().call_deferral_s();
         assert!((scan["dwell_s"].as_f64().expect("dwell") - (before + deaf)).abs() < 1e-3);
         assert!((scan["linger_s"].as_f64().expect("linger") - (longest + deaf)).abs() < 1e-3);
         // two dwells: the time a call's tries must keep starting to fall in a visit to any

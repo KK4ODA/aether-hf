@@ -3183,18 +3183,29 @@ writes `identify_by` for a schema-15 daemon (`session_matrix.py --identify-by`) 
 `identifier_faults` judges the frames as Morse. v0.2.0-beta.161 carries it (the shell's
 `SCHEMA_HISTORY` line `("0.2.0-beta.161", 15)`).
 
-**Scanning (2026-11-17, ADR-0129, proposed; the author asked how RadioPost Gateway should scan as
-Trimode does).** Proposed: the station steps the radio itself (`scan.start {dials}`, `scan.stop`,
-`status.scan`, the `scan` event), owned by the connection that asks, and never by a program
-cycling `listen`. It does not move while a frame is announced and unreported, an answer or
-identifier is owed for the dial, or a linger runs. A move drops the audio until the radio's change
-is through the card (`Air::lose_captured`), so a call heard on one dial is never answered on the
-next. The dwell (13.5 s) and the linger (34.5 s) are computed from the call's own timing. A caller
-asks for `connect {call_s}`, which takes *n* + 2 tries for *n* channels. The operator's tune or the
-knob stops the scan. The timing model is `docs/research/scanning/00-timing.md`: a 3.5 s dwell
-locks in phase with the 11–13 s tries, and jitter does not help. RadioPost's side, with RP-4 and
-RP-5 drafts, is its `docs/design/03-scanning.md` (W50). Nothing built; harness step 0 (dials in
-the channel server) first.
+**Scanning (2026-11-17, ADR-0129, accepted for building; the author asked how RadioPost Gateway
+should scan as Trimode does).** The station steps the radio itself for the connection that asks
+(`station/scan.rs`: `scan.start {dials}`, `scan.stop`, `status.scan`, the `scan` event), never a
+program cycling `listen`. It does not move while a frame is announced and unreported, a contact is up,
+something of the dial is queued, or the identifier is owed there (`dial_movable`, shared with
+`tune_to`). A move restarts the receiver at once and after `move_deaf_s()` (`Air::lose_captured(0)`;
+a recording's `hop` event, followed by `--replay`), so a call heard on one dial is never answered on
+the next. The dwell and the linger come from `GrantedEngine::call_gaps()` (13.0 s and 34.4 s plus the
+move's 0.5 s, more with a turnaround). A linger starts from a frame reported undecoded yet acquired past
+`DETECT_CONFIDENCE_TRUSTED`, or a probe answered, never from an announcement: tone arrivals are heeded
+at any confidence, and one on noise had held a dead dial 34 s. The operator wins: another
+connection's `frequency.set`, the knob, or the panel's Stop (a claim-less `scan.stop`, `why`
+`operator`). `connect {call_s}` makes `tries_lasting` tries (*n* + 2 for *n* dials) and answers
+`tries`. The timing model is `docs/research/scanning/00-timing.md` (a 3.5 s dwell locks in phase
+with the 11–13 s tries; jitter does not help). **The harness has dials**: a daemon on a channel
+server greets `AEC4` and gets `ChannelRig` (keys nothing, has a dial; message 8 both ways); the
+server joins only stations on one dial, counts collisions per dial and judges S1 from the air
+(`channel_server.dial_faults`, an invariant in `session_matrix.py`); scenario keys `[stations.x]
+dial_hz`, steps `scan WHO D,D,…` (held over `tools/control_ws.py`'s WebSocket), `scan-stop`, `knob
+WHO HZ`, `tune WHO HZ`, `record WHO`, `connect call_s=N|scan`. The S3/S4 grid is
+`docs/research/scanning/scratch/make_grid.py` (calls at ten phases of the cycle) and
+`grid_summary.py`. RadioPost's side (RP-4/RP-5 drafts) is its `docs/design/03-scanning.md` (W50),
+built once the harness criteria pass.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

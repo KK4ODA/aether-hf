@@ -709,8 +709,12 @@ impl<P: Ptt> Station<P> {
     /// and only for a call that makes more (ADR-0126 §9): a 2 300 Hz station reads only the tone
     /// floor of a 500 Hz call, so a short call that moved lost its last try's OFDM half to every
     /// station not known to run 500 Hz.
+    /// Not for a call asked to last (ADR-0129): its station scans its channels, and an unanswered
+    /// try says it was elsewhere, not that it runs 500 Hz. A scanning gateway's caller fell back
+    /// after four tries and lost the rest of its call to the gateway's visits.
     fn narrow_after_tries(&self) -> Option<usize> {
-        (self.engine.call_tries_planned() > NARROW_AFTER_TRIES).then_some(NARROW_AFTER_TRIES)
+        (!self.call_lasting && self.engine.call_tries_planned() > NARROW_AFTER_TRIES)
+            .then_some(NARROW_AFTER_TRIES)
     }
 
     /// Whether the station could move to another bandwidth now.

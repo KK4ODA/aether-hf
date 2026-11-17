@@ -2943,6 +2943,22 @@ impl GrantedEngine {
         (before, longest)
     }
 
+    /// The most a try of a call can be moved past a frame heard arriving
+    /// ([`on_preamble`](Self::on_preamble)): the longest frame this station can be told of, from
+    /// its start, and the wait after it. A scanning station's dwell covers it as well as the gaps
+    /// between tries (ADR-0129 §9): a tone arrival on noise is heeded, and one had pushed a try
+    /// past the gateway's visit to the caller's dial.
+    #[must_use]
+    pub fn call_deferral_s(&self) -> f64 {
+        let t = &self.timing;
+        let longest = t
+            .data_frame_s
+            .max(t.control_frame_s)
+            .max(t.floor_data_frame_s.unwrap_or(0.0))
+            .max(t.floor_control_frame_s.unwrap_or(0.0));
+        longest + self.budget(true) + self.config.guard_s
+    }
+
     /// This station's turnaround as a call states it: the connect body's quantised value, which
     /// is what the slot a try grants is reckoned from.
     fn declared_turnaround(&self) -> f64 {

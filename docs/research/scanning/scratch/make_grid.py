@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 DIALS = [3_590_000, 10_145_000, 14_105_000, 18_105_000]
-DWELL_S = 13.5  # the derived dwell, as `scan.start` answers it (00-timing.md §2)
+DWELL_S = 19.6  # the dwell `scan.start` answers on the harness's stations (a turnaround, the deferral)
 
 
 def scenario(

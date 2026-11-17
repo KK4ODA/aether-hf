@@ -265,6 +265,17 @@ choices made in building it:
   from a tone announcement on noise at confidence 1.01 (a tone arrival is heeded whatever its
   confidence) that no report followed, and the caller lost a whole cycle (a call of 80 s for
   20 s). Rerun on the same draw, the gateway left on its dwell and the call took 19.6 s.
+* **The dwell covers a deferred try** (`GrantedEngine::call_deferral_s`, model first): a caller
+  that hears a frame arriving moves its next try past it (ADR-0016), and a tone arrival on noise
+  is heeded, so a try can stand apart from the last by the gap the engine schedules plus the
+  longest frame and the wait after it (5.71 s). The grid's next run found it: the caller heard
+  noise at confidence 1.01 and 1.03, two of its gaps grew to 14.5 and 15.1 s against a 13.9 s
+  dwell, and a try began 0.35 s after the gateway had left. The dwell and the linger now include
+  it: about 19.2 s and 40.1 s at the defaults, 19.6 s on the harness's stations. `scan_s` grows
+  with it, and so does a call asked to last.
+* **A call asked to last keeps its bandwidth.** The same run's caller went on at 500 Hz after four
+  unanswered tries (ADR-0058): its station scans, and an unanswered try says it was elsewhere. A
+  call with `call_s` no longer moves (`Station::call_lasting`).
 * A recording carries each move as a `hop` event (`dial <hz> deaf <s>`), and `aetherd --replay`
   restarts its receiver at both points.
 * The panel's dial box has a **Scanning** row (the dial, its place, the program; *held* or

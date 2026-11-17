@@ -1232,6 +1232,9 @@ pub struct Station<P: Ptt> {
     frequency: FrequencyCache,
     /// The scan a program asked for, and the radio's way home after one (ADR-0129).
     scanner: scan::Scanner,
+    /// The call under way was asked to last (`call_s`): its station scans, so it keeps its
+    /// bandwidth however many tries go unanswered (ADR-0129).
+    call_lasting: bool,
     compressor: Compressor,
     decompressor: Decompressor,
     /// Application bytes waiting for a session to negotiate compression.
@@ -1407,6 +1410,7 @@ impl<P: Ptt> Station<P> {
             crossed: 0,
             frequency: FrequencyCache::default(),
             scanner: scan::Scanner::default(),
+            call_lasting: false,
             // Nothing is compressed until a session negotiates it. Before that the two ends
             // have not agreed on anything, and a guess would produce a stream the peer
             // cannot read.
@@ -1892,6 +1896,7 @@ impl<P: Ptt> Station<P> {
         let heard_db = self.heard_lately(remote, self.now());
         self.engine
             .connect_lasting(remote, as_call, heard_db, call_s)?;
+        self.call_lasting = call_s.is_some_and(|s| s > 0.0);
         if idle && keep_bandwidth {
             // after the call is placed: it says after how many of its tries it moves
             self.note_kept_bandwidth(remote);
@@ -11284,6 +11289,32 @@ mod tests {
             "{}",
             mismatch.sentence
         );
+    }
+
+    #[test]
+    fn a_call_asked_to_last_keeps_its_bandwidth() {
+        // ADR-0129: a call asked to last (`call_s`) is to a station that scans its channels, and
+        // an unanswered try says it was elsewhere, not that it runs 500 Hz: it does not go on at
+        // 500 Hz after four tries as ADR-0058's call does. A scanning gateway's caller fell back
+        // after four and lost the rest of its call to the gateway's visits.
+        let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+            params: aether_phy::waveform::NARROW_500,
+            ..config
+        });
+        air.a = caller_on(WIDE_2300);
+        air.a
+            .connect_keeping("KK4XYZ", None, false, Some(80.0))
+            .expect("idle");
+        assert!(air.a.engine().call_tries_planned() > super::bandwidth::NARROW_AFTER_TRIES);
+        air.run(200.0, |a, _| a.state() == State::Idle);
+        assert!(air.a.engine().connect_tries() > super::bandwidth::NARROW_AFTER_TRIES);
+        assert_eq!(
+            air.a.bandwidth_status()["moves"],
+            0,
+            "{:?}",
+            air.a.take_events()
+        );
+        assert!(!air.b.connected());
     }
 
     #[test]
