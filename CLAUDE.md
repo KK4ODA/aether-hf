@@ -1279,10 +1279,10 @@ resolves to the real install, and the two copies need a grant each. **The next m
 *Re-Broadcast* passes (the identical frame again). *Relay notifications* could not be reached:
 the VMail parks at the relay (from the outbox, *Relay now through connected station*, off the
 calling frequency; one addressed to the connected station is delivered to it instead), but VarAC
-notifies only on hearing the addressee's *beacon*, and VarAC's *Send beacons* sends Aether nothing
-(no host command, no KISS frame, on or off the CF) while *Call CQ* sends `CQFRAME`; a `CQFRAME`
-without a slot suffix, `-0` or `-0I` is read as a CQ; the beacon writes nothing to the command,
-data or KISS port — the silent beacon is VarAC's own. A debug build is useless for
+notifies only on hearing the addressee's *beacon*, and that day VarAC's *Send beacons* sent Aether
+nothing (no host command, no KISS frame, on or off the CF) while *Call CQ* sent `CQFRAME`; a
+`CQFRAME` without a slot suffix, `-0` or `-0I` is read as a CQ. "The silent beacon is VarAC's
+own" was wrong: VarAC was holding it (2026-11-17, below). A debug build is useless for
 host-program benches (passes of 30–100 s). Also: the
 scratch VarAC copies had `PSKReporterUpload=ON`/`SelfReport=ON` from the real install and spotted
 KK4ODA and WD5EMA on 14.105 MHz during the benches — both INIs now say OFF. Owed on the air: all
@@ -3230,6 +3230,29 @@ WHO HZ`, `tune WHO HZ`, `record WHO`, `connect call_s=N|scan`. The S3/S4 grid is
 `docs/research/scanning/scratch/make_grid.py` (calls at ten phases of the cycle) and
 `grid_summary.py`. RadioPost's side (RP-4/RP-5 drafts) is its `docs/design/03-scanning.md` (W50),
 built once the harness criteria pass.
+
+**VarAC's beacons work through Aether (2026-11-17; the organisers of VarAC Wednesday asked).**
+No change to Aether. VarAC 15.0.18's *Send beacons* is `CQFRAME <call>-9 500` on the command
+port, never the KISS port; its CQs are `CQFRAME <call>-<slot> 500`. Aether sends the beacon under
+that name (ADR-0024) and the other VarAC lists a `-9` under BEACONS. Two beta.161 daemons over
+`[sim]` carried it both ways (`host-interfaces.md` §7). VarAC holds its beacon, logging nothing,
+while the modem has said `BUSY ON`, and for the five minutes it waits on its slot after *Call CQ*
+(the button reads *BEACON PAUSED*). That is what 2026-10-08 saw. VarAC's own command log marks a
+beacon's line `(Beacon)`. Relay notifications are still untried end to end. **The bench on a second
+PC of the author's (user folder `C:\Users\User`)** is not the one above: `C:\Dev\AetherBench\` there
+has `varac-a`/`varac-b` (VarAC's program files copied from `C:\VarAC`, never its INI or DB),
+`aetherd-161\` (the release's Windows daemon zip), `varac-500-here\a|b\station.toml` (the
+`[sim]` pair, host 8300/8310, KISS 8100/8101) and `stub-modem\vara_standin.py` (answers like
+Aether's adapter, logs every byte, takes injected lines). There is no Rust toolchain or MSVC on
+that PC. Its `C:\VARA` is a real VARA install, so a scratch VarAC's INI is written **before its
+first start**, with `VarahfLaunchOnModemConnect=OFF` and `VarahfMainPath` in a stub folder (VarAC
+edits the `VARA.ini` beside that path). The INI also needs PSK Reporter upload and self-report
+OFF, `CheckForUpdates=OFF` and CAT on a port that does not exist. VarAC rewrites its INI with LF
+line ends. `StartBeaconUponStartup=ON` fires a beacon with no click. Without computer use, a
+scratch copy's buttons are pressed through their accessibility default action
+(`AccessibleObjectFromWindow` + `accDoDefaultAction` on the button's window handle). A posted
+click does nothing: WinForms checks the real cursor. The one-time beacon is a right click on the
+beacon button, which a posted `WM_RBUTTONDOWN`/`UP` does.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

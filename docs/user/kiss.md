@@ -97,16 +97,19 @@ while a session was up waited in the queue and went out four seconds after the s
 broadcast through the other station's 21 s transmission and handed it over five seconds after
 `BUSY OFF`; with it ticked, both stations transmitted at once and both broadcasts were lost, as
 the setting asks. **The next morning (2026-10-08):** *Re-Broadcast* sends the same frame again,
-byte for byte, and the other VarAC shows it twice. **Relay notifications could not be reached:**
-a VMail relayed through the connected station does park there (*Relay now through connected
-station* from the outbox, off the calling frequency; the other copy's *Parking* count went to 1),
-but VarAC sends the notification only when it *hears the addressee's beacon*, and VarAC's own
-*Send beacons* sends nothing to Aether — no command on the host port, no KISS frame, on or off
-the calling frequency — while its *Call CQ* sends `CQFRAME` and works. A `CQFRAME` without a
-slot suffix, or with `-0`, is read by VarAC as a CQ, not a beacon. VarAC logs "Sending beacon"
-and writes nothing to the command port, the data port or the KISS port: the cause is inside
-VarAC. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS packet it sends in
+byte for byte, and the other VarAC shows it twice. A VMail relayed through the connected station
+parks there (*Relay now through connected station* from the outbox, off the calling frequency;
+the other copy's *Parking* count went to 1). VarAC sends the relay notification only when it
+*hears the addressee's beacon*, and no beacon came that day, so the notification was not
+reached. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS packet it sends in
 hex; Aether's `trace` shows type, length and fate only.
+
+**VarAC's beacons do not use the KISS port.** *Send beacons* sends `CQFRAME <call>-9 500` on the
+host port, and Aether carries it as a beacon under that name: VarAC at the other end lists it
+under BEACONS (2026-11-17, [host-interfaces.md](../spec/host-interfaces.md) §7). The 2026-10-08
+finding that VarAC sends Aether nothing for a beacon was wrong. VarAC holds its beacon back while
+Aether says `BUSY ON`, and for five minutes after a *Call CQ* (its button reads *BEACON PAUSED*),
+and logs nothing while it waits. Either hold matches what was seen that day.
 
 ### APRS programs
 
@@ -224,7 +227,7 @@ parameters are told apart from VARA's frame types by their length:
 | Aether's test suite (framing, escapes, partial and joined reads, the type bytes, ACKMODE, backpressure, several clients, a stress run of four clients at once, Winlink priority, two daemons over `[sim]`) | passing |
 | `tools/kiss_test_client.py`, two daemons over `[sim]` | passing (2026-09-25) |
 | VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, *Re-Broadcast*, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07/08) |
-| VarAC 15.0.18 relay notifications | not reachable: VarAC's beacon sends nothing to Aether, and the notification follows a heard beacon (2026-10-08) |
+| VarAC 15.0.18 relay notifications | not yet tried end to end: the notification follows a heard beacon, and VarAC's beacons cross Aether on the host port (2026-11-17) |
 | Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

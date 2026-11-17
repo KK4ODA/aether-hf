@@ -46,6 +46,11 @@ In **VarAC**, *Settings*:
 With no host program attached, Aether refuses to start anything (the Session tab says why):
 nobody would key the radio.
 
+VarAC's CQs and beacons go through the host port, not the KISS port, so they work with *KISS
+programs* off. Another VarAC lists a beacon under BEACONS and a CQ under CQ CALLS. VarAC holds
+its beacon while Aether says the channel is busy, and for five minutes after a CQ, while it waits
+on its slot (its beacon button then reads *BEACON PAUSED*).
+
 ## Aether owning the radio
 
 In **Aether**, Setup step 2 keys the radio the way VARA's own PTT settings would — CAT on the
