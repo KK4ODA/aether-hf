@@ -67,7 +67,7 @@ max_collisions = 0
 '''
 
 
-FIRST_MOVE_S = 20.2  # air time of the move off the home dial planted against (see above)
+FIRST_MOVE_S = 22.7  # about the move off the home dial planted against (4.5 s dwells on average)
 TRY_RF_S = 6.4  # a first try's radiated length: the OFDM part and the tone part
 RF_AFTER_CONNECT_S = 0.1  # the key's lead after a `connect`
 
