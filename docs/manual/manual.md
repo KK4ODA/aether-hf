@@ -7,7 +7,7 @@
 | **Status** | Current |
 | **Version** | 1.4.0 |
 | **Updated** | 2026-11-17 |
-| **Describes** | Aether HF 0.2.0-beta.161 |
+| **Describes** | Aether HF 0.2.0-beta.162 |
 | **Licence** | CC BY 4.0 |
 
 This manual shows you how to set up Aether, make contacts with it, and use it with Winlink
