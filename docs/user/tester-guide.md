@@ -91,9 +91,10 @@ not connect, and would blame VARA. Send yourself a short message first, then che
 
 VarAC usually keys the radio itself (Setup step 2: **Host**), as it does with VARA:
 VarAC's *Vara* tab with host `127.0.0.1`, main port `8300`, KISS port `8100`; its *RIG* tab with
-PTT and frequency control on CAT. Ping, chat, files, CQ and broadcasts all work. Use plain
-callsigns (no SSID), and set VarAC's callsign before the first run. One VarAC feature does not
-reach Aether: its periodic *Send beacons* — VarAC sends Aether nothing for it, so use *Call CQ*.
+PTT and frequency control on CAT. Ping, chat, files, CQ, beacons and broadcasts all work. Use
+plain callsigns (no SSID), and set VarAC's callsign before the first run. VarAC holds its beacon
+while the channel is busy, and for five minutes after a *Call CQ* (its beacon button reads
+*BEACON PAUSED*): that is VarAC waiting, not Aether failing.
 
 ### Pat
 
@@ -166,7 +167,6 @@ tried again later, and after three tries the files stay in your recordings folde
   the bench at both bandwidths and Pat at 2300 Hz, with two stations connected through a
   simulated channel; Pat at 500 Hz has not been run even on the bench.
 * A **SSID** in Winlink Express's callsign stops messages (§3).
-* VarAC's *Send beacons* does nothing with Aether (§3).
 * The installer is not yet code-signed (§1); macOS builds are untested with a radio.
 * Aether's own sessions with a host program attached are not the program's: the program keys
   the radio for them and is told nothing else ([host-programs.md](host-programs.md)).
