@@ -192,7 +192,8 @@ def test_a_plain_session_is_summarised_from_its_frames() -> None:
     }
     session = field_ingest.summarise(document, "x")
     assert (session.frames, session.decoded, session.snr_db) == (2, 1, 6.0)
-    assert session.goodput_bps == 80.0 and session.outcome == "session"
+    # the counters are the daemon's since it started, so they say nothing of this session's goodput
+    assert session.goodput_bps is None and session.outcome == "session"
     assert field_ingest.band_of(None) is None
     assert field_ingest.band_of(14_074_000) == "20 m"
     assert field_ingest.band_of(5_000_000) == "5.000 MHz"

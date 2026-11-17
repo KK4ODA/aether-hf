@@ -14,7 +14,8 @@ again over the same files changes nothing.
 
 Two things the sidecar cannot know come from the command line: the channel class, which is
 the operator's judgement (§4 of the guide), and the band when no rig control recorded the
-frequency. A plain session (no Test session) is folded in too, from its frames and counters.
+frequency. A plain session (no Test session) is folded in too, from its frames; its goodput is
+left as ``?``, since a sidecar's counters run for the daemon's life, not the session's.
 """
 
 from __future__ import annotations
@@ -151,14 +152,13 @@ def summarise(document: dict[str, object], recording: str) -> Session:
     assert isinstance(frames, list)
     audio = document.get("audio") or {}
     assert isinstance(audio, dict)
-    counters = document.get("counters") or {}
-    assert isinstance(counters, dict)
 
     snrs = [s for f in frames if isinstance(f, dict) and (s := _number(f.get("snr_3k_db")))]
     data = [f for f in frames if isinstance(f, dict) and f.get("kind") in ("data", "measure")]
     seconds = _number(audio.get("seconds")) or 0.0
-    delivered = _number(counters.get("bytes_delivered")) or 0.0
-    goodput = 8.0 * delivered / seconds if seconds > 0 and delivered > 0 else None
+    # a sidecar's counters are the daemon's since it started, not the session's, so they give no
+    # session's goodput: a plain session has none here (a Test session's transfers say theirs)
+    goodput: float | None = None
 
     path = test.get("path") or {}
     assert isinstance(path, dict)
