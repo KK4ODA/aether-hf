@@ -297,3 +297,22 @@ gateway left 7.101 MHz for 10.145 MHz at 14.0 s, the caller's first try at 7.7 s
 its second at 19.1 s was answered at 26.2 s; no dial fault, no collision. The harness's quick set
 passed unchanged.
 
+## 10. The harness's verdict (2026-11-17, step 3)
+
+`docs/research/scanning/01-results.md` has every run. S1, S3, S5 and S6 pass: no frame keyed on a
+wrong dial in 240 runs, 120 of 120 good-path calls over 2 to 4 dials at both bandwidths, nothing
+slower or failing more than the baseline, and the operator's tune and the knob end a scan. **S4
+fails:** at −16 dB on Moderate, three dials, 6 and 5 of 10 calls connected against 8; the same
+calls to a gateway on a fixed dial connected 9 and 10 of 10. The broken assumption is the timing
+model's (`00-timing.md` §4): it took each part of a try to decode half the time, independently,
+where at such a path a try connects about one time in three, so a call of *n* + 2 tries puts too
+few on the gateway's dial. S7: the hold and the restart each cost calls when taken out (calls a
+cycle later without the hold; a call lost without the restart, the gateway lingering on the dial
+it had moved to), though neither showed the fault registered for it; the linger showed nothing
+(12 of 20 without it, 11 with).
+
+Step 3 stops here, as the rule for a failing criterion says. The fix is the caller's rule: a call
+long enough to put four or five tries on the gateway's dial at a weak path (about twice `scan_s`),
+or fewer dials for a gateway that serves weak paths, or the cost accepted and said. That, and
+whether the linger stays, is the author's decision. RP-4 and RP-5 1.1.0 wait on it.
+

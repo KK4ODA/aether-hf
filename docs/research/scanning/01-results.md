@@ -157,6 +157,32 @@ radio's knob each ended the scan, the owner was told why (`tuned by another prog
 the radio stayed where it was put, and a later call there connected. The owner's connection
 closing ends the scan and sends the radio home once it is free (`scan.rs`'s station tests).
 
-## 7. S5, no harm
+## 7. S5, no harm: passes
 
-*Not run yet.*
+Every scenario in `bench/scenarios/` (66, the two scanning ones new), three draws each, as the
+nightly runs them (`--variant 0|1|2 --drop-passing-audio --fail-on invariants`), then
+`tools/scenario_trend.py` against `bench/baselines/scenarios.csv`: **"Nothing slower or failing
+more than the baseline."** No invariant broke in the 198 runs. Two scenarios passed two draws of
+three, as they do in the baseline:
+
+* `80m-trimode-gateway-client-vanishes-500` (s1046): no scan in it. The client's first try fell
+  in the stand-in Trimode's half-second of `LISTEN` off; the gateway accepted the second, which
+  the client never read on the NVIS path, and a call of two tries ended (ADR-0126's accepted
+  cost).
+* `80m-agc-slow-carrier-outside-500` (s2032): a message did not arrive.
+
+## 8. Where it stands
+
+| criterion | result |
+|---|---|
+| S1, the wrong dial | passes: no fault in 140 grid runs, 60 planted, 40 more of S4's |
+| S2, held | not judged on the harness (§2); the station's tests hold it |
+| S3, a good path | passes: 120 of 120 |
+| S4, a weak path | **fails**: 11 of 20 against 8 of 10 a cell; a fixed gateway takes 19 of 20 of the same calls |
+| S5, no harm | passes |
+| S6, the end | passes |
+| S7, each part | the hold and the restart each cost calls when taken out, not in the way registered; the linger shows nothing (12 of 20 without it, 11 with) |
+
+S4's failure is the design's, not the harness's: on a weak path a scanning gateway hears too few
+of a caller's tries. What would change it is the caller's rule (ADR-0129 §2.5), the author's
+decision, and with it whether the linger stays.
