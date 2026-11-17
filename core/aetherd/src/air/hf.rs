@@ -307,6 +307,20 @@ impl Air for HfAir {
         self.rx_origin = self.baseband_seen;
     }
 
+    /// The silence is fed to the new receiver as a muted transmission is: a tone frame that
+    /// began in it is found by its middle and end sync blocks (ADR-0070) and read with its
+    /// first part erased, as a receiver never started again would read it with another dial's
+    /// noise there (`docs/research/scanning/02-sense-and-stay.md` §6).
+    fn listen_after_silence(&mut self, silence_s: f64) {
+        let lead = ((silence_s.max(0.0) * self.params.fs_baseband).round() as usize)
+            .min(self.baseband_seen);
+        self.receiver = StreamingReceiver::new(self.params, 6.0, true);
+        self.rx_origin = self.baseband_seen - lead;
+        // silence finds nothing; whatever it would say is not this dial's
+        let _ = self.receiver.feed(&vec![(0.0, 0.0); lead]);
+        let _ = self.receiver.take_preambles();
+    }
+
     /// Every part new, the station's baseband count carried on, the new receiver counting from
     /// it. The busy detector learns its floor again through the new band filter, at the
     /// threshold it had, and keeps the radio's levels on quiet (ADR-0078 §5). What is left of
@@ -500,5 +514,97 @@ pub fn phy_timing(params: WaveformParams) -> PhyTiming {
         } else {
             aether_link::rate::ECHO_LIMIT.to_vec()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tone frame at the floor's first rung, rendered to the radio's audio with a second of
+    /// silence before it and after.
+    fn a_try(params: WaveformParams) -> (Vec<f32>, usize) {
+        let mut sender = HfAir::new(params, BusyConfig::default());
+        let rung = sender.interface().ladder()[0].payload_bytes();
+        let frame = TxFrame {
+            container: Container::Data,
+            payload: (0..rung).map(|i| (i * 37 % 251) as u8).collect(),
+            mode: 0,
+            rv: 0,
+            floor: true,
+            follows: 0,
+        };
+        let audio = sender
+            .render(std::slice::from_ref(&frame))
+            .expect("modulates")
+            .expect("a frame")
+            .audio;
+        let second = params.audio_rate;
+        let mut heard = vec![0.0f32; second];
+        heard.extend(&audio);
+        heard.extend(vec![0.0f32; 2 * second]);
+        (heard, second)
+    }
+
+    /// What a receiver started `into` seconds into the frame finds of it, given `silence_s` of
+    /// silence behind it: the frames it decoded, on the station's clock.
+    fn started_into(params: WaveformParams, into: f64, silence_s: f64) -> Vec<f64> {
+        let (heard, start) = a_try(params);
+        let mut air = HfAir::new(params, BusyConfig::default());
+        let block = params.audio_rate / 50;
+        let restart = start + (into * params.audio_rate as f64) as usize;
+        let mut decoded = Vec::new();
+        let mut restarted = false;
+        for (k, chunk) in heard.chunks(block).enumerate() {
+            if !restarted && k * block >= restart {
+                air.restart_front_end();
+                air.listen_after_silence(silence_s);
+                restarted = true;
+            }
+            // the old dial's audio: another signal's, which nothing may be read from
+            let other: Vec<f32> = if restarted {
+                chunk.to_vec()
+            } else {
+                chunk.iter().map(|_| 0.0).collect()
+            };
+            air.take_block(&other, Listening::Hearing { sense: false }, 0.0);
+            let found = air.listen_next();
+            decoded.extend(found.frames.iter().filter(|f| f.ok()).map(|f| f.start_s));
+        }
+        decoded
+    }
+
+    /// A try begun on a dial before a scanning station got there is read from its later sync
+    /// blocks once the receiver has silence behind it, and only noticed without (ADR-0129 §12).
+    /// Where the frame is placed is where it began, on the station's clock.
+    #[test]
+    fn a_receiver_given_silence_behind_it_reads_a_try_begun_before_it() {
+        for params in [
+            crate::station::params_for(2300),
+            crate::station::params_for(500),
+        ] {
+            let params = params.expect("an air");
+            let begins = 1.0;
+            for into in [0.6, 1.5] {
+                assert!(
+                    started_into(params, into, 0.0).is_empty(),
+                    "{} Hz: a receiver with nothing behind it read a frame begun {into} s before it",
+                    params.bandwidth.hz()
+                );
+                let lead = HfAir::new(params, BusyConfig::default())
+                    .timing()
+                    .floor_data_frame_s
+                    .expect("a floor");
+                let read = started_into(params, into, lead);
+                assert_eq!(read.len(), 1, "{} Hz, {into} s in", params.bandwidth.hz());
+                let fs = params.fs_baseband;
+                assert!(
+                    (read[0] - begins).abs() < 0.1 + 200.0 / fs,
+                    "{} Hz: placed at {} s, not where it began",
+                    params.bandwidth.hz(),
+                    read[0]
+                );
+            }
+        }
     }
 }

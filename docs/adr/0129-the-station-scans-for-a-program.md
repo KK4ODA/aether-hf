@@ -362,3 +362,53 @@ taken (`radio_reads.rs`).
 
 The harness judges the amended scan as it judged the first (§6): S1, S3, S4 and S7 again, S6
 unchanged.
+
+## 12. The amended scan on the harness, and silence behind the new receiver (2026-11-17)
+
+`docs/research/scanning/02-sense-and-stay.md` §4–§6 has every run.
+
+**The jittered build** (`76853d1`, §11 as written): S1, no frame keyed on a wrong dial in 260
+runs of it and of the two builds below with a part taken out; S3, 120 of 120 good-path calls (median 10.9–19.6 s, the longest 43.4 s at four dials); S4,
+9 and 9 of 10 weak calls, 9 and 8 run again on the same draws (8 and 8 for exactly 4 s; a gateway
+on a fixed dial took 9 and 10). S7:
+
+* **The hold** shows nothing on a strong path, where a try heard from its start is announced at
+  1.1 or more and the notice's linger keeps the dial longer than the hold would. On S4's draws
+  the build without it connected 15 of 20 against 17 and 18: an announcement under 1.1 is what
+  only the hold keeps the dial for. It stays.
+* **The restart**, as built, kept the receiver from reading a try it arrived into. A new
+  receiver has no audio from before it started, and a tone frame needs its first sample inside
+  the receiver's stream, so a try begun on the new dial before the gateway got there was
+  noticed and stayed for, never read. Without the restart, ten tries the gateway came home into
+  2–3 s late were each read at once (11 s), where the full build waited for the next try (39 s)
+  or lost the call; S4's draws connected 18 of 20; and nothing was keyed on a wrong dial. The
+  restart is still what keeps the old dial's audio out of the new one's frames (the first
+  design lost a call without it, §10).
+
+**What changes:** rule 2's second start of the receiver, once the move's deafness is over, has
+the longest tone frame of silence behind it (`Air::listen_after_silence`), fed as a muted
+transmission is. A tone frame begun on the new dial before the station arrived is found by its
+middle and end sync blocks (ADR-0049, ADR-0070) and read with its first part erased; nothing of the
+old dial reaches it. On the model's receiver a try arrived into within its first 2.6 s is read as
+a receiver never started again reads it, and none later (its middle sync block gone). It costs
+the receiver 80 ms of work at each move. An OFDM frame begun before the arrival is lost either way.
+No constant, wire or setting changes, and RadioPost's `scan_s` is the same.
+
+**On the harness** (`02-sense-and-stay.md` §7): S1, no frame keyed on a wrong dial in 200 runs;
+S3, 120 of 120, the median call at three and four dials 15.2 s (19.5 before) and the longest
+34.2 s (43.4); S7, 20 of 20 planted calls (18 before), nine tries reached 2.0–2.8 s late read at
+once (10.9 s, against 39 s). S4: 54 of 60 over three passes of its twenty draws, as the build
+before (54 of 60). Two cells of the six came out at 7, under the 8 S4 asks; every call lost in
+them connected in another pass of the same build, and at a 90 % rate a cell of ten falls to 7 one
+time in fourteen. S4's per-cell count is noisier than what it was set to see: the pooled count is
+the verdict, and on it the weak path is unchanged. S6 is unchanged by the change, and S5 is the
+nightly's.
+
+**For the author:** a call that does not last `scan_s` reaches a scanning gateway far less often.
+The planted calls are the station's own two tries, with the pause before the last (15 s and up to
+a try's length), which is longer than the linger: through the timing model a two-try call reaches
+a scanning gateway on a good path 72, 55 and 43 % of the time with 2, 3 and 4 dials. A linger
+long enough to cover the pause (26–29 s) would make that 98–100, 83–85 and 63–64 %, and `scan_s`
+15–20 s longer, with every false notice costing as much more. RadioPost's client calls for
+`scan_s`; the VARA port's hosts and the panel's Connect cannot ask for a call's length. Not
+changed.

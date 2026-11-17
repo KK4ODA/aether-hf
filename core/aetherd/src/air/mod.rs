@@ -225,6 +225,14 @@ pub trait Air {
     fn restart_front_end(&mut self);
     /// Move on past `samples` of lost captured audio and start the receiver again after it.
     fn lose_captured(&mut self, samples: usize);
+    /// Start the receiver again as if the station had heard silence for `silence_s` up to now:
+    /// nothing the old receiver held is kept, and a frame that began in that time can still be
+    /// found by what of it is heard from now on (a scan's move, ADR-0129 §12). An air that
+    /// cannot read a frame from part of it starts the receiver again with nothing behind it.
+    fn listen_after_silence(&mut self, silence_s: f64) {
+        let _ = silence_s;
+        self.lose_captured(0);
+    }
 
     /// The same air in another bandwidth (ADR-0026), carrying over what carries; `None` where
     /// the air runs one bandwidth.

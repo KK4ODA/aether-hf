@@ -12,7 +12,9 @@
 //!    (ADR-0055), a linger.
 //! 2. **A move starts the receiver again**, at once and again once the radio's change has come
 //!    through the sound card ([`move_deaf_s`]), so no frame begun on one dial is decoded, and
-//!    answered, on the next.
+//!    answered, on the next. The second start has silence behind it, the longest tone frame's
+//!    worth (§12): a try begun on the new dial before the station got there is read from its
+//!    later sync blocks, as a receiver never started again would, with nothing of the old dial.
 //! 3. **It leaves a quiet dial after a short listen, and stays on one where a call is under way**
 //!    (§11, the author's design after S4): a dwell is the move's deafness and
 //!    [`NOTICE_LISTEN_S`], long enough to hear one of the sync blocks of any try on the air; a
@@ -618,11 +620,23 @@ impl<P: Ptt> Station<P> {
             .and_then(|scan| scan.restart_at)
             .is_some_and(|at| now >= at);
         if due {
-            self.restart_receiver();
+            self.air.restart_front_end();
+            self.air.listen_after_silence(self.readable_lead_s());
             if let Some(scan) = self.scanner.scan.as_mut() {
                 scan.restart_at = None;
             }
         }
+    }
+
+    /// How much silence the receiver is given behind it on a new dial (rule 2): the longest
+    /// tone frame, so a try begun before the station arrived is read from its later sync blocks
+    /// rather than only noticed (§12).
+    fn readable_lead_s(&self) -> f64 {
+        let timing = self.air.timing();
+        timing
+            .floor_data_frame_s
+            .unwrap_or(0.0)
+            .max(timing.floor_control_frame_s.unwrap_or(0.0))
     }
 
     /// A new receiver from here on: what the old one held, and anything it was settling, goes.
@@ -1163,6 +1177,81 @@ mod tests {
             rig.lock().expect("rig").dial,
             DIALS[1],
             "stayed past the linger"
+        );
+    }
+
+    /// A caller's first try to `to` as a station sends it to one it has not heard: the audio
+    /// from its first sample to its last, rendered by a station of its own.
+    fn a_callers_try(to: &str) -> Vec<f32> {
+        let mut caller = Station::new(
+            StationConfig {
+                callsign: "KK4XYZ".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            2,
+        );
+        caller.connect(to).expect("idle");
+        let block = 960;
+        let (mut out, silence) = (vec![0.0f32; block], vec![0.0f32; block]);
+        let (mut played, mut audio) = (0u64, Vec::new());
+        for _ in 0..1000 {
+            caller.device_played(played);
+            let handed = caller.playback(&mut out).expect("playback");
+            caller.device_drains_at(played + handed as u64);
+            played += block as u64;
+            caller.capture(&silence).expect("capture");
+            if handed > 0 {
+                audio.extend_from_slice(&out[..handed]);
+            } else if !audio.is_empty() {
+                break;
+            }
+        }
+        let first = audio.iter().position(|&x| x != 0.0).expect("a try");
+        let last = audio.iter().rposition(|&x| x != 0.0).expect("a try");
+        audio[first..=last].to_vec()
+    }
+
+    /// A try begun on a dial before the scan got there is read, not only noticed: the receiver
+    /// started again after the move has the longest tone frame of silence behind it (ADR-0129
+    /// §12), and finds the try's tone frame by its later sync blocks. Started with nothing
+    /// behind it, the station noticed the try and waited for the next.
+    #[test]
+    fn a_try_begun_before_the_scan_arrived_is_read() {
+        let (mut station, rig) = scanning_station();
+        let try_audio = a_callers_try("W4ODA");
+        let rate = station.config.params.audio_rate;
+        let block = rate / 50;
+        let silence = vec![0.0f32; block];
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        // on the first dial until the scan moves to the caller's
+        let mut waited = 0;
+        while rig.lock().expect("rig").dial != DIALS[1] {
+            station.capture(&silence).expect("capture");
+            waited += 1;
+            assert!(waited < 50 * 30, "the scan never reached the caller's dial");
+        }
+        // the caller's try began two seconds before: its tone frame a second before
+        let mut heard = try_audio[2 * rate..].to_vec();
+        heard.extend(vec![0.0f32; 2 * rate]);
+        for chunk in heard.chunks(block) {
+            let mut piece = chunk.to_vec();
+            piece.resize(block, 0.0);
+            station.capture(&piece).expect("capture");
+            if station.engine().state() != State::Idle {
+                break;
+            }
+        }
+        assert_ne!(
+            station.engine().state(),
+            State::Idle,
+            "a try begun before the scan arrived was not read"
+        );
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[1],
+            "answered on another dial"
         );
     }
 

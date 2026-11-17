@@ -186,3 +186,8 @@ three, as they do in the baseline:
 S4's failure is the design's, not the harness's: on a weak path a scanning gateway hears too few
 of a caller's tries. What would change it is the caller's rule (ADR-0129 §2.5), the author's
 decision, and with it whether the linger stays.
+
+**Since** (the same day): the author changed the gateway's rule instead, a short listen on a quiet
+dial and a stay where a try is under way (ADR-0129 §11), and the receiver after a move was given
+silence behind it (§12). `02-sense-and-stay.md` judges both: S1 and S3 pass, S4 passes at 54 of 60
+over three passes against this design's 11 of 20, and the hold and the linger earn their places.

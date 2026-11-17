@@ -3206,9 +3206,11 @@ should scan as Trimode does).** The station steps the radio itself for the conne
 (`station/scan.rs`: `scan.start {dials}`, `scan.stop`, `status.scan`, the `scan` event), never a
 program cycling `listen`. It does not move while a frame is announced and unreported, a contact is up,
 something of the dial is queued, or the identifier is owed there (`dial_movable`, shared with
-`tune_to`). A move restarts the receiver at once and after `move_deaf_s()` (`Air::lose_captured(0)`;
-a recording's `hop` event, followed by `--replay`), so a call heard on one dial is never answered on
-the next. **Since §11** (the author's design after S4 failed: a quiet dial is left after a short
+`tune_to`). A move restarts the receiver at once and after `move_deaf_s()` (a recording's `hop`
+event, followed by `--replay`), so a call heard on one dial is never answered on the next; the
+second start has the longest tone frame of silence behind it (`Air::listen_after_silence`, §12), so
+a try begun on the new dial before the station got there is read from its later sync blocks, not
+only noticed (`scratch/prefix.py`). **Since §11** (the author's design after S4 failed: a quiet dial is left after a short
 listen): the dwell is `move_deaf_s()` + `NOTICE_LISTEN_S` (3.5 s) = 4 s, and a SplitMix64 draw up to
 `DWELL_JITTER_S` (1 s) so a round never keeps in step with the caller's tries; an arrival or an undecoded
 report at `NOTICE_CONFIDENCE` (1.1) or more is a try under way and starts a linger of the caller's
