@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 DIALS = [3_590_000, 10_145_000, 14_105_000, 18_105_000]
-DWELL_S = 4.0  # the dwell `scan.start` answers since ADR-0129 §11 (19.6 before, a turnaround, the deferral)
+DWELL_S = 4.5  # the mean dwell since ADR-0129 §11 (4 s and up to 1 s drawn; 19.6 before)
 
 
 def scenario(

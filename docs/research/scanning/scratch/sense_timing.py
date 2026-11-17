@@ -29,9 +29,10 @@ import statistics as st
 import sys
 from collections import defaultdict
 
-STARTS = [0.0, 11.01, 22.03, 33.54, 45.06, 57.07, 69.08, 81.1, 93.1]
-"""When a not-heard caller's tries start (`GrantedEngine.call_offsets`, eight tries and more:
-the pause before the last left out, the call made long enough)."""
+STARTS = [0.0, 11.4, 22.8, 34.7, 46.6, 59.0, 71.4, 83.8, 96.2]
+"""When a not-heard caller's tries start on the harness's stations (their turnaround widens the
+engine's gaps of 11.0, 11.5, 12.0 s a little: measured 11.4, 11.4, 11.9, 11.9, 12.4 s), the pause
+before the last left out, the call made long enough."""
 DEAF_S = 0.5
 TONE_START_S = 1.054
 """Where a try's tone frame begins, after the OFDM call frame: a gateway listening before then
@@ -84,12 +85,19 @@ def visit(table, offset: float, listen: float, rng: random.Random):
 
 
 def one_call(table, decode_p: float, n: int, dwell: float, stay: float, false_p: float,
-             call_s: float, rng: random.Random) -> float | None:
-    """When the gateway reads one of the caller's tries (s from the call's first try), or None."""
+             call_s: float, rng: random.Random, phase: float | None = None,
+             shuffle: bool = False, jitter: float = 0.0) -> float | None:
+    """When the gateway reads one of the caller's tries (s from the call's first try), or None.
+    ``phase`` (0–1) fixes where the scan's cycle stands at the call's first try; ``shuffle``
+    visits the dials in a fresh random order each round; ``jitter`` adds a uniform part to each
+    dwell."""
     tries = [s for s in STARTS if s <= call_s]
     mine = rng.randrange(n)
-    t = -rng.uniform(0, n * dwell) + rng.choice([0.0, 0.0, -30.0])  # any phase, any dial first
-    k = rng.randrange(n)
+    frac = rng.random() if phase is None else phase
+    t = -frac * n * dwell
+    order = list(range(n))
+    pos = 0
+    k = order[0]
     while t <= tries[-1] + 7.0:
         if k == mine:
             # the try on the air, or the last one that began, relative to this visit's start
@@ -103,7 +111,8 @@ def one_call(table, decode_p: float, n: int, dwell: float, stay: float, false_p:
                 if nxt and nxt[0] - t <= stay + dwell and rng.random() < decode_p:
                     return nxt[0]
                 t += dwell + stay
-                k = (k + 1) % n
+                pos = (pos + 1) % n
+                k = order[pos]
                 continue
             if begun:
                 got = visit(table, t - begun[-1], dwell - DEAF_S, rng)
@@ -114,13 +123,30 @@ def one_call(table, decode_p: float, n: int, dwell: float, stay: float, false_p:
                     if nxt and nxt[0] - t <= stay and rng.random() < decode_p:
                         return nxt[0]
                     t += stay
-                    k = (k + 1) % n
+                    pos = (pos + 1) % n
+                    k = order[pos]
                     continue
         elif rng.random() < false_p:
             t += stay  # noise taken for a try: it stays on a dead dial
-        t += dwell
-        k = (k + 1) % n
+        t += dwell + rng.uniform(0.0, jitter)
+        pos += 1
+        if pos == n:
+            pos = 0
+            if shuffle:
+                last = order[-1]
+                rng.shuffle(order)
+                if n > 1 and order[0] == last:  # never the same dial twice in a row
+                    order[0], order[-1] = order[-1], order[0]
+        k = order[pos]
     return None
+
+
+SHUFFLE = "--shuffle" in sys.argv
+JITTER = float(sys.argv[sys.argv.index("--jitter") + 1]) if "--jitter" in sys.argv else 0.0
+
+
+def must_last(n: int, dwell: float, stay: float) -> float:
+    return float(int(n * dwell + 2 * stay + 0.999))
 
 
 def main() -> None:
@@ -128,7 +154,7 @@ def main() -> None:
     dwell = float(sys.argv[sys.argv.index("--dwell") + 1]) if "--dwell" in sys.argv else 3.5
     call_s = float(sys.argv[sys.argv.index("--call") + 1]) if "--call" in sys.argv else 40.0
     threshold = float(sys.argv[sys.argv.index("--threshold") + 1]) if "--threshold" in sys.argv else 1.0
-    stay = 13.0 + 5.7 + DEAF_S
+    stay = 13.4 + 5.7 + DEAF_S  # the harness's stations: their turnaround
     tables = load(tries_csv, threshold)
     noise = noise_rate(noise_csv, threshold)
     print(f"dwell {dwell} s, stay {stay:.1f} s, a call of {call_s:.0f} s, notices >= {threshold}")
@@ -141,12 +167,21 @@ def main() -> None:
         decode_p = sum(heard) / len(heard) if heard else 0.0
         false_p = noise.get(air, 0.0) * (dwell - DEAF_S)
         row = []
-        for n in (2, 3, 4, 5, 6, 8):
+        for n in (2, 3, 4):
             rng = random.Random(3)
-            got = [one_call(table, decode_p, n, dwell, stay, false_p, call_s, rng) for _ in range(3000)]
-            ok = sorted(g for g in got if g is not None)
+            call = must_last(n, dwell, stay) if call_s <= 0 else call_s
+            # the worst of twenty starting phases, 300 calls each: a phase that locks is what a
+            # caller meets every time it calls then
+            worst = 1.0
+            got_all = []
+            for ph in range(20):
+                got = [one_call(table, decode_p, n, dwell, stay, false_p, call, rng, ph / 20,
+                                SHUFFLE, JITTER) for _ in range(300)]
+                worst = min(worst, sum(g is not None for g in got) / len(got))
+                got_all += got
+            ok = sorted(g for g in got_all if g is not None)
             med = st.median(ok) if ok else float("nan")
-            row.append(f"{n}:{len(ok) / len(got):4.0%} {med:4.0f}s")
+            row.append(f"{n}: {len(ok) / len(got_all):4.0%} worst {worst:4.0%} {med:3.0f}s")
         print(f"{air:>4} {profile:8} {snr:>6} read {decode_p:4.0%} | " + " | ".join(row))
 
 

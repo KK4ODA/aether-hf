@@ -596,7 +596,7 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
   The rules judge every transmission against it until you change it.
 - **Scanning**: shown while a program, such as RadioPost Gateway, has Aether scan its channels.
   It names the dial the radio is on, its place in the program's list, and the program. Up to
-  four dials. Aether listens about 4 s on a dial and moves on if it hears nothing. When it hears
+  four dials. Aether listens 4 to 5 s on a dial and moves on if it hears nothing. When it hears
   a call under way, even one too weak to read, it stays about 19 s for the caller's next try. It
   never moves while a frame is arriving, while a call or a session is up, or while your
   identifier is still to go out there, and it stays after a contact too. Answering stays on all
@@ -1508,4 +1508,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
 | 1.2.0 | 2026-11-16 | The identifier in the data signal (ADR-0127): Setup step 4's **Identify by** (Morse or Data signal) in place of **Morse ID**, the Morse speed on its own row, and the goodbye, the rules and the host programs' `CWID ON` in those words. |
 | 1.3.0 | 2026-11-17 | Scanning (ADR-0129): the **Radio dial** box's **Scanning** row with **Stop**, while a program such as RadioPost Gateway scans the station's dials; what holds the radio on a dial, and what ends a scan. |
-| 1.4.0 | 2026-11-17 | Scanning: up to four dials; about 4 s on a quiet dial, and about 19 s where a call is heard under way (ADR-0129 §11). |
+| 1.4.0 | 2026-11-17 | Scanning: up to four dials; 4 to 5 s on a quiet dial, and about 19 s where a call is heard under way (ADR-0129 §11). |

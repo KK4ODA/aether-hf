@@ -58,6 +58,14 @@ pub const MAX_SCAN_DIALS: usize = 4;
 /// from any point of a try but its last second noticed it within this, on good paths at either
 /// air (`docs/research/scanning/02-sense-and-stay.md` §1).
 pub const NOTICE_LISTEN_S: f64 = 3.5;
+/// The most each dwell is drawn longer than the move and [`NOTICE_LISTEN_S`]: a uniform part, so
+/// a round of the dials never keeps in step with a caller whose tries come once a round. Three
+/// dials at four seconds are a 12 s round against tries 11.4–12.4 s apart; the harness's grid
+/// found a phase at which every visit fell in the quiet between tries, on both airs, and the
+/// call was never heard. A second's jitter reads every call at every phase on good paths in the
+/// timing model; two or three cost the weak path more than they buy
+/// (`docs/research/scanning/02-sense-and-stay.md` §4).
+pub const DWELL_JITTER_S: f64 = 1.0;
 /// How far over its gate an arrival announced, or a frame reported that did not decode, must
 /// stand for the scan to take it as a try under way and linger. Twenty minutes of noise reached
 /// 1.07; the first notice of a try heard partway through stood at 1.1 or more in four of five at
@@ -80,6 +88,16 @@ const KNOB_TOLERANCE_HZ: u64 = 50;
 #[must_use]
 pub fn must_last(dials: usize, dwell_s: f64, linger_s: f64) -> f64 {
     (dials as f64 * dwell_s + 2.0 * linger_s).ceil()
+}
+
+/// The next draw in 0..1 from a `SplitMix64` state.
+fn next_unit(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
 }
 
 /// How long a move leaves the station deaf: the card's input latency, and the radio's settling.
@@ -184,6 +202,9 @@ pub(super) struct Scan {
     placed: bool,
     dwell_s: f64,
     linger_s: f64,
+    /// The draws that lengthen each dwell by up to [`DWELL_JITTER_S`] (`SplitMix64`, seeded from
+    /// the scan's owner and dials, so a replay of the same scan draws the same).
+    jitter: u64,
     /// The longest a visit lasts however much it lingers: the longest call (fifteen tries).
     cap_s: f64,
     /// How long a call's tries must keep starting to be read: a round of the dials, and two
@@ -292,8 +313,11 @@ impl<P: Ptt> Station<P> {
             placed: on.is_some(),
             dwell_s,
             linger_s,
+            jitter: dials
+                .iter()
+                .fold(0x5CA9_u64 ^ owner.id, |h, &d| h.rotate_left(13) ^ d),
             cap_s: longest_call + dwell_s,
-            must_last_s: must_last(dials.len(), dwell_s, linger_s),
+            must_last_s: must_last(dials.len(), dwell_s + DWELL_JITTER_S, linger_s),
             moved_at: now,
             hear_from: now,
             restart_at: None,
@@ -311,12 +335,13 @@ impl<P: Ptt> Station<P> {
         self.note(
             "scan",
             &format!(
-                "scanning {} for {app}: {:.1} s on each, {:.1} s more where a call is under way, \
-                 a call must keep trying {:.0} s",
+                "scanning {} for {app}: {:.1}–{:.1} s on each, {:.1} s more where a call is under \
+                 way, a call must keep trying {:.0} s",
                 list.join(", "),
                 dwell_s,
+                dwell_s + DWELL_JITTER_S,
                 linger_s,
-                must_last(dials.len(), dwell_s, linger_s)
+                must_last(dials.len(), dwell_s + DWELL_JITTER_S, linger_s)
             ),
         );
         Ok(self.scan_status())
@@ -358,6 +383,7 @@ impl<P: Ptt> Station<P> {
             "dials": scan.dials,
             "at_hz": scan.dials.get(scan.at),
             "dwell_s": round3(scan.dwell_s),
+            "dwell_jitter_s": DWELL_JITTER_S,
             "linger_s": round3(scan.linger_s),
             "scan_s": scan.must_last_s,
             "held": self.scan_held(now),
@@ -550,7 +576,7 @@ impl<P: Ptt> Station<P> {
             }
             scan.at = index % left;
             scan.placed = false;
-            scan.must_last_s = must_last(left, scan.dwell_s, scan.linger_s);
+            scan.must_last_s = must_last(left, scan.dwell_s + DWELL_JITTER_S, scan.linger_s);
             self.note(
                 "scan",
                 &format!(
@@ -576,7 +602,7 @@ impl<P: Ptt> Station<P> {
         scan.moved_at = now;
         scan.hear_from = now + deaf;
         scan.restart_at = Some(now + deaf);
-        scan.leave_at = now + scan.dwell_s;
+        scan.leave_at = now + scan.dwell_s + DWELL_JITTER_S * next_unit(&mut scan.jitter);
         scan.linger_until = None;
         scan.arriving_until = f64::NEG_INFINITY;
         scan.hops += 1;
@@ -893,8 +919,9 @@ mod tests {
         let linger = before + station.engine().call_deferral_s() + move_deaf_s();
         assert!((scan["dwell_s"].as_f64().expect("dwell") - dwell).abs() < 1e-3);
         assert!((scan["linger_s"].as_f64().expect("linger") - linger).abs() < 1e-3);
-        // a round of the dials and two lingers: a try noticed, then two the scan stays for
-        let rounded = (DIALS.len() as f64 * dwell + 2.0 * linger).ceil();
+        // a round of the dials at their longest and two lingers: a try noticed, then two the
+        // scan stays for
+        let rounded = (DIALS.len() as f64 * (dwell + DWELL_JITTER_S) + 2.0 * linger).ceil();
         assert_eq!(scan["scan_s"], json!(rounded));
     }
 
@@ -905,13 +932,30 @@ mod tests {
         listen(&mut station, 0.2);
         // not on any of them: it goes to the home dial at once
         assert_eq!(rig.lock().expect("rig").dial, DIALS[0]);
+        // each visit a dwell and a part of DWELL_JITTER_S, never more
         let dwell = dwell(&station);
-        listen(&mut station, dwell + 0.3);
-        assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
-        listen(&mut station, dwell);
-        assert_eq!(rig.lock().expect("rig").dial, DIALS[2]);
-        listen(&mut station, dwell);
+        let mut moved = Vec::new();
+        let mut last = station.now();
+        for _ in 0..3 {
+            let from = rig.lock().expect("rig").set.len();
+            while rig.lock().expect("rig").set.len() == from {
+                // the helper listens in tenths of a second
+                listen(&mut station, 0.1);
+                assert!(
+                    station.now() - last < dwell + DWELL_JITTER_S + 0.2,
+                    "stayed too long"
+                );
+            }
+            assert!(station.now() - last > dwell - 0.3, "left too soon");
+            moved.push(station.now() - last);
+            last = station.now();
+        }
         assert_eq!(rig.lock().expect("rig").dial, DIALS[0]);
+        // the draws differ: a round of the dials does not keep in step with a caller
+        assert!(
+            (moved[1] - moved[2]).abs() > 0.05 || (moved[0] - moved[1]).abs() > 0.05,
+            "{moved:?}"
+        );
         assert_eq!(
             rig.lock().expect("rig").set,
             [DIALS[0], DIALS[1], DIALS[2], DIALS[0]]
@@ -1013,7 +1057,7 @@ mod tests {
         let (mut station, rig) = scanning_station();
         station.scan_start(gateway(), &DIALS).expect("a scan");
         let dwell = dwell(&station);
-        listen(&mut station, dwell + 0.5);
+        listen(&mut station, dwell + DWELL_JITTER_S + 0.3);
         assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
         station.connection_closed(gateway());
         assert!(!station.scanning());
@@ -1047,7 +1091,7 @@ mod tests {
         rig.lock().expect("rig").refuses.push(DIALS[1]);
         station.scan_start(gateway(), &DIALS).expect("a scan");
         let dwell = dwell(&station);
-        listen(&mut station, dwell + 0.5);
+        listen(&mut station, dwell + DWELL_JITTER_S + 0.3);
         assert_eq!(station.scan_status()["dials"], json!([DIALS[0], DIALS[2]]));
         assert_eq!(station.scan_status()["dropped"][0]["hz"], DIALS[1]);
         listen(&mut station, 0.3);

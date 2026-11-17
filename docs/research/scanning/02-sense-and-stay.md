@@ -83,3 +83,34 @@ at −16 dB, as S4's control was against its timing model.
   model, more than 80 % at the weak path S4 is set at, both airs; at 5 the 500 Hz weak path falls
   to 76 %, at 6 good paths start to lose calls. Three-quarters of the Winlink HF gateways listed on
   2026-11-01 publish 4 dials or fewer (median 3, from the gateway list Pat ships).
+
+## 4. On the harness, and the lock it found
+
+The S3/S4 grid (`make_grid.py`, the dials 4 s each) on the daemon at `ed42e63`: S4 passed, 8 of 10
+weak calls at 2300 Hz and 9 of 10 at 500 Hz (6 and 5 with the first design, 9 and 10 for a gateway on
+a fixed dial). S3's good paths connected every call in a median 11–20 s and at most 31.5 s, but one
+phase of the ten, the same in all four three-dial cells, never connected: three dials at exactly
+4 s are a 12 s round, the caller's tries come 11.4–12.4 s apart on the harness's stations, and every
+visit to the caller's dial fell in the quiet half of its cycle. The timing model had averaged over
+phases and hidden it; asked for the worst of twenty phases, it shows it (three dials, good path: 93 %
+on average, 64 % at the worst phase).
+
+Each dwell drawn longer by a random part breaks the lock. Worst phase of twenty, `scan_s` from the
+longest dwell:
+
+| | 2 dials | 3 dials | 4 dials |
+|---|---|---|---|
+| 4 s exactly, good path | 100 % | 64 % | 100 % |
+| 4–5 s, good path | 100 % | 100 % | 100 % |
+| 4–5 s, Moderate −16 dB, 2300 / 500 Hz | 90 / 81 % | 86 / 77 % | 86 / 72 % |
+| 4–6 s, good path | 100 % | 100 % | 98 % |
+| 4–6 s, Moderate −16 dB, 2300 / 500 Hz | 80 / 74 % | 91 / 78 % | 79 / 67 % |
+| a fresh order each round, 4 s, good path | 100 % | 87 % | 97 % |
+
+A second of jitter is taken (`DWELL_JITTER_S`): it reads every call at every phase on good paths, and
+more of the weak path than two or three seconds, which lengthen the round.
+
+**The linger, on S4's draws** (the daemon at `ed42e63`, its notices' linger taken out, the contact's
+kept): 3 of 10 at 2300 Hz and 5 of 10 at 500 Hz, against 8 and 9 with it; no draw connected without
+it that failed with it. The linger earns its place.
+

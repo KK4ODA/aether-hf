@@ -337,8 +337,11 @@ weak path S4 is set at, 85 % at 500 Hz and 96 % at 2300 Hz with four dials, fall
 
 **What changes** (rules 3 and 5 of the module, `station/scan.rs`):
 
-* **The dwell** on a dial is the move's deafness and `NOTICE_LISTEN_S` (3.5 s): 4.0 s, where it had
-  been the caller's gap (19.2 s).
+* **The dwell** on a dial is the move's deafness and `NOTICE_LISTEN_S` (3.5 s), 4.0 s, and a part
+  drawn at random up to `DWELL_JITTER_S` (1 s), where it had been the caller's gap (19.2 s). The
+  random part came from the harness: three dials at exactly 4 s are a 12 s round against tries
+  11.4–12.4 s apart, and at one phase of the grid every visit fell in the quiet between tries, on
+  both airs, and the call was never heard (`02-sense-and-stay.md` §4).
 * **A notice** is an arrival announced, or a frame reported that did not decode, at
   `NOTICE_CONFIDENCE` (1.1) or more over its threshold. It starts the linger; under it an
   announcement only holds the dial, as before. The linger had started only from a frame reported at
@@ -346,8 +349,9 @@ weak path S4 is set at, 85 % at 500 Hz and 96 % at 2300 Hz with four dials, fall
 * **The linger** is the caller's gap: the longest gap between two tries' starts before a call's
   pause, the most a try can be moved past a frame heard arriving, and the move (19.2 s; 19.6 on the
   harness's stations), counted from the notice. It had been the longest call gap of all (40 s).
-* **`scan_s`** is a round of the dials and two lingers, `n × 4.0 + 2 × 19.2` rounded up: 47, 51 and
-  55 s for 2, 3 and 4 dials. A try noticed is followed by two the scan stays for.
+* **`scan_s`** is a round of the dials at their longest dwell and two lingers, `n × 5.0 + 2 × 19.2`
+  rounded up: 49, 54 and 59 s for 2, 3 and 4 dials. A try noticed is followed by two the scan stays
+  for.
 * **The cap** is four dials (`MAX_SCAN_DIALS`), where it had been eleven. Three-quarters of the
   Winlink HF gateways listed on 2026-11-01 publish four or fewer.
 

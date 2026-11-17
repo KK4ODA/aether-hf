@@ -3209,10 +3209,11 @@ something of the dial is queued, or the identifier is owed there (`dial_movable`
 `tune_to`). A move restarts the receiver at once and after `move_deaf_s()` (`Air::lose_captured(0)`;
 a recording's `hop` event, followed by `--replay`), so a call heard on one dial is never answered on
 the next. **Since §11** (the author's design after S4 failed: a quiet dial is left after a short
-listen): the dwell is `move_deaf_s()` + `NOTICE_LISTEN_S` (3.5 s) = 4 s; an arrival or an undecoded
+listen): the dwell is `move_deaf_s()` + `NOTICE_LISTEN_S` (3.5 s) = 4 s, and a SplitMix64 draw up to
+`DWELL_JITTER_S` (1 s) so a round never keeps in step with the caller's tries; an arrival or an undecoded
 report at `NOTICE_CONFIDENCE` (1.1) or more is a try under way and starts a linger of the caller's
 gap (`call_gaps().0` + `call_deferral_s()` + the move, 19.2 s; under 1.1 an announcement only holds);
-`scan_s` = `must_last(n, dwell, linger)` = n × 4 + 2 × 19.2 rounded up; at most `MAX_SCAN_DIALS`
+`scan_s` = `must_last(n, dwell + jitter, linger)` = n × 5 + 2 × 19.2 rounded up; at most `MAX_SCAN_DIALS`
 (4) dials. Measured in `docs/research/scanning/02-sense-and-stay.md` (`scratch/notice.py`: the
 stream announces a try's middle or end sync block as an arrival; noise reached 1.07 in 20 min;
 `scratch/sense_timing.py`). A dial reading taken before the one the station holds is not taken
