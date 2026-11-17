@@ -33,7 +33,12 @@ STARTS = [0.0, 11.01, 22.03, 33.54, 45.06, 57.07, 69.08, 81.1, 93.1]
 """When a not-heard caller's tries start (`GrantedEngine.call_offsets`, eight tries and more:
 the pause before the last left out, the call made long enough)."""
 DEAF_S = 0.5
-OFFSETS_STEP = 0.4
+TONE_START_S = 1.054
+"""Where a try's tone frame begins, after the OFDM call frame: a gateway listening before then
+hears the frame that carries the call on a weak path from its start, and reads it or not."""
+NOISE_S = 600.0
+"""Seconds of noise per air in ``noise.py``'s CSV (ten minutes): a chunk that noticed nothing
+has no row."""
 
 
 def load(tries_csv: str, threshold: float):
@@ -57,17 +62,11 @@ def load(tries_csv: str, threshold: float):
 
 def noise_rate(noise_csv: str, threshold: float) -> dict[str, float]:
     """False notices a second, per air, at or over ``threshold``."""
-    count: dict[str, int] = defaultdict(int)
-    seconds: dict[str, float] = defaultdict(float)
-    chunks: dict[str, set] = defaultdict(set)
+    count: dict[str, int] = {"2300": 0, "500": 0}
     for r in csv.DictReader(open(noise_csv, encoding="utf-8")):
-        air = r["air"]
-        if (r["offset"], r["trial"]) not in chunks[air]:
-            chunks[air].add((r["offset"], r["trial"]))
-            seconds[air] += float(r["offset"])
         if r["event"] != "none" and float(r["confidence"]) >= threshold:
-            count[air] += 1
-    return {a: count[a] / seconds[a] for a in seconds}
+            count[r["air"]] += 1
+    return {a: n / NOISE_S for a, n in count.items()}
 
 
 def visit(table, offset: float, listen: float, rng: random.Random):
@@ -76,9 +75,9 @@ def visit(table, offset: float, listen: float, rng: random.Random):
     way, or None."""
     offs = sorted(table)
     o = min(offs, key=lambda x: abs(x - offset))
-    noticed, decoded = rng.choice(table[o])
-    if o < 0.0 and noticed is not None:
-        return ("read", decoded)  # it listened from before the try's start: the hold reads it
+    noticed, _ = rng.choice(table[o])
+    if offset + DEAF_S <= TONE_START_S:
+        return ("read", None)  # it hears the tone frame from its start: the hold reads it, or not
     if noticed is not None and noticed <= listen:
         return ("noticed", None)
     return None
@@ -108,6 +107,8 @@ def one_call(table, decode_p: float, n: int, dwell: float, stay: float, false_p:
                 continue
             if begun:
                 got = visit(table, t - begun[-1], dwell - DEAF_S, rng)
+                if got is not None and got[0] == "read" and rng.random() < decode_p:
+                    return begun[-1]
                 if got is not None:
                     nxt = [s for s in tries if s > begun[-1]]
                     if nxt and nxt[0] - t <= stay and rng.random() < decode_p:
@@ -135,7 +136,8 @@ def main() -> None:
     for key in sorted(tables, key=lambda k: (k[0], k[1], -float(k[2]))):
         air, profile, snr = key
         table = tables[key]
-        heard = [d for o, v in table.items() if o < 0 for _, d in v]
+        # listens that began before the tone frame's start and ended after its report
+        heard = [d for o, v in table.items() if -0.6 <= o <= 0.2 for _, d in v]
         decode_p = sum(heard) / len(heard) if heard else 0.0
         false_p = noise.get(air, 0.0) * (dwell - DEAF_S)
         row = []

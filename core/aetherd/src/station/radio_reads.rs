@@ -113,9 +113,13 @@ impl<P: Ptt> Station<P> {
         }
         if let Some(hz) = readings.dial_hz {
             // fresher than the display's ten-second cadence, and the rules check reads it too;
-            // the display need not ask the radio itself, on the run loop, while these come
-            self.read_dial(hz, at);
-            self.frequency.next_ask_s = self.frequency.next_ask_s.max(at + 10.0);
+            // the display need not ask the radio itself, on the run loop, while these come. A
+            // reading taken before the dial the station last read or set is stale: one asked
+            // just before a scan's move came back with the dial it had left (ADR-0129)
+            if self.frequency.read_at_s.is_none_or(|last| at >= last) {
+                self.read_dial(hz, at);
+                self.frequency.next_ask_s = self.frequency.next_ask_s.max(at + 10.0);
+            }
         }
         let Some(recording) = self.recording.as_mut() else {
             return;

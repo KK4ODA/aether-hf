@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.3.0 |
+| **Version** | 1.4.0 |
 | **Updated** | 2026-11-17 |
 | **Describes** | Aether HF 0.2.0-beta.161 |
 | **Licence** | CC BY 4.0 |
@@ -595,11 +595,12 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
 - **Dial is at**: shown when the radio cannot report its dial. Type where it is and press **Set**.
   The rules judge every transmission against it until you change it.
 - **Scanning**: shown while a program, such as RadioPost Gateway, has Aether scan its channels.
-  It names the dial the radio is on, its place in the program's list, and the program. Aether
-  moves the radio to the next dial after about 13 s on each. It never moves while a frame is
-  arriving, while a call or a session is up, or while your identifier is still to go out there.
-  After a frame it could not read, or a contact, it stays about half a minute for the caller's
-  next try. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
+  It names the dial the radio is on, its place in the program's list, and the program. Up to
+  four dials. Aether listens about 4 s on a dial and moves on if it hears nothing. When it hears
+  a call under way, even one too weak to read, it stays about 19 s for the caller's next try. It
+  never moves while a frame is arriving, while a call or a session is up, or while your
+  identifier is still to go out there, and it stays after a contact too. Answering stays on all
+  the while. **Stop** ends the scan and leaves the radio where it
   is; so does turning the radio's knob, or tuning from anywhere else. The program is told, and
   does not start the scan again by itself. The dial list is held while a scan runs.
 
@@ -1507,3 +1508,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.1.0 | 2026-11-16 | Link protocol 13's call (ADR-0126): **Connect** and **Bandwidth** say how a call goes, and Setup step 4 has **Call tries**. |
 | 1.2.0 | 2026-11-16 | The identifier in the data signal (ADR-0127): Setup step 4's **Identify by** (Morse or Data signal) in place of **Morse ID**, the Morse speed on its own row, and the goodbye, the rules and the host programs' `CWID ON` in those words. |
 | 1.3.0 | 2026-11-17 | Scanning (ADR-0129): the **Radio dial** box's **Scanning** row with **Stop**, while a program such as RadioPost Gateway scans the station's dials; what holds the radio on a dial, and what ends a scan. |
+| 1.4.0 | 2026-11-17 | Scanning: up to four dials; about 4 s on a quiet dial, and about 19 s where a call is heard under way (ADR-0129 §11). |

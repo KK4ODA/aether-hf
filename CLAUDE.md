@@ -3190,14 +3190,19 @@ program cycling `listen`. It does not move while a frame is announced and unrepo
 something of the dial is queued, or the identifier is owed there (`dial_movable`, shared with
 `tune_to`). A move restarts the receiver at once and after `move_deaf_s()` (`Air::lose_captured(0)`;
 a recording's `hop` event, followed by `--replay`), so a call heard on one dial is never answered on
-the next. The dwell and the linger come from `GrantedEngine::call_gaps()` (13.0 s and 34.4 s plus the
-move's 0.5 s, more with a turnaround). A linger starts from a frame reported undecoded yet acquired past
-`DETECT_CONFIDENCE_TRUSTED`, or a probe answered, never from an announcement: tone arrivals are heeded
-at any confidence, and one on noise had held a dead dial 34 s. The operator wins: another
-connection's `frequency.set`, the knob, or the panel's Stop (a claim-less `scan.stop`, `why`
-`operator`). `connect {call_s}` makes `tries_lasting` tries (*n* + 2 for *n* dials) and answers
-`tries`. The timing model is `docs/research/scanning/00-timing.md` (a 3.5 s dwell locks in phase
-with the 11–13 s tries; jitter does not help). **The harness has dials**: a daemon on a channel
+the next. **Since §11** (the author's design after S4 failed: a quiet dial is left after a short
+listen): the dwell is `move_deaf_s()` + `NOTICE_LISTEN_S` (3.5 s) = 4 s; an arrival or an undecoded
+report at `NOTICE_CONFIDENCE` (1.1) or more is a try under way and starts a linger of the caller's
+gap (`call_gaps().0` + `call_deferral_s()` + the move, 19.2 s; under 1.1 an announcement only holds);
+`scan_s` = `must_last(n, dwell, linger)` = n × 4 + 2 × 19.2 rounded up; at most `MAX_SCAN_DIALS`
+(4) dials. Measured in `docs/research/scanning/02-sense-and-stay.md` (`scratch/notice.py`: the
+stream announces a try's middle or end sync block as an arrival; noise reached 1.07 in 20 min;
+`scratch/sense_timing.py`). A dial reading taken before the one the station holds is not taken
+(`radio_reads.rs`: one asked just before a move came back with the old dial). The operator wins:
+another connection's `frequency.set`, the knob, or the panel's Stop (a claim-less `scan.stop`, `why`
+`operator`). `connect {call_s}` makes `tries_lasting` tries and answers `tries`. The first design's
+timing model is `docs/research/scanning/00-timing.md`, its harness results (S4 failed: a scanning
+gateway took 11 of 20 weak calls a fixed one took 19 of) `01-results.md`. **The harness has dials**: a daemon on a channel
 server greets `AEC4` and gets `ChannelRig` (keys nothing, has a dial; message 8 both ways); the
 server joins only stations on one dial, counts collisions per dial and judges S1 from the air
 (`channel_server.dial_faults`, an invariant in `session_matrix.py`); scenario keys `[stations.x]

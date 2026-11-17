@@ -316,3 +316,45 @@ long enough to put four or five tries on the gateway's dial at a weak path (abou
 or fewer dials for a gateway that serves weak paths, or the cost accepted and said. That, and
 whether the linger stays, is the author's decision. RP-4 and RP-5 1.1.0 wait on it.
 
+
+## 11. Amended: a short listen on a quiet dial, a stay where a call is under way (2026-11-17)
+
+**The author's correction** after §10: waiting on a quiet dial makes no sense. A gateway that hears
+nothing for a few seconds can move on, as Trimode does; it needs to sit through a caller's gap
+between tries only where a try is under way. The dwell of §2.3 had been sized for a gateway that
+could catch a try only from its start. The author asked that the detector be measured first, and
+that the dials be capped where it is best.
+
+**The measurement** (`docs/research/scanning/02-sense-and-stay.md`): a receiver started partway
+through a caller's real try announces the tone frame's middle or end sync block as an arrival,
+without the block before it, within about 1.1–1.5 s. From any point of the try but its last second,
+3.5 s of listening noticed it on good paths at either air; at −16 dB on Moderate three to six times
+in six. Twenty minutes of noise reached confidence 1.07; the first notice of a try heard partway
+through stood at 1.1 or more in four of five at −16 dB, its median 1.58. Fed to a timing model
+against the engine's tries, the rule reads every call on good paths up to four dials and, at the
+weak path S4 is set at, 85 % at 500 Hz and 96 % at 2300 Hz with four dials, falling to 76 % and
+85 % at five.
+
+**What changes** (rules 3 and 5 of the module, `station/scan.rs`):
+
+* **The dwell** on a dial is the move's deafness and `NOTICE_LISTEN_S` (3.5 s): 4.0 s, where it had
+  been the caller's gap (19.2 s).
+* **A notice** is an arrival announced, or a frame reported that did not decode, at
+  `NOTICE_CONFIDENCE` (1.1) or more over its threshold. It starts the linger; under it an
+  announcement only holds the dial, as before. The linger had started only from a frame reported at
+  the trusted gate (1.3), never from an announcement.
+* **The linger** is the caller's gap: the longest gap between two tries' starts before a call's
+  pause, the most a try can be moved past a frame heard arriving, and the move (19.2 s; 19.6 on the
+  harness's stations), counted from the notice. It had been the longest call gap of all (40 s).
+* **`scan_s`** is a round of the dials and two lingers, `n × 4.0 + 2 × 19.2` rounded up: 47, 51 and
+  55 s for 2, 3 and 4 dials. A try noticed is followed by two the scan stays for.
+* **The cap** is four dials (`MAX_SCAN_DIALS`), where it had been eleven. Three-quarters of the
+  Winlink HF gateways listed on 2026-11-01 publish four or fewer.
+
+**Found on the way:** a dial reading asked of the radio just before a move and answered after it
+carried the dial the radio had left, and the station took it: a scan that ended then thought the
+radio home and left it on another dial. A reading taken before the one the station holds is now not
+taken (`radio_reads.rs`).
+
+The harness judges the amended scan as it judged the first (§6): S1, S3, S4 and S7 again, S6
+unchanged.

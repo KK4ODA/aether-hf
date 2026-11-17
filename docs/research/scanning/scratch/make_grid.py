@@ -10,17 +10,20 @@ lands on, with the channel's own draws changed by the seed.
     python make_grid.py OUT_DIR --s4 SNR_2300 SNR_500   # S4: weak, Moderate, 3 channels
     python make_grid.py OUT_DIR --planted       # S7: calls at the edge of the scan's first move
 
-The planted calls (S7) sit on the gateway's home dial and call once, unasked to last, timed from
-a run of this build: the scan's first move comes 19.8 s into the air and a try radiates 6.4 s
-from 0.1 s after its `connect`. Ten end their first try 0 to 0.9 s before the move, ten start it
-0.1 to 1.9 s before.
+The planted calls (S7) sit on the gateway's home dial and call once, unasked to last, timed
+against a move of the scan off the home dial: with the 19.6 s dwell before ADR-0129 §11 its first
+move, 19.8 s into the air; with the 4 s dwell since, its fifth, 20.2 s in (home, away, home, away,
+home, each 4 s), once the caller has settled. A try radiates 6.4 s from 0.1 s after its
+`connect`. Ten end their first try 0 to 0.9 s before the move, ten start it 0.1 to 1.9 s before;
+the scan's start lands a few blocks apart from run to run, so the results place each try by its
+measured lead.
 """
 
 import sys
 from pathlib import Path
 
 DIALS = [3_590_000, 10_145_000, 14_105_000, 18_105_000]
-DWELL_S = 19.6  # the dwell `scan.start` answers on the harness's stations (a turnaround, the deferral)
+DWELL_S = 4.0  # the dwell `scan.start` answers since ADR-0129 §11 (19.6 before, a turnaround, the deferral)
 
 
 def scenario(
@@ -64,7 +67,7 @@ max_collisions = 0
 '''
 
 
-FIRST_MOVE_S = 19.8  # air time of the scan's first move, the scan started at 0.2 s
+FIRST_MOVE_S = 20.2  # air time of the move off the home dial planted against (see above)
 TRY_RF_S = 6.4  # a first try's radiated length: the OFDM part and the tone part
 RF_AFTER_CONNECT_S = 0.1  # the key's lead after a `connect`
 

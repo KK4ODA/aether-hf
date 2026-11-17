@@ -5217,7 +5217,7 @@ impl<P: Ptt> Station<P> {
             let frame_s = pending.length_s;
             self.rx_until = self.rx_until.max(now + frame_s.max(data_frame_s));
             // a scan does not leave a frame arriving (ADR-0129 rule 4)
-            self.scan_arriving(end_s);
+            self.scan_arriving(end_s, pending.detect_confidence, now);
             self.engine.on_preamble(start_s, now, Some(frame_s));
         }
     }

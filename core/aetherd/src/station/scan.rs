@@ -13,18 +13,20 @@
 //! 2. **A move starts the receiver again**, at once and again once the radio's change has come
 //!    through the sound card ([`move_deaf_s`]), so no frame begun on one dial is decoded, and
 //!    answered, on the next.
-//! 3. **The dwell and the linger come from the call** ([`GrantedEngine::call_gaps`]): the
-//!    longest gap between two tries' starts before a call's pause, and the longest of all, each
-//!    with the most a try can be moved past a frame heard arriving
-//!    ([`GrantedEngine::call_deferral_s`]) and the move's deafness. A visit that long holds the
-//!    start of a try of any call going on.
+//! 3. **It leaves a quiet dial after a short listen, and stays on one where a call is under way**
+//!    (§11, the author's design after S4): a dwell is the move's deafness and
+//!    [`NOTICE_LISTEN_S`], long enough to hear one of the sync blocks of any try on the air; a
+//!    try noticed partway through keeps the radio there a linger, the longest gap between two
+//!    tries' starts before a call's pause ([`GrantedEngine::call_gaps`]) with the most a try can
+//!    be moved past a frame heard arriving ([`GrantedEngine::call_deferral_s`]) and the move's
+//!    deafness, so the caller's next try begins while it listens.
 //! 4. **A frame heard holds the dial until it is reported**; an answer, a session and its
 //!    identifiers hold it as they always have.
-//! 5. **It lingers** after a frame reported that came to nothing yet passed the gate the station
-//!    trusts acquisition by, and after a probe it answered: a caller too weak to read this time
-//!    tries again. At most the longest call in all; a frame decoded as another station's ends
-//!    it. An announcement alone holds the dial (rule 4) but starts no linger: a tone arrival is
-//!    heeded whatever its confidence, and one on noise had held a dial nobody used for 34 s.
+//! 5. **It lingers** after a frame announced or reported, not decoded, at [`NOTICE_CONFIDENCE`]
+//!    or more, and after a probe it answered: a try under way, or a caller too weak to read this
+//!    time, tries again. At most the longest call in all; a frame decoded as another station's
+//!    ends it. Under that confidence an announcement only holds the dial (rule 4): noise reached
+//!    1.07, and a tone arrival on noise at 1.01 had once held a dial nobody used.
 //! 6. After a session, a call or a probe it goes on from the same dial, with a linger.
 //! 7. The list is judged once, at the start, as this station's answer would be.
 //! 8. A dial the radio will not take is dropped; below two dials the scan ends.
@@ -37,16 +39,30 @@
 
 use serde_json::{Value, json};
 
-use super::{DETECT_CONFIDENCE_TRUSTED, FrameReport, RegulatoryQuery, State, Station};
+use super::{FrameReport, RegulatoryQuery, State, Station};
 use crate::control::protocol::ConnectionId;
 use crate::ptt::Ptt;
 use crate::regulatory::Direction;
 
 /// The fewest dials a scan takes: one is a dial, not a scan.
 pub const MIN_SCAN_DIALS: usize = 2;
-/// The most dials a scan takes: fifteen tries (`MAX_CALL_TRIES`) reach eleven of them with
-/// either plan (`docs/research/scanning/00-timing.md`), the author's limit (ADR-0129 §8).
-pub const MAX_SCAN_DIALS: usize = 11;
+/// The most dials a scan takes, the author's cap (ADR-0129 §11): up to four a scanning gateway
+/// reads every call on a good path and, in the timing model fed with the detector's measured
+/// notices, more than four in five at the weak path S4 is set at; at five the 500 Hz weak path
+/// falls to 76 % (`docs/research/scanning/02-sense-and-stay.md`). Three-quarters of the Winlink
+/// HF gateways listed on 2026-11-01 publish four dials or fewer.
+pub const MAX_SCAN_DIALS: usize = 4;
+/// How long the scan listens on a dial, after the move's deafness, before it leaves one where it
+/// noticed nothing: the longest two of a try's markers stand apart (its tone frame's middle and
+/// end sync blocks, 2.4 s), a block's length, and its announcement after it. Measured: listening
+/// from any point of a try but its last second noticed it within this, on good paths at either
+/// air (`docs/research/scanning/02-sense-and-stay.md` §1).
+pub const NOTICE_LISTEN_S: f64 = 3.5;
+/// How far over its gate an arrival announced, or a frame reported that did not decode, must
+/// stand for the scan to take it as a try under way and linger. Twenty minutes of noise reached
+/// 1.07; the first notice of a try heard partway through stood at 1.1 or more in four of five at
+/// −16 dB, its median 1.58 (`02-sense-and-stay.md` §1).
+pub const NOTICE_CONFIDENCE: f64 = 1.1;
 /// The radio's own settling after it has taken a new dial, before what it delivers is the new
 /// channel's: its synthesiser and its AGC. The ADR's timing model assumed half a second for the
 /// whole move with the card's input latency; measured at the radio in its step 2.
@@ -57,6 +73,14 @@ pub const REPORT_AFTER_END_S: f64 = 1.0;
 /// How far a dial read back may differ from the dial asked for before it is taken for the knob:
 /// a radio that rounds its dial to its tuning step.
 const KNOB_TOLERANCE_HZ: u64 = 50;
+
+/// How long a caller's tries must keep starting to be read by a scan of `dials` dials (the
+/// `scan_s` a program publishes): a round of them, and two lingers, so a try noticed partway
+/// through is followed by two the scan stays for.
+#[must_use]
+pub fn must_last(dials: usize, dwell_s: f64, linger_s: f64) -> f64 {
+    (dials as f64 * dwell_s + 2.0 * linger_s).ceil()
+}
 
 /// How long a move leaves the station deaf: the card's input latency, and the radio's settling.
 #[must_use]
@@ -162,7 +186,8 @@ pub(super) struct Scan {
     linger_s: f64,
     /// The longest a visit lasts however much it lingers: the longest call (fifteen tries).
     cap_s: f64,
-    /// How long a call's tries must keep starting for one of them to fall in a visit.
+    /// How long a call's tries must keep starting to be read: a round of the dials, and two
+    /// lingers, so a try noticed is followed by two the scan stays for.
     must_last_s: f64,
     /// When the radio was put on this dial, and when its audio is the new channel's.
     moved_at: f64,
@@ -237,12 +262,12 @@ impl<P: Ptt> Station<P> {
                 return Err(ScanRefusal::Rules { dial_hz, why });
             }
         }
-        // the longest a caller's tries can stand apart: the gaps its engine schedules, a try
-        // moved past a frame heard arriving (a tone arrival on noise is heeded), and the move
-        let (before, longest) = self.engine.call_gaps();
-        let deaf = move_deaf_s() + self.engine.call_deferral_s();
-        let dwell_s = before + deaf;
-        let linger_s = longest + deaf;
+        // a quiet dial is left after a listen; a try under way keeps the radio until the
+        // caller's next one has begun: the gap its engine leaves before it, a try moved past a
+        // frame heard arriving (a tone arrival on noise is heeded), and the move
+        let (before, _) = self.engine.call_gaps();
+        let dwell_s = move_deaf_s() + NOTICE_LISTEN_S;
+        let linger_s = before + self.engine.call_deferral_s() + move_deaf_s();
         let longest_call = self
             .engine
             .call_offsets(&[b'H'; aether_link::MAX_CALL_TRIES])
@@ -268,7 +293,7 @@ impl<P: Ptt> Station<P> {
             dwell_s,
             linger_s,
             cap_s: longest_call + dwell_s,
-            must_last_s: ((dials.len() - 1) as f64 * dwell_s).ceil(),
+            must_last_s: must_last(dials.len(), dwell_s, linger_s),
             moved_at: now,
             hear_from: now,
             restart_at: None,
@@ -286,10 +311,12 @@ impl<P: Ptt> Station<P> {
         self.note(
             "scan",
             &format!(
-                "scanning {} for {app}: {:.1} s on each, a call must keep trying {:.0} s",
+                "scanning {} for {app}: {:.1} s on each, {:.1} s more where a call is under way, \
+                 a call must keep trying {:.0} s",
                 list.join(", "),
                 dwell_s,
-                ((dials.len() - 1) as f64 * dwell_s).ceil()
+                linger_s,
+                must_last(dials.len(), dwell_s, linger_s)
             ),
         );
         Ok(self.scan_status())
@@ -389,20 +416,23 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A frame announced past the gate the station heeds (rule 4): the dial is held until it
-    /// can have been decoded or refused. It starts no linger by itself: a tone arrival is heeded
-    /// whatever its confidence, and the harness's first grid found one on noise, at 1.01, that
-    /// had held a dial nobody used for 34 s and cost the caller a whole cycle.
-    pub(super) fn scan_arriving(&mut self, end_s: f64) {
+    /// can have been decoded or refused. At [`NOTICE_CONFIDENCE`] or more it is a try under way,
+    /// heard from its start or partway through it, and the scan lingers for the caller's next
+    /// (rule 5). Under it the announcement only holds: a tone arrival is heeded whatever its
+    /// confidence, and the harness's first grid found one on noise, at 1.01.
+    pub(super) fn scan_arriving(&mut self, end_s: f64, confidence: f64, now: f64) {
         if let Some(scan) = &mut self.scanner.scan {
             scan.arriving_until = scan.arriving_until.max(end_s + REPORT_AFTER_END_S);
+            if confidence >= NOTICE_CONFIDENCE && now >= scan.hear_from {
+                let until = now + scan.linger_s;
+                scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
+            }
         }
     }
 
-    /// A frame reported (rule 5): one that came to nothing yet was acquired past the gate the
-    /// station trusts — the rule its receive window keeps for "a burst is there at all" — or a
-    /// probe this station answers, keeps it a linger longer; one decoded as another station's
-    /// ends the linger. The noise candidates a quiet band brings every few seconds fall under
-    /// the gate.
+    /// A frame reported (rule 5): one that came to nothing at [`NOTICE_CONFIDENCE`] or more, or
+    /// a probe this station answers, keeps it a linger longer; one decoded as another station's
+    /// ends the linger. The noise candidates a quiet band brings fall under the gate.
     pub(super) fn scan_heard(&mut self, report: &FrameReport, now: f64) {
         let ours = report
             .to
@@ -422,7 +452,7 @@ impl<P: Ptt> Station<P> {
                 // another session's frames, heard by a station in none
                 _ => idle,
             };
-        let weak_caller = !report.decoded && report.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
+        let weak_caller = !report.decoded && report.detect_confidence >= NOTICE_CONFIDENCE;
         if anothers {
             scan.linger_until = None;
         } else if weak_caller || (report.decoded && report.kind == "probe" && ours) {
@@ -520,7 +550,7 @@ impl<P: Ptt> Station<P> {
             }
             scan.at = index % left;
             scan.placed = false;
-            scan.must_last_s = ((left - 1) as f64 * scan.dwell_s).ceil();
+            scan.must_last_s = must_last(left, scan.dwell_s, scan.linger_s);
             self.note(
                 "scan",
                 &format!(
@@ -696,7 +726,9 @@ mod tests {
     #[derive(Debug, Clone, Default)]
     struct ScanRadio {
         rig: Arc<Mutex<Rig>>,
-        answers: Arc<Mutex<Vec<crate::ptt::Readings>>>,
+        asked: Arc<Mutex<Vec<crate::ptt::Asked>>>,
+        /// Answers a test hands the station as if a question had been served late.
+        late: Arc<Mutex<Vec<crate::ptt::Readings>>>,
     }
 
     impl Ptt for ScanRadio {
@@ -731,20 +763,27 @@ mod tests {
         }
 
         fn request_readings(&mut self, asked: crate::ptt::Asked) {
-            self.answers
-                .lock()
-                .expect("rig")
-                .push(crate::ptt::Readings {
-                    at: std::time::Instant::now(),
-                    asked,
-                    meter: None,
-                    dial_hz: asked.dial.then(|| self.rig.lock().expect("rig").dial),
-                    settings: Vec::new(),
-                });
+            self.asked.lock().expect("rig").push(asked);
         }
 
+        /// Answered when the station takes them, as a radio's thread serves a question at
+        /// once: a test's clock runs ahead of the wall clock, so an answer kept from the
+        /// question would carry a dial the scan has since left, stamped as new.
         fn take_readings(&mut self) -> Vec<crate::ptt::Readings> {
-            std::mem::take(&mut self.answers.lock().expect("rig"))
+            let dial = self.rig.lock().expect("rig").dial;
+            let mut out = std::mem::take(&mut *self.late.lock().expect("rig"));
+            out.extend(
+                std::mem::take(&mut *self.asked.lock().expect("rig"))
+                    .into_iter()
+                    .map(|asked| crate::ptt::Readings {
+                        at: std::time::Instant::now(),
+                        asked,
+                        meter: None,
+                        dial_hz: asked.dial.then_some(dial),
+                        settings: Vec::new(),
+                    }),
+            );
+            out
         }
     }
 
@@ -807,7 +846,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_needs_a_radio_that_tunes_and_two_to_eleven_distinct_dials() {
+    fn a_scan_needs_a_radio_that_tunes_and_two_to_four_distinct_dials() {
         let mut deaf = Station::new(StationConfig::default(), NullPtt::default(), 1);
         assert_eq!(
             deaf.scan_start(gateway(), &DIALS),
@@ -818,7 +857,7 @@ mod tests {
             &[7_101_000][..],
             &[7_101_000, 7_101_000],
             &[7_101_000, 0],
-            &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+            &[1, 2, 3, 4, 5],
         ] {
             let refused = station.scan_start(gateway(), bad).expect_err("bad dials");
             assert_eq!(
@@ -846,15 +885,17 @@ mod tests {
     }
 
     #[test]
-    fn the_dwell_and_the_linger_come_from_the_call() {
+    fn a_dwell_is_a_listen_and_a_linger_the_callers_gap() {
         let (mut station, _) = scanning_station();
         let scan = station.scan_start(gateway(), &DIALS).expect("a scan");
-        let (before, longest) = station.engine().call_gaps();
-        let deaf = move_deaf_s() + station.engine().call_deferral_s();
-        assert!((scan["dwell_s"].as_f64().expect("dwell") - (before + deaf)).abs() < 1e-3);
-        assert!((scan["linger_s"].as_f64().expect("linger") - (longest + deaf)).abs() < 1e-3);
-        // two dwells: the time a call's tries must keep starting to fall in a visit to any
-        assert_eq!(scan["scan_s"], json!((2.0 * (before + deaf)).ceil()));
+        let (before, _) = station.engine().call_gaps();
+        let dwell = move_deaf_s() + NOTICE_LISTEN_S;
+        let linger = before + station.engine().call_deferral_s() + move_deaf_s();
+        assert!((scan["dwell_s"].as_f64().expect("dwell") - dwell).abs() < 1e-3);
+        assert!((scan["linger_s"].as_f64().expect("linger") - linger).abs() < 1e-3);
+        // a round of the dials and two lingers: a try noticed, then two the scan stays for
+        let rounded = (DIALS.len() as f64 * dwell + 2.0 * linger).ceil();
+        assert_eq!(scan["scan_s"], json!(rounded));
     }
 
     #[test]
@@ -884,11 +925,11 @@ mod tests {
         station.scan_start(gateway(), &DIALS).expect("a scan");
         listen(&mut station, 0.2);
         let dwell = dwell(&station);
-        // a frame announced holds the radio until it can have been decoded or refused, and
-        // starts no linger by itself
+        // a frame announced holds the radio until it can have been decoded or refused; under the
+        // confidence a try under way reaches it starts no linger
         let now = station.now();
         let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
-        station.scan_arriving(now + dwell + 2.0);
+        station.scan_arriving(now + dwell + 2.0, NOTICE_CONFIDENCE - 0.05, now);
         listen(&mut station, dwell + 2.0);
         assert_eq!(
             rig.lock().expect("rig").dial,
@@ -902,16 +943,16 @@ mod tests {
             DIALS[1],
             "lingered on an announcement"
         );
-        // a frame that came to nothing, acquired past the gate the station trusts, is a caller
-        // too weak to read this time: it lingers for the next try; a noise candidate does not
+        // a frame that came to nothing at the confidence a try reaches is a caller too weak to
+        // read this time: it lingers for the next try; a noise candidate does not
         listen(&mut station, move_deaf_s() + 0.1);
         let now = station.now();
-        station.scan_heard(&report(false, 1.0), now);
+        station.scan_heard(&report(false, NOTICE_CONFIDENCE - 0.05), now);
         assert!(
             station.scan_status()["lingering_until_ms"].is_null(),
             "lingered on noise"
         );
-        station.scan_heard(&report(false, DETECT_CONFIDENCE_TRUSTED + 0.2), now);
+        station.scan_heard(&report(false, NOTICE_CONFIDENCE + 0.2), now);
         assert!(!station.scan_status()["lingering_until_ms"].is_null());
         listen(&mut station, linger - 2.0);
         assert_eq!(rig.lock().expect("rig").dial, DIALS[1], "did not linger");
@@ -1051,5 +1092,67 @@ mod tests {
         let want = station.engine().tries_lasting(Some(54.0), None);
         assert!(want > station.config.link.call_tries);
         assert_eq!(station.engine().call_plan().len(), want);
+    }
+
+    /// A try noticed partway through (its middle or end sync block announced) keeps the radio a
+    /// linger from the notice, so the caller's next try begins while it listens (§11).
+    #[test]
+    fn a_try_noticed_partway_through_keeps_the_radio_for_the_next() {
+        let (mut station, rig) = scanning_station();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, 0.2);
+        let dwell = dwell(&station);
+        let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
+        listen(&mut station, dwell - 1.5);
+        let now = station.now();
+        // the stream takes the block it heard for a frame's start: it ends a tone frame later
+        station.scan_arriving(now + 5.4, 1.6, now);
+        listen(&mut station, linger - 1.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[0],
+            "left a dial a call is under way on"
+        );
+        assert!(!station.scan_status()["lingering_until_ms"].is_null());
+        listen(&mut station, 2.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[1],
+            "stayed past the linger"
+        );
+    }
+
+    /// A dial reading taken before the one the station holds is stale, and is not taken: on a
+    /// radio thread a question asked just before a scan's move can come back with the dial the
+    /// radio has left, and the station took it for its dial (the scan then thought the radio
+    /// home, and left it on another).
+    #[test]
+    fn a_dial_reading_taken_before_the_last_is_not_taken() {
+        let radio = ScanRadio::default();
+        radio.rig.lock().expect("rig").dial = DIALS[1];
+        let late = Arc::clone(&radio.late);
+        let mut station = Station::new(StationConfig::default(), radio, 1);
+        listen(&mut station, 1.5);
+        assert_eq!(station.frequency.value, Some(DIALS[1]));
+        let stale = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(5))
+            .expect("an instant five seconds ago");
+        late.lock().expect("rig").push(crate::ptt::Readings {
+            at: stale,
+            asked: crate::ptt::Asked {
+                meter: false,
+                dial: true,
+                settings: false,
+            },
+            meter: None,
+            dial_hz: Some(DIALS[0]),
+            settings: Vec::new(),
+        });
+        listen(&mut station, 0.1);
+        assert_eq!(
+            station.frequency.value,
+            Some(DIALS[1]),
+            "took a stale reading"
+        );
     }
 }
