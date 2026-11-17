@@ -15,13 +15,25 @@ edge of one bandwidth's signal, steady, judged at that bandwidth only and agains
 uncut twin (``ssb2700`` under the same condition and floor) or the reverse, for how soon a
 reading follows the operator's knob.
 
+``05-busy-band.md`` added a third: *qrm* clips, another station's signal wider than the
+leave-out inside the signal's span (a 500 Hz multicarrier, a PACTOR-class pair, a 2.4 kHz
+VARA-class signal over the top half, four RTTY stations), on its own rhythm or half the time,
+moderate or strong with a fast AGC answering it, over uncut and cut filters. Both stations of
+2026-11-17 warned of a cut neither radio had while such signals were on 7.101 MHz, and the
+harness's ``40m-rtty-contest-2300`` warns every night. They are judged as the corpus clips are
+(K1, K2, K3), and counted apart.
+
     python tools/rxfilter_corpus.py make OUT_DIR [--only NAME-PART] [--seed N] [--list]
     python tools/rxfilter_corpus.py judge OUT_DIR [--daemon PATH] [--csv FILE]
         [--only NAME-PART] [--jobs N]
 
-``field`` runs the same over the nineteen field recordings (``01-evidence.md`` §2) found under
-``INBOX`` (``field/inbox/``, git-ignored), each with its sidecar, and judges them against what
-the review knows of each (K2, K4).
+``field`` runs the same over the field recordings (``01-evidence.md`` §2, and the sixteen of
+2026-11-17 in ``05-busy-band.md``) found under ``INBOX`` (``field/inbox/``, git-ignored), each
+with its sidecar, and judges them against what the review knows of each (K2, K4). A recording
+starts with the audio of the 30 s before it (its pre-roll), where its events are not kept: a
+caller's own tries are keyed there, and the reading of a live station takes no look while keyed.
+When the upload's ``aetherd.log`` is beside the recordings, the keying it logged in the pre-roll
+is added to a copy of the sidecar the trace reads.
 
     python tools/rxfilter_corpus.py field INBOX [--daemon PATH] [--csv FILE] [--jobs N]
 
@@ -51,8 +63,10 @@ import multiprocessing
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -121,6 +135,10 @@ class Clip:
     """The bandwidths the clip is judged at."""
     then: Clip | None = None
     """A joined clip's second part, heard straight after this one."""
+    qrm: tuple[Source, ...] = ()
+    """A qrm clip's other stations, in the audio through the response."""
+    qrm_agc: str = ""
+    """The AGC preset answering a qrm clip's audio, its signals included; none when empty."""
 
 
 RESPONSES: dict[str, Response] = {
@@ -175,6 +193,43 @@ JOINED = ("shift-down-1100", "ssb1800", "narrow500")
 JOINED_SECONDS = {"steady": (40.0, 90.0), "ft8": (120.0, 120.0)}
 """How long each part of a joined clip runs, by condition."""
 UNCUT = "ssb2700"
+QRM_SETUPS: dict[str, tuple[tuple[tuple[str, float], ...], float]] = {
+    # 2026-11-17 20:27Z: a 400 Hz block at 1100-1500 Hz in every one of the gateway's looks
+    "ofdm500-1300": ((("ofdm500", 1300.0),), 0.0),
+    # 20:03Z: a block at 650-950 Hz both stations heard at the same time
+    "pactor-800": ((("pactor", 800.0),), 0.0),
+    # 20:05Z: a wide signal over 1700-2600 Hz, the top half of the span, for 25 s; 6 dB more,
+    # since its power is spread over 2.4 kHz
+    "ofdm2400-2900": ((("ofdm2400", 2900.0),), 6.0),
+    # the harness's 40m-rtty-contest-2300, which warns every night
+    "rtty-contest": (
+        (("rtty", 700.0), ("rtty", 1250.0), ("rtty", 1900.0), ("rtty", 2450.0)),
+        0.0,
+    ),
+}
+"""A qrm clip's other stations, by kind and audio centre, and the decibels each setup adds to
+the strength (``05-busy-band.md`` §3)."""
+QRM_STRENGTHS = {"moderate": (0.0, ""), "strong": (8.0, "fast")}
+"""Each signal's power over the band noise's in 3 kHz, and the AGC preset answering the audio.
+The field's blocks stood a median 5-7 dB over a look's span median, on in a third to three
+quarters of the looks: at "moderate" the 500 Hz setups stand 6.7-6.9 dB, on 64-66 % of their
+own rhythm. The strong ones pull the band's noise down under a fast AGC, as the gateway's FTDX10
+on AGC FAST did by 7-15 dB."""
+QRM_DUTIES = {"own": None, "half": [(0.0, 15.0), (30.0, 45.0), (60.0, 75.0)]}
+"""On its own rhythm (an ARQ exchange's bursts, PACTOR's cycle, RTTY's overs: on 70-90 % of
+the time), or steadily on 15 s in every 30."""
+QRM_RESPONSES = {
+    ("ssb2700", "deep"): ("own", "half"),
+    ("tilt", "deep"): ("own", "half"),
+    ("ssb2700", "shallow"): ("own", "half"),
+    ("shift-down-1100", "deep"): ("own",),
+    ("lowcut600", "deep"): ("own",),
+    ("narrow500", "deep"): ("own",),
+}
+"""The radios under the qrm, with the duties each is heard at: three uncut (a flat one and the
+FTDX10's slope over the deep floor, a flat one over the mobile's shallow floor), which must stay
+silent (K2), and a top cut, a bottom cut and a narrow filter, which must still be named (K1)."""
+QRM_SECONDS = 90.0
 
 
 def edge_cut(bandwidth: int, edge: str, depth_db: float) -> Response:
@@ -252,6 +307,35 @@ def corpus(seed: int = 0, additions: bool = True) -> list[Clip]:
                             then=second,
                         )
                     )
+    for k, ((rname, floor), duties) in enumerate(QRM_RESPONSES.items()):
+        for q, (setup, (signals, offset)) in enumerate(QRM_SETUPS.items()):
+            for s, (strength, (snr, agc)) in enumerate(QRM_STRENGTHS.items()):
+                for duty in duties:
+                    d = list(QRM_DUTIES).index(duty)
+                    sources = tuple(
+                        Source(kind, hz, snr + offset, windows=QRM_DUTIES[duty])
+                        for kind, hz in signals
+                    )
+                    clips.append(
+                        Clip(
+                            name=f"qrm-{setup}-{strength}-{duty}-{rname}-{floor}",
+                            response=RESPONSES[rname],
+                            condition="qrm",
+                            floor=floor,
+                            seconds=QRM_SECONDS,
+                            seed=90_001 + seed * 10_000 + k * 1000 + q * 100 + s * 10 + d,
+                            labels={
+                                **truth(RESPONSES[rname]),
+                                "qrm": [f"{kind}@{hz:.0f}" for kind, hz in signals],
+                                "qrm_snr_3k_db": snr + offset,
+                                "qrm_agc": agc,
+                                "qrm_duty": duty,
+                            },
+                            kind="qrm",
+                            qrm=sources,
+                            qrm_agc=agc,
+                        )
+                    )
     return clips
 
 
@@ -312,6 +396,27 @@ def build_part(clip: Clip) -> tuple[np.ndarray, dict]:
         gains = np.ones(n)
         gains[:steps] = np.repeat(10 ** (agc.gains_db((band + felt)[:steps]) / 20.0), Agc.STEP)
         band *= gains
+    if clip.condition == "qrm":
+        # other stations inside the passband, wider than the leave-out reaches; an AGC, when
+        # there is one, answers them and takes the band's noise down with them
+        others = np.zeros(n)
+        for k, source in enumerate(clip.qrm):
+            clean = source_audio(source, n, clip.seed * 100 + 50 + k)
+            others += shaped(clean, clip.response) * 10 ** (
+                (NOISE_3K_DBFS + source.snr_3k_db) / 20.0
+            )
+        if clip.qrm_agc:
+            noise_rms_3k = 10 ** (NOISE_3K_DBFS / 20.0)
+            hang, decay = AGC_PRESETS[clip.qrm_agc]
+            agc = Agc(noise_rms_3k * 10 ** (12.0 / 20.0), hang, decay)
+            steps = n // Agc.STEP * Agc.STEP
+            gains = np.ones(n)
+            gains[:steps] = np.repeat(
+                10 ** (agc.gains_db((band + others)[:steps]) / 20.0), Agc.STEP
+            )
+            band *= gains
+            others *= gains
+        band = band + others
     floor_3k_dbfs = NOISE_3K_DBFS - FLOORS_DB[clip.floor]
     chain = rng.standard_normal(n) * 10 ** (floor_3k_dbfs / 20.0) / math.sqrt(white_3k)
     audio = band + chain
@@ -527,6 +632,39 @@ def summary(rows: list[dict]) -> None:
                 f"    joined {r['clip']}: first {r['first_right_s'] or r['first_warning_s']}"
                 f" then settles {r.get('settles_s')} s after the join, ended {r['final']}"
             )
+        qrm_summary([r for r in rows if r["kind"] == "qrm"])
+
+
+def qrm_summary(rows: list[dict]) -> None:
+    """The qrm clips' counts (``05-busy-band.md`` §5): K1 and K3 over the cut radios, K2 over the
+    uncut ones, each clip at each bandwidth."""
+    if not rows:
+        return
+    cut = [r for r in rows if r["need"]]
+    named = [r for r in cut if r["first_right_s"] != "" and r["right_at_end"]]
+    silent = [
+        r
+        for r in rows
+        if not r["need"] and r["loss_low"] <= SILENT_DB and r["loss_high"] <= SILENT_DB
+    ]
+    false = [r for r in silent if r["false_warnings"]]
+    wrong = [r for r in rows if r["wrong_side"]]
+    print(
+        f"\nqrm: K1 {len(named)} of {len(cut)} cuts named right by the end;"
+        f" K2 {len(false)} of {len(silent)} uncut clip-bandwidths warned;"
+        f" K3 {len(wrong)} with a warning naming a side not cut"
+    )
+    for r in sorted(cut, key=lambda r: (r["clip"], r["bandwidth"])):
+        if r not in named:
+            print(
+                f"    missed {r['clip']} at {r['bandwidth']}: ended {r['final']}"
+                f" ({r['low_drop']}/{r['high_drop']} dB, {r['looks']} looks)"
+            )
+    for r in sorted(false, key=lambda r: (r["clip"], r["bandwidth"])):
+        print(
+            f"    false {r['clip']} at {r['bandwidth']}: {r['false_warnings']} of"
+            f" {r['readings']} readings, ended {r['final']} ({r['low_drop']}/{r['high_drop']} dB)"
+        )
 
 
 def judge(out: Path, daemon: Path, table: Path | None, only: str | None, jobs: int) -> None:
@@ -577,6 +715,25 @@ FIELD: dict[str, str] = {
     "20261108-011008_KK4ODA_KK4ODA-1": "top",
     "20261108-010123_KK4ODA_KK4ODA-1": "high 8",
     "20261108-012431_WD5EMA_KK4ODA": "high 8",
+    # 2026-11-17, 40 m at 2300 Hz on 7.101 MHz with other stations on and around it, both
+    # radios set right (05-busy-band.md): the gateway's FTDX10, scanning 80 and 40 m until
+    # 20:14:50Z, and the mobile's TS-480 (KK4ODA-2, answering as WD5EMA and KK4ODA)
+    "20261117-195649_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-200004_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-200118_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-200314_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-200523_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-200709_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-201711_KK4ODA-1_KK4ODA": WORKING,
+    "20261117-202734_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-202825_KK4ODA-1_WD5EMA": WORKING,
+    "20261117-195656_WD5EMA_KK4ODA-1": WORKING,
+    "20261117-200006_WD5EMA_KK4ODA-1": WORKING,
+    "20261117-200119_WD5EMA_KK4ODA-1": WORKING,
+    "20261117-200315_WD5EMA_KK4ODA-1": WORKING,
+    "20261117-200524_WD5EMA_KK4ODA-1": WORKING,
+    "20261117-200711_WD5EMA_KK4ODA-1": WORKING,
+    "20261117-201713_KK4ODA_KK4ODA-1": WORKING,
 }
 """What the review knows of each field recording: a working station (no passband warning, K2),
 a cut side that must be named before the recording ends (K4), or the witness's drop at an edge
@@ -592,14 +749,66 @@ SATURDAY = (
 """The mobile's five sessions of Saturday night, every one clipped (K6)."""
 
 
+def preroll_keying(wav: Path) -> list[dict]:
+    """The keying a station logged in a recording's pre-roll, as sidecar events. A recording
+    keeps its events from its start only, and its first ``preroll_s`` of audio come from before
+    it: a caller's own tries are keyed there, and a live station takes no look while keyed.
+    Read from the upload's ``aetherd.log`` beside the ``recordings`` folder; none without it."""
+    log = wav.parent.parent / "aetherd.log"
+    if not log.exists():
+        return []
+    side = json.loads(wav.with_suffix(".json").read_text(encoding="utf-8"))
+    preroll = float((side.get("session") or {}).get("preroll_s") or 0.0)
+    if preroll <= 0.0:
+        return []
+
+    def when(line: str) -> float:
+        return datetime.fromisoformat(line[:23]).timestamp()
+
+    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    started = [
+        line
+        for line in lines
+        if "recording: started" in line and wav.name in line and line[:4].isdigit()
+    ]
+    if not started:
+        return []
+    t0 = when(started[0]) - preroll
+    events = []
+    keyed = False
+    for line in lines:
+        if not line[:4].isdigit() or " ptt: " not in line:
+            continue
+        t = when(line) - t0
+        what = "keyed" if " ptt: keyed" in line else "released" if " ptt: released" in line else ""
+        if not what or t >= preroll:
+            continue
+        if t < 0.0:
+            keyed = what == "keyed"
+            continue
+        if keyed and not events:
+            events.append({"t_s": 0.0, "event": "ptt", "detail": "keyed", "state": "Connecting"})
+        events.append({"t_s": round(t, 3), "event": "ptt", "detail": what, "state": "Connecting"})
+        keyed = what == "keyed"
+    return events
+
+
 def trace_field(daemon: Path, wav: Path) -> list[dict]:
-    """Every reading over a field recording, with its sidecar."""
-    out = subprocess.run(
-        [str(daemon), "--passband-trace", str(wav), "--expect", str(wav.with_suffix(".json"))],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
+    """Every reading over a field recording, with its sidecar and the pre-roll's keying."""
+    sidecar = wav.with_suffix(".json")
+    extra = preroll_keying(wav)
+    with tempfile.TemporaryDirectory() as scratch:
+        if extra:
+            side = json.loads(sidecar.read_text(encoding="utf-8"))
+            side["events"] = extra + list(side.get("events", []))
+            sidecar = Path(scratch) / sidecar.name
+            sidecar.write_text(json.dumps(side), encoding="utf-8")
+        out = subprocess.run(
+            [str(daemon), "--passband-trace", str(wav), "--expect", str(sidecar)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
     return list(csv.DictReader(out.splitlines()))
 
 
