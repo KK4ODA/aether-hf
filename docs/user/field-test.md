@@ -217,6 +217,22 @@ you untick it; a request link from the author opens the form ready. `tools/field
 arrives into `field/LOG.md` and `field/paths.csv`, and `tools/bench_link.py --replay
 <sidecar>` runs the model's engines against what the path did.
 
+## 3b. Sessions the rate controller needs
+
+The rate controller picks how fast each frame goes. It is tuned on a simulator today, and the
+simulator cannot say which paths operators actually meet. Your ordinary sessions can. The most
+useful ones:
+
+- **Both sides, with audio.** Each station sends its own files (Log tab, *Send files…*, *Send
+  my files to the Aether project*, audio ticked). One side alone can't show the frames the other
+  never heard.
+- **Ordinary use, not only Tests.** Mail through a gateway and P2P transfers are what the modem
+  is for. With debug mode on, sessions a host program runs are uploaded by themselves.
+- **A spread of conditions.** 40 m and 80 m, day and night, 500 and 2300 Hz, the stations you
+  usually work. A dull session on a steady path is as useful as a hard one.
+- **A line about the path.** The band, the time, the distance, and the class from §4 as you saw
+  it.
+
 ## 4. Channel class
 
 The simulator's baselines are for four classes. Write down which one the air was, from what
