@@ -67,21 +67,41 @@ middle and end (`Y`), from the channel server's record of both stations' dials:
 | 500 p7 | no | 44.2 `YYY`, 55.6 `YY.`, 67.0 `...`, 78.9 `...`, 90.8 `...`, 120.7 `...` |
 | 500 p9 | no | 56.0 `YY.`, 67.3 `...`, 78.8 `...`, 90.7 `...`, 102.5 `YYY`, 132.4 `YYY` |
 
-* **The scan found the caller.** In every failed draw at least one try fell wholly on the
-  gateway's dial, and in four of the nine, three to six did. The linger did its part: in 2300 p7
-  and 500 p6 the gateway, having read the caller's frames and failed them, stayed on the caller's
-  dial for 76 and 79 s, every try heard.
-* **The path did not carry the try on the harness.** Of the tries wholly on the gateway's dial,
-  8 of 19 drew an acceptance at 2300 Hz and 8 of 22 at 500 Hz: about 0.4 a try, where the calling
-  bench gives about 0.6 at the same SNR, and fewer still connected, since the caller must read the
-  acceptance too. Six tries on the dial in a row went unanswered in one draw of each air.
-* So the registered SNR, read from the calling bench, is weaker on the harness than the criterion
-  meant, and S4 as run measures the path's reach as much as the scan's. Whether the scan costs
-  calls is the question the control of §4 answers.
+* **Where a try met the gateway, the call went on there.** In every failed draw at least one try
+  fell wholly on the gateway's dial. In 2300 p7 and 500 p6 the gateway read a try, accepted it,
+  and stayed on the caller's dial in the session it had accepted (76 and 79 s), but the caller
+  never read either acceptance and its call ran out. Every call the gateway read drew an
+  acceptance, in every draw of both arms.
+* **No dial fault, no late answer.** The slow passes the 500 Hz gateways logged were the
+  harness's lockstep sound card waiting on a loaded machine (a build ran beside these draws), not
+  the station: a thread that only sleeps woke on time throughout.
 
 ## 4. S4's control: the same calls to a gateway that does not scan
 
-*Running.*
+The same twenty draws (same seeds, the call placed at the same moment, `call_s` 40, the scan's
+own figure), the gateway sitting on the caller's dial (`s4-control`, made from the S4 files):
+
+| | scanning (§3) | fixed |
+|---|---|---|
+| 2300 Hz | 6 of 10 | 9 of 10 |
+| 500 Hz | 5 of 10 | 10 of 10 |
+
+Draw by draw, eight calls the fixed gateway took were lost by the scanning one; none went the
+other way (2300 p7 was lost by both). The fixed gateway took most calls at the first or second
+try: tries on the dial from the start, where the fading happened to be kind. **So S4 measures a
+real cost of the scan, and the reading at the end of §3 was wrong:** the path is not what lost
+these calls. A scanning gateway catches about a third of a caller's tries until it reads one,
+and at −16 dB on Moderate a try connects (read one way, its acceptance read the other) only
+about one time in three, where the timing model (`00-timing.md` §4) assumed each part of a try
+decoded half the time and tries were independent, giving 98–99 %. With six tries, of which
+about two land on the gateway's dial, about half of the calls connect, as measured.
+
+**The broken assumption** is the model's per-try success on a weak path: the ordinary part of a
+both-ways try never decodes at −16 dB (the calling bench already said so), so only its tone part
+counts, and a call needs its acceptance read too. What would meet S4 is a call long enough to
+put four or five tries on the gateway's dial at such a path, about twice `scan_s`, or a gateway
+that scans fewer dials. That is a change to the rule a caller follows (ADR-0129 §2.5), which waits
+for the author.
 
 ## 5. S7, each part earns its place
 
