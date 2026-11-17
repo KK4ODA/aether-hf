@@ -2887,8 +2887,8 @@ C1. Gone: `PassbandMonitor`, `passband_edges`, `passband_width_hz`, `PassbandEdg
 receiver (band-limited over a chain floor) is `passband::test_noise::ReceiverNoise`: flat noise
 to 24 kHz, as `[sim]` adds it, has no chain floor and reads *can't check*.
 
-**R3 on a busy band (2026-11-17, `docs/research/receive-filter/05-busy-band.md`; nothing built,
-the author's decision).** The banner warned at both stations on 7.101 MHz with both filters set
+**R3 on a busy band (2026-11-17, `docs/research/receive-filter/05-busy-band.md`; the author:
+"fix all items", built from its §10 by a session with Rust).** The banner warned at both stations on 7.101 MHz with both filters set
 right. No file caught the warnings themselves: they came while the stations were idle, recordings
 cover only sessions and their 30 s pre-roll, and the daemon does not log the verdict. The cause is
 other stations' signals wider than the leave-out reaches (150 Hz sides, so anything over about
@@ -2905,10 +2905,15 @@ says, and §6 of the ADR lists this case as untested: it is a judgement, not a b
 * the field judge adding a pre-roll's keying from the upload's `aetherd.log`, since a recording's
   events start at its start.
 
-Registered, not run: C1 (each look divided by its span median; each bin's 20th percentile over
-the looks), C2 (the frames as a veto, only for a signal that is always there), L1 (the verdict in
-the log), H1 (the nightly lists a warning on an uncut radio), S1 (a scan hop into a frame under
-way). The per-look tools and an R3 mirror are in that folder's `scratch/`.
+The build, specified step by step in §10 with the criteria of §7 fixed before any run:
+* R4: each look divided by its span median, each bin's 20th percentile over the looks
+  (`TIME_QUANTILE`);
+* L1: the verdict's changes in the log;
+* H1: the nightly lists a warning on an uncut radio, an invariant once R4 clears the harness;
+* S1, a scan hop into a frame under way: only if measured to matter.
+
+W2 (the frames as a veto) only on the author's explicit word. The frames' witness agrees that
+neither radio cut. The per-look tools and an R3 mirror are in that folder's `scratch/`.
 
 **RadioPost, and one modem for both systems (2026-11-09).** RadioPost (`KK4ODA/RadioPost`)
 reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the control API. The

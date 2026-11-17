@@ -120,7 +120,7 @@ grid (`tools/rxfilter_cost.py`), which has no other stations on the air.
   comes from idle listening. Frames that are announced or reported are held out, as designed.
 * **The radios and the line.** On clean stretches the FTDX10 reads 2–4 dB and the TS-480 2–6 dB.
   Neither radio is near the 12 dB line on its own.
-* **A move between bandwidths** (`set_air`): neither station moved. **Clipping**: none (C1 0.0 %).
+* **A move between bandwidths** (`set_air`): neither station moved. **Clipping**: none (the clipping share C1 0.0 %).
 
 ## 4. Bug or judgement
 
@@ -190,7 +190,10 @@ and the AGC moves with it. Frequency cannot separate them: a 2.4 kHz signal over
 of the span has the same spectrum as a passband moved down by an IF shift. Neither can depth: a
 narrow filter over a shallow floor is a 15 dB hump, the same as a 15 dB signal.
 
-### 6.1 C1: a signal comes and goes, the filter stays
+The names follow the review's: R4 is the reading after R3, and W2 the witness after W1. C1 stays
+the clipping share of ADR-0105 §2.2.
+
+### 6.1 R4: a signal comes and goes, the filter stays
 
 1. **Each look is divided by the median** of its span's bins left in (today: their ninth decile).
    A signal on part of the span no longer sets the look's level, so the look's noise, the edges
@@ -218,12 +221,12 @@ Everything else stays as it is:
     sooner than today.
   * A low quantile has fewer looks under it, so the edges read a little noisier. The ±50 Hz
     smoothing is there for that.
-* **Ablations**: C1a is the median division alone, C1b the quantile over looks alone. A part
+* **Ablations**: R4a is the median division alone, R4b the quantile over looks alone. A part
   whose removal fails no criterion goes.
 
-### 6.2 C2: the frames clear an edge
+### 6.2 W2: the frames clear an edge
 
-C2 is the only rule that can clear a signal that is always on. A warning is not shown for an edge
+W2 is the only rule that can clear a signal that is always on. A warning is not shown for an edge
 when the other station's OFDM frames, decoded in the last N minutes at the same bandwidth, show
 that edge passing within 10 dB of the middle. Each frame's channel estimate, carrier by carrier,
 is the transmit filter, the path and this radio's receive filter together. If the edge carriers
@@ -238,7 +241,7 @@ arrive whole, this radio does not cut that edge 20 dB.
     warnings came while idle.
   * It reverses the author's Gate 2 answer on the frames' role: there, frames could only bring a
     warning forward; here, they veto one.
-* **Recommendation: C1 first.** C2 only if the author wants the always-on case closed and accepts
+* **Recommendation: R4 first.** W2 only if the author wants the always-on case closed and accepts
   the frames as a veto.
 
 ### 6.3 Instruments and the scan's leak (each the author's go)
@@ -253,7 +256,7 @@ arrive whole, this radio does not cut that edge 20 dB.
   fix is in. With the fix, it becomes an invariant.
 * **S1, a call the scan lands in partway.** For the reader, a frame announced within the air's
   longest frame after a hop starts at the hop, because the try's first part was never announced.
-  About five lines. Register it only if C1's runs show those looks matter. On today's evidence they
+  About five lines. Register it only if R4's runs show those looks matter. On today's evidence they
   do not: 7 looks a call, which a 20th percentile over 120 absorbs.
 
 ### 6.4 Considered and not registered
@@ -290,17 +293,160 @@ rule.
 
 ## 8. For the author
 
-1. **Build C1?** It clears the signals that come and go: every warning the files show today came
+1. **Build R4?** It clears the signals that come and go: every warning the files show today came
    from signals on a third to three-quarters of the time. The cost is a reading that clears about
    48 s after the knob instead of 21–41 s, and one constant more.
 2. **The always-on case.** A wide signal on the frequency for most of a minute will still read as a
-   cut under C1, and it clears when the signal stops. Accept it, or add C2 (the frames as a veto)?
+   cut under R4, and it clears when the signal stops. Accept it, or add W2 (the frames as a veto)?
 3. **L1 and H1 now?** Neither changes what the reader says. L1 lets the next field report place a
    warning. H1 shows the harness's warnings every night, as `40m-rtty-contest-2300` has been
    giving them.
 4. **The mobile's own warning** was not captured (§2.1). If it comes again before a fix, a recording
    made while idle (*Record* on the Session tab) with the band busy would show it, and L1 would date
    it.
+
+**The author's answer** (relayed by the session that started this one, 2026-11-17): "fix all
+items", the filter alert's false positives included, the Rust work to a cloud session. §10 is the
+build, read as R4 (§6.1), L1 and H1; S1 only if its check shows the leak matters; and W2 only on the
+author's explicit word, since it reverses the Gate 2 answer on what the frames may do.
+
+## 10. The build
+
+For a session with a Rust toolchain. The criteria of §7 are fixed; nothing below changes them. The
+frames' witness agrees that neither radio cut: `tools/passband_witness.py` on the gateway's 20:07Z
+recording reads the mobile's 322 OFDM frames −1.1 dB at 300 Hz and −6.1 dB at 2600 Hz, and on the
+mobile's side the gateway's 59 frames within 3 dB from 300 to 2600 Hz. Every warning of that
+afternoon was false.
+
+### Step 1: the trace follows the station's hops
+
+Changes:
+* **`core/aetherd/src/passband_trace.rs`.** At each scan hop the sidecar holds
+  (`Expectation::restarts`, pairs of `[t, t + deaf]`), hand the reading `filter.frame(t, t + deaf)`,
+  as `station/scan.rs` does at a hop (`self.passband.frame(now, now + deaf)`). Today the trace
+  ignores hops.
+* **`tools/rxfilter_corpus.py`, `preroll_keying`.** Also add the pre-roll's hops from the log's
+  `dial: moved to <Hz> Hz` lines, as `hop` events with the detail `dial <Hz> deaf 0.500` (the form
+  `replay::hop_deaf_s` reads). A recording keeps no events before its start.
+
+Check: the trace prints the same lines as before over every field recording without a hop, and
+differs only around hops (the gateway's pre-rolls before 20:14:50Z).
+
+### Step 2: R4, in `core/aetherd/src/passband.rs`
+
+1. **A new constant**, after `REFERENCE_QUANTILE`:
+   ```rust
+   /// Where in each bin's values over the looks kept the profile is read: the fifth. Another
+   /// station's signal comes and goes and the radio's filter stays, so a bin's low values are the
+   /// filter's: a signal on in up to four looks of five no longer sets it. On 7.101 MHz on
+   /// 2026-11-17 the signals the leave-out could not reach were on in 33-77 % of the looks
+   /// (`docs/research/receive-filter/05-busy-band.md`).
+   pub const TIME_QUANTILE: f64 = 0.2;
+   ```
+2. **`ReceiveFilter::fold`.** Keep the ninth decile (`level`) for the floor test, as now: it sets
+   `last_over` and counts a look `weak`. Divide the look by its median over the span instead:
+   `quantile(&mut bins_between(&look, bin_hz, span.low_hz, span.high_hz), 0.5)`. A signal on part
+   of the span no longer sets the look's level.
+3. **`ReceiveFilter::profile`.** `quantile(&mut column, 0.5)` becomes
+   `quantile(&mut column, TIME_QUANTILE)`. The rule that a bin a signal held in more than half the
+   looks is NaN stays.
+4. **`ReceiveFilter::set_air`.** Divide each kept look again by its median over the new span, not
+   its `REFERENCE_QUANTILE`. The looks must stay divided the way `fold` divides them.
+5. **Unchanged:**
+   * `span_drops`, which reads the ninth decile over the smoothed profile;
+   * `verdict_of` and `LINE_DB`;
+   * `leave_out_occupied`;
+   * the hold, `LOOKS_NEEDED` and `LOOKS_KEPT`;
+   * C1, the clipping share.
+6. **Words.**
+   * The module's doc comment: a look is divided "by its median over the signal's span", and the
+     profile is "each bin's fifth over the looks kept".
+   * `record.rs`'s `passband_profile` doc: the values are relative to the span's median, where
+     they were relative to the passband's level. The sidecar's form does not change.
+7. **Tests.** The nineteen in `passband.rs` must pass with what they assert unchanged (verdicts
+   and drops). Two new ones, each seen to fail on R3's rules first:
+   * `a_wide_signal_on_part_of_the_time_is_not_a_cut`: flat noise, as in
+     `flat_noise_passes_the_signal`, with a 400 Hz block 10 dB over the noise at 1100-1500 Hz in
+     70 % of the looks, and the noise 10 dB down in those looks (the AGC). It reads `Clear`.
+   * `a_cut_under_a_wide_signal_is_still_named`: the moved passband of
+     `a_passband_moved_down_reads_as_its_top_cut`, with the same block. It reads `Top`.
+
+   `a_change_of_bandwidth_keeps_the_looks_and_judges_the_new_span` covers `set_air`.
+8. **Constants:** twelve, R3's eleven and `TIME_QUANTILE`. The look's median is a median, not a
+   setting.
+
+### Step 3: L1, in `core/aetherd/src/station.rs`
+
+* A field on `Station`: `filter_said: Verdict`, starting `Waiting`.
+* In `sample_passband`, after `step`, read `self.passband.reading()`. When its verdict differs
+  from `filter_said`, note one line and remember the verdict:
+  `self.note("filter", "<old> -> <new> | bottom <x> dB, top <y> dB, <n> looks")`, with the verdicts'
+  `word()`, the drops to a tenth of a dB, and `-` for a drop the reading lacks. It reaches
+  `aetherd.log` and the panel's Log as every note does.
+* A test: a station fed a cut and then the same radio uncut notes `waiting -> top` and then
+  `top -> clear`, and nothing for readings that do not change.
+
+### Step 4: H1, in `tools/session_matrix.py` and `tools/nightly_report.py`
+
+* `filter_warnings(run)` takes each station whose scenario gives its radio no
+  `[stations.<who>.radio] rx_filter_hz`, and reads its recordings' `passband.readings`
+  (`<run>/<who>/recordings/*.json`). For each recording with a reading whose verdict is `top`,
+  `bottom` or `both`, it returns `"<who>: <verdict> up to <drop> dB in <n> of <m> readings
+  (<recording>)"`. `scratch/nightly_filter.py` is the same reading over a nightly's artifacts.
+* `judge()` puts them in the result as `filter_warnings` and the CSV gains the column. They are not
+  in `invariants` yet.
+* `nightly_report.py` lists them among the night's findings, as a warning on a green run.
+* **When they become an invariant:** once step 6 shows none on three draws of H(a), they move into
+  `invariants`, in their own commit. A narrow miss there goes to the author first.
+
+### Step 5: S1, only if it matters
+
+First measure it. On the field set, with step 1's hops in the trace, count the looks R4 keeps
+between a hop and a frame announced within the air's longest frame after it. The gateway's 19:56Z
+pre-roll has 7. If leaving those looks out changes no verdict on the field set or the harness, S1
+is not built, and the decision record says so.
+
+If it does matter:
+* `ReceiveFilter::hop(at)` remembers the last hop.
+* `frame(start, end)` takes `start = last_hop` when `0 <= start - last_hop <= hold_s - 0.5` (the
+  air's longest frame).
+* `scan.rs` calls `hop(now)` beside its `frame(now, now + deaf)`, and the trace calls it at each
+  restart.
+
+### Step 6: judge it (§7)
+
+* **Corpus.** `python tools/rxfilter_corpus.py make OUT`, and `make OUT1 --seed 1` (every clip,
+  the qrm kind with them). Then `judge OUT --daemon core/target/release/aetherd` and the same on
+  `OUT1`. K1–K3, K5 and K6 come from the first line, Q1 and Q2 from the `qrm:` line.
+* **Ablations**, two scratch builds judged the same way. A part whose removal fails no criterion
+  goes.
+  * R4a: the median division alone (`TIME_QUANTILE = 0.5`).
+  * R4b: the fifth over the looks alone (the look divided by `REFERENCE_QUANTILE` as before).
+* **Field.** `python tools/rxfilter_corpus.py field field/inbox --daemon …` over the 2026-11-17
+  uploads, and over Gate 3's nineteen (`tools/fetch_uploads.py get 20261106`, `20261107`,
+  `20261108`, one at a time). K2: none of the thirty working recordings warns. K4: 5 of 5.
+* **Harness (a).** The scenarios of §7's H(a), three draws each, on the built daemon:
+  `session_matrix.py --seeds 3 --keep-passing` with H1's list. No warning at any station.
+* **Harness (b).** The cut grid: `tools/rxfilter_cost.py OUT --keep-audio`, then
+  `rxfilter_corpus.py harness OUT`. Every run passes as before, with no radiated overlap.
+* **Cost (K9).** `aetherd --passband-trace` over the mini PC's longest field recording, best of
+  three, within 2 % of real time.
+* A miss goes to the author with its trace. Nothing passes by rule.
+
+### Step 7: the record and the manual
+
+If the criteria hold, it is recorded in an ADR amending ADR-0105: §2.1 steps 3–4, and §6's
+untested case, now measured, with what R4 removes and its one constant. The next free number is
+ADR-0130. It ships with:
+* `docs/manual/manual.md`, in the same commit. One sentence under *The receive filter banner says…*:
+  a strong signal from another station sitting on the frequency for most of a minute can read as a
+  cut, and the banner goes when the signal stops. A change-log row with the header's Version and
+  Updated. *The reading follows the knob within about a minute* stays true (about 54 s).
+* `CLAUDE.md`'s receive-filter paragraph.
+* A beta, by the standing rule.
+
+If W2 is wanted after that, it is a step of its own, specified in §6.2. It is built only on the
+author's explicit word, since it reverses the Gate 2 answer.
 
 ## 9. Method and scripts
 
