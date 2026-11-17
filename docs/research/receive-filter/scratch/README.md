@@ -16,3 +16,16 @@ this directory, with the model's environment (numpy, matplotlib).
 
 The corpus's *qrm* clips and the field set's sixteen recordings of 2026-11-17 are in
 `tools/rxfilter_corpus.py`, which judges any build.
+
+## R4, judged (`../06-r4-results.md`)
+
+| File | What it does |
+|---|---|
+| `r4.patch` | R4 against the tree (`git apply`): the look divided by its span median, each bin's 20th percentile over the looks, and the two tests. Not merged: it misses §7's Q1, Q2, and K2/K3 on draw 1 |
+| `q_counts.py JUDGE_CSV` | Q1 and Q2 of `05-busy-band.md` §7 from `rxfilter_corpus.py judge --csv` |
+| `criteria_table.py JUDGE_DIR DRAWS BUILDS` | `06-r4-results.md` §2's table, from each `<draw>-<build>.txt` and `.csv` the judge wrote |
+| `q1_timing.py CORPUS JUDGE_CSV DAEMONS [WARM_S]` | Q1's clips traced again: whether each warned only in the first `WARM_S` (35) seconds of listening or after too |
+| `warn_spans.py CORPUS DAEMONS CLIP@BW …` | Each clip's warning spans and its last reading, build by build |
+| `harness_traces.py RUNS DAEMONS` | Every uncut station of a harness run: its live readings and each build's trace over its recording, as warnings |
+| `offset_check.py` | `06-r4-results.md` §3.5's synthetic check: a block on in two looks of three, under R4's 20th percentile and the median |
+| `rejudge_filter.py RUNS REPO` | `session_matrix.filter_warnings` (H1) read again over every run of a harness out dir |

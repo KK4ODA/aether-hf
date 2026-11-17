@@ -2915,6 +2915,29 @@ The build, specified step by step in §10 with the criteria of §7 fixed before 
 W2 (the frames as a veto) only on the author's explicit word. The frames' witness agrees that
 neither radio cut. The per-look tools and an R3 mirror are in that folder's `scratch/`.
 
+**R4, built and judged: it misses (2026-11-17, `06-r4-results.md`).** R4 as §10 specified misses
+§7's Q1 on both corpus draws (22 and 20 of 84 qrm clips over uncut radios warn; R3 18 and 20), Q2
+by one on each (23 of 24), and K2/K3 on the held-out draw (2 of 160 plain clips, a radio 8 dB down
+at an edge read 12–13 dB in the first readings). So it stops before step 7: no ADR amends ADR-0105
+(ADR-0130 went to a8f1385's short-transmission rung), R4 is not merged, its patch is
+`scratch/r4.patch`, and the decision is the author's. Why it buys less than §6.1 expected: most of
+Q1 is the first half minute (a signal on since the station started listening reads as a filter
+under any rule of time); a 500 Hz signal covers more than half the 500 Hz span, so the median
+division does not reach it; and a look is one 85 ms periodogram, so a bin's 20th percentile over
+the looks a signal held in a share *p* of them sits at the 0.2/(1 − *p*) quantile of its noise,
+2–10 dB over its free neighbours for *p* = 33–77 % (`scratch/offset_check.py`). After 35 s of
+listening R4 leaves 6 of 84 warning on each draw (R3 8 and 10). On the harness's H(a), R4 warned in
+2 of 24 runs (`40m-rtty-contest-2300`'s station b, in its first 6–18 s of listening), R3 in all
+three of that scenario's draws at both stations and in session too; the cut grid (H(b)) holds under
+R4, 22 of 24 cuts named and none of 138 uncut recordings warned. **H1 now reads the daemon's
+`filter:` log lines as well as the recordings**: the recordings alone missed warnings given while a
+station idled before its session. Merged and independent of R4: the trace follows a scan's hops
+(and `preroll_keying` adds the pre-roll's from `dial: moved to` lines), L1's `filter:` log line
+(`Station::note_filter`, the manual's Log section, 1.6.0), and H1's `filter_warnings` column in
+`session_matrix.py` and the nightly report (a report, not an invariant). S1 was not built. The
+upload script refused this session's read key, so K2 field and K4 are owed. **`--keep-passing` does
+not exist**: `session_matrix.py` keeps a run's audio unless `--drop-passing-audio`.
+
 **RadioPost, and one modem for both systems (2026-11-09).** RadioPost (`KK4ODA/RadioPost`)
 reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the control API. The
 author asked whether to fork Aether for it. The answer: no fork. Aether stays one modem that doesn't
