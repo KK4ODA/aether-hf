@@ -3183,6 +3183,19 @@ writes `identify_by` for a schema-15 daemon (`session_matrix.py --identify-by`) 
 `identifier_faults` judges the frames as Morse. v0.2.0-beta.161 carries it (the shell's
 `SCHEMA_HISTORY` line `("0.2.0-beta.161", 15)`).
 
+**Scanning (2026-11-17, ADR-0129, proposed; the author asked how RadioPost Gateway should scan as
+Trimode does).** Proposed: the station steps the radio itself (`scan.start {dials}`, `scan.stop`,
+`status.scan`, the `scan` event), owned by the connection that asks, and never by a program
+cycling `listen`. It does not move while a frame is announced and unreported, an answer or
+identifier is owed for the dial, or a linger runs. A move drops the audio until the radio's change
+is through the card (`Air::lose_captured`), so a call heard on one dial is never answered on the
+next. The dwell (13.5 s) and the linger (34.5 s) are computed from the call's own timing. A caller
+asks for `connect {call_s}`, which takes *n* + 2 tries for *n* channels. The operator's tune or the
+knob stops the scan. The timing model is `docs/research/scanning/00-timing.md`: a 3.5 s dwell
+locks in phase with the 11–13 s tries, and jitter does not help. RadioPost's side, with RP-4 and
+RP-5 drafts, is its `docs/design/03-scanning.md` (W50). Nothing built; harness step 0 (dials in
+the channel server) first.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
