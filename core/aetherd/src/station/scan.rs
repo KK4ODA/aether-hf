@@ -31,7 +31,11 @@
 //!    1.07, and a tone arrival on noise at 1.01 had once held a dial nobody used.
 //! 6. After a session, a call or a probe it goes on from the same dial, with a linger.
 //! 7. The list is judged once, at the start, as this station's answer would be.
-//! 8. A dial the radio will not take is dropped; below two dials the scan ends.
+//! 8. A dial the radio refuses is dropped, and one it has not answered for
+//!    [`UNANSWERED_TO_DROP`] moves in a row; below two dials the scan ends. A move it did not
+//!    answer for says nothing of the dial (§13): the receiver starts again as after a move, the
+//!    scan listens a dwell where the radio is, the next reading of the dial says where that is,
+//!    and then it asks for the dial again.
 //! 9. **The operator wins**: another tune, or the knob, ends the scan, and its owner is told.
 //! 10. **A scan belongs to its connection**: when the connection closes, the scan ends and the
 //!     radio goes to the home dial once nothing holds it where it is.
@@ -43,7 +47,7 @@ use serde_json::{Value, json};
 
 use super::{FrameReport, RegulatoryQuery, State, Station};
 use crate::control::protocol::ConnectionId;
-use crate::ptt::Ptt;
+use crate::ptt::{Ptt, PttError};
 use crate::regulatory::Direction;
 
 /// The fewest dials a scan takes: one is a dial, not a scan.
@@ -80,6 +84,12 @@ pub const MOVE_SETTLE_S: f64 = 0.25;
 /// How long after a frame's end it is decoded or refused: the floor's frame is final 18 symbols
 /// (0.72 s) after it ends (ADR-0009 §8), and a pass of the run loop on top.
 pub const REPORT_AFTER_END_S: f64 = 1.0;
+/// How many moves in a row to one dial the radio may leave unanswered before the scan leaves the
+/// dial out (ADR-0129 §13). An FTDX10 just out of transmit missed the read-back of a move asked
+/// 5 ms after its release, and the scan, which dropped a dial on any error, ended for the day
+/// (report 18 §3). The moves are a dwell apart at least: three in a row is a radio that does not
+/// go there, or does not answer at all.
+pub const UNANSWERED_TO_DROP: u32 = 3;
 /// How far a dial read back may differ from the dial asked for before it is taken for the knob:
 /// a radio that rounds its dial to its tuning step.
 const KNOB_TOLERANCE_HZ: u64 = 50;
@@ -228,6 +238,11 @@ pub(super) struct Scan {
     hops: u64,
     /// Dials the radio would not take, and why.
     dropped: Vec<(u64, String)>,
+    /// Moves in a row to each dial, by its place in `dials`, that the radio did not answer.
+    unanswered: Vec<u32>,
+    /// The dial the last move asked for, by its place in `dials`, when the radio did not answer
+    /// it: the radio may be there rather than on `dials[at]` until a reading says (§13).
+    or_at: Option<usize>,
     since_ms: u64,
 }
 
@@ -323,12 +338,15 @@ impl<P: Ptt> Station<P> {
             moved_at: now,
             hear_from: now,
             restart_at: None,
-            leave_at: now + dwell_s,
+            // on none of the dials, it moves at once
+            leave_at: now + if on.is_some() { dwell_s } else { 0.0 },
             linger_until: None,
             arriving_until: f64::NEG_INFINITY,
             held_by_contact: false,
             hops: 0,
             dropped: Vec::new(),
+            unanswered: vec![0; dials.len()],
+            or_at: None,
             since_ms: super::beacons::unix_ms(),
         });
         self.scanner.home = None;
@@ -496,6 +514,7 @@ impl<P: Ptt> Station<P> {
             return;
         }
         self.restart_after_move(now);
+        self.follow_unanswered();
         if self.knob_turned(now) {
             self.end_scan_staying(ScanEnd::Knob);
             return;
@@ -518,6 +537,10 @@ impl<P: Ptt> Station<P> {
             return;
         }
         if !scan.placed {
+            // after a move the radio did not answer for, a dwell first
+            if now < scan.leave_at {
+                return;
+            }
             let at = scan.at;
             self.move_scan(at, now);
             return;
@@ -561,31 +584,7 @@ impl<P: Ptt> Station<P> {
             return;
         };
         if let Err(error) = self.ptt.inner_mut().set_frequency_hz(dial) {
-            let why = error.to_string();
-            let Some(scan) = self.scanner.scan.as_mut() else {
-                return;
-            };
-            scan.dials.remove(index);
-            scan.dropped.push((dial, why.clone()));
-            let left = scan.dials.len();
-            if left < MIN_SCAN_DIALS {
-                self.note(
-                    "scan",
-                    &format!("the radio would not go to {}: {why}", mhz(dial)),
-                );
-                self.end_scan(ScanEnd::Radio);
-                return;
-            }
-            scan.at = index % left;
-            scan.placed = false;
-            scan.must_last_s = must_last(left, scan.dwell_s + DWELL_JITTER_S, scan.linger_s);
-            self.note(
-                "scan",
-                &format!(
-                    "the radio would not go to {}, which the scan leaves out: {why}",
-                    mhz(dial)
-                ),
-            );
+            self.move_failed(index, dial, &error, now);
             return;
         }
         let deaf = move_deaf_s();
@@ -601,6 +600,10 @@ impl<P: Ptt> Station<P> {
         };
         scan.at = index;
         scan.placed = true;
+        scan.or_at = None;
+        if let Some(misses) = scan.unanswered.get_mut(index) {
+            *misses = 0;
+        }
         scan.moved_at = now;
         scan.hear_from = now + deaf;
         scan.restart_at = Some(now + deaf);
@@ -609,6 +612,145 @@ impl<P: Ptt> Station<P> {
         scan.arriving_until = f64::NEG_INFINITY;
         scan.hops += 1;
         self.record_event("hop", &format!("dial {dial} deaf {deaf:.3}"));
+    }
+
+    /// A move to the scan's dial `index` failed (rule 8, §13). A refusal drops the dial at once;
+    /// no answer keeps it, until the radio has left [`UNANSWERED_TO_DROP`] moves to it in a row
+    /// unanswered.
+    fn move_failed(&mut self, index: usize, dial: u64, error: &PttError, now: f64) {
+        let Some(scan) = self.scanner.scan.as_mut() else {
+            return;
+        };
+        let misses = match error {
+            PttError::Refused(_) => None,
+            PttError::Backend(_) | PttError::WatchdogTripped => {
+                scan.unanswered.get_mut(index).map(|misses| {
+                    *misses += 1;
+                    *misses
+                })
+            }
+        };
+        match misses {
+            Some(misses) if misses < UNANSWERED_TO_DROP => {
+                self.move_unanswered(index, dial, misses, error, now);
+            }
+            _ => self.drop_dial(index, dial, misses, error),
+        }
+    }
+
+    /// Leave the scan's dial `index` out: the radio refused it, or has not answered `misses`
+    /// moves to it in a row. Below [`MIN_SCAN_DIALS`] the scan ends.
+    fn drop_dial(&mut self, index: usize, dial: u64, misses: Option<u32>, error: &PttError) {
+        let Some(scan) = self.scanner.scan.as_mut() else {
+            return;
+        };
+        let (why, said) = match misses {
+            Some(misses) => (
+                format!("no answer {misses} times in a row ({error})"),
+                format!(
+                    "the radio did not answer at {} {misses} times in a row ({error})",
+                    mhz(dial)
+                ),
+            ),
+            None => (
+                error.to_string(),
+                format!("the radio would not go to {}: {error}", mhz(dial)),
+            ),
+        };
+        scan.dials.remove(index);
+        scan.unanswered.remove(index);
+        scan.or_at = None;
+        scan.dropped.push((dial, why));
+        let left = scan.dials.len();
+        if left < MIN_SCAN_DIALS {
+            self.note("scan", &said);
+            self.end_scan(ScanEnd::Radio);
+            return;
+        }
+        scan.at = index % left;
+        scan.placed = false;
+        scan.must_last_s = must_last(left, scan.dwell_s + DWELL_JITTER_S, scan.linger_s);
+        self.note("scan", &format!("{said}; the scan leaves it out"));
+    }
+
+    /// A move the radio did not answer for, the dial kept (§13). The radio may have gone there
+    /// or not: the receiver starts again as after a move (rule 2), the scan stays where it was a
+    /// dwell, and the next reading of the dial says where the radio is
+    /// ([`Self::follow_unanswered`]). Then the scan asks for the dial again.
+    fn move_unanswered(
+        &mut self,
+        index: usize,
+        dial: u64,
+        misses: u32,
+        error: &PttError,
+        now: f64,
+    ) {
+        let deaf = move_deaf_s();
+        self.restart_receiver();
+        self.passband.frame(now, now + deaf);
+        self.note(
+            "scan",
+            &format!(
+                "the radio did not answer at {}; the scan tries it again after a dwell (miss \
+                 {misses} of {UNANSWERED_TO_DROP}: {error})",
+                mhz(dial)
+            ),
+        );
+        let Some(scan) = self.scanner.scan.as_mut() else {
+            return;
+        };
+        scan.or_at = (scan.placed && scan.at != index).then_some(index);
+        scan.moved_at = now;
+        scan.hear_from = now + deaf;
+        scan.restart_at = Some(now + deaf);
+        scan.leave_at = now + scan.dwell_s + DWELL_JITTER_S * next_unit(&mut scan.jitter);
+        scan.linger_until = None;
+        scan.arriving_until = f64::NEG_INFINITY;
+        self.record_event("hop", &format!("dial {dial} deaf {deaf:.3} unanswered"));
+    }
+
+    /// A reading of the dial taken after a move the radio did not answer for says where the
+    /// scan is (§13): on the dial asked for, the move went through after all; on the one it was
+    /// on, it did not, and the scan asks again after its dwell. Neither is the knob; any other
+    /// dial still is (rule 9).
+    fn follow_unanswered(&mut self) {
+        let (Some(hz), Some(read_at)) = (self.frequency.value, self.frequency.read_at_s) else {
+            return;
+        };
+        let Some(scan) = self.scanner.scan.as_mut() else {
+            return;
+        };
+        if read_at <= scan.moved_at + 1e-6 {
+            return;
+        }
+        let on = |i: usize| {
+            scan.dials
+                .get(i)
+                .is_some_and(|&d| d.abs_diff(hz) <= KNOB_TOLERANCE_HZ)
+        };
+        let went = if scan.placed {
+            scan.or_at.filter(|&asked| on(asked))
+        } else {
+            Some(scan.at).filter(|&at| on(at))
+        };
+        let Some(went) = went else {
+            return;
+        };
+        scan.at = went;
+        scan.placed = true;
+        scan.or_at = None;
+        if let Some(misses) = scan.unanswered.get_mut(went) {
+            *misses = 0;
+        }
+        let dial = scan.dials[went];
+        self.refresh_ceiling(true);
+        self.note(
+            "scan",
+            &format!(
+                "the radio reads {}: the move went through after all",
+                mhz(dial)
+            ),
+        );
     }
 
     /// Start the receiver again once the radio's change has come through the card.
@@ -755,12 +897,21 @@ mod tests {
 
     const DIALS: [u64; 3] = [3_590_000, 7_101_000, 10_145_000];
 
-    /// A radio whose dial a test can turn at the knob, and which can refuse a dial.
+    /// A radio whose dial a test can turn at the knob, which can refuse a dial, and which can
+    /// leave a move unanswered.
     #[derive(Debug, Default)]
     struct Rig {
         dial: u64,
+        /// Dials it reads another frequency after: refused.
         refuses: Vec<u64>,
+        /// Moves it does not answer: one taken off at each move to the dial it names.
+        silent: Vec<u64>,
+        /// Whether a move it did not answer went through all the same.
+        moves_unanswered: bool,
+        /// Moves it took and answered.
         set: Vec<u64>,
+        /// Every move asked of it, answered or not.
+        tries: Vec<u64>,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -794,8 +945,21 @@ mod tests {
 
         fn set_frequency_hz(&mut self, hz: u64) -> Result<(), PttError> {
             let mut rig = self.rig.lock().expect("rig");
+            rig.tries.push(hz);
             if rig.refuses.contains(&hz) {
-                return Err(PttError::Backend("the radio did not take it".into()));
+                return Err(PttError::Refused(format!(
+                    "the radio reads {} Hz after being asked for {hz}",
+                    rig.dial
+                )));
+            }
+            if let Some(at) = rig.silent.iter().position(|&dial| dial == hz) {
+                rig.silent.remove(at);
+                if rig.moves_unanswered {
+                    rig.dial = hz;
+                }
+                return Err(PttError::Backend(
+                    "the radio did not answer after the frequency was set".into(),
+                ));
             }
             rig.dial = hz;
             rig.set.push(hz);
@@ -883,6 +1047,33 @@ mod tests {
 
     fn dwell(station: &Station<ScanRadio>) -> f64 {
         station.scan_status()["dwell_s"].as_f64().expect("dwell")
+    }
+
+    /// Listen a tenth of a second at a time until `done`, at most `seconds`.
+    fn until(
+        station: &mut Station<ScanRadio>,
+        seconds: f64,
+        mut done: impl FnMut(&Station<ScanRadio>) -> bool,
+    ) {
+        let limit = station.now() + seconds;
+        while !done(station) {
+            assert!(station.now() < limit, "not within {seconds} s");
+            listen(station, 0.1);
+        }
+    }
+
+    /// The gateway of 2026-11-17: its home dial, and the one it scanned with it.
+    const GATEWAY: [u64; 2] = [7_101_000, 3_590_000];
+
+    /// A scan of `dials` started with the radio on the first, as the gateway's was.
+    fn scanning_from_home(dials: &[u64]) -> (Station<ScanRadio>, Arc<Mutex<Rig>>) {
+        let (mut station, rig) = scanning_station();
+        rig.lock().expect("rig").dial = dials[0];
+        // the station reads the dial, so the scan starts where the radio is
+        listen(&mut station, 1.5);
+        station.scan_start(gateway(), dials).expect("a scan");
+        assert_eq!(station.scan_status()["at_hz"], dials[0]);
+        (station, rig)
     }
 
     #[test]
@@ -1099,8 +1290,10 @@ mod tests {
         assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
     }
 
+    /// A dial the radio refuses — it reads another frequency after the move — is left out at
+    /// the first move to it.
     #[test]
-    fn a_dial_the_radio_will_not_take_is_dropped() {
+    fn a_dial_the_radio_refuses_is_dropped() {
         let (mut station, rig) = scanning_station();
         rig.lock().expect("rig").refuses.push(DIALS[1]);
         station.scan_start(gateway(), &DIALS).expect("a scan");
@@ -1108,6 +1301,16 @@ mod tests {
         listen(&mut station, dwell + DWELL_JITTER_S + 0.3);
         assert_eq!(station.scan_status()["dials"], json!([DIALS[0], DIALS[2]]));
         assert_eq!(station.scan_status()["dropped"][0]["hz"], DIALS[1]);
+        assert_eq!(
+            rig.lock()
+                .expect("rig")
+                .tries
+                .iter()
+                .filter(|&&d| d == DIALS[1])
+                .count(),
+            1,
+            "asked once"
+        );
         listen(&mut station, 0.3);
         assert_eq!(rig.lock().expect("rig").dial, DIALS[2]);
         // below two, the scan is over
@@ -1115,6 +1318,146 @@ mod tests {
         listen(&mut station, dwell + 0.5);
         assert!(!station.scanning());
         assert_eq!(station.scan_event()["why"], "radio");
+    }
+
+    /// The gateway on 2026-11-17 (report 18 §3): the FTDX10, just out of transmit, did not
+    /// answer the read-back of the scan's move, and the scan dropped the dial and ended. Now the
+    /// dial is kept, the scan listens a dwell where the radio is, and asks for it again.
+    #[test]
+    fn a_move_the_radio_did_not_answer_keeps_the_dial_and_the_scan_goes_on() {
+        let (mut station, rig) = scanning_from_home(&GATEWAY);
+        let dwell = dwell(&station);
+        rig.lock().expect("rig").silent.push(GATEWAY[1]);
+        station.take_events();
+        until(&mut station, dwell + 1.0, |_| {
+            !rig.lock().expect("rig").tries.is_empty()
+        });
+        let missed_at = station.now();
+        listen(&mut station, 1.5);
+        assert!(station.scanning(), "{}", station.scan_event());
+        assert_eq!(station.scan_status()["dials"], json!(GATEWAY));
+        assert_eq!(station.scan_status()["dropped"], json!([]));
+        assert_eq!(rig.lock().expect("rig").dial, GATEWAY[0]);
+        assert_eq!(
+            station.scan_status()["at_hz"],
+            GATEWAY[0],
+            "where the radio is"
+        );
+        let events = station.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.contains("did not answer at 3.5900 MHz; the scan tries it again")),
+            "{events:?}"
+        );
+        // a dwell, and it asks again; the radio answers this time
+        until(&mut station, dwell + DWELL_JITTER_S, |_| {
+            rig.lock().expect("rig").tries.len() == 2
+        });
+        let waited = station.now() - missed_at;
+        assert!(
+            waited > dwell - 0.2,
+            "asked again {waited:.1} s after the miss"
+        );
+        assert_eq!(rig.lock().expect("rig").dial, GATEWAY[1]);
+        assert_eq!(station.scan_status()["at_hz"], GATEWAY[1]);
+        // and round again
+        until(&mut station, dwell + DWELL_JITTER_S + 0.2, |_| {
+            rig.lock().expect("rig").dial == GATEWAY[0]
+        });
+        assert_eq!(
+            rig.lock().expect("rig").tries,
+            [GATEWAY[1], GATEWAY[1], GATEWAY[0]]
+        );
+        assert!(station.scanning());
+    }
+
+    /// A move that went through though its read-back was missed: the next reading of the dial
+    /// says where the radio is, and the scan goes on from there. Without it that reading is a
+    /// dial that is not the scan's, taken for the knob, and the scan ends.
+    #[test]
+    fn a_move_that_went_through_unanswered_is_found_by_the_next_reading() {
+        let (mut station, rig) = scanning_from_home(&GATEWAY);
+        let dwell = dwell(&station);
+        {
+            let mut rig = rig.lock().expect("rig");
+            rig.silent.push(GATEWAY[1]);
+            rig.moves_unanswered = true;
+        }
+        until(&mut station, dwell + 1.0, |_| {
+            !rig.lock().expect("rig").tries.is_empty()
+        });
+        assert_eq!(rig.lock().expect("rig").dial, GATEWAY[1], "it went");
+        listen(&mut station, 1.5);
+        assert!(station.scanning(), "{}", station.scan_event());
+        assert_eq!(station.scan_status()["at_hz"], GATEWAY[1]);
+        until(&mut station, dwell + DWELL_JITTER_S, |_| {
+            rig.lock().expect("rig").tries.len() == 2
+        });
+        assert_eq!(rig.lock().expect("rig").tries, [GATEWAY[1], GATEWAY[0]]);
+        assert_eq!(rig.lock().expect("rig").dial, GATEWAY[0]);
+    }
+
+    /// The first move, from a dial that is none of the scan's, unanswered: the scan does not
+    /// ask again at the next pass — three misses in a third of a second would drop the dial —
+    /// but after a dwell.
+    #[test]
+    fn a_first_move_unanswered_is_asked_again_after_a_dwell() {
+        let (mut station, rig) = scanning_station();
+        rig.lock().expect("rig").silent.push(DIALS[0]);
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        let dwell = dwell(&station);
+        listen(&mut station, dwell - 0.3);
+        assert_eq!(rig.lock().expect("rig").tries, [DIALS[0]]);
+        assert_eq!(rig.lock().expect("rig").dial, 14_105_000);
+        until(&mut station, DWELL_JITTER_S + 0.6, |_| {
+            rig.lock().expect("rig").tries.len() == 2
+        });
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[0]);
+        assert_eq!(station.scan_status()["dials"], json!(DIALS));
+    }
+
+    /// A dial the radio leaves unanswered three moves in a row is left out; misses with an
+    /// answer between them are not in a row.
+    #[test]
+    fn a_dial_unanswered_three_moves_in_a_row_is_dropped() {
+        let dials = [GATEWAY[0], GATEWAY[1], 10_145_000];
+        let (mut station, rig) = scanning_from_home(&dials);
+        let dwell = dwell(&station);
+        let round = 3.0 * (dwell + DWELL_JITTER_S) + 1.0;
+        // two misses, then an answer
+        rig.lock().expect("rig").silent = vec![dials[1]; 2];
+        until(&mut station, 3.0 * round, |_| {
+            rig.lock().expect("rig").set.contains(&dials[1])
+        });
+        assert_eq!(rig.lock().expect("rig").tries, [dials[1]; 3]);
+        assert_eq!(station.scan_status()["dials"], json!(dials));
+        // three in a row
+        rig.lock().expect("rig").silent = vec![dials[1]; 3];
+        until(&mut station, 4.0 * round, |station| {
+            station.scan_status()["dropped"]
+                .as_array()
+                .is_some_and(|dropped| !dropped.is_empty())
+        });
+        let status = station.scan_status();
+        assert_eq!(status["dials"], json!([dials[0], dials[2]]));
+        assert_eq!(status["dropped"][0]["hz"], dials[1]);
+        assert!(
+            status["dropped"][0]["why"]
+                .as_str()
+                .is_some_and(|why| why.starts_with("no answer 3 times in a row")),
+            "{status}"
+        );
+        let asked = rig.lock().expect("rig").tries.clone();
+        assert_eq!(
+            asked.iter().filter(|&&d| d == dials[1]).count(),
+            6,
+            "{asked:?}"
+        );
+        // the scan goes on, at once, with the dial after it
+        assert!(station.scanning());
+        listen(&mut station, 0.3);
+        assert_eq!(rig.lock().expect("rig").dial, dials[2]);
     }
 
     #[test]

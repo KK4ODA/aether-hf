@@ -2460,7 +2460,9 @@ impl<P: Ptt> Station<P> {
             .inner_mut()
             .set_frequency_hz(hz)
             .map_err(|e| match e {
-                crate::ptt::PttError::Backend(message) => message,
+                crate::ptt::PttError::Backend(message) | crate::ptt::PttError::Refused(message) => {
+                    message
+                }
                 other @ crate::ptt::PttError::WatchdogTripped => other.to_string(),
             })?;
         // what the radio now reads, and a fresh reading soon after

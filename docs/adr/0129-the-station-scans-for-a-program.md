@@ -106,7 +106,8 @@ radio. That thread already knows everything that should keep the radio where it 
    radio reports.
 8. **Every move is verified.** `set_frequency_hz` reads the dial back. A dial the radio will not
    take is dropped from the scan and named in a `scan` event, once. Below two dials the scan
-   stops at the home dial (`why`: `radio`).
+   stops at the home dial (`why`: `radio`). *Amended in §13:* a dial the radio refuses goes at
+   once; a move it does not answer keeps the dial until three in a row go unanswered.
 9. **The operator wins.** These stop the scan and tell its owner, who does not start it again by
    itself:
    * a `frequency.set` from any other connection, the panel's dial list included;
@@ -412,3 +413,73 @@ long enough to cover the pause (26–29 s) would make that 98–100, 83–85 and
 15–20 s longer, with every false notice costing as much more. RadioPost's client calls for
 `scan_s`; the VARA port's hosts and the panel's Connect cannot ask for a call's length. Not
 changed.
+
+## 13. Amended: a move the radio did not answer keeps its dial (2026-11-17)
+
+**What happened** (report 18 §3, `docs/research/link-architecture/18-radiopost-40m-beta162.md`).
+The gateway's FTDX10 released its key after its closing identifier at 20:14:50.876, and the scan
+asked for 3.590 MHz 5 ms later. A Yaesu says nothing back to `FA…;`, so the CAT backend reads the
+dial back, and the radio, just out of transmit, did not answer in time. Rule 8, as built, dropped
+the dial on any error; one dial was left, so the scan ended, and the radio stayed on 7.101 MHz for
+the rest of the day. After the five sessions before it the same move followed the identifier and
+the radio answered, so it was timing, and it will happen again. A dial the radio did not answer
+for is not a dial it will not take, which is what rule 8 meant.
+
+**What changes** (rule 8; `station/scan.rs`, `ptt.rs`):
+
+* **A refusal and no answer are told apart by type, not by the error's words.** `PttError::Refused`
+  is the radio, or the program in front of it, answering no:
+  * the dial read back after the move is another (a locked VFO, a band the radio has not got);
+  * an Icom answers NG (`FA`);
+  * `rigctld` returns one of Hamlib's soft errors, the rig having answered: `RIG_IS_SOFT_ERRCODE`
+    in Hamlib's `rig.h` (invalid parameter, not implemented, rejected by the rig, not available,
+    VFO not targetable, invalid VFO, out of the function's domain, deprecated, security, not
+    powered on), less `RIG_ETRUNC` (a command performed, its argument truncated);
+  * `FLRig` answers with a fault.
+
+  Everything else stays `PttError::Backend`, which says nothing of the dial: no read-back, an
+  Icom's silence or only its echo, the keying thread's bound run out or its port still busy,
+  `rigctld`'s timeout, I/O or bus errors, `rigctld` or `FLRig` not reachable, an HTTP error.
+* **A refused dial goes at once**, as before.
+* **A dial the radio did not answer for is kept** until `UNANSWERED_TO_DROP` (3) moves to it in a
+  row go unanswered. A move to it that the radio answers clears the count. On the third miss the
+  dial goes, its `why` saying `no answer 3 times in a row`. Below two dials the scan ends as before
+  (`why`: `radio`).
+* **Where the scan is after a miss.** As far as the station knows the radio has not moved, but
+  it may have. So:
+  * the receiver starts again as after a move, at once and after the move's deafness (rule 2), so
+    no frame begun on one dial is answered on the other, whichever the radio is on. The recording
+    has a `hop` event ending `unanswered`, and the replay follows it as it follows a move;
+  * the scan keeps its place for a dwell, with its random part, and then asks for the dial again
+    at its next move. It never asks again at the next pass, after a first move from a dial off
+    its list either: three misses in a third of a second would drop a dial the radio missed once;
+  * the first reading of the dial taken after the miss says where the radio is. The station reads
+    it every second while idle. On the dial asked for, the move went through after all: the scan
+    is there, and goes on from it. On the dial it was on, nothing changes. Neither is the knob
+    (rule 9); any other dial still ends the scan.
+* **The log says so:** `the radio did not answer at 3.5900 MHz; the scan tries it again after a
+  dwell (miss 1 of 3: …)`; `the radio reads 3.5900 MHz: the move went through after all`; and on
+  the third, `the radio did not answer at 3.5900 MHz 3 times in a row (…); the scan leaves it
+  out`.
+
+**Asked again at the next move, not a round later.** With two dials, as the gateway had, the two
+are the same. With three or four, a round later would leave the dial unheard a round more, and
+the dial the radio is on gets its extra dwell either way.
+
+**What it costs:** a miss keeps the radio a dwell (4–5 s) more on the dial it was on. A radio that
+answers nothing loses each dial after three moves to it, at least a dwell apart: the scan ends in
+about 15 s with two dials and 25 s with three, where it ended at the first move.
+
+**What it removes:** nothing. It narrows what drops a dial. No wire, setting, constant of the
+timing, or field of `status.scan` changes, and `scan_s` is the same.
+
+**How it is tested:** station tests in `station/scan.rs` with a radio that misses one read-back and
+then answers (both dials kept, the scan goes on, a dwell before it asks again), misses one but went
+there (the next reading finds it; without it that reading is taken for the knob), reads another
+frequency (dropped at the first move), misses three in a row (dropped, and two misses with an
+answer between them are not in a row), and misses the first move from a dial off the list (asked
+again after a dwell). Each fails with its part of the change taken out. `ptt.rs` tests each
+backend's answers: the read-back, the Icom's FB, NG, silence and echo, `rigctld`'s `RPRT -9`,
+`-1` and `-5` and no `rigctld` at all, `FLRig`'s fault and HTTP error, and the keying thread. No
+harness scenario: the channel server's radio always answers, and teaching it to miss a read-back
+is more than the fix.

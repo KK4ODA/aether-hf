@@ -3247,7 +3247,13 @@ gap (`call_gaps().0` + `call_deferral_s()` + the move, 19.2 s; under 1.1 an anno
 (4) dials. Measured in `docs/research/scanning/02-sense-and-stay.md` (`scratch/notice.py`: the
 stream announces a try's middle or end sync block as an arrival; noise reached 1.07 in 20 min;
 `scratch/sense_timing.py`). A dial reading taken before the one the station holds is not taken
-(`radio_reads.rs`: one asked just before a move came back with the old dial). The operator wins:
+(`radio_reads.rs`: one asked just before a move came back with the old dial). **A move the radio
+does not answer keeps its dial** (§13, report 18 §3: the FTDX10 missed a read-back 5 ms after its
+release and the scan ended for the day): `PttError::Refused` (the dial read back is another, an
+Icom's NG, one of Hamlib's soft errors from rigctld, an FLRig fault) drops a dial at once; any
+other error is a miss — the receiver starts again as after a move, the scan keeps its place a
+dwell, the next dial reading says which dial the radio is on (neither is the knob), and the dial
+goes after `UNANSWERED_TO_DROP` (3) misses in a row. The operator wins:
 another connection's `frequency.set`, the knob, or the panel's Stop (a claim-less `scan.stop`, `why`
 `operator`). `connect {call_s}` makes `tries_lasting` tries and answers `tries`. The first design's
 timing model is `docs/research/scanning/00-timing.md`, its harness results (S4 failed: a scanning

@@ -22,8 +22,15 @@
 /// Anything that went wrong keying a radio.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PttError {
-    /// The backend refused or the device is gone.
+    /// The backend failed, the device is gone, or the radio — or the program in front of it —
+    /// did not answer in time. Nothing is known of what was asked: a tune may have gone through.
     Backend(String),
+    /// The radio, or the program in front of it, answered and said no. For a tune: the radio
+    /// reads another dial after it (a locked VFO, a band it has not got), an Icom answered NG,
+    /// rigctld returned one of Hamlib's soft errors, or `FLRig` answered with a fault. A scan
+    /// leaves such a dial out at once, where a [`Self::Backend`] error says nothing about the
+    /// dial (ADR-0129 §13).
+    Refused(String),
     /// The watchdog has tripped and has not been cleared.
     WatchdogTripped,
 }
@@ -31,7 +38,7 @@ pub enum PttError {
 impl core::fmt::Display for PttError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Backend(message) => write!(f, "keying: {message}"),
+            Self::Backend(message) | Self::Refused(message) => write!(f, "keying: {message}"),
             Self::WatchdogTripped => {
                 write!(
                     f,
@@ -731,9 +738,13 @@ impl RigctldPtt {
             reader
                 .read_line(&mut reply)
                 .map_err(|e| PttError::Backend(format!("read: {e}")))?;
-            // `RPRT 0` is success; anything else is the rig or the daemon saying no
+            // `RPRT 0` is success; a soft error is the rig or the daemon answering no, the rest
+            // the exchange failing on the way (a timeout, the bus)
             match reply.trim().strip_prefix("RPRT ") {
                 Some("0") => Ok(()),
+                Some(code) if hamlib_refusal(code) => {
+                    Err(PttError::Refused(format!("rigctld returned {code}")))
+                }
                 Some(code) => Err(PttError::Backend(format!("rigctld returned {code}"))),
                 None => Err(PttError::Backend(format!(
                     "unexpected reply {:?}",
@@ -746,6 +757,19 @@ impl RigctldPtt {
         }
         result
     }
+}
+
+/// Hamlib's error codes that say the rig, or `rigctld`, answered and refused what was asked:
+/// `RIG_IS_SOFT_ERRCODE` in Hamlib's `rig.h` — invalid parameter (1), not implemented (4),
+/// rejected by the rig (9), not available (11), VFO not targetable (12), invalid VFO (16), out
+/// of the function's domain (17), deprecated (18), security (19), rig not powered on (20) — less
+/// `RIG_ETRUNC` (10), a command performed with its argument truncated. The rest, a timeout (5),
+/// an I/O or bus error, a protocol error, are the exchange failing: they say nothing of the
+/// request. `rigctld` answers `RPRT` and the code negated.
+fn hamlib_refusal(code: &str) -> bool {
+    code.trim()
+        .parse::<i32>()
+        .is_ok_and(|code| matches!(code.unsigned_abs(), 1 | 4 | 9 | 11 | 12 | 16..=20))
 }
 
 impl Ptt for RigctldPtt {
@@ -856,7 +880,7 @@ impl FlrigPtt {
             .map_err(|e| PttError::Backend(format!("FLRig's answer to {method}: {e}")))?;
         if reply.contains("<fault>") {
             let said = xml_text(&reply, "string").unwrap_or_else(|| reply.trim().to_owned());
-            return Err(PttError::Backend(format!("FLRig refused {method}: {said}")));
+            return Err(PttError::Refused(format!("FLRig refused {method}: {said}")));
         }
         Ok(xml_value(&reply).unwrap_or_default())
     }
@@ -1624,8 +1648,13 @@ mod tests {
         let mut flrig = FlrigPtt::new(&address, std::time::Duration::from_secs(2));
         let refused = flrig.key().expect_err("a fault");
         assert!(refused.to_string().contains("no transceiver"), "{refused}");
-        // an HTTP error is an error, and no dial is a dial unknown, not a zero
-        assert!(flrig.set_frequency_hz(7_078_000).is_err());
+        assert!(matches!(refused, PttError::Refused(_)), "FLRig answered no");
+        // an HTTP error is an error that says nothing of the request, and no dial is a dial
+        // unknown, not a zero
+        assert!(matches!(
+            flrig.set_frequency_hz(7_078_000),
+            Err(PttError::Backend(_))
+        ));
         assert_eq!(flrig.frequency_hz(), None);
         // nobody there: the error names FLRig and the setting to check
         let nobody = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -1654,6 +1683,121 @@ mod tests {
         let mut none = NullPtt::default();
         assert!(!none.can_tune());
         assert!(none.set_frequency_hz(7_101_000).is_err());
+    }
+
+    /// A stand-in for `rigctld` that answers `F` by the frequency, a client at a time: the rig
+    /// rejected 7.050 MHz (`RPRT -9`), timed out on 3.590 MHz (`RPRT -5`), found 14.100 MHz an
+    /// invalid parameter (`RPRT -1`), and took any other.
+    fn rigctld_tuning() -> String {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address").to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                let mut writer = stream.try_clone().expect("clone");
+                for line in BufReader::new(stream).lines() {
+                    let Ok(line) = line else { break };
+                    let answer = match line.as_str() {
+                        "F 7050000" => "RPRT -9\n",
+                        "F 3590000" => "RPRT -5\n",
+                        "F 14100000" => "RPRT -1\n",
+                        _ => "RPRT 0\n",
+                    };
+                    if writer.write_all(answer.as_bytes()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        address
+    }
+
+    /// A tune the radio refused is told from one it did not answer: a scan leaves the first dial
+    /// out at once and asks for the second again (ADR-0129 §13), by the error's type alone.
+    #[test]
+    fn a_tune_refused_is_told_from_one_not_answered() {
+        // a Yaesu or Kenwood, read back: the dial asked for, another, or nothing
+        assert_eq!(read_back("COM6", 3_590_000, Some(3_590_010)), Ok(()));
+        assert!(matches!(
+            read_back("COM6", 3_590_000, Some(7_101_000)),
+            Err(PttError::Refused(_))
+        ));
+        let missed = read_back("COM6", 3_590_000, None).expect_err("no answer");
+        assert!(matches!(missed, PttError::Backend(_)));
+        assert_eq!(
+            missed.to_string(),
+            "keying: COM6: the radio did not answer after the frequency was set"
+        );
+        // an Icom: FB taken, NG refused; nothing, or only the command's echo, is no answer
+        let icom = CatProtocol::Icom { address: 0x94 };
+        assert_eq!(
+            icom.tune_answer("COM3", &[0xFE, 0xFE, 0xE0, 0x94, 0xFB, 0xFD]),
+            Ok(())
+        );
+        assert!(matches!(
+            icom.tune_answer("COM3", &[0xFE, 0xFE, 0xE0, 0x94, 0xFA, 0xFD]),
+            Err(PttError::Refused(_))
+        ));
+        assert!(matches!(
+            icom.tune_answer("COM3", &[]),
+            Err(PttError::Backend(_))
+        ));
+        assert!(matches!(
+            icom.tune_answer("COM3", &icom.frequency_set(3_590_000)),
+            Err(PttError::Backend(_))
+        ));
+        // rigctld: Hamlib's soft errors are the rig answering no; a timeout is not
+        let mut rig = RigctldPtt::new(&rigctld_tuning(), std::time::Duration::from_secs(2));
+        rig.set_frequency_hz(7_101_000).expect("taken");
+        assert!(matches!(
+            rig.set_frequency_hz(7_050_000),
+            Err(PttError::Refused(_))
+        ));
+        assert!(matches!(
+            rig.set_frequency_hz(14_100_000),
+            Err(PttError::Refused(_))
+        ));
+        assert!(matches!(
+            rig.set_frequency_hz(3_590_000),
+            Err(PttError::Backend(_))
+        ));
+        assert!(hamlib_refusal("-20") && !hamlib_refusal("-10") && !hamlib_refusal("-13"));
+        // rigctld not there at all says nothing of the dial either
+        let nobody = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let gone = nobody.local_addr().expect("address").to_string();
+        drop(nobody);
+        assert!(matches!(
+            RigctldPtt::new(&gone, std::time::Duration::from_millis(300))
+                .set_frequency_hz(7_101_000),
+            Err(PttError::Backend(_))
+        ));
+        // FLRig's fault on rig.set_vfo is a refusal
+        let (address, _) = fake_flrig(|_| {
+            Some(
+                "<?xml version=\"1.0\"?><methodResponse><fault><value><struct><member>\
+                 <name>faultString</name><value><string>out of range</string></value>\
+                 </member></struct></value></fault></methodResponse>"
+                    .to_owned(),
+            )
+        });
+        assert!(matches!(
+            FlrigPtt::new(&address, std::time::Duration::from_secs(2)).set_frequency_hz(1),
+            Err(PttError::Refused(_))
+        ));
+        // the keying thread passes a refusal through, and a reply that did not come in time
+        // is no answer
+        let passed = ThreadedPtt::done(
+            Some(Reply::Done(Err(PttError::Refused("no".into())))),
+            "tuning command",
+            None,
+        );
+        assert_eq!(passed, Err(PttError::Refused("no".into())));
+        assert!(matches!(
+            ThreadedPtt::done(None, "tuning command", None),
+            Err(PttError::Backend(_))
+        ));
     }
 
     #[test]
@@ -2099,6 +2243,33 @@ impl CatProtocol {
         }
     }
 
+    /// What an Icom's answer to a tuning command says: FB is taken, FA (NG) addressed to this
+    /// controller is the radio refusing the dial, and anything else — nothing, an echo of the
+    /// command, a transceive broadcast — is no answer, which says nothing of the dial.
+    ///
+    /// # Errors
+    /// [`PttError::Refused`] on NG, [`PttError::Backend`] on no answer; `port` names the port.
+    pub fn tune_answer(self, port: &str, reply: &[u8]) -> Result<(), PttError> {
+        if self.keying_accepted(reply) {
+            return Ok(());
+        }
+        let refused = match self {
+            Self::Icom { address } => reply
+                .windows(6)
+                .any(|w| w == [0xFE, 0xFE, CIV_CONTROLLER, address, 0xFA, 0xFD]),
+            Self::Yaesu | Self::Kenwood => false,
+        };
+        if refused {
+            Err(PttError::Refused(format!(
+                "{port}: the radio refused the frequency (answer {reply:02X?})"
+            )))
+        } else {
+            Err(PttError::Backend(format!(
+                "{port}: the radio did not answer the frequency (answer {reply:02X?})"
+            )))
+        }
+    }
+
     /// The bytes that ask for the S-meter: `SM0;` (the main receiver) on a Yaesu and a
     /// Kenwood, CI-V `15 02` on an Icom.
     #[must_use]
@@ -2270,6 +2441,22 @@ fn collect_reply(
     Ok(got)
 }
 
+/// What a dial read back after a tune says of it: taken when within 10 Hz of `asked`, refused
+/// when it is another (a locked VFO, a band the radio has not got), and nothing known when the
+/// radio did not answer — a radio just out of transmit can miss the question (ADR-0129 §13).
+fn read_back(path: &str, asked: u64, read: Option<u64>) -> Result<(), PttError> {
+    match read {
+        Some(now) if now.abs_diff(asked) <= 10 => Ok(()),
+        Some(now) => Err(PttError::Refused(format!(
+            "{path}: the radio reads {now} Hz after being asked for {asked}; a locked VFO or a \
+             band the radio has not got"
+        ))),
+        None => Err(PttError::Backend(format!(
+            "{path}: the radio did not answer after the frequency was set"
+        ))),
+    }
+}
+
 /// Keying a radio with its own commands over its CAT port.
 pub struct CatPtt {
     path: String,
@@ -2396,33 +2583,17 @@ impl Ptt for CatPtt {
 
         let command = self.protocol.frequency_set(hz);
         if self.protocol.acknowledges_keying() {
-            // an Icom answers FB or FA to every command, this one included
+            // an Icom answers FB or FA (NG) to every command, this one included
             let reply = self.ask(&command).unwrap_or_default();
-            if !self.protocol.keying_accepted(&reply) {
-                return Err(PttError::Backend(format!(
-                    "{}: the radio did not accept the frequency (answer {:02X?})",
-                    self.path, reply
-                )));
-            }
-            return Ok(());
+            return self.protocol.tune_answer(&self.path, &reply);
         }
         self.port
             .write_all(&command)
             .and_then(|()| self.port.flush())
             .map_err(|e| PttError::Backend(format!("{}: {e}", self.path)))?;
         // a Yaesu or Kenwood says nothing back: read the dial to see that it moved
-        match self.frequency_hz() {
-            Some(now) if now.abs_diff(hz) <= 10 => Ok(()),
-            Some(now) => Err(PttError::Backend(format!(
-                "{}: the radio reads {now} Hz after being asked for {hz}; a locked VFO or a \
-                 band the radio has not got",
-                self.path
-            ))),
-            None => Err(PttError::Backend(format!(
-                "{}: the radio did not answer after the frequency was set",
-                self.path
-            ))),
-        }
+        let read = self.frequency_hz();
+        read_back(&self.path, hz, read)
     }
 
     fn s_meter(&mut self) -> Option<SMeter> {
