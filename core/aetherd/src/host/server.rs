@@ -417,6 +417,16 @@ fn spawn_data_loop(
                 if let Some(old) = current.take() {
                     old.close();
                 }
+                // What an older connection wrote and was not sent was its program's, and goes
+                // with it. Dropped here, not when a program attaches to the command port: a
+                // program that opens both ports and writes at once can have its first bytes in
+                // the pipe before the command port's thread has taken it, and a reset there
+                // lost them (`payload_written_to_the_data_port_reaches_the_modem`, flaky under
+                // load). The old connection appends only while it is current, under this lock,
+                // so nothing of it lands after the reset.
+                if let Ok(mut pipe) = pipe.lock() {
+                    pipe.to_radio.clear();
+                }
                 data_note(&notes, trace, mine, "opened by the program");
                 // each read waits at most `POLL`, never on a read timeout on the socket
                 // (`polled.rs`)
@@ -506,7 +516,11 @@ fn serve_data(
             Ok(0) if !current() => return DataEnd::Replaced,
             Ok(0) => return DataEnd::Closed,
             Ok(count) => {
+                // a connection let go for a newer one adds nothing after the newer one's reset
                 if let Ok(mut pipe) = pipe.lock() {
+                    if !current() {
+                        return DataEnd::Replaced;
+                    }
                     pipe.to_radio.extend_from_slice(&buffer[..count]);
                 }
             }
@@ -604,10 +618,12 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                     continue;
                 };
                 taken.store(true, Ordering::SeqCst);
-                // a newcomer starts with an empty pipe: what the last program wrote and was
-                // not sent, or was sent it and not read, was that program's
+                // a newcomer is not sent what the modem delivered to the last program and it
+                // did not read. What the last program wrote and was not sent goes when the
+                // newcomer opens the data port (`spawn_data_loop`): its own first bytes may be
+                // in the pipe already, written the moment it connected.
                 if let Ok(mut pipe) = shared.pipe.lock() {
-                    *pipe = DataPipe::default();
+                    pipe.to_host.clear();
                 }
                 let said = Arc::new(Mutex::new(Instant::now()));
                 current = Some((reader.closer(), Arc::clone(&said)));
@@ -2794,6 +2810,39 @@ mod tests {
 
         assert!(!decoded.is_empty(), "nothing reached the modem");
         assert_eq!(decoded, wanted);
+    }
+
+    #[test]
+    fn payload_written_before_the_command_port_is_taken_is_kept() {
+        // A program opens both ports and writes at once; the command port's thread may take
+        // the connection after the first bytes are in the pipe. Its reset of the pipe for a
+        // newcomer lost them, which made `payload_written_to_the_data_port_reaches_the_modem`
+        // fail under load. Here the bytes are certainly in first: the command port is not even
+        // opened until they have had time to arrive.
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut data = TcpStream::connect(server.data_address).expect("data port");
+        data.write_all(b"written first").expect("write");
+        std::thread::sleep(Duration::from_millis(300));
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("CONNECT W4ODA KK4XYZ");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (master)", "callsign": "W4ODA"}),
+        );
+        assert!(
+            client
+                .expect(|l| l.starts_with("CONNECTED"))
+                .contains("KK4XYZ")
+        );
+        let sent: Vec<u8> = params_of(&modem, "send")
+            .iter()
+            .flat_map(|p| from_base64(p["data"].as_str().unwrap_or_default()).unwrap_or_default())
+            .collect();
+        assert_eq!(sent, b"written first");
     }
 
     #[test]
