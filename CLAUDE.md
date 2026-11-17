@@ -2274,6 +2274,24 @@ brief is `docs/research/rate-control/00-brief.md`** (written 2026-10-23, after r
 rule's condition): gates 0–6, instruments first, criteria registered before the runs, the old
 controller deleted at the end.
 
+**The rate controller waits for the air (2026-11-17, the author's decision).** Three reviews (the
+first two days each) tuned it on the harness, and two things kept them from settling it. The
+harness's noise (a ten-draw median regret moves ten points between runs) was as large as the
+differences judged. And a scenario set grown from bug hunting — RTTY contests, thunderstorms,
+polar and equatorial paths, disturbed NVIS — counted as much as the paths operators work, with
+criteria (F3, K1) that let any one of them veto a change. The oracle breakdown
+(`docs/research/first-burst/02-oracle-breakdown.md`) shows the paths pulling opposite ways
+(fast fading and QRM too low, NVIS too high): no one setting is best on all of them, so do not
+look for one. **No fourth review on the harness, and no change to the controller, until on-air
+sessions show which paths to optimize for.** Collect two-sided sessions with audio, ordinary use
+(mail, P2P) as well as Tests, across bands, hours and bandwidths (`docs/user/field-test.md` §3b);
+give each a path class from what it measured, and read it with `rung_reading.py`,
+`c1_replay.py` and `two_sides.py`. Reopen only when the same common-case loss shows in several
+sessions. A review then has two tiers: the typical paths, weighted by how often the field meets
+them, are optimized; the hostile paths are a survival test only (completes, no overlap, no worse
+than a generous bound), never a veto. And it is sized to its effect: decide the smallest gain
+that matters, and run enough paired draws to see it. ROADMAP P9-21.
+
 **ND1J's two Tests at 500 Hz (2026-10-23, `16-nd1j-500-beta121.md`).** ND1J's Tests to KK4ODA-1
 at 16:04Z and 16:07Z, 80 m, beta.121 at both ends, both sides with audio — at **500 Hz** (his
 station runs 500; KK4ODA-1, set to 2300, moved down to answer each). Complete, files at 413 and
