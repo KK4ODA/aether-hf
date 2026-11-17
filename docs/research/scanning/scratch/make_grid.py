@@ -8,6 +8,12 @@ lands on, with the channel's own draws changed by the seed.
 
     python make_grid.py OUT_DIR                 # S3: +10 dB, AWGN and Moderate, both airs
     python make_grid.py OUT_DIR --s4 SNR_2300 SNR_500   # S4: weak, Moderate, 3 channels
+    python make_grid.py OUT_DIR --planted       # S7: calls at the edge of the scan's first move
+
+The planted calls (S7) sit on the gateway's home dial and call once, unasked to last, timed from
+a run of this build: the scan's first move comes 19.8 s into the air and a try radiates 6.4 s
+from 0.1 s after its `connect`. Ten end their first try 0 to 0.9 s before the move, ten start it
+0.1 to 1.9 s before.
 """
 
 import sys
@@ -58,7 +64,60 @@ max_collisions = 0
 '''
 
 
+FIRST_MOVE_S = 19.8  # air time of the scan's first move, the scan started at 0.2 s
+TRY_RF_S = 6.4  # a first try's radiated length: the OFDM part and the tone part
+RF_AFTER_CONNECT_S = 0.1  # the key's lead after a `connect`
+
+
+def planted(name: str, wait: float, seed: int) -> str:
+    return f'''name = "{name}"
+description = "ADR-0129 S7: a call on the home dial timed against the scan's first move."
+tags = ["scan-planted"]
+bandwidth = 2300
+seconds = 240
+seed = {seed}
+connect_within_s = 180
+
+[stations.a]
+callsign = "W4ODA"
+dial_hz = {DIALS[0]}
+[stations.b]
+callsign = "KK4XYZ-10"
+
+[path]
+profile = "awgn"
+snr_db = 10.0
+
+[script]
+steps = [
+  "scan b {DIALS[0]},{DIALS[1]}",
+  "wait {wait:.2f}",
+  "connect",
+  "disconnect",
+  "wait 15",
+]
+
+[expect]
+connected = true
+max_collisions = 0
+'''
+
+
 def main() -> None:
+    if "--planted" in sys.argv:
+        out = Path(sys.argv[1])
+        out.mkdir(parents=True, exist_ok=True)
+        for k in range(10):
+            ends = FIRST_MOVE_S - 0.1 * k  # the first try's end
+            wait = ends - TRY_RF_S - RF_AFTER_CONNECT_S - 0.2
+            name = f"scan-planted-ends-{k}"
+            (out / f"{name}.toml").write_text(planted(name, wait, 9000 + k))
+            starts = FIRST_MOVE_S - 0.1 - 0.2 * k  # the first try's start
+            wait = starts - RF_AFTER_CONNECT_S - 0.2
+            name = f"scan-planted-starts-{k}"
+            (out / f"{name}.toml").write_text(planted(name, wait, 9100 + k))
+        print(f"{len(list(out.glob('*.toml')))} scenarios in {out}")
+        return
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
     weak = "--s4" in sys.argv
