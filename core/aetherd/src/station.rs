@@ -67,7 +67,7 @@ use crate::{
     busy::BusyConfig,
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
-    passband::{Clipping, FilterReading, ReceiveFilter, SPECTRUM_TOP_HZ},
+    passband::{Clipping, FilterReading, ReceiveFilter, SPECTRUM_TOP_HZ, Verdict},
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
     regulatory::{
         AirOccupancy, Authorization, Ceiling, Decision, DialSource, Direction, Edges, EmissionKind,
@@ -1214,6 +1214,10 @@ pub struct Station<P: Ptt> {
     passband: ReceiveFilter,
     /// The share of the audio heard at full scale over the last ten seconds (ADR-0105 §2.2).
     clipping: Clipping,
+    /// The receive filter's verdict the log last said: a change is one `filter` line, so a
+    /// warning given while the station idled can be placed after the fact
+    /// (`docs/research/receive-filter/05-busy-band.md` §6.3, L1).
+    filter_said: Verdict,
     /// Until when a burst is known to be arriving: a preamble was found and its frame
     /// has not finished, or a frame just finished and the next may follow.
     rx_until: f64,
@@ -1402,6 +1406,7 @@ impl<P: Ptt> Station<P> {
             spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
             passband: ReceiveFilter::for_air(params),
             clipping: Clipping::new(params.audio_rate as f64),
+            filter_said: Verdict::Waiting,
             rx_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
@@ -5273,15 +5278,37 @@ impl<P: Ptt> Station<P> {
         let folded = self.passband.step(now, listening, analyser.window_s(), || {
             analyser.compute_to(SPECTRUM_TOP_HZ)
         });
-        if let Some(recording) = &mut self.recording
-            && !folded.is_empty()
-        {
-            let reading = self.passband.reading();
+        // the reading changes as a look folds in; a move to the other bandwidth shows at the next
+        if folded.is_empty() {
+            return;
+        }
+        let reading = self.passband.reading();
+        self.note_filter(&reading);
+        if let Some(recording) = &mut self.recording {
             let clipping = self.clipping.share();
             for taken in folded {
                 recording.passband_reading(now, taken, &reading, clipping);
             }
         }
+    }
+
+    /// One `filter` line when the receive filter's verdict changes, in the form of the busy
+    /// detector's transitions: `clear -> top | bottom 5.1 dB, top 12.4 dB, 120 looks`.
+    fn note_filter(&mut self, reading: &FilterReading) {
+        if reading.verdict == self.filter_said {
+            return;
+        }
+        let db = |drop: Option<f32>| drop.map_or_else(|| "-".to_owned(), |d| format!("{d:.1}"));
+        let detail = format!(
+            "{} -> {} | bottom {} dB, top {} dB, {} looks",
+            self.filter_said.word(),
+            reading.verdict.word(),
+            db(reading.low_drop_db),
+            db(reading.high_drop_db),
+            reading.looks
+        );
+        self.filter_said = reading.verdict;
+        self.note("filter", &detail);
     }
 
     /// Log a change of the busy state with the numbers that decided it.
@@ -6744,6 +6771,44 @@ mod tests {
             "folded in before it was taken: {last}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_log_says_when_the_receive_filter_changes_its_verdict() {
+        // L1 (05-busy-band.md §6.3): the banners of 2026-11-17 came while the stations idled,
+        // and nothing placed them. A radio cut at 1900 Hz, then the same radio opened
+        let mut station = idle_station();
+        let rate = station.config.params.audio_rate as f64;
+        let block = station.config.params.audio_rate / 50;
+        let mut lines = Vec::new();
+        let mut listen = |station: &mut Station<NullPtt>, low: f64, high: f64, seconds: usize| {
+            let mut noise =
+                crate::passband::test_noise::ReceiverNoise::new(low, high, rate, 0.3, 0.001);
+            for _ in 0..seconds * 50 {
+                station.capture(&noise.take(block)).expect("capture");
+                lines.extend(
+                    station
+                        .take_events()
+                        .into_iter()
+                        .filter(|e| e.starts_with("filter:")),
+                );
+            }
+        };
+        listen(&mut station, 300.0, 1900.0, 30);
+        assert_eq!(station.rx_filter().verdict, Verdict::Top);
+        // the knob turned: the cut clears once most of the looks kept are new
+        listen(&mut station, 250.0, 3500.0, 90);
+        assert_eq!(station.rx_filter().verdict, Verdict::Clear);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].starts_with("filter:waiting -> top | bottom ")
+                && lines[0].ends_with(" dB, 12 looks"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[1].starts_with("filter:top -> clear | bottom "),
+            "{lines:?}"
+        );
     }
 
     /// A station that will transmit on demand: no channel gate, no keying to fail.

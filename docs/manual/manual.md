@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.5.0 |
+| **Version** | 1.6.0 |
 | **Updated** | 2026-11-17 |
 | **Describes** | Aether HF 0.2.0-beta.162 |
 | **Licence** | CC BY 4.0 |
@@ -813,7 +813,7 @@ one entry a line. Hold the mouse over a line for the whole of it. Filters: *All*
 *Rules*, *Sessions*, *Beacons*. **Clear** empties the window's copy; the modem's own log file is
 kept.
 
-Two kinds of line are worth knowing:
+Three kinds of line are worth knowing:
 
 - A **keying** line says how long your radio takes to key and how long Aether takes to prepare a
   transmission. Aether starts its transmissions that much sooner, so its answers reach the air on
@@ -822,6 +822,10 @@ Two kinds of line are worth knowing:
   late, and says why: a slow render, a slow radio, or the computer falling behind. One now and then
   is harmless. Many in a session mean the computer is too busy: close other programs, or send
   your files to the project.
+- A **filter** line says the receive filter's reading changed, as in
+  *clear -> top | bottom 5.1 dB, top 12.4 dB, 120 looks*: what it said before and now, how far
+  each edge of Aether's signal lies under the passband's level, and how many looks it rests on.
+  It tells you when a receive filter banner came and went, even while you were away.
 
 ### Sending files
 
@@ -1513,3 +1517,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.3.0 | 2026-11-17 | Scanning (ADR-0129): the **Radio dial** box's **Scanning** row with **Stop**, while a program such as RadioPost Gateway scans the station's dials; what holds the radio on a dial, and what ends a scan. |
 | 1.4.0 | 2026-11-17 | Scanning: up to four dials; 4 to 5 s on a quiet dial, and about 19 s where a call is heard under way (ADR-0129 §11). |
 | 1.5.0 | 2026-11-17 | A short message goes at the slowest rung of its kind that carries it in as many frames (ADR-0130): **Slow and sure, or fast** says so, and why the header's rung can read lower while short replies go. |
+| 1.6.0 | 2026-11-17 | The Log tab's **filter** line: the receive filter's reading each time it changes. |
