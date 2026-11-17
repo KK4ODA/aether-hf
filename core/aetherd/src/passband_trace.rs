@@ -7,9 +7,10 @@
 //! (`Station::sample_passband`) as near as a sidecar allows: deaf where the transmitter was
 //! keyed and for its tail, counted as receiving from a heeded announcement for the frame's
 //! length (at least the air's longest) and for half a second after a frame that decoded or was
-//! trusted, and every frame announced or reported handed to the reading as the station handed
-//! it. It reports every look the reading folds in, and between them the reading on a half-second
-//! beat, each with C1's share of the audio clipping (ADR-0105).
+//! trusted, every frame announced or reported handed to the reading as the station handed it, and
+//! each of a scan's moves of the radio handed to it as its deaf span, as `station/scan.rs` does
+//! at a hop. It reports every look the reading folds in, and between them the reading on a
+//! half-second beat, each with C1's share of the audio clipping (ADR-0105).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -54,9 +55,9 @@ fn params_for(bandwidth_hz: u32) -> Result<WaveformParams, String> {
 /// Run a recording through the receive filter's reading.
 ///
 /// `expectation` is the recording's sidecar when there is one: the keyed spans are deaf, the
-/// frames and announcements hold the station receiving and are handed to the reading, and a
-/// move to the other bandwidth moves the span judged. Without one the whole recording is
-/// listened to.
+/// frames and announcements hold the station receiving and are handed to the reading, a scan's
+/// move of the radio hands the reading its deaf span, and a move to the other bandwidth moves
+/// the span judged. Without one the whole recording is listened to.
 ///
 /// # Errors
 /// If the file cannot be read or is not at the modem's rate.
@@ -87,6 +88,12 @@ pub fn trace(
         .map_or(&[][..], |e| &e.airs[..])
         .iter()
         .peekable();
+    // a scan's moves: the receiver started again at each and once the radio's change had come
+    // through the card, `[t, t + deaf]`
+    let mut hops = expectation
+        .map_or(&[][..], |e| &e.restarts[..])
+        .chunks_exact(2)
+        .peekable();
 
     let feed = (FEED_S * rate) as usize;
     let mut readings = Vec::new();
@@ -101,6 +108,10 @@ pub fn trace(
             let params = params_for(air.bandwidth_hz)?;
             filter.set_air(params);
             heard.longest_s = aether_phy::modes::air_interface(params).long.duration_s();
+        }
+        while let Some(hop) = hops.next_if(|h| h[0] <= now) {
+            // station/scan.rs: what came through the card while the radio moved is no look
+            filter.frame(hop[0], hop[1]);
         }
         let keyed = muted.iter().any(|m| t >= m.from_s && t < m.until_s);
         let deaf = crate::busy_trace::deaf_at(&muted, t);
@@ -231,6 +242,17 @@ mod tests {
     /// The trace of `audio` recorded with a sidecar whose transmitter was keyed over `keyed`
     /// (seconds of the recording), if any.
     fn trace_of(audio: &[f32], name: &str, keyed: Option<(f64, f64)>) -> Vec<Reading> {
+        trace_with(audio, name, keyed, None)
+    }
+
+    /// [`trace_of`], with a scan's move of the radio at `hop` (seconds of the recording), if
+    /// any, deaf for half a second.
+    fn trace_with(
+        audio: &[f32],
+        name: &str,
+        keyed: Option<(f64, f64)>,
+        hop: Option<f64>,
+    ) -> Vec<Reading> {
         let dir = std::env::temp_dir().join(format!(
             "aether-passband-trace-{}-{name}",
             std::process::id()
@@ -249,6 +271,9 @@ mod tests {
         if let Some((from, until)) = keyed {
             recording.event(from, "ptt", "keyed", "Connected");
             recording.event(until, "ptt", "released", "Connected");
+        }
+        if let Some(at) = hop {
+            recording.event(at, "hop", "dial 7101000 deaf 0.500", "Idle");
         }
         let summary = recording.finish(&serde_json::json!({})).expect("finish");
         let expectation = Expectation::from_sidecar(&summary.sidecar).expect("sidecar");
@@ -306,6 +331,34 @@ mod tests {
                 t - WINDOW_S
             );
         }
+    }
+
+    #[test]
+    fn no_look_is_kept_over_a_scans_move_of_the_radio() {
+        // station/scan.rs hands the reading the move's deaf span: what came through the card
+        // while the radio moved is another dial's, or the radio settling
+        let mut noise = ReceiverNoise::new(300.0, 2900.0, RATE, 0.3, 0.001);
+        let audio = noise.take(25 * 48_000);
+        let hopped = trace_with(&audio, "hop", None, Some(10.0));
+        let taken: Vec<f64> = hopped.iter().filter_map(|r| r.taken_s).collect();
+        assert!(taken.iter().any(|&t| t < 10.0) && taken.iter().any(|&t| t > 11.0));
+        for &t in &taken {
+            assert!(
+                t <= 10.0 || t - WINDOW_S >= 10.5 - 0.03,
+                "a look of {:.2}-{t:.2} s overlaps the move",
+                t - WINDOW_S
+            );
+        }
+        // and nothing else changes: without the hop the same audio keeps those looks too
+        let plain = trace_of(&audio, "no-hop", None);
+        let kept: Vec<f64> = plain.iter().filter_map(|r| r.taken_s).collect();
+        assert!(
+            kept.len() > taken.len(),
+            "{} against {}",
+            kept.len(),
+            taken.len()
+        );
+        assert!(taken.iter().all(|t| kept.contains(t)));
     }
 
     #[test]

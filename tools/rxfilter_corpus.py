@@ -739,6 +739,9 @@ FIELD: dict[str, str] = {
 a cut side that must be named before the recording ends (K4), or the witness's drop at an edge
 the reading must place within 3 dB (K4)."""
 WITNESS_WITHIN_DB = 3.0
+HOP_DEAF_S = 0.5
+"""How long a scan's move leaves the station deaf (``scan::move_deaf_s``): the card's input
+latency and the radio's settling."""
 SATURDAY = (
     "20261108-005459_",
     "20261108-010123_",
@@ -750,10 +753,13 @@ SATURDAY = (
 
 
 def preroll_keying(wav: Path) -> list[dict]:
-    """The keying a station logged in a recording's pre-roll, as sidecar events. A recording
-    keeps its events from its start only, and its first ``preroll_s`` of audio come from before
-    it: a caller's own tries are keyed there, and a live station takes no look while keyed.
-    Read from the upload's ``aetherd.log`` beside the ``recordings`` folder; none without it."""
+    """The keying and the scan's hops a station logged in a recording's pre-roll, as sidecar
+    events. A recording keeps its events from its start only, and its first ``preroll_s`` of
+    audio come from before it: a caller's own tries are keyed there, and a live station takes no
+    look while keyed; a scanning station's hops are there too, and a live station hands the
+    reading each hop's deaf span. A hop is a ``dial: moved to <Hz> Hz`` line, made a ``hop``
+    event in the form the trace reads (``dial <Hz> deaf 0.500``). Read from the upload's
+    ``aetherd.log`` beside the ``recordings`` folder; none without it."""
     log = wav.parent.parent / "aetherd.log"
     if not log.exists():
         return []
@@ -777,7 +783,22 @@ def preroll_keying(wav: Path) -> list[dict]:
     events = []
     keyed = False
     for line in lines:
-        if not line[:4].isdigit() or " ptt: " not in line:
+        if not line[:4].isdigit():
+            continue
+        if " dial: moved to " in line:
+            t = when(line) - t0
+            hz = line.split(" dial: moved to ", 1)[1].split()[0]
+            if 0.0 <= t < preroll and hz.isdigit():
+                events.append(
+                    {
+                        "t_s": round(t, 3),
+                        "event": "hop",
+                        "detail": f"dial {hz} deaf {HOP_DEAF_S:.3f}",
+                        "state": "Idle",
+                    }
+                )
+            continue
+        if " ptt: " not in line:
             continue
         t = when(line) - t0
         what = "keyed" if " ptt: keyed" in line else "released" if " ptt: released" in line else ""
@@ -786,10 +807,11 @@ def preroll_keying(wav: Path) -> list[dict]:
         if t < 0.0:
             keyed = what == "keyed"
             continue
-        if keyed and not events:
+        if keyed and not any(e["event"] == "ptt" for e in events):
             events.append({"t_s": 0.0, "event": "ptt", "detail": "keyed", "state": "Connecting"})
         events.append({"t_s": round(t, 3), "event": "ptt", "detail": what, "state": "Connecting"})
         keyed = what == "keyed"
+    events.sort(key=lambda e: e["t_s"])
     return events
 
 
