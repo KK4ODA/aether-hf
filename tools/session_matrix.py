@@ -808,6 +808,11 @@ def step(run: Run, text: str) -> bool:
         if owner is not None:
             owner.request("scan.stop")
         return True
+    if word == "record":
+        # `record b`: station b records from now to the end of the run, idle or not — its
+        # sidecar keeps every frame announced and every move of a scan
+        call(run.stations[arg].control, "record.start")
+        return True
     if word == "knob":
         # `knob b 7074000`: the dial turned at station b's radio
         who, _, hz = arg.partition(" ")

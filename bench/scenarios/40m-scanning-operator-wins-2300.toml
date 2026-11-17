@@ -1,0 +1,35 @@
+name = "40m-scanning-operator-wins-2300"
+description = "ADR-0129 S6: a gateway scanning three dials; the knob turned at its radio ends the scan and the radio stays where it was put; scanned again, another program's tune ends it the same way; then a caller on that dial still reaches it."
+tags = ["scan"]
+bandwidth = 2300
+seconds = 300
+seed = 3
+
+[stations.a]
+callsign = "W4ODA"
+dial_hz = 7_074_000
+[stations.b]
+callsign = "KK4XYZ-10"
+
+[path]
+profile = "awgn"
+snr_db = 10.0
+
+[script]
+steps = [
+  "scan b 3590000,10145000,14105000",
+  "wait 20",
+  "knob b 7074000",
+  "wait 30",
+  "scan b 3590000,10145000,14105000",
+  "wait 20",
+  "tune b 7074000",
+  "wait 30",
+  "connect",
+  "disconnect",
+  "wait 15",
+]
+
+[expect]
+connected = true
+max_collisions = 0

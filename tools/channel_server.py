@@ -871,33 +871,6 @@ class Server:
             st.deliver(self.t + TICK, heard[who], stalled[who])
         self.t += TICK
 
-    def dial_faults(self) -> list[str]:
-        """ADR-0129 S1, from the air: every acceptance answers a call on its own dial, heard with
-        the station still on that dial. An acceptance with no call on its dial in the minute
-        before it, or after its station moved since that call, answered a call heard elsewhere."""
-        faults = []
-        calls = sorted(
-            (tx["air_s"], tx.get("dial"), st.name)
-            for st in self.stations.values()
-            for tx in st.transmissions
-            if any(f.get("kind") == "ConnectReq" for f in tx.get("frames", []))
-        )
-        for st in self.stations.values():
-            for tx in st.transmissions:
-                if not any(f.get("kind") == "Accept" for f in tx.get("frames", [])):
-                    continue
-                at, dial = tx["air_s"], tx.get("dial")
-                heard = [
-                    c for c in calls if c[2] != st.name and c[1] == dial and at - 60 < c[0] < at
-                ]
-                if not heard:
-                    faults.append(f"{st.name} accepted at {at:.1f} s on {dial} with no call there")
-                    continue
-                since = heard[-1][0]
-                if any(since < t <= at for t, _ in st.dials[1:]):
-                    faults.append(f"{st.name} accepted at {at:.1f} s after moving since the call")
-        return faults
-
     def _note_radiated(self, st: Station, signal: np.ndarray) -> None:
         """Extend the station's radiated intervals by this tick, a radiated block at a time."""
         blocks = signal[::RADIATED_BLOCK]
@@ -936,6 +909,11 @@ class Server:
         st.deaf_hits["recovering"] += int((lost & ~keyed[rx]).sum())
 
     def report(self) -> dict:
+        out = self._report()
+        out["dial_faults"] = dial_faults(out)
+        return out
+
+    def _report(self) -> dict:
         seconds = lambda n: round(n / AUDIO_RATE, 3)  # noqa: E731
         return {
             "scenario": self.scenario.get("name"),
@@ -954,7 +932,7 @@ class Server:
                 }
                 for st in self.stations.values()
             },
-            "dial_faults": self.dial_faults(),
+            "dial_faults": [],
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
             "overlap_s": {k: seconds(v) for k, v in self.overlap.items()},
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
@@ -964,6 +942,40 @@ class Server:
             "rf_overlaps": [[round(x, 3) for x in iv] for iv in self.rf_overlaps],
             "outages": self.outages,
         }
+
+
+def dial_faults(report: dict) -> list[str]:
+    """ADR-0129 S1, judged from the air's account alone: every acceptance answers a call on its
+    own dial, and its station has not moved since that call ended. A station that reaches the
+    caller's dial during a try hears the rest of it — a both-ways try's floor part — and answers
+    it rightly; one that heard a call and moved before answering it did not. A call's end is the
+    end of its caller's keyed span that holds its start."""
+    stations = report.get("stations", {})
+    calls = []
+    for name, st in stations.items():
+        for tx in st.get("transmissions", []):
+            if any(f.get("kind") == "ConnectReq" for f in tx.get("frames", [])):
+                start = tx["air_s"]
+                end = next(
+                    (b for a, b in st.get("keyed", []) if a - 0.05 <= start <= b + 0.05), start
+                )
+                calls.append((start, end, tx.get("dial"), name))
+    calls.sort()
+    faults = []
+    for name, st in stations.items():
+        moves = [t for t, _ in st.get("dials", [])[1:]]
+        for tx in st.get("transmissions", []):
+            if not any(f.get("kind") == "Accept" for f in tx.get("frames", [])):
+                continue
+            at, dial = tx["air_s"], tx.get("dial")
+            heard = [c for c in calls if c[3] != name and c[2] == dial and at - 60 < c[0] < at]
+            if not heard:
+                faults.append(f"{name} accepted at {at:.1f} s on {dial} with no call there")
+                continue
+            ended = heard[-1][1]
+            if any(ended < t <= at for t in moves):
+                faults.append(f"{name} accepted at {at:.1f} s after moving since the call ended")
+    return faults
 
 
 MACHINE_SEED = 7919

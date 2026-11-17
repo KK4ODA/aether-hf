@@ -18,9 +18,11 @@
 //!    with the move's deafness. A visit that long holds the start of a try of any call going on.
 //! 4. **A frame heard holds the dial until it is reported**; an answer, a session and its
 //!    identifiers hold it as they always have.
-//! 5. **It lingers** after a frame that came to nothing and after a probe it answered, until no
-//!    frame has been announced for the linger, at most [`Scan::cap_s`] in all; a frame decoded
-//!    as another station's ends the linger.
+//! 5. **It lingers** after a frame reported that came to nothing yet passed the gate the station
+//!    trusts acquisition by, and after a probe it answered: a caller too weak to read this time
+//!    tries again. At most the longest call in all; a frame decoded as another station's ends
+//!    it. An announcement alone holds the dial (rule 4) but starts no linger: a tone arrival is
+//!    heeded whatever its confidence, and one on noise had held a dial nobody used for 34 s.
 //! 6. After a session, a call or a probe it goes on from the same dial, with a linger.
 //! 7. The list is judged once, at the start, as this station's answer would be.
 //! 8. A dial the radio will not take is dropped; below two dials the scan ends.
@@ -32,7 +34,7 @@
 
 use serde_json::{Value, json};
 
-use super::{FrameReport, RegulatoryQuery, State, Station};
+use super::{DETECT_CONFIDENCE_TRUSTED, FrameReport, RegulatoryQuery, State, Station};
 use crate::control::protocol::ConnectionId;
 use crate::ptt::Ptt;
 use crate::regulatory::Direction;
@@ -381,21 +383,21 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// A frame announced past the gate the station heeds (rules 4 and 5): the dial is held
-    /// until it can have been reported, and a linger runs from its end — a frame that comes to
-    /// nothing may be a caller too weak to read this time. Only what the station heeds counts:
-    /// on a quiet band the receiver tries a noise candidate every few seconds, and a linger on
-    /// each would keep the scan on every dial to its cap.
+    /// A frame announced past the gate the station heeds (rule 4): the dial is held until it
+    /// can have been decoded or refused. It starts no linger by itself: a tone arrival is heeded
+    /// whatever its confidence, and the harness's first grid found one on noise, at 1.01, that
+    /// had held a dial nobody used for 34 s and cost the caller a whole cycle.
     pub(super) fn scan_arriving(&mut self, end_s: f64) {
         if let Some(scan) = &mut self.scanner.scan {
             scan.arriving_until = scan.arriving_until.max(end_s + REPORT_AFTER_END_S);
-            let until = end_s + scan.linger_s;
-            scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
         }
     }
 
-    /// A frame reported (rule 5): a probe this station answers keeps it a linger longer; one
-    /// decoded as another station's ends the linger its announcement began.
+    /// A frame reported (rule 5): one that came to nothing yet was acquired past the gate the
+    /// station trusts — the rule its receive window keeps for "a burst is there at all" — or a
+    /// probe this station answers, keeps it a linger longer; one decoded as another station's
+    /// ends the linger. The noise candidates a quiet band brings every few seconds fall under
+    /// the gate.
     pub(super) fn scan_heard(&mut self, report: &FrameReport, now: f64) {
         let ours = report
             .to
@@ -415,9 +417,10 @@ impl<P: Ptt> Station<P> {
                 // another session's frames, heard by a station in none
                 _ => idle,
             };
+        let weak_caller = !report.decoded && report.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
         if anothers {
             scan.linger_until = None;
-        } else if report.decoded && report.kind == "probe" && ours {
+        } else if weak_caller || (report.decoded && report.kind == "probe" && ours) {
             let until = now + scan.linger_s;
             scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
         }
@@ -771,6 +774,29 @@ mod tests {
         }
     }
 
+    /// A data frame heard: decoded or not, acquired at `detect_confidence`.
+    fn report(decoded: bool, detect_confidence: f64) -> FrameReport {
+        FrameReport {
+            t_s: 0.0,
+            kind: "data",
+            mode: 5,
+            rv: 0,
+            snr_db: -3.0,
+            cfo_hz: 0.0,
+            confidence: 1.0,
+            detect_confidence,
+            decoded,
+            bytes: 0,
+            from: None,
+            to: None,
+            control: None,
+            bandwidth_hz: None,
+            follows: None,
+            capture_skip: false,
+            echo: None,
+        }
+    }
+
     fn dwell(station: &Station<ScanRadio>) -> f64 {
         station.scan_status()["dwell_s"].as_f64().expect("dwell")
     }
@@ -853,8 +879,8 @@ mod tests {
         station.scan_start(gateway(), &DIALS).expect("a scan");
         listen(&mut station, 0.2);
         let dwell = dwell(&station);
-        // a frame announced holds the radio until it can have been decoded or refused, and,
-        // nothing of it decoded as another station's, it lingers for the caller's next try
+        // a frame announced holds the radio until it can have been decoded or refused, and
+        // starts no linger by itself
         let now = station.now();
         let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
         station.scan_arriving(now + dwell + 2.0);
@@ -866,17 +892,32 @@ mod tests {
         );
         assert_eq!(station.scan_status()["held"], "a frame is arriving");
         listen(&mut station, REPORT_AFTER_END_S + 0.3);
-        assert!(station.scan_status()["held"].is_null());
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[1],
+            "lingered on an announcement"
+        );
+        // a frame that came to nothing, acquired past the gate the station trusts, is a caller
+        // too weak to read this time: it lingers for the next try; a noise candidate does not
+        listen(&mut station, move_deaf_s() + 0.1);
+        let now = station.now();
+        station.scan_heard(&report(false, 1.0), now);
+        assert!(
+            station.scan_status()["lingering_until_ms"].is_null(),
+            "lingered on noise"
+        );
+        station.scan_heard(&report(false, DETECT_CONFIDENCE_TRUSTED + 0.2), now);
         assert!(!station.scan_status()["lingering_until_ms"].is_null());
-        assert_eq!(rig.lock().expect("rig").dial, DIALS[0], "did not linger");
-        listen(&mut station, linger);
-        assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
+        listen(&mut station, linger - 2.0);
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[1], "did not linger");
+        listen(&mut station, 3.0);
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[2]);
         // a call out holds it, and when the call is over it lingers there
         station.connect("KK4XYZ").expect("idle");
         listen(&mut station, dwell + 1.0);
         assert_eq!(
             rig.lock().expect("rig").dial,
-            DIALS[1],
+            DIALS[2],
             "left a call going out"
         );
         station.abort();
@@ -885,11 +926,11 @@ mod tests {
         listen(&mut station, linger - 2.0);
         assert_eq!(
             rig.lock().expect("rig").dial,
-            DIALS[1],
+            DIALS[2],
             "did not linger after the call"
         );
         listen(&mut station, 3.0);
-        assert_eq!(rig.lock().expect("rig").dial, DIALS[2]);
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[0]);
     }
 
     #[test]

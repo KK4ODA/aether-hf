@@ -255,11 +255,16 @@ choices made in building it:
   stays where it is, and `why` is a sixth word, `operator`.
 * `connect`'s answer carries `tries`: the call's plan, which depends on how the station called was
   heard (ADR-0126 §2.3).
-* **The linger starts from a frame the station heeds** (an announcement past the acquisition gate
-  the station's own receive window uses), from its end, and a frame decoded as another station's
-  ends it. Reading back the first build, it started from any frame reported undecoded; on a quiet
-  band the receiver reports a noise candidate every few seconds, and the scan would have lingered
-  on each dial to its cap.
+* **The linger starts from a frame reported that came to nothing yet was acquired past the gate
+  the station trusts** (`DETECT_CONFIDENCE_TRUSTED`, the rule its receive window keeps for "a burst
+  is there at all"), or from a probe it answered; a frame decoded as another station's ends it. An
+  announcement holds the dial (rule 4) and starts no linger. Two builds came first. One started the
+  linger from any frame reported undecoded (read back before any run: on a quiet band the receiver
+  reports a noise candidate every few seconds). The other started it from every heeded
+  announcement: the first grid found 2 of 128 visits held 41–44 s on a dial nobody used, each
+  from a tone announcement on noise at confidence 1.01 (a tone arrival is heeded whatever its
+  confidence) that no report followed, and the caller lost a whole cycle (a call of 80 s for
+  20 s). Rerun on the same draw, the gateway left on its dwell and the call took 19.6 s.
 * A recording carries each move as a `hop` event (`dial <hz> deaf <s>`), and `aetherd --replay`
   restarts its receiver at both points.
 * The panel's dial box has a **Scanning** row (the dial, its place, the program; *held* or
