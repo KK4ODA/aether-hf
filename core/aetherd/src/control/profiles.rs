@@ -18,10 +18,13 @@ use crate::{
     station::Station,
 };
 
-/// The methods this module answers.
+/// The methods this module answers, `varac.*` among them: setting `VarAC` up makes a profile
+/// ([`crate::control::varac`]).
 #[must_use]
 pub fn handles(method: &str) -> bool {
-    method.starts_with("profile.") || method == "config.schema"
+    method.starts_with("profile.")
+        || method == "config.schema"
+        || crate::control::varac::handles(method)
 }
 
 /// The methods that change something.
@@ -47,6 +50,9 @@ pub fn dispatch<P: Ptt>(
     params: &Value,
     id: Option<String>,
 ) -> Response {
+    if crate::control::varac::handles(method) {
+        return crate::control::varac::dispatch(station, daemon, method, params, id);
+    }
     if method == "config.schema" {
         return Response::ok(
             id,

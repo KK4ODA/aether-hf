@@ -425,15 +425,6 @@ pub fn dispatch_with<P: Ptt>(
             request.id.clone(),
         );
     }
-    if crate::control::varac::handles(&request.method) {
-        return crate::control::varac::dispatch(
-            station,
-            daemon,
-            &request.method,
-            &request.params,
-            request.id.clone(),
-        );
-    }
     match request.method.as_str() {
         "config.get" => return config_get(daemon, request.id.clone()),
         "config.set" => return config_set(station, daemon, &request.params, request.id.clone()),
