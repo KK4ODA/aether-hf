@@ -20,6 +20,15 @@ is one click.
 
 ## VarAC, the host program owning the radio
 
+**On Windows, Aether does this for you.** When VarAC is installed (in `C:\VarAC`, or a folder
+you name in Setup step 5), Aether offers **Set up**: it writes `VarAC_Aether.ini` in VarAC's
+folder, a copy of your `VarAC.ini` with only the modem settings below changed, and saves the
+Aether profile *VarAC default* with the Aether settings below. Then choose VarAC's **Switch
+profile → VarAC_Aether**. After an update that changes a path or a port, Aether offers to bring
+both up to date and keeps everything else. The manual's
+[VarAC in one step](../manual/manual.md#varac-in-one-step) has the details. The steps below are
+what it does, for doing it by hand.
+
 In **Aether**:
 
 1. Setup step 2, *Keying*: **Host** — VarAC or Winlink Express keys the radio on `PTT ON`.

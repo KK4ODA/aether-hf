@@ -3373,6 +3373,14 @@ input.address {
   letter-spacing: normal;
 }
 
+/* a folder: C:\Program Files (x86)\VarAC whole */
+input.folder {
+  font-family: var(--mono);
+  width: calc(28ch + 20px);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 /* the KISS port (ADR-0019): its state line and the programs connected to it */
 .kiss-state {
   color: var(--text-2);

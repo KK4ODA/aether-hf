@@ -124,6 +124,13 @@
         <button class="small" id="btn-debug-keep" title="Keep debug mode on, and stop showing this">Keep it on</button>
         <button class="small quiet" id="btn-debug-off" title="Turn debug mode off: nothing is sent unless you send it from Log → Send files…">Turn it off</button>
       </div>
+      <!-- VarAC in one step: offered when VarAC is found, and again when a new version changes what it needs -->
+      <div class="note unsaved-banner" id="varac-banner" title="VarAC is on this computer: Aether can add a VarAC profile that runs on Aether, and an Aether profile for VarAC. Setup step 5 does the same" role="status" hidden>
+        <span id="varac-banner-text" title="Set up writes VarAC_Aether.ini in VarAC's folder, a copy of your VarAC profile that starts and talks to Aether, and saves the Aether profile VarAC default. In VarAC, Switch profile to VarAC_Aether runs it on Aether; switching back to VarAC runs it on VARA again"></span>
+        <button class="small" id="btn-varac-banner-go" title="Write VarAC_Aether.ini and the Aether profile VarAC default">Set up</button>
+        <button class="small" id="btn-varac-banner-switch" title="Switch this station to the Aether profile VarAC default" hidden>Switch to VarAC default</button>
+        <button class="small quiet" id="btn-varac-banner-later" title="Do not offer this again; Setup step 5 still does it">Not now</button>
+      </div>
       <!-- the session, in large type on every tab: up, being called, or how the last one ended -->
       <div class="session-banner" id="session-banner" title="What the station is doing: calling, connected, disconnecting, probing, a Test, a beacon waiting or a transmission — or how the last session ended" role="status" aria-live="assertive" hidden>
         <span id="session-banner-text"></span>
@@ -988,6 +995,17 @@
                 <button class="small quiet" id="btn-kiss-disconnect" title="Close every KISS program's connection; a program may connect again" disabled>Disconnect</button>
               </div>
               <ul class="kiss-clients" id="kiss-clients" title="The programs connected to the KISS port: what they seem to be, where from, and their frames" hidden></ul>
+              <div class="row" id="varac-row" hidden>
+                <label for="varac-folder" title="VarAC's folder, where its VarAC.ini is">VarAC</label>
+                <input id="varac-folder" title="VarAC's folder, where its VarAC.ini is: C:\VarAC unless VarAC was installed somewhere else" type="text" class="folder" spellcheck="false" placeholder="C:\VarAC" aria-label="VarAC folder" />
+                <select id="varac-source" class="narrow" title="The VarAC profile the new one is copied from: its rig, callsign and every other VarAC setting carry over" aria-label="VarAC profile to copy"></select>
+                <button class="small" id="btn-varac-setup" title="Write VarAC_Aether.ini in VarAC's folder, a copy of the chosen VarAC profile that starts and talks to Aether, and save the Aether profile VarAC default. Your own VarAC profiles are not changed. Once made, this brings both up to date" disabled>Set up</button>
+              </div>
+              <div class="row" id="varac-state-row" hidden>
+                <label for="btn-varac-switch" title="What is set up for VarAC">VarAC profile</label>
+                <span class="kiss-state" id="varac-state" title="Whether VarAC_Aether.ini is in VarAC's folder and up to date, and whether the Aether profile VarAC default is in use. In VarAC, Switch profile to VarAC_Aether runs VarAC on Aether" role="status">not checked</span>
+                <button class="small quiet" id="btn-varac-switch" title="Switch this station to the Aether profile VarAC default" hidden>Switch to VarAC default</button>
+              </div>
             </li>
 
             <!-- 6: in reach from anywhere on the tab -->

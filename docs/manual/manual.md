@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.7.1 |
+| **Version** | 1.8.0 |
 | **Updated** | 2026-11-18 |
 | **Describes** | Aether HF 0.2.0-beta.163 |
 | **Licence** | CC BY 4.0 |
@@ -351,6 +351,7 @@ and most have buttons that do it.
 | Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a program's callsign while that program is not running | Follow its buttons: **Setup step 4**, **Check for Updates**, **Answer as it too**, **Call it**, or **Dismiss**. For a program that is not running, start it again |
 | Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down |
 | Debug mode | Shown once: sessions run by a program are sent to the project | **Keep it on** or **Turn it off** ([Step 5](#step-5-application-settings)) |
+| VarAC | VarAC is on this computer and not set up for Aether, or a new version of Aether changed what its VarAC profile needs | **Set up** or **Update**, then **Switch to VarAC default** if you want; **Not now** stops this offer ([VarAC in one step](#varac-in-one-step)) |
 | Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2 |
 
 The clipping banner shows in Compact too. Aether tells a host program nothing of it.
@@ -566,6 +567,10 @@ quiet leaves the signal inside the sound card's own noise.
     station's ports uses, and so does Aether at start.
 - **KISS programs**: opens a KISS-over-TCP port for APRS and packet programs, and for VarAC's
   broadcasts and relay notifications ([KISS programs](#24-kiss-programs)).
+- **VarAC**: VarAC's folder (found by itself at `C:\VarAC`), the VarAC profile to copy, and
+  **Set up**, which writes a VarAC profile that runs on Aether and saves the Aether profile
+  *VarAC default* ([VarAC in one step](#varac-in-one-step)). Once they are made the button reads
+  **Update**. **VarAC profile** says whether they are there and up to date. Shown on Windows only.
 
 ### Step 6. Save
 
@@ -1121,6 +1126,45 @@ in their places, and your own come back when the program leaves.
 - Winlink Express closes the modem it started: turn off its automatic launch and start Aether
   yourself.
 
+### VarAC in one step
+
+On a computer where VarAC is installed, Aether sets VarAC up for you. Your own VarAC settings
+stay as they are, and VARA HF stays one click away.
+
+![Setup with the offer under the header, VarAC is on this computer, with Set up and Not now; step 5 ends with the VarAC row (its folder, the profile to copy and Set up) and the VarAC profile row, not set up](screens/varac.png)
+
+*Figure 31. The offer to set VarAC up, and Setup step 5's VarAC rows.*
+
+1. Install Aether and do Setup steps 1 to 3 as usual: callsign, sound card, receive level.
+2. A banner says VarAC is on this computer. Press **Set up** (or use Setup step 5, **VarAC**).
+   Aether does two things:
+   - It writes **VarAC_Aether.ini** in VarAC's folder. This is a copy of your VarAC profile
+     (`VarAC.ini`, or the one you pick in step 5), so your rig, callsign and other VarAC settings
+     carry over. Only the modem settings change: VarAC starts Aether instead of VARA, on Aether's
+     ports, with the KISS port on and no VARA monitor.
+   - It saves the Aether profile **VarAC default**: your settings with **Host programs** and
+     **KISS programs** on. If your VarAC profile keys the radio itself (CAT, OmniRig, FLRig,
+     Hamlib or DTR/RTS), the profile also sets keying to **Host** and the rules to *None*, as
+     Setup does for Host. If VarAC uses VOX, Aether keeps its own keying.
+3. Press **Switch to VarAC default**, or pick it on the Profile bar.
+4. In VarAC, choose **Switch profile**, then **VarAC_Aether**. VarAC restarts and starts Aether.
+   To go back to VARA, switch VarAC back to **VarAC** and Aether back to your usual profile.
+
+Close VARA HF before switching: while it runs it holds ports 8300 and 8100 and the sound card,
+and VarAC would still reach VARA.
+
+**After an update.** If a new version of Aether moves, changes a port, or changes what VarAC
+needs, the banner says **VarAC_Aether.ini needs updating** (or that *VarAC default* has new
+settings). **Update** changes only those settings. A copy of the old file is kept as
+`VarAC_Aether.ini.bak`, and anything you changed in VarAC yourself is kept. Your sound card and
+levels in *VarAC default* are kept too.
+
+- VarAC writes a small `VARA.ini` beside Aether's program when it starts it. That file is
+  VarAC's, and Aether ignores it.
+- If VarAC is not in `C:\VarAC`, type its folder in step 5. A folder under Program Files needs an
+  administrator to write in, and Aether says so.
+- **Not now** stops the offer. A later version's change is offered again.
+
 [VarAC, Winlink Express and Pat with Aether](../user/host-programs.md) has each program's settings,
 screen by screen.
 
@@ -1128,7 +1172,7 @@ screen by screen.
 
 ![Two rows. Winlink: your station with Winlink Express and Aether, by radio to a gateway with RMS Trimode and Aether, then the Internet to Winlink's servers. RadioPost: your station with RadioPost and Aether, by radio to RadioPost Gateway and Aether, then the Internet to your post office](fig/mail.svg)
 
-*Figure 31. Mail by radio, through a gateway: Winlink above, RadioPost below.*
+*Figure 32. Mail by radio, through a gateway: Winlink above, RadioPost below.*
 
 An Aether gateway runs RMS Trimode beside Aether; a station in the field runs Winlink Express with
 Aether. Set the gateway's Aether to *Automatic* control (Setup step 1) when nobody is at its radio.
@@ -1240,7 +1284,7 @@ is to carry RadioPost's email over FM, simplex and through repeaters.
 
 ![Aether FM as planned: simplex between two FM radios through the voice path or a 9600 data port; the far station measuring your level and telling you; through a repeater, off by default; and packet radio](fig/fm.svg)
 
-*Figure 32. Aether FM as planned.*
+*Figure 33. Aether FM as planned.*
 
 What has been decided:
 
@@ -1339,7 +1383,7 @@ frames at a good SNR, check the receive level, the drive and the receive filter.
 
 ![Three panels: the radio's filter passing all of Aether's signal; a filter moved down that cuts the top; a filter moved up that cuts the bottom, with the knob to turn for each](fig/filter.svg)
 
-*Figure 33. When the radio's receive filter cuts the signal.*
+*Figure 34. When the radio's receive filter cuts the signal.*
 
 **Checking the radio's receive filter.** Open the Diagnostics tab and look at the waterfall. The red lines
 are the edges of Aether's signal, and the band's noise should look even between them. Aether does not
@@ -1515,3 +1559,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.6.0 | 2026-11-17 | The Log tab's **filter** line: the receive filter's reading each time it changes. |
 | 1.7.0 | 2026-11-18 | The receive filter is no longer read (ADR-0132): the **Receive filter** banner and line and the Log's **filter** line are gone. Check the filter on the waterfall instead: [The receive audio](#the-receive-audio). The clipping banner stays. |
 | 1.7.1 | 2026-11-18 | VarAC's relay notifications travel on the KISS port: **KISS programs** on at both stations. |
+| 1.8.0 | 2026-11-18 | [VarAC in one step](#varac-in-one-step): the **VarAC** banner and Setup step 5's **VarAC** row write a VarAC profile that runs on Aether and the Aether profile *VarAC default*, and bring them up to date after an update. |

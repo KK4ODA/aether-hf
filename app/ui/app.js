@@ -62,6 +62,7 @@ function connect() {
     await loadDevices();
     await loadConfig();
     loadProfiles();
+    loadVarac();
   });
 
   socket.addEventListener("message", (message) => {
@@ -177,8 +178,10 @@ function onEvent(frame) {
       noteSession(data);
       break;
     case "profile":
-      // the settings, the dials or the profiles changed: the star by the name follows
+      // the settings, the dials or the profiles changed: the star by the name follows, and
+      // so does whether VarAC default is the one in use
       applyProfiles(data);
+      if (varac) loadVarac();
       break;
     case "data":
       onReceivedData(data.data ?? "");
@@ -5208,6 +5211,147 @@ function wireDebug() {
   });
 }
 
+// ── VarAC in one step ───────────────────────────────────────────────
+//
+// Aether writes a VarAC profile beside the operator's own, VarAC_Aether.ini, that starts and
+// reaches Aether as VarAC would VARA HF, and saves an Aether profile for VarAC, VarAC default.
+// The modem finds VarAC and says what to offer (`varac.status`): set it up, or bring it up to
+// date when a new version changes what it needs. Each offer is made until it is taken or
+// dismissed; Setup step 5 does the same at any time.
+
+let varac = null;
+// the banner says what the last set-up did until it is closed
+let varacDone = false;
+
+const VARAC_OFFERS = {
+  setup: "VarAC is on this computer. Set it up to run on Aether: a VarAC profile, VarAC_Aether, and an Aether profile, VarAC default.",
+  update: "VarAC_Aether.ini needs updating for this version of Aether.",
+  template: "The Aether profile VarAC default has new settings in this version.",
+};
+
+async function loadVarac(folder) {
+  try {
+    renderVarac(await call("varac.status", folder ? { folder } : {}));
+  } catch {
+    // a modem from before this method: nothing to offer
+    renderVarac(null);
+  }
+}
+
+function varacStateText(status) {
+  if (!status.folder) return status.asked ? `no VarAC.ini in ${status.asked}` : "VarAC not found";
+  if (!status.app) return "Aether's application not found";
+  if (!status.profile?.exists) return "not set up";
+  const stale = (status.profile.differences ?? []).length;
+  if (stale) return `VarAC_Aether.ini: ${stale} setting${stale === 1 ? "" : "s"} out of date`;
+  if (!status.aether_profile?.id) return "VarAC_Aether.ini ready, no VarAC default profile";
+  if (status.offer === "template") return "VarAC default has new settings";
+  return status.aether_profile.active ? "ready, VarAC default in use" : "ready";
+}
+
+function renderVarac(status) {
+  varac = status;
+  const shown = Boolean(status?.supported);
+  $("varac-row").hidden = !shown;
+  $("varac-state-row").hidden = !shown;
+  if (!shown) {
+    $("varac-banner").hidden = true;
+    return;
+  }
+  const folder = $("varac-folder");
+  if (document.activeElement !== folder) folder.value = status.folder ?? status.asked ?? "";
+  const source = $("varac-source");
+  const chosen = source.value;
+  source.replaceChildren();
+  for (const name of status.sources ?? []) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    source.append(option);
+  }
+  if ([...source.options].some((option) => option.value === chosen)) source.value = chosen;
+  // the copy is made from it once; afterwards only the modem's settings are kept up to date
+  source.disabled = Boolean(status.profile?.exists) || !source.options.length;
+  const setup = $("btn-varac-setup");
+  setup.disabled = !status.folder || !status.app;
+  setup.textContent = status.profile?.exists ? "Update" : "Set up";
+  const state = $("varac-state");
+  state.textContent = varacStateText(status);
+  state.dataset.state = status.offer === "update" || status.offer === "template" ? "warn" : "";
+  const switchable = Boolean(status.aether_profile?.id) && !status.aether_profile.active;
+  $("btn-varac-switch").hidden = !switchable;
+  if (varacDone) {
+    $("btn-varac-banner-switch").hidden = !switchable;
+    return;
+  }
+  $("varac-banner").hidden = !status.show_offer;
+  $("varac-banner-text").textContent = VARAC_OFFERS[status.offer] ?? "";
+  $("btn-varac-banner-go").hidden = false;
+  $("btn-varac-banner-go").textContent = status.offer === "setup" ? "Set up" : "Update";
+  $("btn-varac-banner-switch").hidden = true;
+  $("btn-varac-banner-later").textContent = "Not now";
+}
+
+async function setUpVarac() {
+  const params = {};
+  const folder = $("varac-folder").value.trim();
+  if (folder) params.folder = folder;
+  if (!$("varac-source").disabled && $("varac-source").value) params.source = $("varac-source").value;
+  const buttons = [$("btn-varac-setup"), $("btn-varac-banner-go")];
+  for (const button of buttons) button.disabled = true;
+  try {
+    const answer = await call("varac.setup", params);
+    applyProfiles(answer);
+    const written = answer.written ?? {};
+    const ini = written.created ? "made" : written.changed?.length ? "updated" : "up to date";
+    const profile = answer.aether_profile?.created ? "made" : "updated";
+    varacDone = true;
+    $("varac-banner-text").textContent = `VarAC_Aether.ini ${ini}, Aether profile VarAC default ${profile}. In VarAC: Switch profile, VarAC_Aether.`;
+    $("btn-varac-banner-go").hidden = true;
+    $("btn-varac-banner-later").textContent = "Close";
+    $("varac-banner").hidden = false;
+    renderVarac(answer.varac);
+  } catch (error) {
+    $("varac-state").textContent = error.message;
+    $("varac-state").dataset.state = "error";
+    log(`VarAC was not set up: ${error.message}`, true, "varac");
+  } finally {
+    for (const button of buttons) button.disabled = false;
+    if (varac) $("btn-varac-setup").disabled = !varac.folder || !varac.app;
+  }
+}
+
+function switchToVaracDefault() {
+  const id = varac?.aether_profile?.id;
+  if (!id) return;
+  withProfileSaved("switching to VarAC default", async () => {
+    await loadProfile(id);
+    loadVarac();
+  });
+}
+
+async function closeVaracBanner() {
+  $("varac-banner").hidden = true;
+  if (varacDone) {
+    varacDone = false;
+    return;
+  }
+  try {
+    renderVarac(await call("varac.dismiss"));
+  } catch (error) {
+    log(error.message, true);
+  }
+}
+
+function wireVarac() {
+  $("btn-varac-setup").addEventListener("click", setUpVarac);
+  $("btn-varac-banner-go").addEventListener("click", setUpVarac);
+  $("btn-varac-switch").addEventListener("click", switchToVaracDefault);
+  $("btn-varac-banner-switch").addEventListener("click", switchToVaracDefault);
+  $("btn-varac-banner-later").addEventListener("click", closeVaracBanner);
+  $("varac-folder").addEventListener("change", () => loadVarac($("varac-folder").value.trim()));
+}
+
 function wireMismatch() {
   $("btn-mismatch-update").addEventListener("click", () => $("btn-check-updates")?.click());
   $("btn-mismatch-setup").addEventListener("click", () => {
@@ -6235,6 +6379,7 @@ function wire() {
   wireStepper();
   wireMismatch();
   wireDebug();
+  wireVarac();
   wireClipping();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
   $("radio-identify-by").addEventListener("change", showIdentifyBy);

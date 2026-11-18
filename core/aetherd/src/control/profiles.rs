@@ -108,7 +108,8 @@ pub fn status_json(daemon: &DaemonState) -> Value {
     })
 }
 
-fn api(error: &ProfileError) -> ApiError {
+/// A profile error as the API reports it.
+pub(crate) fn api(error: &ProfileError) -> ApiError {
     let code = match error {
         ProfileError::NotAProfile(_) | ProfileError::Newer(_) | ProfileError::BadName(_) => {
             "bad_params"
@@ -216,7 +217,7 @@ fn report(applied: &Applied) -> Value {
 }
 
 /// Apply a profile to the station: validated, written, live keys taken on, made active.
-fn commit<P: Ptt>(
+pub(crate) fn commit<P: Ptt>(
     station: &mut Station<P>,
     daemon: &mut DaemonState,
     profile: &Profile,

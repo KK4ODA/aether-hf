@@ -3196,6 +3196,31 @@ and message take UI Automation's `ValuePattern`. A VarAC form that opens takes t
 focus from whatever the author is typing in, so read a field back before sending it. The
 one-time beacon is a right click on the beacon button, which a posted `WM_RBUTTONDOWN`/`UP` does.
 
+**VarAC in one step (2026-11-18, the author's design; no config key, no wire change).**
+`core/aetherd/src/varac.rs` writes `VarAC_Aether.ini` in VarAC's folder: a copy of one of the
+operator's profiles (`VarAC.ini` unless another is picked) with only `[VARAHF_CONFIG]`'s modem
+keys set (`wanted`: the application's path, Aether's host and KISS ports, KISS on, no monitor
+path, and `VarahfLaunchOnModemConnect=ON` at creation only), every other byte kept (`Ini` edits
+bytes in place, LF or CRLF as found), the old file kept as `.bak` on an update. The Aether profile
+*VarAC default* is the station's settings (or the profile's own, when it exists) with host and KISS
+on and, when the VarAC profile's `RigPTTControlType` is anything but VOX/NONE, `ptt.kind = host`
+with rules `none` (`aether_changes`). `varac.json` beside the configuration remembers the folder,
+the dismissed offer (by key: `setup`, `update:<keys=values>`, `template:<n>`) and the profile's
+`TEMPLATE` number: **raise `varac::TEMPLATE` when `aether_changes` changes**, and a station is
+offered the update. Control API `varac.status`/`varac.setup {folder?, source?, load?}`/
+`varac.dismiss` (`control/varac.rs`); the shell passes `AETHER_APP` (the daemon falls back to
+`aether-hf.exe` beside itself). Panel: `#varac-banner` and Setup step 5's VarAC rows
+(`loadVarac`, `renderVarac`). The author's decisions: names `VarAC_Aether.ini` and *VarAC default*,
+the switch is offered, never made by itself, and nothing is read from VARA's own `VARA.ini`. Found
+on the bench with a probe exe (`C:\Dev\AetherBench\vara-stub\probe\`, compiled with the .NET
+Framework's `csc.exe`): VarAC 15.0.18 starts the modem with **no arguments** in VarAC's folder, not
+elevated, and first writes `VARA.ini` beside the modem's path (`[Monitor] Monitor Mode=0`, `[Setup]
+Enable KISS=1`, the two ports); the scratch VarAC hung on close whether or not the modem lived.
+**The `VERSION` gate** (`C:\Dev\AetherBench\stub-modem\version_probe.ps1`): VarAC refuses `Aether HF
+0.2.0`, `v0.2.0`, `0.2.0 (Aether)`, `1.0.0` and `0.2.0.1` (*Please update VARA … 4.8.8 or higher*)
+and accepts `0.2.0-beta.161`, `0.2.0-stable`, `0.2.0+f1ee736` and a bare `Aether HF`: anything glued
+to the number. The first release without `-beta` needs the author's decision before it ships.
+
 **RadioPost mail on 40 m to the scanning gateway (2026-11-17, `docs/research/link-architecture/
 18-radiopost-40m-beta162.md`).** Nine sessions at 2300 Hz from the mobile (station `KK4ODA-2`,
 beta.161, RTS keying, calling as `WD5EMA` or `KK4ODA`) to `KK4ODA-1` (beta.162, RadioPost Gateway

@@ -409,6 +409,25 @@ as the profile *Default* — nothing in the file changes — so every existing s
 profile from the first day. `dirty` is computed, not tracked: it is whether loading the
 active profile again would change anything, so it is right after any client's change.
 
+**VarAC in one step.** A VarAC profile is a copy of `VarAC.ini` named `VarAC_<name>.ini` in
+VarAC's folder, which its *Switch profile* lists (VarAC's manual). These methods write one,
+`VarAC_Aether.ini`, from one of the operator's profiles with only the settings VarAC starts
+and reaches its modem by changed — `VaraModemType`, `VarahfMainPath` (Aether's application),
+`VarahfMainHost`, `VarahfMainPort`, `VarahfEnableKissInterface`, `VarahfMainKissPort`, an
+empty `VarahfMonitorPath`, and `VarahfLaunchOnModemConnect` when it is made — keeping every
+other byte, and make the Aether profile *VarAC default*: the station's settings (or the
+profile's own, when it is there) with the host interface and the KISS port on and, when the
+VarAC profile's `RigPTTControlType` says VarAC keys the radio (anything but `VOX` or
+`NONE`), keying by the host program with no rules profile. Nothing of VARA's is read or
+written. `varac.json` beside the configuration remembers the folder, the offer dismissed and
+the profile's template number; it is not a setting.
+
+| Method | Params | Result |
+|---|---|---|
+| `varac.status` | `folder?` | `supported` (Windows), `app` (Aether's application, or null), `folder` (VarAC's: the one asked for, else the one remembered, else `C:\VarAC` or under the program folders, when its `VarAC.ini` is there; null otherwise), `asked`, `sources` (the profiles a new one can be made from, `VarAC.ini` first), `keying` (`program`, `modem` or `unknown`: who keys the radio in the VarAC profile, or in `VarAC.ini` before it is made), `profile` (`file`, `exists`, `differences`: each setting it says differently from what this version would write, with `key`, `now`, `wanted`), `aether_profile` (`name`, `id`, `active`, `template`, `current_template`), `offer` (`setup`, `update`, `template` or null), `offer_key` and `show_offer` (the offer, unless that one was dismissed) |
+| `varac.setup` | `folder?`, `source?` (`VarAC.ini`), `load?` (false) | the VarAC profile made from `source`, or brought up to date (only the settings that differ; the old file kept as `VarAC_Aether.ini.bak`), the Aether profile made or brought up to date (its own sound card and levels kept), both remembered, and with `load` the station switched to the Aether profile. Answers as `profile.list` (as `profile.load` with `load`), plus `varac` (the status), `written` (`path`, `created`, `changed`, `backup`), `aether_profile` (`entry`, `created`, `changed`) and `keying`. `not_found` without VarAC's folder, `unsupported` without Aether's application, `cannot_save` (retryable) when a file cannot be written — a folder under Program Files needs an administrator. A `log` line named `varac` says what was done, never the profile's contents |
+| `varac.dismiss` | — | the offer shown now is not shown again; a different one (a later version's change) is. Answers as `varac.status` |
+
 ### 4.10 The rules
 
 The daemon judges every transmission against a regulatory profile before the radio is keyed

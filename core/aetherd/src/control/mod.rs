@@ -14,6 +14,7 @@ pub mod methods;
 pub mod profiles;
 pub mod protocol;
 pub mod server;
+pub mod varac;
 
 pub use protocol::{
     ApiError, Connection, ConnectionId, ConnectionKind, ControlChannel, ControlHandle, Event,

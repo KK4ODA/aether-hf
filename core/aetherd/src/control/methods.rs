@@ -98,6 +98,8 @@ pub fn is_mutating(method: &str) -> bool {
             | "scan.stop"
             | "rate.pin"
             | "share.include"
+            | "varac.setup"
+            | "varac.dismiss"
     ) || crate::control::profiles::is_mutating(method)
 }
 
@@ -193,6 +195,9 @@ pub struct DaemonState {
     pub control_handle: Option<crate::control::ControlHandle>,
     /// The profiles beside the configuration, and which one is active.
     pub profiles: crate::profile::Store,
+    /// `VarAC` as set up for this station (`varac.json` beside the configuration), where
+    /// Aether's application is for `VarAC` to start, and where `VarAC` is looked for.
+    pub varac: crate::varac::Setup,
     /// Whether the settings or the profiles changed since the run loop last told the
     /// clients: set by the methods, taken by the loop, which publishes a `profile` event.
     profiles_changed: bool,
@@ -273,6 +278,7 @@ impl DaemonState {
             kiss_retry_at: None,
             control_handle: None,
             profiles: crate::profile::Store::open(Some(&path)),
+            varac: crate::varac::Setup::open(Some(path.with_file_name(crate::varac::STATE_FILE))),
             profiles_changed: false,
             path,
         }
@@ -412,6 +418,15 @@ pub fn dispatch_with<P: Ptt>(
 ) -> Response {
     if crate::control::profiles::handles(&request.method) {
         return crate::control::profiles::dispatch(
+            station,
+            daemon,
+            &request.method,
+            &request.params,
+            request.id.clone(),
+        );
+    }
+    if crate::control::varac::handles(&request.method) {
+        return crate::control::varac::dispatch(
             station,
             daemon,
             &request.method,

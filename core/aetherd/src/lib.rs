@@ -40,6 +40,7 @@ pub mod sim;
 pub mod spectrum;
 pub mod station;
 pub mod upload;
+pub mod varac;
 pub mod waits;
 
 pub use audio::{AudioConfig, AudioError, AudioIo, Loopback, SoundCard};

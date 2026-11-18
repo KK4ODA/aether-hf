@@ -197,6 +197,22 @@ const PROFILES = {
   extension: "aetherprofile",
 };
 
+// VarAC found in its usual folder and not set up yet: the offer, and Setup step 5's VarAC rows
+const VARAC = {
+  supported: true,
+  app: "C:\\Users\\N1CALL\\AppData\\Local\\Aether HF\\aether-hf.exe",
+  asked: null,
+  folder: "C:\\VarAC",
+  sources: ["VarAC.ini", "VarAC_FT-991A.ini"],
+  keying: "program",
+  profile: {file: "VarAC_Aether.ini", exists: false, differences: []},
+  aether_profile: {name: "VarAC default", id: null, active: false, template: 0,
+                   current_template: 1},
+  offer: "setup",
+  offer_key: "setup",
+  show_offer: true,
+};
+
 const RADIOPOST = {id: 3, app: "RadioPost client 0.1.0-beta.21", kind: "control",
                    since_ms: NOW - 41 * 60 * MS};
 
@@ -706,6 +722,7 @@ function world(scene) {
          dir: `${DATA_DIR}\\profiles`, extension: "aetherprofile"},
     heard: configured ? heardList() : [],
     sessions: configured ? sessionList() : [],
+    varac: scene.varac ?? null,
     constellation: configured ? constellation(random) : {frame: null, points: []},
     spectrum: {transmit_hz: wide.edges, passband_hz: [1500 - bandwidth / 2, 1500 + bandwidth / 2],
                // the span the other station's signal fills: the air's nominal width, centred
@@ -907,6 +924,8 @@ function pageWorld(D) {
         return D.constellation;
       case "test.status":
         return {running: Boolean(D.status.test), results: null};
+      case "varac.status":
+        return D.varac ?? {};
       default:
         return {};
     }
@@ -1014,6 +1033,11 @@ const SCENES = {
   banners: {timeline: "idle", bandwidth: 500, mismatch: true, signal: false,
             clipping: {share: 0.0042, clips: true},
             clip: ["#mismatch-banner", "#clip-banner"]},
+  // step 5 alone, under the offer: the other steps are taken out rather than scrolled past,
+  // since a clip starts at the top of the page
+  varac: {timeline: "idle", varac: VARAC, after: [tab("setup"),
+    `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = s.dataset.step !== "5"`],
+          clip: ['.step[data-step="5"]']},
 };
 
 // the ended banner comes down by itself 15 s after a session ends: the shot is of the panel

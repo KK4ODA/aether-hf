@@ -89,6 +89,10 @@ not connect, and would blame VARA. Send yourself a short message first, then che
 
 ### VarAC
 
+On Windows, the quickest way: when the banner says VarAC is on this computer, press **Set up**,
+then **Switch to VarAC default**, and in VarAC choose *Switch profile → VarAC_Aether*. Switching
+VarAC back to *VarAC* returns to VARA. By hand:
+
 VarAC usually keys the radio itself (Setup step 2: **Host**), as it does with VARA:
 VarAC's *Vara* tab with host `127.0.0.1`, main port `8300`, KISS port `8100`; its *RIG* tab with
 PTT and frequency control on CAT. Ping, chat, files, CQ, beacons, broadcasts and relayed VMail
