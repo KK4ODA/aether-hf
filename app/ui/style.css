@@ -3107,12 +3107,8 @@ td.bw-other {
   color: var(--text);
 }
 
-#profile-select {
-  min-width: 180px;
-}
-
 /* unsaved changes: the name carries a star, and the field says so in colour */
-#profile-select[data-dirty="true"] {
+#profile-current[data-dirty="true"] {
   border-color: var(--status-warning);
 }
 
@@ -3187,6 +3183,114 @@ details.menu > .menu-list > button {
 details.menu > .menu-list > button:hover:not(:disabled) {
   background: var(--surface-3);
   border-color: transparent;
+}
+
+/* a list that looks like a select and opens on rows of buttons: the profiles, each name with
+   an × beside it, which a native select cannot hold. As wide as Setup's long selects */
+details.menu.picker {
+  flex: 0 1 34rem;
+  min-width: 180px;
+}
+
+details.menu.picker > summary {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 28px 0 9px;
+  border-color: var(--border);
+  background: var(--well) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23969da4' stroke-width='1.5'/></svg>") no-repeat right 10px center;
+  font-weight: 400;
+}
+
+details.menu.picker > summary:hover {
+  background-color: var(--well);
+  border-color: var(--border-strong);
+}
+
+details.menu.picker[open] > summary {
+  border-color: var(--focus);
+}
+
+.picker-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+details.menu.picker > .menu-list {
+  right: 0;
+  max-height: min(60vh, 24rem);
+  overflow-y: auto;
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-sm);
+}
+
+.picker-row:hover {
+  background: var(--surface-3);
+}
+
+details.menu.picker .picker-row > button {
+  border-color: transparent;
+  background: transparent;
+  outline-offset: -2px;
+}
+
+details.menu.picker .picker-row > button:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.picker-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-start;
+  padding: 0 9px 0 6px;
+  font-weight: 400;
+}
+
+.picker-name[aria-current="true"] {
+  font-weight: 600;
+}
+
+.picker-mark {
+  flex: none;
+  width: 1em;
+  color: var(--text-2);
+  visibility: hidden;
+}
+
+.picker-name[aria-current="true"] .picker-mark {
+  visibility: visible;
+}
+
+/* the × in the operator's red only under the pointer or the keyboard: a list of red crosses
+   would shout. Faint where it cannot be pressed — the active profile, the last one */
+details.menu.picker .picker-x {
+  flex: none;
+  width: var(--control-h);
+  padding: 0;
+  color: var(--text-3);
+  font-size: 17px;
+  line-height: 1;
+}
+
+details.menu.picker .picker-x:hover:not(:disabled),
+details.menu.picker .picker-x:focus-visible {
+  color: var(--status-error);
+  background: color-mix(in srgb, var(--status-error) 14%, transparent);
+}
+
+details.menu.picker .picker-x:disabled {
+  opacity: 0.3;
+}
+
+.picker-none {
+  margin: 0;
+  padding: 4px 9px;
 }
 
 /* ── controls ───────────────────────────────────────────────────── */

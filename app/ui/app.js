@@ -4165,9 +4165,10 @@ async function applied(answer) {
 // radio-interface presets of Setup step 2, an older use of the word.
 
 let profiles = { active: null, name: null, dirty: null, list: [], dir: "" };
-// what the name form is for once OK is pressed: "save-as", "new", "rename",
-// "duplicate" or "delete"
+// what the name form is for once OK is pressed: "save-as", "new", "rename" or "duplicate"
 let profilePurpose = null;
+// the profile whose × was pressed, while the confirmation asks
+let profileToDelete = null;
 // what to do once the unsaved-changes question is answered
 let profileAfterPrompt = null;
 // the devices the last profile load could not find, with the daemon's suggestions
@@ -4204,35 +4205,35 @@ function applyProfiles(status) {
 }
 
 function renderProfiles() {
-  const select = $("profile-select");
-  select.replaceChildren();
-  if (!profiles.active) {
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = profiles.list.length ? "— pick a profile —" : "— no profile saved yet —";
-    select.append(none);
-  }
-  for (const entry of profiles.list) {
-    const option = document.createElement("option");
-    option.value = entry.id;
-    const active = entry.id === profiles.active;
-    option.textContent = `${entry.name}${active && profiles.dirty ? " *" : ""}`;
-    if (entry.error) {
-      option.textContent += " — cannot be read";
-      option.disabled = true;
-    }
-    option.title = entry.error
-      ? `${entry.path}: ${entry.error}`
-      : `${entry.path}${entry.modified ? ` — saved ${entry.modified}` : ""}`;
-    select.append(option);
-  }
-  select.value = profiles.active ?? "";
-  select.dataset.dirty = String(profiles.dirty === true);
-  $("profile-label").dataset.dirty = String(profiles.dirty === true);
-  select.title = profiles.dirty
-    ? `${profiles.name}: changed since it was saved — Save writes the changes to it`
-    : "The saved profile these settings come from; pick another to switch the station to it";
   const connected = socket && socket.readyState === WebSocket.OPEN;
+  const activeName = profiles.name ?? profiles.active;
+  $("profile-current-name").textContent = profiles.active
+    ? `${activeName}${profiles.dirty ? " *" : ""}`
+    : profiles.list.length ? "— pick a profile —" : "— no profile saved yet —";
+  const current = $("profile-current");
+  current.dataset.dirty = String(profiles.dirty === true);
+  $("profile-label").dataset.dirty = String(profiles.dirty === true);
+  current.title = profiles.dirty
+    ? `${activeName}: changed since it was saved — Save writes the changes to it; open the list to switch to another or delete one`
+    : "The saved profile these settings come from; open the list to switch to another or delete one";
+  // a row keeps the keyboard's place when the list is drawn again under it — a profile
+  // event from another panel while this one's list is open
+  const focused = document.activeElement?.closest?.("#profile-list .picker-row") ? document.activeElement : null;
+  const keep = focused && { id: focused.dataset.id, x: focused.classList.contains("picker-x") };
+  const list = $("profile-list");
+  list.replaceChildren(...profiles.list.map((entry) => profileRow(entry, connected)));
+  if (profiles.list.length === 0) {
+    const none = document.createElement("p");
+    none.className = "sub picker-none";
+    none.textContent = "No profile saved yet";
+    none.title = "Save as… keeps the running settings as a profile";
+    list.append(none);
+  }
+  if (keep) {
+    const again = list.querySelector(`.picker-row[data-id="${CSS.escape(keep.id)}"] ${keep.x ? ".picker-x" : ".picker-name"}`);
+    if (again && !again.disabled) again.focus();
+    else firstProfileButton()?.focus();
+  }
   const hasActive = Boolean(profiles.active);
   $("profile-save").disabled = !connected || !hasActive;
   $("profile-save").title = hasActive
@@ -4243,47 +4244,169 @@ function renderProfiles() {
   $("profile-rename").disabled = !hasActive;
   $("profile-duplicate").disabled = !hasActive;
   $("profile-export").disabled = !connected;
-  $("profile-delete").disabled = profiles.list.filter((p) => p.id !== profiles.active).length === 0;
   for (const id of ["profile-save-as", "profile-import", "profile-new"]) $(id).disabled = !connected;
 }
 
-/// The form for a name (or, for a delete, a choice), with what OK will do.
+/// One row of the profile list: the name, which switches the station to it, and an × that
+/// deletes it once the operator confirms. A native select cannot hold a button per option, so
+/// the list is the panel's own: a disclosure of plain buttons, which a screen reader reads as
+/// "Truck, button" and "Delete Truck, button", moved through with Tab or the arrow keys.
+function profileRow(entry, connected) {
+  const row = document.createElement("div");
+  row.className = "picker-row";
+  row.dataset.id = entry.id;
+  const active = entry.id === profiles.active;
+  const saved = entry.modified ? `saved ${entry.modified}` : "";
+  const name = document.createElement("button");
+  name.type = "button";
+  name.className = "picker-name";
+  name.dataset.id = entry.id;
+  const mark = document.createElement("span");
+  mark.className = "picker-mark";
+  mark.setAttribute("aria-hidden", "true");
+  mark.textContent = "✓";
+  const text = document.createElement("span");
+  text.className = "picker-text";
+  text.textContent = `${entry.name}${active && profiles.dirty ? " *" : ""}${entry.error ? " — cannot be read" : ""}`;
+  name.append(mark, text);
+  if (active) name.setAttribute("aria-current", "true");
+  name.disabled = Boolean(entry.error);
+  name.title = entry.error
+    ? `${entry.path}: ${entry.error}`
+    : active
+      ? `${entry.name}: the profile the station runs on${saved ? `, ${saved}` : ""} — ${entry.path}`
+      : `Switch the station to ${entry.name}${saved ? ` (${saved})` : ""} — ${entry.path}`;
+  name.addEventListener("click", () => pickProfile(entry.id));
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "picker-x";
+  x.dataset.id = entry.id;
+  x.textContent = "×";
+  x.setAttribute("aria-label", `Delete ${entry.name}`);
+  const last = profiles.list.length <= 1;
+  x.disabled = !connected || active || last;
+  x.title = active
+    ? `${entry.name} is the profile the station runs on: switch to another one to delete it`
+    : last
+      ? "The last profile cannot be deleted"
+      : !connected
+        ? "The modem is not connected"
+        : `Delete ${entry.name}: its file is removed once you confirm`;
+  x.addEventListener("click", () => askDeleteProfile(entry.id));
+  row.append(name, x);
+  return row;
+}
+
+/// The first button of the list the keyboard can stand on: the active profile's name, else
+/// the first that can be pressed.
+function firstProfileButton() {
+  const list = $("profile-list");
+  return list.querySelector('.picker-name[aria-current="true"]:not(:disabled)')
+    ?? list.querySelector("button:not(:disabled)");
+}
+
+function closeProfilePicker(focusField) {
+  $("profile-picker").open = false;
+  if (focusField) $("profile-current").focus();
+}
+
+function pickProfile(id) {
+  closeProfilePicker(true);
+  if (!id || id === profiles.active) return;
+  withProfileSaved("switching", () => loadProfile(id));
+}
+
+/// The list's keys: up and down move between rows, left and right between a name and its ×,
+/// Home and End to the ends, Escape closes. Tab moves through the buttons as anywhere else.
+function moveInProfileList(event) {
+  const here = event.target.closest?.(".picker-row");
+  if (!here) return;
+  const rows = [...$("profile-list").querySelectorAll(".picker-row")];
+  const index = rows.indexOf(here);
+  const column = event.target.classList.contains("picker-x") ? ".picker-x" : ".picker-name";
+  const other = column === ".picker-x" ? ".picker-name" : ".picker-x";
+  const usable = (row, which) => {
+    const button = row.querySelector(which);
+    return button && !button.disabled ? button : null;
+  };
+  const inRow = (row) => usable(row, column) ?? usable(row, other);
+  const scan = (from, step) => {
+    for (let i = from; i >= 0 && i < rows.length; i += step) {
+      const found = inRow(rows[i]);
+      if (found) return found;
+    }
+    return null;
+  };
+  const target = {
+    ArrowDown: () => scan(index + 1, 1),
+    ArrowUp: () => scan(index - 1, -1),
+    Home: () => scan(0, 1),
+    End: () => scan(rows.length - 1, -1),
+    ArrowRight: () => usable(here, ".picker-x"),
+    ArrowLeft: () => usable(here, ".picker-name"),
+  }[event.key];
+  if (!target) return;
+  event.preventDefault();
+  target()?.focus();
+}
+
+/// The × asks first, in the bar itself: the profile's name, and that it cannot be undone.
+function askDeleteProfile(id) {
+  const entry = profiles.list.find((p) => p.id === id);
+  const name = entry?.name ?? id;
+  closeProfilePicker(false);
+  closeProfileForm();
+  profileToDelete = id;
+  $("profile-confirm-text").textContent =
+    `Delete the profile ${name}? This cannot be undone: its file is removed. The running settings stay as they are.`;
+  $("profile-confirm-delete").title = `Delete ${name}; this cannot be undone`;
+  $("profile-confirm").hidden = false;
+  $("profile-confirm-cancel").focus();
+}
+
+function closeProfileConfirm() {
+  $("profile-confirm").hidden = true;
+  profileToDelete = null;
+}
+
+async function answerProfileConfirm(go) {
+  const id = profileToDelete;
+  const name = profiles.list.find((p) => p.id === id)?.name ?? id;
+  closeProfileConfirm();
+  $("profile-current").focus();
+  if (!go || !id) return;
+  try {
+    applyProfiles(await call("profile.delete", { id }));
+    noteProfile(`Deleted ${name}.`);
+    log(`profile ${name} deleted`);
+  } catch (error) {
+    noteProfile(error.message, "error");
+    log(error.message, true);
+  }
+}
+
+/// The form for a name, with what OK will do.
 function openProfileForm(purpose) {
   profilePurpose = purpose;
   $("profile-more").open = false;
+  closeProfileConfirm();
   const form = $("profile-name-form");
   const name = $("profile-name");
-  const pick = $("profile-pick");
   const labels = {
     "save-as": ["Save as", "A name for the new profile", "OK"],
     new: ["New profile", "A name for the new profile — it starts from the defaults", "Create"],
     rename: ["Rename to", "The profile's new name", "Rename"],
     duplicate: ["Copy as", "A name for the copy", "Copy"],
-    delete: ["Delete", "Which profile to delete", "Delete"],
   };
   const [label, hint, ok] = labels[purpose];
   $("profile-name-label").textContent = label;
   $("profile-name-ok").textContent = ok;
-  $("profile-name-ok").classList.toggle("danger", purpose === "delete");
-  $("profile-name-ok").classList.toggle("primary", purpose !== "delete");
-  name.hidden = purpose === "delete";
-  pick.hidden = purpose !== "delete";
   name.title = hint;
-  if (purpose === "delete") {
-    pick.replaceChildren();
-    for (const entry of profiles.list.filter((p) => p.id !== profiles.active)) {
-      const option = document.createElement("option");
-      option.value = entry.id;
-      option.textContent = entry.name;
-      pick.append(option);
-    }
-  } else {
-    name.value = purpose === "rename" ? (profiles.name ?? "") : "";
-    if (purpose === "duplicate" && profiles.name) name.value = `${profiles.name} copy`;
-  }
+  name.value = purpose === "rename" ? (profiles.name ?? "") : "";
+  if (purpose === "duplicate" && profiles.name) name.value = `${profiles.name} copy`;
   form.hidden = false;
-  (purpose === "delete" ? pick : name).focus();
-  if (purpose !== "delete") name.select();
+  name.focus();
+  name.select();
 }
 
 function closeProfileForm() {
@@ -4294,7 +4417,7 @@ function closeProfileForm() {
 async function profileFormOk() {
   const purpose = profilePurpose;
   const name = $("profile-name").value.trim();
-  if (purpose !== "delete" && !name) {
+  if (!name) {
     $("profile-name").focus();
     return;
   }
@@ -4327,13 +4450,6 @@ async function profileFormOk() {
     } else if (purpose === "duplicate") {
       applyProfiles(await call("profile.duplicate", { id: profiles.active, name }));
       noteProfile(`Copied to ${name}. The station stays on ${profiles.name}; pick ${name} to switch.`);
-    } else if (purpose === "delete") {
-      const id = $("profile-pick").value;
-      if (!id) return;
-      const entry = profiles.list.find((p) => p.id === id);
-      if (!window.confirm(`Delete the profile ${entry?.name ?? id}? Its file is removed; the running settings are not touched.`)) return;
-      applyProfiles(await call("profile.delete", { id }));
-      noteProfile(`Deleted ${entry?.name ?? id}.`);
     }
   } catch (error) {
     noteProfile(error.message, "error");
@@ -6590,17 +6706,48 @@ function wire() {
   $("tx-level").addEventListener("input", () => showTxLevel(txLevel()));
   $("tx-level").addEventListener("change", saveTxLevel);
   $("wz-save").addEventListener("click", wizardSave);
-  $("profile-select").addEventListener("change", () => {
-    const id = $("profile-select").value;
-    if (!id || id === profiles.active) return;
-    withProfileSaved("switching", () => loadProfile(id));
+  const picker = $("profile-picker");
+  // opened, the list puts the keyboard on the active profile, as a select does. The toggle
+  // event comes a moment after the click or key that opened it, so a key pressed in between
+  // keeps its place
+  picker.addEventListener("toggle", () => {
+    if (!picker.open) return;
+    $("profile-more").open = false;
+    if (!$("profile-list").contains(document.activeElement)) firstProfileButton()?.focus();
+  });
+  picker.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && picker.open) {
+      event.preventDefault();
+      closeProfilePicker(true);
+    } else if (event.target === $("profile-current")
+               && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      picker.open = true;
+      firstProfileButton()?.focus();
+    } else {
+      moveInProfileList(event);
+    }
+  });
+  // Tab out of the list closes it; a click elsewhere does too (below)
+  picker.addEventListener("focusout", (event) => {
+    if (picker.open && event.relatedTarget && !picker.contains(event.relatedTarget)) picker.open = false;
+  });
+  $("profile-more").addEventListener("toggle", () => {
+    if ($("profile-more").open) picker.open = false;
+  });
+  $("profile-confirm-delete").addEventListener("click", () => answerProfileConfirm(true));
+  $("profile-confirm-cancel").addEventListener("click", () => answerProfileConfirm(false));
+  $("profile-confirm").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      answerProfileConfirm(false);
+    }
   });
   $("profile-save").addEventListener("click", saveProfile);
   $("profile-save-as").addEventListener("click", () => openProfileForm("save-as"));
   $("profile-new").addEventListener("click", () => withProfileSaved("starting a new one", () => openProfileForm("new")));
   $("profile-rename").addEventListener("click", () => openProfileForm("rename"));
   $("profile-duplicate").addEventListener("click", () => openProfileForm("duplicate"));
-  $("profile-delete").addEventListener("click", () => openProfileForm("delete"));
   $("profile-export").addEventListener("click", exportProfile);
   $("profile-import").addEventListener("click", () => {
     $("profile-more").open = false;
@@ -6624,10 +6771,11 @@ function wire() {
   $("profile-prompt-save").addEventListener("click", () => answerProfilePrompt("save"));
   $("profile-prompt-discard").addEventListener("click", () => answerProfilePrompt("discard"));
   $("profile-prompt-cancel").addEventListener("click", () => answerProfilePrompt("cancel"));
-  // the More menu closes when the pointer goes elsewhere
+  // the More menu and the profile list close when the pointer goes elsewhere
   document.addEventListener("click", (event) => {
-    const menu = $("profile-more");
-    if (menu.open && !menu.contains(event.target)) menu.open = false;
+    for (const menu of [$("profile-more"), $("profile-picker")]) {
+      if (menu.open && !menu.contains(event.target)) menu.open = false;
+    }
   });
   $("btn-copy").addEventListener("click", async () => {
     try {

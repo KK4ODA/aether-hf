@@ -120,7 +120,7 @@ pub(crate) fn api(error: &ProfileError) -> ApiError {
         ProfileError::NotAProfile(_) | ProfileError::Newer(_) | ProfileError::BadName(_) => {
             "bad_params"
         }
-        ProfileError::Invalid(_) => "refused",
+        ProfileError::Invalid(_) | ProfileError::Kept(_) => "refused",
         ProfileError::Io(_) => "cannot_save",
         ProfileError::NoSuchProfile(_) => "not_found",
         ProfileError::NameTaken(_) => "conflict",
@@ -324,7 +324,8 @@ fn duplicate(daemon: &mut DaemonState, params: &Value) -> Result<Value, ApiError
     Ok(result)
 }
 
-/// `profile.delete`: not the active one.
+/// `profile.delete`: not the active one, nor the last ([`crate::profile::Store::delete`]).
+/// Every panel is told by the `profile` event, so a list open elsewhere loses the row.
 fn delete(daemon: &mut DaemonState, params: &Value) -> Result<Value, ApiError> {
     let id = id_param(params)?.to_owned();
     daemon.profiles.delete(&id).map_err(|e| api(&e))?;
@@ -662,6 +663,112 @@ mod tests {
             json!({ "id": "Home copy" }),
         );
         assert_eq!(missing.error.expect("refused").code, "not_found");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_delete_keeps_the_active_and_the_last_and_says_what_is_not_there() {
+        let mut station = station();
+        let (mut daemon, dir) = daemon("delete");
+        daemon
+            .profiles
+            .adopt(&daemon.config, &[], None, &crate::profile::now())
+            .expect("adopt");
+        for name in ["Truck", "Portable"] {
+            ok(call(
+                &mut station,
+                &mut daemon,
+                "profile.duplicate",
+                json!({ "id": "Default", "name": name }),
+            ));
+        }
+        // a file that cannot be read is listed, and deleting it is how it goes
+        std::fs::write(
+            dir.join("profiles").join("Broken.aetherprofile"),
+            "{ not a profile",
+        )
+        .expect("write");
+        let _ = daemon.take_profiles_changed();
+
+        let active = call(
+            &mut station,
+            &mut daemon,
+            "profile.delete",
+            json!({ "id": "Default" }),
+        );
+        let error = active.error.expect("the active one stays");
+        assert_eq!(error.code, "refused");
+        assert!(
+            error.message.contains("switch to another"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("applied"),
+            "a delete is not a load: {}",
+            error.message
+        );
+        assert!(
+            !daemon.take_profiles_changed(),
+            "nothing changed, nothing told"
+        );
+
+        for id in ["Broken", "Truck"] {
+            let deleted = ok(call(
+                &mut station,
+                &mut daemon,
+                "profile.delete",
+                json!({ "id": id }),
+            ));
+            assert_eq!(deleted["deleted"], id);
+            assert_eq!(
+                deleted["active"], "Default",
+                "the station stays where it was"
+            );
+            assert!(daemon.take_profiles_changed(), "every panel is told");
+        }
+        assert!(!dir.join("profiles").join("Truck.aetherprofile").exists());
+
+        // a second client's delete of the same profile, or a stale list
+        let missing = call(
+            &mut station,
+            &mut daemon,
+            "profile.delete",
+            json!({ "id": "Truck" }),
+        );
+        assert_eq!(missing.error.expect("gone").code, "not_found");
+
+        // with no profile active the last one still stays: the store is never emptied
+        daemon.profiles.set_active(None).expect("no active");
+        ok(call(
+            &mut station,
+            &mut daemon,
+            "profile.delete",
+            json!({ "id": "Portable" }),
+        ));
+        let last = call(
+            &mut station,
+            &mut daemon,
+            "profile.delete",
+            json!({ "id": "Default" }),
+        );
+        let error = last.error.expect("the last one stays");
+        assert_eq!(error.code, "refused");
+        assert!(error.message.contains("last profile"), "{}", error.message);
+        assert_eq!(daemon.profiles.list().len(), 1);
+
+        // an active mark whose file was removed by hand: its name is not there
+        daemon
+            .profiles
+            .set_active(Some("Gone".into()))
+            .expect("stale mark");
+        let stale = call(
+            &mut station,
+            &mut daemon,
+            "profile.delete",
+            json!({ "id": "Gone" }),
+        );
+        assert_eq!(stale.error.expect("not there").code, "not_found");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

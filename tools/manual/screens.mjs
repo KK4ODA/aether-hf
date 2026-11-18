@@ -1014,6 +1014,9 @@ const SCENES = {
   window: {after: [tab("session")]},
   status: {},
   setup: {timeline: "ended", after: [tab("setup"), "hideEndedBanner()"]},
+  // the profile list open: each name with its ×, the one in use ticked
+  profiles: {timeline: "ended", after: [tab("setup"), "hideEndedBanner()",
+    `document.getElementById("profile-picker").open = true`], clip: ["#profile-list"]},
   "setup-modem": {timeline: "ended", after: [tab("setup"), "hideEndedBanner()",
     `document.querySelector('.step[data-step="4"]').scrollIntoView({block: "start"})`]},
   "session-test": {timeline: "test", after: [tab("session")]},

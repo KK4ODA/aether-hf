@@ -193,7 +193,8 @@ folder, the update channel, debug mode, the KISS port's address) is never in the
 behind it named when there is one, and the modem stays receive-only until you choose.
 A profile written by an older version loads with defaults for what it does not have; one
 written by a newer version says so rather than loading half of itself. **More** holds the
-rest: a new profile from the defaults, rename, duplicate, delete.
+rest: a new profile from the defaults, rename, duplicate. The **×** beside a profile in the
+list deletes it once you confirm; the one in use, and the last one, cannot be deleted.
 
 ---
 

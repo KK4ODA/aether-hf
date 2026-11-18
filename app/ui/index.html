@@ -670,8 +670,11 @@
           <!-- the profile these settings belong to, and the steps at a glance -->
           <section class="card console-card profile-bar" id="profile-bar" aria-labelledby="profile-label" title="Profiles: every setting on this tab and the transmit level, saved under a name. One per radio, place or program. A * means the running settings have changed since the profile was saved, and switching asks first. Export writes an .aetherprofile file to back up or carry to another computer; Import brings one in, and a device that computer does not have shows as not on this computer until you choose one.">
             <div class="tool-row">
-              <label for="profile-select" id="profile-label" class="card-title" title="The profile the running settings came from; a * means they have changed since it was saved">Profile</label>
-              <select id="profile-select" title="The saved profile these settings come from; pick another to switch the station to it; a * means the running settings have changed since it was saved" aria-label="Active profile"></select>
+              <span id="profile-label" class="card-title" title="The profile the running settings came from; a * means they have changed since it was saved">Profile</span>
+              <details class="menu picker" id="profile-picker" title="The saved profiles: pick one to switch the station to it, or × to delete one">
+                <summary id="profile-current" aria-labelledby="profile-label profile-current-name" title="The saved profile these settings come from; open the list to switch to another or delete one; a * means the running settings have changed since it was saved"><span class="picker-text" id="profile-current-name" title="The profile in use; a * means the running settings have changed since it was saved"></span></summary>
+                <div class="menu-list" id="profile-list" role="group" aria-label="Saved profiles" title="Every saved profile: its name switches the station to it, × deletes it"></div>
+              </details>
               <div class="btn-group" role="group" aria-label="Save the profile" title="Save the running settings to a profile">
                 <button id="profile-save" class="primary" title="Write the current settings to this profile">Save</button>
                 <button id="profile-save-as" class="quiet" title="Keep the current settings as a new profile, and switch to it">Save as…</button>
@@ -680,13 +683,12 @@
                 <button id="profile-import" class="quiet" title="Bring in a profile from an .aetherprofile file; it is checked and listed, and loaded only when you say">Import…</button>
                 <button id="profile-export" class="quiet" title="Save this profile as an .aetherprofile file to back up or carry to another computer">Export…</button>
               </div>
-              <details class="menu" id="profile-more" title="New, rename, duplicate, delete">
-                <summary id="profile-more-summary" title="More: new, rename, duplicate, delete">More ▾</summary>
+              <details class="menu" id="profile-more" title="New, rename, duplicate">
+                <summary id="profile-more-summary" title="More: new, rename, duplicate">More ▾</summary>
                 <div class="menu-list" id="profile-menu" title="The less-used profile actions">
                   <button id="profile-new" title="Start a new profile from the defaults, keeping your callsign and operator details">New profile…</button>
                   <button id="profile-rename" title="Give this profile another name">Rename…</button>
                   <button id="profile-duplicate" title="Copy this profile under a new name, without switching to it">Duplicate…</button>
-                  <button id="profile-delete" class="danger" title="Delete a profile other than the active one">Delete…</button>
                 </div>
               </details>
               <input id="profile-file" type="file" accept=".aetherprofile,application/json" title="The profile file to import" aria-label="Profile file to import" hidden />
@@ -694,9 +696,13 @@
             <div class="tool-row inset-row" id="profile-name-form" title="Name the profile" hidden>
               <label for="profile-name" id="profile-name-label" title="What the profile is called">Name</label>
               <input id="profile-name" type="text" class="prose" maxlength="60" placeholder="Home FTDX10" autocomplete="off" title="The profile's name; the file is named after it" aria-label="Profile name" />
-              <select id="profile-pick" title="Which profile" aria-label="Which profile" hidden></select>
               <button id="profile-name-ok" class="primary" title="Go ahead">OK</button>
               <button id="profile-name-cancel" class="quiet" title="Close without changing anything">Cancel</button>
+            </div>
+            <div class="tool-row inset-row" id="profile-confirm" role="group" aria-labelledby="profile-confirm-text" title="Deleting a profile removes its file, and cannot be undone" hidden>
+              <span class="sub" id="profile-confirm-text" title="What is about to happen"></span>
+              <button id="profile-confirm-delete" class="danger" title="Delete the profile's file; this cannot be undone">Delete</button>
+              <button id="profile-confirm-cancel" class="quiet" title="Keep the profile">Cancel</button>
             </div>
             <div class="tool-row inset-row" id="profile-prompt" title="The current profile has changes that are not saved to it" hidden>
               <span class="sub" id="profile-prompt-text" title="What is about to happen"></span>
@@ -1161,7 +1167,7 @@
               <div class="card-head"><h2 class="card-title" id="help-air-title" title="From a new installation to a session">Getting on the air</h2></div>
               <ol class="help-steps">
                 <li><strong>Setup</strong>: callsign, the rules you operate under, the control and your license class, the radio interface and its devices, the receive level, save. A sound card, port or callsign change restarts the modem by itself.</li>
-                <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another switches to it (a <code>*</code> means unsaved changes, and switching asks), <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in.</li>
+                <li><strong>Profiles</strong>, at the top of Setup: every setting under a name — one per radio or per place. <em>Save as…</em> keeps the current settings as a new one, picking another in the list switches to it (a <code>*</code> means unsaved changes, and switching asks), the <em>×</em> beside a name deletes that profile once you confirm, <em>Export…</em> writes an <code>.aetherprofile</code> file to back up or carry to another computer and <em>Import…</em> brings one in.</li>
                 <li><strong>The rules</strong>: the badge beside the dial says <em>Legal</em>, <em>Warning</em> or <em>TX blocked</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
                 <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not <em>Tuner tone</em>) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider.</li>
                 <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter: what you send stays in the box with its time and a ✓ once the other station has all of it (… on its way, ✗ if the session ended first).</li>

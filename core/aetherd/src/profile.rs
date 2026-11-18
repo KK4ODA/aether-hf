@@ -132,6 +132,8 @@ pub enum ProfileError {
     NameTaken(String),
     /// The name is empty or too long.
     BadName(String),
+    /// The profile is kept: the active one, or the last one, cannot be deleted.
+    Kept(String),
     /// There is nowhere to keep profiles: the daemon runs without a configuration file.
     NoDirectory,
 }
@@ -141,7 +143,9 @@ impl core::fmt::Display for ProfileError {
         match self {
             Self::NotAProfile(detail) => write!(f, "this is not an Aether HF profile: {detail}"),
             Self::Invalid(detail) => write!(f, "the profile cannot be applied: {detail}"),
-            Self::Newer(detail) | Self::Io(detail) | Self::BadName(detail) => write!(f, "{detail}"),
+            Self::Newer(detail) | Self::Io(detail) | Self::BadName(detail) | Self::Kept(detail) => {
+                write!(f, "{detail}")
+            }
             Self::NoSuchProfile(id) => write!(f, "there is no profile called {id:?}"),
             Self::NameTaken(name) => write!(f, "a profile called {name:?} already exists"),
             Self::NoDirectory => write!(
@@ -970,23 +974,37 @@ impl Store {
         })
     }
 
-    /// Delete a profile. The active one cannot be: switch first.
+    /// Delete a profile: its file goes, and nothing else changes — the running settings
+    /// are the configuration's, not the profile's. Three rules, checked in this order:
+    /// a profile that is not there is said to be not there (a second client's delete, a
+    /// stale list), whatever the active mark says; the active one stays, since the
+    /// running settings and `dirty` are measured against it (switch first); and the last
+    /// one stays, so the store a station adopted on its first start is never emptied. The
+    /// last rule matters only with no profile active — a folder filled by hand before the
+    /// first start, or the active one's file removed by hand — since otherwise the last
+    /// profile is the active one. A file that cannot be read can be deleted: that is how
+    /// it is got rid of.
     ///
     /// # Errors
-    /// If it is active, does not exist, or cannot be removed.
+    /// If it does not exist, is active, is the last one, or cannot be removed.
     pub fn delete(&mut self, id: &str) -> Result<(), ProfileError> {
+        let path = self.path_of(id).ok_or(ProfileError::NoDirectory)?;
+        if !path.exists() {
+            return Err(ProfileError::NoSuchProfile(id.to_owned()));
+        }
         if self
             .active
             .as_deref()
             .is_some_and(|a| a.eq_ignore_ascii_case(id))
         {
-            return Err(ProfileError::Invalid(
+            return Err(ProfileError::Kept(
                 "the active profile cannot be deleted: switch to another one first".into(),
             ));
         }
-        let path = self.path_of(id).ok_or(ProfileError::NoDirectory)?;
-        if !path.exists() {
-            return Err(ProfileError::NoSuchProfile(id.to_owned()));
+        if self.list().len() <= 1 {
+            return Err(ProfileError::Kept(
+                "the last profile cannot be deleted: a station keeps at least one".into(),
+            ));
         }
         std::fs::remove_file(&path)
             .map_err(|e| ProfileError::Io(format!("{}: {e}", path.display())))
@@ -1740,7 +1758,7 @@ mod tests {
             "remembered across a restart"
         );
         assert!(
-            matches!(store.delete("Home FTDX10"), Err(ProfileError::Invalid(_))),
+            matches!(store.delete("Home FTDX10"), Err(ProfileError::Kept(_))),
             "the active one stays"
         );
 

@@ -376,7 +376,7 @@ design.
 | `profile.create` | `name` | a new profile of the defaults, keeping the callsign and the operator's details, written and loaded; answers as `profile.load` |
 | `profile.rename` | `id`, `name` | the file moves with the name, and so does the active mark |
 | `profile.duplicate` | `id`, `name` | a copy under the new name, not made active |
-| `profile.delete` | `id` | `refused` for the active profile: switch first |
+| `profile.delete` | `id` | the profile's file removed; nothing else changes (the running settings are the configuration's). Answers as `profile.list`, plus `deleted` (the id), and every client gets the `profile` event. Checked in this order: `not_found` for a profile that is not there (one another client deleted, a stale list), whatever the active mark says; `refused` for the active profile (switch first: the running settings and `dirty` are measured against it); `refused` for the last profile, so the store is never emptied — which bites only with no profile active, since otherwise the last one is the active one. A file that cannot be read (listed with `error`) can be deleted |
 | `profile.export` | `id?`, `name?` | `text` (the file's contents), `filename`, `path`; without an id, the running settings as a profile would hold them, under `name` or the callsign |
 | `profile.import` | `text`, `name?`, `replace?` | the file parsed, brought forward, checked against the running settings and this computer's devices, and written to the store — **not loaded**: the answer carries `imported` and the same `report` a load would give, so a client can say what it found before switching. `bad_params` for a file that is not a profile or was written by a newer version; `conflict` for a name in use unless `replace` is true |
 
