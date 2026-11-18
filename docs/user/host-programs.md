@@ -49,7 +49,10 @@ nobody would key the radio.
 VarAC's CQs and beacons go through the host port, not the KISS port, so they work with *KISS
 programs* off. Another VarAC lists a beacon under BEACONS and a CQ under CQ CALLS. VarAC holds
 its beacon while Aether says the channel is busy, and for five minutes after a CQ, while it waits
-on its slot (its beacon button then reads *BEACON PAUSED*).
+on its slot (its beacon button then reads *BEACON PAUSED*). VarAC's relay notifications are the
+exception: the station holding a VMail tells the addressee about it, on hearing its beacon, with a
+frame on the KISS port. Turn on *KISS programs* at both stations, and VarAC's KISS interface, for
+those.
 
 ## Aether owning the radio
 

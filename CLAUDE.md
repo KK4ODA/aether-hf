@@ -1282,7 +1282,8 @@ calling frequency; one addressed to the connected station is delivered to it ins
 notifies only on hearing the addressee's *beacon*, and that day VarAC's *Send beacons* sent Aether
 nothing (no host command, no KISS frame, on or off the CF) while *Call CQ* sent `CQFRAME`; a
 `CQFRAME` without a slot suffix, `-0` or `-0I` is read as a CQ. "The silent beacon is VarAC's
-own" was wrong: VarAC was holding it (2026-11-17, below). A debug build is useless for
+own" was wrong: VarAC was holding it (2026-11-17, below), and the notification passes
+(2026-11-18, below). A debug build is useless for
 host-program benches (passes of 30–100 s). Also: the
 scratch VarAC copies had `PSKReporterUpload=ON`/`SelfReport=ON` from the real install and spotted
 KK4ODA and WD5EMA on 14.105 MHz during the benches — both INIs now say OFF. Owed on the air: all
@@ -3164,7 +3165,14 @@ that name (ADR-0024) and the other VarAC lists a `-9` under BEACONS. Two beta.16
 `[sim]` carried it both ways (`host-interfaces.md` §7). VarAC holds its beacon, logging nothing,
 while the modem has said `BUSY ON`, and for the five minutes it waits on its slot after *Call CQ*
 (the button reads *BEACON PAUSED*). That is what 2026-10-08 saw. VarAC's own command log marks a
-beacon's line `(Beacon)`. Relay notifications are still untried end to end. **The bench on a second
+beacon's line `(Beacon)`. **Relay notifications pass (2026-11-18)**: a VMail parked at the relay
+(*Parking* 1) is announced, when the relay's VarAC hears the addressee's beacon, by a 23-byte KISS
+type-1 frame `<SMP>` to the addressee, 10 s after the beacon; the addressee's VarAC shows *VMail
+relay notification* and lights RELAY, connects, and the relay hands the VMail over unasked. So it
+needs *KISS programs* at both stations. VarAC 15.0.18 refuses a `VERSION` it can parse as under
+4.8.8 (a stand-in saying `Aether HF 0.2.0` drew *Please update VARA*); the beta form fails to parse
+and passes. A release without `-beta` would be refused: the author's call (the `VERSION` rule).
+**The bench on a second
 PC of the author's (user folder `C:\Users\User`)** is not the one above: `C:\Dev\AetherBench\` there
 has `varac-a`/`varac-b` (VarAC's program files copied from `C:\VarAC`, never its INI or DB),
 `aetherd-161\` (the release's Windows daemon zip), `varac-500-here\a|b\station.toml` (the
@@ -3173,12 +3181,20 @@ Aether's adapter, logs every byte, takes injected lines). There is no Rust toolc
 that PC. Its `C:\VARA` is a real VARA install, so a scratch VarAC's INI is written **before its
 first start**, with `VarahfLaunchOnModemConnect=OFF` and `VarahfMainPath` in a stub folder (VarAC
 edits the `VARA.ini` beside that path). The INI also needs PSK Reporter upload and self-report
-OFF, `CheckForUpdates=OFF` and CAT on a port that does not exist. VarAC rewrites its INI with LF
-line ends. `StartBeaconUponStartup=ON` fires a beacon with no click. Without computer use, a
-scratch copy's buttons are pressed through their accessibility default action
-(`AccessibleObjectFromWindow` + `accDoDefaultAction` on the button's window handle). A posted
-click does nothing: WinForms checks the real cursor. The one-time beacon is a right click on the
-beacon button, which a posted `WM_RBUTTONDOWN`/`UP` does.
+OFF, `CheckForUpdates=OFF` and CAT on a port that does not exist. The relay bench kept both
+copies on 14.110 MHz (`LastFrequency`), off the calling frequency, where VarAC relays a VMail, with
+`DisableCallingFrequencyQSYSelector=ON`. VarAC rewrites its INI with LF line ends.
+`StartBeaconUponStartup=ON` fires a beacon with no click. Without computer use, a button is
+clicked by posting `WM_LBUTTONDOWN`/`UP` to its window handle **while no other window covers it**
+(WinForms counts a click only if the button is the topmost window at the click's point; move the
+two copies apart with `SetWindowPos`, since raising one from a background process is refused).
+The accessibility default action (`accDoDefaultAction`) runs Connect's and Ping's handlers, but
+VarAC then sends nothing; it is fine for message boxes and the main window's other buttons. The
+call box and the VMail's *To* box take typed characters only (posted `WM_CHAR`; a posted
+`WM_KEYDOWN` doubles each one); text set through UI Automation shows but is not read. Subject
+and message take UI Automation's `ValuePattern`. A VarAC form that opens takes the keyboard
+focus from whatever the author is typing in, so read a field back before sending it. The
+one-time beacon is a right click on the beacon button, which a posted `WM_RBUTTONDOWN`/`UP` does.
 
 **RadioPost mail on 40 m to the scanning gateway (2026-11-17, `docs/research/link-architecture/
 18-radiopost-40m-beta162.md`).** Nine sessions at 2300 Hz from the mobile (station `KK4ODA-2`,

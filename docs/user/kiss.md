@@ -101,7 +101,7 @@ byte for byte, and the other VarAC shows it twice. A VMail relayed through the c
 parks there (*Relay now through connected station* from the outbox, off the calling frequency;
 the other copy's *Parking* count went to 1). VarAC sends the relay notification only when it
 *hears the addressee's beacon*, and no beacon came that day, so the notification was not
-reached. VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS packet it sends in
+reached that day (it passes now: below). VarAC's own debug log (`DebugMode=ON` in its INI) shows every KISS packet it sends in
 hex; Aether's `trace` shows type, length and fate only.
 
 **VarAC's beacons do not use the KISS port.** *Send beacons* sends `CQFRAME <call>-9 500` on the
@@ -110,6 +110,17 @@ under BEACONS (2026-11-17, [host-interfaces.md](../spec/host-interfaces.md) §7)
 finding that VarAC sends Aether nothing for a beacon was wrong. VarAC holds its beacon back while
 Aether says `BUSY ON`, and for five minutes after a *Call CQ* (its button reads *BEACON PAUSED*),
 and logs nothing while it waits. Either hold matches what was seen that day.
+
+**VarAC's relay notifications do use the KISS port (2026-11-18).** On the bench, KK4ODA connected
+to WD5EMA, wrote a VMail for N0CALL and answered *Yes* to VarAC's *relay this VMail through
+WD5EMA?*; WD5EMA's *Parking* count went to 1. When WD5EMA's VarAC heard N0CALL's beacon, it waited
+for a clear channel and then wrote a 23-byte type-1 frame to its KISS port: `<SMP>`, addressed to
+N0CALL, 10 s after the beacon. Aether sent it as a datagram, N0CALL's station heard it at 12.9 dB,
+and N0CALL's VarAC showed *VMail relay notification: WD5EMA has VMails waiting for you. Connect
+WD5EMA to collect them* and lit its RELAY indicator. N0CALL then connected to WD5EMA, which sent
+the parked VMail by itself 13 s after the connect; both ends said it was delivered. So **a relay
+notification needs the KISS port at both stations**: *KISS programs* on in Setup step 5 and VarAC's
+KISS interface on. The VMail itself, and its collection, go over ordinary sessions on the host port.
 
 ### APRS programs
 
@@ -227,7 +238,7 @@ parameters are told apart from VARA's frame types by their length:
 | Aether's test suite (framing, escapes, partial and joined reads, the type bytes, ACKMODE, backpressure, several clients, a stress run of four clients at once, Winlink priority, two daemons over `[sim]`) | passing |
 | `tools/kiss_test_client.py`, two daemons over `[sim]` | passing (2026-09-25) |
 | VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, *Re-Broadcast*, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07/08) |
-| VarAC 15.0.18 relay notifications | not yet tried end to end: the notification follows a heard beacon, and VarAC's beacons cross Aether on the host port (2026-11-17) |
+| VarAC 15.0.18 relay notifications, the same bench (a VMail parked at a relay, the addressee's beacon heard, the `<SMP>` notification over KISS, the VMail collected) | passing (2026-11-18) |
 | Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

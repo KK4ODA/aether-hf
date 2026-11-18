@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.7.0 |
+| **Version** | 1.7.1 |
 | **Updated** | 2026-11-18 |
 | **Describes** | Aether HF 0.2.0-beta.163 |
 | **Licence** | CC BY 4.0 |
@@ -565,7 +565,7 @@ quiet leaves the signal inside the sound card's own noise.
     which this window and RadioPost use. Setup refuses a port number that another of the
     station's ports uses, and so does Aether at start.
 - **KISS programs**: opens a KISS-over-TCP port for APRS and packet programs, and for VarAC's
-  broadcasts ([KISS programs](#24-kiss-programs)).
+  broadcasts and relay notifications ([KISS programs](#24-kiss-programs)).
 
 ### Step 6. Save
 
@@ -1090,7 +1090,7 @@ Programs reach Aether through ports on the same computer. Each kind has its own.
 |---|---|---|
 | 8515 | Aether's control port | Aether's own window, RadioPost, RadioPost Gateway |
 | 8300 and 8301 | The host programs port, VARA-compatible (Setup step 5, *Host programs*) | Winlink Express, Pat, VarAC, RMS Trimode |
-| 8100 | The KISS port, off until you turn it on (Setup step 5, *KISS programs*) | APRS and packet programs, VarAC's broadcasts |
+| 8100 | The KISS port, off until you turn it on (Setup step 5, *KISS programs*) | APRS and packet programs, VarAC's broadcasts and relay notifications |
 
 Leave the numbers as they are unless another program needs one. Never give the host programs port
 8515 or 8514: Aether then refuses to start.
@@ -1180,7 +1180,9 @@ and [setting up a gateway](https://github.com/KK4ODA/RadioPost/blob/main/docs/ma
 
 ## 24. KISS programs
 
-For APRS and packet programs, and for VarAC's broadcasts, turn on **KISS programs** in Setup step 5.
+For APRS and packet programs, and for VarAC's broadcasts and relay notifications, turn on **KISS
+programs** in Setup step 5. A relay notification needs it at both stations: the one holding the
+VMail sends it on this port, and the one it is for hears it here.
 The default address, `127.0.0.1` port 8100, is VARA HF's own, so a program set up for VARA needs no
 change.
 
@@ -1512,3 +1514,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.5.0 | 2026-11-17 | A short message goes at the slowest rung of its kind that carries it in as many frames (ADR-0130): **Slow and sure, or fast** says so, and why the header's rung can read lower while short replies go. |
 | 1.6.0 | 2026-11-17 | The Log tab's **filter** line: the receive filter's reading each time it changes. |
 | 1.7.0 | 2026-11-18 | The receive filter is no longer read (ADR-0132): the **Receive filter** banner and line and the Log's **filter** line are gone. Check the filter on the waterfall instead: [The receive audio](#the-receive-audio). The clipping banner stays. |
+| 1.7.1 | 2026-11-18 | VarAC's relay notifications travel on the KISS port: **KISS programs** on at both stations. |

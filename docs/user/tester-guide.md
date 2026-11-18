@@ -91,7 +91,8 @@ not connect, and would blame VARA. Send yourself a short message first, then che
 
 VarAC usually keys the radio itself (Setup step 2: **Host**), as it does with VARA:
 VarAC's *Vara* tab with host `127.0.0.1`, main port `8300`, KISS port `8100`; its *RIG* tab with
-PTT and frequency control on CAT. Ping, chat, files, CQ, beacons and broadcasts all work. Use
+PTT and frequency control on CAT. Ping, chat, files, CQ, beacons, broadcasts and relayed VMail
+with its notification all work; the notification and the broadcasts need *KISS programs* on. Use
 plain callsigns (no SSID), and set VarAC's callsign before the first run. VarAC holds its beacon
 while the channel is busy, and for five minutes after a *Call CQ* (its beacon button reads
 *BEACON PAUSED*): that is VarAC waiting, not Aether failing.
