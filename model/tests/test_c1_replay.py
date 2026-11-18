@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from test_rung_reading import wrapped_session  # noqa: E402
 
 import c1_replay  # noqa: E402
+import rung_reading as rr  # noqa: E402
 
 
 def test_a_session_past_256_frames_is_replayed_direction_by_direction(tmp_path: Path) -> None:
@@ -24,7 +25,7 @@ def test_a_session_past_256_frames_is_replayed_direction_by_direction(tmp_path: 
     reading, directions = c1_replay.replay_session(master, slave)
     down = next(d for d in directions if d.role == "master")
     data = [tx for tx in reading.directions[0].txs if tx.data and not tx.measure]
-    assert 0 < down.data_transmissions <= len(data)
+    assert 0 < down.data_transmissions + down.copies_only <= len(data)
     assert 0 <= down.agree <= down.data_transmissions
     assert 0 <= down.below <= down.data_transmissions - down.agree
     assert len(down.states) == len(reading.directions[0].txs)
@@ -34,6 +35,24 @@ def test_a_session_past_256_frames_is_replayed_direction_by_direction(tmp_path: 
         if t.end is not None:
             assert t.won is not None and t.margin is not None and t.end >= t.start
     assert all(s["choice"] in range(15) for s in down.states)
+
+
+def test_a_transmission_of_copies_alone_is_no_choice_of_c1s() -> None:
+    """A transmission of blocks already sent goes at their own rungs (or a stuck-frame rule's),
+    not at C1's choice: agreement is judged on the new blocks of a transmission, and one of
+    copies alone is counted apart. On 2026-11-18's QRM-bound session four of nine transmissions
+    were copies of three stuck blocks, and judged as choices they read as the replay parting
+    from the session (report 19)."""
+
+    def frame(rung: int, copy: int) -> rr.Frame:
+        return rr.Frame("data", rung, 0, 150, False, 0.0, 5.36, copy=copy)
+
+    copies = rr.Transmission(0, 0.0, 0.0, [frame(5, 2), frame(5, 3)])
+    assert c1_replay.new_blocks_rung(copies) is None
+    mixed = rr.Transmission(1, 0.0, 0.0, [frame(5, 4), frame(3, 1), frame(3, 1), frame(2, 1)])
+    assert c1_replay.new_blocks_rung(mixed) == 3
+    tie = rr.Transmission(2, 0.0, 0.0, [frame(4, 1), frame(3, 1)])
+    assert c1_replay.new_blocks_rung(tie) == 3
 
 
 def test_a_near_miss_is_a_lost_try_within_five_per_cent() -> None:

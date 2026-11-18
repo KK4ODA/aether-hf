@@ -461,6 +461,36 @@ def test_c1_at_the_sender_replays_as_the_engine_feeds_it(tmp_path: Path) -> None
     ]
 
 
+def test_the_master_seeds_c1_from_the_snr_its_acceptance_states(tmp_path: Path) -> None:
+    """From protocol 13 (ADR-0126) the acceptance is a control frame stating, in whole
+    decibels, the SNR the slave read the call at, and the master's engine seeds C1 from that
+    with the exchange already priced in both stations' control families: its own headers on the
+    floor, and the slave's asked on the floor when the master read the acceptance under the
+    ordinary control threshold and its margin. Seeded from the slave's own reading of the call
+    and with no families, the replay put session 4 of 2026-11-18 at rung 8 where the engine
+    sent rung 5 (report 19)."""
+    master, slave = session(tmp_path)
+    doc = json.loads(master.read_text(encoding="utf-8"))
+    doc["frames"].insert(
+        0,
+        {"kind": "control", "mode": 0, "rv": 0, "decoded": True, "snr_3k_db": -10.0, "bytes": 7,
+         "confidence": 1.0, "detect_confidence": 50.0, "start_s": 4.0, "end_s": 7.2, "t_s": 7.3,
+         "control": "Accept session 5 caller 74 level 0 snr 2 bandwidth 1 version 13 compression"},
+    )  # fmt: skip
+    master.write_text(json.dumps(doc), encoding="utf-8")
+    assert rr._acceptance(rr.load_side(master), 12.0) == (2.0, (True, True))
+    assert rr._acceptance(rr.load_side(master), 7.0) is None  # not yet decoded then
+    down = rr.read_session(master, slave).directions[0]
+    steps = rr.replay_sender(rr.load_side(master), rr.load_side(slave), down.txs, down.blocks)
+    engine = rr.controller_for(NARROW)
+    engine.families = (True, True)
+    engine.seed(2.0)
+    raw = rr.controller_for(NARROW)
+    raw.seed(6.2)
+    assert engine.modes[engine._index] != raw.modes[raw._index]
+    assert steps[0].rung_chosen == engine.modes[engine._index]
+
+
 def test_an_acknowledgement_is_read_past_the_wrap() -> None:
     """A base on the air is modulo 256: next to the blocks in flight it names the block 256
     on, and the blocks before it have arrived whatever their number on the air."""

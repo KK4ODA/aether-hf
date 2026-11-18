@@ -10,12 +10,15 @@ sender's engine was fed — the other station's readings, the acknowledgements, 
 stations' control frames went in, the echo of every frame it decoded, a silent slot's step — by
 ``rung_reading.replay_sender``. What this adds is what the review asks of it:
 
-* **Agreement.** Each data transmission's rung (the rung most of its data went at) against the
-  replay's choice before it. Where they agree the replay explains the session; where they part
-  the session did something the replay does not model (a resend at its own rung, a re-encode, a
-  split), and what follows is read with care. A transmission below the choice in its family is
-  counted apart: since ADR-0130 a short one goes at the most robust rung that carries it in as
-  many frames, which the replay does not model either (it knows the frames, not their bytes).
+* **Agreement.** Each data transmission that carries new blocks: the rung most of them went at
+  against the replay's choice before it, or the rung it was trying then (a try's frames go
+  there). A transmission of copies alone — blocks already sent, at the rung they were first cut
+  at, or re-encoded or split by the stuck-frame rules — is no choice of C1's and is counted
+  apart; on a path where blocks stick it is most of them. Where they agree the replay explains
+  the session; where they part the session did something the replay does not model, and what
+  follows is read with care. A transmission below the choice in its family is counted apart too:
+  since ADR-0130 a short one goes at the most robust rung that carries it in as many frames,
+  which the replay does not model (it knows the frames, not their bytes).
 * **The tries.** Each try of a rung above (one frame a transmission at it), how many
   transmissions it ran, whether its verdict took the rung, and by what margin: the tried rung's
   value over the rung it was tried from, less one, when the try ended. A try lost by a few per
@@ -67,9 +70,12 @@ class Direction:
     receiver: str
     role: str
     data_transmissions: int = 0
+    """Data transmissions that carried new blocks, judged against the replay's choice."""
     agree: int = 0
     below: int = 0
-    """Transmissions under the choice in its family: short ones, since ADR-0130, or a resend."""
+    """Transmissions under the choice in its family: short ones, since ADR-0130."""
+    copies_only: int = 0
+    """Data transmissions of copies alone: their rungs are their blocks', not C1's choice."""
     tries: list[Try] = field(default_factory=list)
     blocked_s: float = 0.0
     doubled_s: float = 0.0
@@ -97,6 +103,13 @@ def _up(ctl: RateController) -> int | None:
             return ctl.modes[i]
         i += 1
     return None
+
+
+def new_blocks_rung(tx: rr.Transmission) -> int | None:
+    """The rung most of a transmission's new blocks went at — first copies, not measurements —
+    the slower of two as common; ``None`` when it carried copies alone."""
+    modes = [f.rung for f in tx.data if f.copy == 1 and not f.measure]
+    return max(sorted(set(modes)), key=modes.count) if modes else None
 
 
 def replay_direction(sender: Any, receiver: Any, d: rr.Direction) -> Direction:
@@ -174,11 +187,15 @@ def replay_direction(sender: Any, receiver: Any, d: rr.Direction) -> Direction:
         step = by_key.get(round(tx.key, 3))
         if step is None or not step.seeded or tx.rung is None:
             continue
+        rung = new_blocks_rung(tx)
+        if rung is None:
+            out.copies_only += 1
+            continue
         out.data_transmissions += 1
-        out.agree += step.rung_chosen == tx.rung
-        out.below += tx.rung < step.rung_chosen and timing.is_floor(tx.rung) == timing.is_floor(
-            step.rung_chosen
-        )
+        if rung in (step.rung_chosen, step.rung_trying):
+            out.agree += 1
+        elif rung < step.rung_chosen and timing.is_floor(rung) == timing.is_floor(step.rung_chosen):
+            out.below += 1
     out.tries = running
     weighted = [(g.air_s, g.regret) for g in d.regrets if g.regret is not None]
     total = sum(a for a, _ in weighted)
@@ -209,9 +226,10 @@ def report(reading: rr.Reading, directions: list[Direction]) -> str:
     for d in directions:
         share = f"{d.agree} of {d.data_transmissions}" if d.data_transmissions else "none"
         below = f" ({d.below} under the choice in its family)" if d.below else ""
+        copies = f"; {d.copies_only} more carried copies alone" if d.copies_only else ""
         lines.append(
             f"  {d.sender}'s data ({d.role}): the replay chose as the session sent in {share} "
-            f"data transmissions{below}"
+            f"data transmissions with new blocks{below}{copies}"
         )
         for t in d.tries:
             verdict = "running at the end" if t.won is None else ("taken" if t.won else "lost")

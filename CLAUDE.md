@@ -3283,6 +3283,40 @@ A/B) — this PC has no Rust. Measured and not built: the estimate's error in th
 18's sessions the mobile's pilot SNR read 3–4 dB over what its data carriers met (not the
 estimate, timing, the blanker or hum) — evidence for the rate review.
 
+**RadioPost gateway and P2P on 40 m under QRM (2026-11-18, `docs/research/link-architecture/
+19-radiopost-p2p-40m-beta164.md`).** Four sessions from the mobile (`KK4ODA-2`, RadioPost client
+as `WD5EMA`, RTS keying) to the house (`KK4ODA-1` under automatic control: RadioPost Gateway holding
+`KK4ODA-1` and scanning, the RadioPost client holding `KK4ODA` for P2P), 7.101 MHz at 2300 Hz,
+beta.164 at both ends, both sides with audio (the mobile had no Internet; the author sent its files
+by hand). A gateway exchange, an 8.4 kB P2P text, and an attachment with an ICS-213 completed; no
+overlap (0.555 s), answers 68–121 ms into their slots. Session 4 spent 110 s getting a 336-byte
+opening through a 6 dB fade under another station's 500 Hz-wide signal and completed: the headers
+on the floor kept the link up at −6.7 to −9 dB, copies combined. Session 3's calls were heard
+and answered by nothing: the house's client closed its Aether connection 88 ms after each session
+ended. Found, each the author's call (§11):
+- **The data identifier is refused after a program's session.** Its frames name the session's
+  callsign (`GrantedEngine::id_call`, here `WD5EMA`). The program's claim ends with the session,
+  and the gate's `foreign_identifier` then counts only the station's own. In Morse the same race
+  names the station's own callsign (`render_link_identifier` uses `engine.my_call` at render). The
+  mobile never identified from 21:07 to 21:13.
+- **A both-ways try's tone part reads as "called again"** (`station/gaps.rs` `called`, decode time
+  against the decision), raising the caller's learned gap 250 ms each time (75 → 575 ms for
+  `WD5EMA`); no cost yet.
+- **The ordinary headers at the edge**: an acceptance stating −2 dB, 0.1 dB over −5.1 + 3, put the
+  first two headers in the ordinary frame, and the QRM cost two silent slots, 28 s.
+- **Blocks keep the rung they were cut at**: C1 chose rung 3 from the first silent slot, but the
+  opening's 150-byte rung-5 blocks fit no slower tone rung whole and split only after four copies.
+  Rung 5 under the partial-band QRM decoded 1 copy of 12 alone; the fast tone kinds read one noise
+  level (ADR-0104).
+- **The house's capture lost about 150 ms in session 4 in pieces under 10 ms** (recording 153 ms
+  short of its wall-clock span, the loops' offset +182 ms), unreported.
+- **Every scan move costs a ~400 ms pass** that the log calls slow (`listen_after_silence`).
+`rung_reading.replay_sender` now seeds a protocol 13 master from the SNR its acceptance states, in
+the control families of that moment (`_acceptance`). `c1_replay.py` judges agreement on a
+transmission's new blocks (`new_blocks_rung`) and counts copies alone apart (`copies_only`). With
+both, the replay explains every new-block transmission. Run the reading tools with `python -I -X
+utf8`: `-I` ignores `PYTHONIOENCODING`, and Windows' console code page cannot print their marks.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

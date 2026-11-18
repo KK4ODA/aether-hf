@@ -1489,6 +1489,42 @@ class SenderStep:
     rung_chosen: int
     seeded: bool
     """C1 at the sender had a reading to choose from; before it, the engine follows the advice."""
+    rung_trying: int | None = None
+    """The rung above the choice C1 was trying then, if any: its frames go there too."""
+
+
+ACCEPTANCE_SNR = re.compile(r"^Accept .* snr (?P<snr>-?\d+(?:\.\d+)?)\b")
+
+
+def _acceptance(sender: two_sides.Side, before: float) -> tuple[float, tuple[bool, bool]] | None:
+    """What the master's engine seeded C1 with, when the acceptance was a control frame
+    (protocol 13 on, ADR-0126): the SNR it states, and the control families the exchange was
+    priced in at that moment — the master's headers on the floor (``granted``'s first
+    ``_hdr_floor``), and the slave's asked on the floor when the master read the acceptance under
+    the ordinary control threshold plus ``answer_floor_margin_db`` (``_wants_floor``). ``None``
+    for an earlier build, whose acceptance was a data frame the slave's reading of the call
+    stands for."""
+    found = None
+    for f in sender.doc.get("frames") or []:
+        if f.get("kind") != "control" or not f.get("decoded") or f.get("t_s") is None:
+            continue
+        if float(f["t_s"]) > before:
+            break
+        m = ACCEPTANCE_SNR.match(str(f.get("control") or ""))
+        if m is not None and f.get("snr_3k_db") is not None:
+            found = (float(m["snr"]), float(f["snr_3k_db"]))
+    if found is None:
+        return None
+    stated, read = found
+    timing = timing_of(sender.air)
+    if timing.floor_modes <= 0:
+        return stated, (False, False)
+    from aether_model.link import granted
+
+    thresholds = timing.control_threshold_db or getattr(granted, "CONTROL_THRESHOLD_DB", None)
+    ordinary = thresholds[False] if thresholds is not None else -math.inf
+    other = read < ordinary + GrantConfig.answer_floor_margin_db
+    return stated, (True, other)
 
 
 def replay_sender(
@@ -1500,7 +1536,8 @@ def replay_sender(
 ) -> list[SenderStep]:
     """C1 at the sender (the review's ``delivery-s``, Gate 3) on what the sender recorded, as the
     engine feeds it: seeded by the other station's first reading of this one (the master's by
-    the slave's reading of the call, which the acceptance carries); every frame the sender
+    the SNR the acceptance states, in the control families of that moment, from protocol 13;
+    by the slave's reading of the call before it); every frame the sender
     decoded gives it its echo (``granted._heard``); each acknowledgement judges the copies sent
     since the last — a block it acknowledges for the first time delivered by its latest copy,
     every other copy air spent for nothing — each charged to the rung its block was first cut at
@@ -1513,7 +1550,16 @@ def replay_sender(
     assert hasattr(ctl, "observe_frames"), "C1 needs a tree with the rate review's controller"
     foreign = foreign_rungs(sender.air)
     timing = timing_of(sender.air)
-    if role_of(sender.doc) == "master":
+    acceptance = _acceptance(sender, txs[0].key if txs else math.inf)
+    if role_of(sender.doc) == "master" and acceptance is not None:
+        # protocol 13 on (ADR-0126): the master seeds from the SNR the acceptance states, whole
+        # decibels, with the exchange already priced in both stations' control families
+        # (``granted._accepted``: ``_heard`` prices before ``rate.seed``)
+        stated, families_then = acceptance
+        if hasattr(ctl, "families"):
+            ctl.families = families_then
+        ctl.seed(stated)
+    elif role_of(sender.doc) == "master":
         began, _ = session_span(receiver)
         call = [
             f
@@ -1563,6 +1609,7 @@ def replay_sender(
                     tx.rung if advice is None else advice,
                     ctl.modes[ctl._index] if seeded else (tx.rung if advice is None else advice),
                     seeded,
+                    getattr(ctl, "_probing", None) if seeded else None,
                 )
             )
         for f in sent:
