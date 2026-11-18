@@ -2938,6 +2938,17 @@ station idled before its session. Merged and independent of R4: the trace follow
 upload script refused this session's read key, so K2 field and K4 are owed. **`--keep-passing` does
 not exist**: `session_matrix.py` keeps a run's audio unless `--drop-passing-audio`.
 
+**R5, option B, judged (2026-11-18, `07-r5-registered.md`, `08-r5-results.md`; the author's "try
+B").** Each look the mean spectrum of its half second (`SpectrumAnalyser::mean_to`), registered
+with its predictions before any run. It misses more than R4: on the FT8 band the leave-out now
+takes the stations' bins out of nearly every look, the edges go blank, and a cut R3 names reads
+*waiting* (K1 47 of 48, K2 up to 6 of 160); Q1 barely moves (19–20 of 84). The three ablations miss
+as much, R5c (steady looks alone) included, so the steady looks cause it; fixing that would change
+the leave-out too, a third change to one reading, which is the review rule's case. Not merged
+(`scratch/r5.patch`). Every reading of this family misses Q1, whose warm-up, always-on and 500 Hz
+span cases no rule of time can clear: the author's choice is R4 with those three accepted, today's
+R3, or W2. The upload script refused the session's read key again, so the field set is still owed.
+
 **RadioPost, and one modem for both systems (2026-11-09).** RadioPost (`KK4ODA/RadioPost`)
 reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the control API. The
 author asked whether to fork Aether for it. The answer: no fork. Aether stays one modem that doesn't

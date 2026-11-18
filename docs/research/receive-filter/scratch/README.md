@@ -28,4 +28,5 @@ The corpus's *qrm* clips and the field set's sixteen recordings of 2026-11-17 ar
 | `warn_spans.py CORPUS DAEMONS CLIP@BW …` | Each clip's warning spans and its last reading, build by build |
 | `harness_traces.py RUNS DAEMONS` | Every uncut station of a harness run: its live readings and each build's trace over its recording, as warnings |
 | `offset_check.py` | `06-r4-results.md` §3.5's synthetic check: a block on in two looks of three, under R4's 20th percentile and the median |
+| `r5.patch` | R5 against the tree (`git apply`, R4's patch included): each look the mean spectrum of its half second. Not merged: it misses more of §7 than R4 (`../08-r5-results.md`) |
 | `rejudge_filter.py RUNS REPO` | `session_matrix.filter_warnings` (H1) read again over every run of a harness out dir |

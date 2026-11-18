@@ -1,0 +1,545 @@
+diff --git a/core/aetherd/src/passband.rs b/core/aetherd/src/passband.rs
+index 46ca0a6..0c53aba 100644
+--- a/core/aetherd/src/passband.rs
++++ b/core/aetherd/src/passband.rs
+@@ -3,12 +3,14 @@
+ //! The radio's receive filter decides what of the other station's signal reaches the modem. Set
+ //! narrower than the signal, moved by an IF shift, or with its low cut set high, it takes an edge
+ //! of every frame away, and nothing in the modem says why the link runs slow. The station reads
+-//! the filter from the band's own noise: every half second that it listens it takes a spectrum,
+-//! leaves out the bins a signal holds, holds the look until no frame under it can still be
+-//! announced, divides it by its own level over the signal's span, and keeps it when that level
+-//! stands over the audio chain's own floor (6–10 kHz, where no radio passes audio). The profile
+-//! is each bin's median over the looks kept; the reading is how far each edge of the signal's
+-//! span lies under the profile's level there, and an edge [`LINE_DB`] or more down is cut.
++//! the filter from the band's own noise: every half second that it listens it takes the mean
++//! spectrum of that half second (a look), leaves out the bins a signal holds, holds the look until no frame under it can still be
++//! announced, keeps it when its level over the signal's span stands over the audio chain's own
++//! floor (6–10 kHz, where no radio passes audio), and divides it by its median over the span.
++//! The profile is each bin's 20th percentile over the looks kept ([`TIME_QUANTILE`]): another
++//! station's signal comes and goes, and the radio's filter stays. The reading is how far each
++//! edge of the signal's span lies under the profile's level there, and an edge [`LINE_DB`] or
++//! more down is cut (ADR-0130 amends ADR-0105 for a busy band).
+ //!
+ //! It replaced an estimate of the passband's width (`spectrum::PassbandMonitor`, beta.14 to
+ //! beta.144) that saw a cut and judged it wrongly: it drew the edge far down the filter's skirt,
+@@ -38,8 +40,7 @@ pub const EDGE_HALF_HZ: f64 = 50.0;
+ pub const FLOOR_BAND_HZ: (f64, f64) = (6000.0, 10_000.0);
+ /// Looks kept before there is a reading.
+ pub const LOOKS_NEEDED: usize = 12;
+-/// Looks each bin's median is read over: a minute at two a second, so a change of filter shows
+-/// within half of it.
++/// Looks each bin's profile is read over: a minute at two a second.
+ pub const LOOKS_KEPT: usize = 120;
+ /// A bin this far over the noise on both its sides in a look is a signal's, not the noise's.
+ /// Each side's noise is its lower quartile ([`OCCUPIED_SIDE_QUANTILE`]), which a second signal
+@@ -58,9 +59,19 @@ pub const OCCUPIED_SIDE_HZ: f64 = 150.0;
+ /// Without it a band of FT8 raised the passband's level against its edges by 2–4 dB.
+ pub const OCCUPIED_SPREAD_BINS: usize = 2;
+ /// The quantile of the bins inside the signal's span the passband's own level is read at: the
+-/// ninth decile, so a passband a tenth of the span wide still sets it.
++/// ninth decile, so a passband a tenth of the span wide still sets it. The reading's level over
++/// the profile, and the floor test of each look.
+ pub const REFERENCE_QUANTILE: f64 = 0.9;
+-/// How often a look is taken while the station listens, seconds.
++/// Where in each bin's values over the looks kept the profile is read: the 20th percentile.
++/// Another station's signal comes and goes and the radio's filter stays, so a bin's low values
++/// are the filter's: a signal on in up to four looks of five no longer sets it. On 7.101 MHz on
++/// 2026-11-17 the signals the leave-out could not reach were on in 33–77 % of the looks
++/// (`docs/research/receive-filter/05-busy-band.md`).
++pub const TIME_QUANTILE: f64 = 0.2;
++/// How often a look is taken while the station listens, seconds, and how much audio each look's
++/// mean spectrum covers (`SpectrumAnalyser::mean_to`): the looks cover the listening time between
++/// them, and one look's bins scatter about ±1.5 dB where one 85 ms transform's scatter ±5.6
++/// (`docs/research/receive-filter/07-r5-registered.md`).
+ pub const LOOK_EVERY_S: f64 = 0.5;
+ /// How high a look's spectrum reaches: the top of the chain's floor band.
+ pub const SPECTRUM_TOP_HZ: f64 = FLOOR_BAND_HZ.1;
+@@ -289,8 +300,8 @@ pub struct ReceiveFilter {
+     /// How long a look is held before it is folded in: the air's longest frame and the half
+     /// second a report of it takes, so no frame under it can still be announced.
+     hold_s: f64,
+-    /// Looks kept, each divided by its own level, dB a bin to [`TOP_HZ`]; a bin a signal held
+-    /// is NaN.
++    /// Looks kept, each divided by its median over the span, dB a bin to [`TOP_HZ`]; a bin a
++    /// signal held is NaN.
+     looks: VecDeque<Vec<f32>>,
+     bin_hz: f64,
+     /// Looks left out because the band's noise stood too close to the chain's floor.
+@@ -357,7 +368,7 @@ impl ReceiveFilter {
+     }
+ 
+     /// The station moved to the air of `params` (ADR-0026). The looks kept are the same radio's
+-    /// noise and are kept, each divided again by its level over the new span.
++    /// noise and are kept, each divided again by its median over the new span.
+     pub fn set_air(&mut self, params: WaveformParams) {
+         self.span = Span::of(params);
+         self.hold_s = Self::hold_for(params);
+@@ -365,12 +376,12 @@ impl ReceiveFilter {
+         let span = self.span;
+         let bin_hz = self.bin_hz;
+         for look in &mut self.looks {
+-            if let Some(level) = quantile(
++            if let Some(middle) = quantile(
+                 &mut bins_between(look, bin_hz, span.low_hz, span.high_hz),
+-                REFERENCE_QUANTILE,
++                0.5,
+             ) {
+                 for v in look.iter_mut() {
+-                    *v -= level;
++                    *v -= middle;
+                 }
+             }
+         }
+@@ -430,8 +441,8 @@ impl ReceiveFilter {
+         folded
+     }
+ 
+-    /// Divide a look by its own level and keep it if its band's noise stands over the chain's
+-    /// floor, first leaving out the bins a signal holds.
++    /// Keep a look if its band's noise stands over the chain's floor, divided by its median
++    /// over the span, first leaving out the bins a signal holds.
+     fn fold(&mut self, spectrum: &Spectrum) {
+         if (self.bin_hz - spectrum.bin_hz).abs() > 1e-9 {
+             self.looks.clear();
+@@ -445,25 +456,28 @@ impl ReceiveFilter {
+         let top = ((TOP_HZ / bin_hz) as usize).min(spectrum.bins_db.len().saturating_sub(1));
+         let mut look = spectrum.bins_db[..=top].to_vec();
+         leave_out_occupied(&mut look, bin_hz);
+-        let in_span = bins_between(&look, bin_hz, self.span.low_hz, self.span.high_hz);
++        let mut in_span = bins_between(&look, bin_hz, self.span.low_hz, self.span.high_hz);
+         if in_span.iter().filter(|v| v.is_finite()).count() * 2 < in_span.len() {
+             // more than half the span held by signals: nothing to read the noise from
+             self.last_over = None;
+             return;
+         }
+-        let level = quantile(
+-            &mut bins_between(&look, bin_hz, self.span.low_hz, self.span.high_hz),
+-            REFERENCE_QUANTILE,
+-        );
+         // a look whose band's noise stands less than the line over the chain's floor could not
+-        // show a cut at the line; a silent input reads no level over its floor at all
++        // show a cut at the line; a silent input reads no level over its floor at all. The
++        // passband's level is its ninth decile, so a narrow passband still sets it
++        let level = quantile(&mut in_span.clone(), REFERENCE_QUANTILE);
+         self.last_over = level.zip(floor).map(|(l, f)| l - f);
+-        let Some(level) = level.filter(|_| self.last_over.is_some_and(|o| o >= LINE_DB)) else {
++        if !self.last_over.is_some_and(|o| o >= LINE_DB) {
+             self.weak = self.weak.saturating_add(1);
+             return;
++        }
++        // divided by its median: a signal wider than the leave-out reaches on part of the span
++        // set the ninth decile, and every other bin of the look read that much lower
++        let Some(middle) = quantile(&mut in_span, 0.5) else {
++            return;
+         };
+         for v in &mut look {
+-            *v -= level;
++            *v -= middle;
+         }
+         self.looks.push_back(look);
+         while self.looks.len() > LOOKS_KEPT {
+@@ -471,10 +485,10 @@ impl ReceiveFilter {
+         }
+     }
+ 
+-    /// Each bin's median over the looks kept that it was free in; NaN where a signal held it in
+-    /// more than half of them. The looks that kept such a bin are those where a signal's skirt
+-    /// slipped under [`OCCUPIED_DB`]: on a band of FT8 a median of those alone raised a 500 Hz
+-    /// span's level 12 dB.
++    /// Each bin's [`TIME_QUANTILE`] over the looks kept that it was free in; NaN where a signal
++    /// held it in more than half of them. The looks that kept such a bin are those where a
++    /// signal's skirt slipped under [`OCCUPIED_DB`]: on a band of FT8 a median of those alone
++    /// raised a 500 Hz span's level 12 dB.
+     fn profile(&self) -> Vec<f32> {
+         let Some(first) = self.looks.front() else {
+             return Vec::new();
+@@ -492,7 +506,7 @@ impl ReceiveFilter {
+                 if column.len() * 2 < self.looks.len() {
+                     return f32::NAN;
+                 }
+-                quantile(&mut column, 0.5).unwrap_or(f32::NAN)
++                quantile(&mut column, TIME_QUANTILE).unwrap_or(f32::NAN)
+             })
+             .collect()
+     }
+@@ -824,6 +838,54 @@ mod tests {
+         assert_eq!(verdict(&f), Verdict::Clear, "{:?}", f.reading());
+     }
+ 
++    /// `look`, with another station's 400 Hz block at 1100-1500 Hz standing 10 dB over the
++    /// band's noise as it was, and an AGC answering it by turning the rest of the band 10 dB
++    /// down: the gateway's 20:27Z pre-roll of 2026-11-17 (`05-busy-band.md` §2.1).
++    fn with_block(band_db: f32, floor_db: f32, gain: &impl Fn(f64) -> f32) -> Spectrum {
++        let mut on = look(band_db - 10.0, floor_db, gain);
++        for (k, v) in on.bins_db.iter_mut().enumerate() {
++            if (1100.0..1500.0).contains(&(k as f64 * BIN_HZ)) {
++                *v = band_db + 10.0;
++            }
++        }
++        on
++    }
++
++    /// [`LOOKS_KEPT`] looks of `gain`, the block of [`with_block`] on in seven of every ten.
++    fn block_on_most_of_the_time(
++        mut filter: ReceiveFilter,
++        gain: impl Fn(f64) -> f32,
++    ) -> ReceiveFilter {
++        let (on, off) = (with_block(-60.0, -110.0, &gain), look(-60.0, -110.0, &gain));
++        for k in 0..LOOKS_KEPT {
++            filter.fold(if k % 10 < 7 { &on } else { &off });
++        }
++        filter
++    }
++
++    #[test]
++    fn a_wide_signal_on_part_of_the_time_is_not_a_cut() {
++        // wider than the leave-out reaches and on in 70 % of the looks: R3 divided each look by
++        // its ninth decile, the block's level, and took the median over the looks, so the noise
++        // the AGC had pulled down read 20 dB under the span's level at both edges
++        let r = block_on_most_of_the_time(wide(), |_| 0.0).reading();
++        assert_eq!(r.verdict, Verdict::Clear, "{r:?}");
++        assert!(
++            r.low_drop_db.is_some_and(|d| d.abs() < 2.0)
++                && r.high_drop_db.is_some_and(|d| d.abs() < 2.0),
++            "{r:?}"
++        );
++    }
++
++    #[test]
++    fn a_cut_under_a_wide_signal_is_still_named() {
++        // the passband moved down by an IF shift, with the same block inside it: the top is cut
++        // and the bottom is not
++        let r = block_on_most_of_the_time(wide(), low_pass(1600.0)).reading();
++        assert_eq!(r.verdict, Verdict::Top, "{r:?}");
++        assert!(r.low_drop_db.is_some_and(|d| d < 2.0), "{r:?}");
++    }
++
+     #[test]
+     fn a_band_of_signals_is_left_out_of_the_profile() {
+         // signals 50 Hz wide every 200 Hz across the span, an FT8 band, in every look: there
+@@ -1056,15 +1118,15 @@ mod tests {
+         // real samples through the station's analyser: noise through 300-1900 Hz, the top of the
+         // 2300 Hz signal cut, over the chain's floor 50 dB down
+         let mut noise = test_noise::ReceiverNoise::new(300.0, 1900.0, RATE, 0.3, 0.001);
+-        let mut analyser = SpectrumAnalyser::new(RATE);
++        let mut analyser = SpectrumAnalyser::holding(RATE, LOOK_EVERY_S);
+         let mut f = wide();
+         let block = 960;
+         let mut now = 0.0;
+         while now < 15.0 {
+             analyser.push(&noise.take(block));
+             now += block as f64 / RATE;
+-            f.step(now, true, analyser.window_s(), || {
+-                analyser.compute_to(SPECTRUM_TOP_HZ)
++            f.step(now, true, LOOK_EVERY_S, || {
++                analyser.mean_to(SPECTRUM_TOP_HZ, LOOK_EVERY_S)
+             });
+         }
+         let r = f.reading();
+@@ -1072,14 +1134,14 @@ mod tests {
+         assert!(r.over_floor_db.is_some_and(|o| o > 30.0), "{r:?}");
+         // the same receiver opened to 250-3500 Hz passes it
+         let mut noise = test_noise::ReceiverNoise::new(250.0, 3500.0, RATE, 0.3, 0.001);
+-        let mut analyser = SpectrumAnalyser::new(RATE);
++        let mut analyser = SpectrumAnalyser::holding(RATE, LOOK_EVERY_S);
+         let mut f = wide();
+         let mut now = 0.0;
+         while now < 15.0 {
+             analyser.push(&noise.take(block));
+             now += block as f64 / RATE;
+-            f.step(now, true, analyser.window_s(), || {
+-                analyser.compute_to(SPECTRUM_TOP_HZ)
++            f.step(now, true, LOOK_EVERY_S, || {
++                analyser.mean_to(SPECTRUM_TOP_HZ, LOOK_EVERY_S)
+             });
+         }
+         assert_eq!(f.reading().verdict, Verdict::Clear, "{:?}", f.reading());
+diff --git a/core/aetherd/src/passband_trace.rs b/core/aetherd/src/passband_trace.rs
+index 5d45daf..c18324d 100644
+--- a/core/aetherd/src/passband_trace.rs
++++ b/core/aetherd/src/passband_trace.rs
+@@ -34,7 +34,7 @@ const RECEIVING_AFTER_FRAME_S: f64 = 0.5;
+ pub struct Reading {
+     /// When, seconds of the recording.
+     pub t_s: f64,
+-    /// When the look folded in here was taken (the end of its 85 ms of audio); `None` on the
++    /// When the look folded in here was taken (the end of its half second of audio); `None` on the
+     /// beat's lines between looks.
+     pub taken_s: Option<f64>,
+     /// The reading after it.
+@@ -79,7 +79,7 @@ pub fn trace(
+             audio.sample_rate
+         ));
+     }
+-    let mut analyser = SpectrumAnalyser::new(rate);
++    let mut analyser = SpectrumAnalyser::holding(rate, LOOK_EVERY_S);
+     let mut filter = ReceiveFilter::for_air(params);
+     let mut clipping = Clipping::new(rate);
+     let mut heard = Heard::new(expectation, params);
+@@ -121,8 +121,8 @@ pub fn trace(
+         }
+         // Station::sample_passband
+         let listening = !keyed && !deaf && now >= heard.receiving_until;
+-        let folded = filter.step(now, listening, analyser.window_s(), || {
+-            analyser.compute_to(SPECTRUM_TOP_HZ)
++        let folded = filter.step(now, listening, LOOK_EVERY_S, || {
++            analyser.mean_to(SPECTRUM_TOP_HZ, LOOK_EVERY_S)
+         });
+         // a line a look folded in, or one on the beat between them
+         if folded.is_empty() && now < next_beat {
+@@ -282,8 +282,8 @@ mod tests {
+         readings
+     }
+ 
+-    /// How much audio one look covers at 48 kHz.
+-    const WINDOW_S: f64 = crate::spectrum::WINDOW as f64 / RATE;
++    /// How much audio one look covers.
++    const WINDOW_S: f64 = LOOK_EVERY_S;
+ 
+     #[test]
+     fn a_trace_reports_the_reading_look_by_look() {
+diff --git a/core/aetherd/src/record.rs b/core/aetherd/src/record.rs
+index 83030c8..eab3410 100644
+--- a/core/aetherd/src/record.rs
++++ b/core/aetherd/src/record.rs
+@@ -526,8 +526,9 @@ impl Recording {
+     }
+ 
+     /// The receive filter's noise profile at the recording's start or at its end (ADR-0105):
+-    /// `{bin_hz, looks, db}`, each bin to a tenth of a decibel over the passband's level, null
+-    /// where signals held it. `profile` is `None` before the first look kept.
++    /// `{bin_hz, looks, db}`, each bin to a tenth of a decibel over the span's median (ADR-0130;
++    /// the passband's ninth decile before it), null where signals held it. `profile` is `None`
++    /// before the first look kept.
+     pub fn passband_profile(
+         &mut self,
+         at_end: bool,
+diff --git a/core/aetherd/src/spectrum.rs b/core/aetherd/src/spectrum.rs
+index 54aaa6f..8e8da47 100644
+--- a/core/aetherd/src/spectrum.rs
++++ b/core/aetherd/src/spectrum.rs
+@@ -10,6 +10,10 @@
+ //! [`WINDOW`]-sample block gives (about 12 Hz at 48 kHz): enough to see a carrier, a tone,
+ //! the shape of a burst and the noise floor either side of it, which is what an operator
+ //! setting a receiver's filter or hunting an interfering signal wants.
++//!
++//! The receive filter's reading asks for a steadier spectrum: the mean power of the transforms
++//! of the last half second ([`SpectrumAnalyser::mean_to`]), for which the analyser keeps that
++//! much audio ([`SpectrumAnalyser::holding`]).
+ 
+ use std::{collections::VecDeque, sync::Arc};
+ 
+@@ -21,10 +25,16 @@ pub const WINDOW: usize = 4096;
+ /// The highest frequency reported, in hertz. Nothing this modem cares about is above it.
+ pub const TOP_HZ: f64 = 4000.0;
+ 
++/// How far apart the transforms of a mean spectrum start: half a window, as Welch's method takes
++/// them under a Hann window, so every sample counts about as much as every other.
++const HOP: usize = WINDOW / 2;
++
+ /// The analyser: a ring of recent audio and a transform ready to run on it.
+ pub struct SpectrumAnalyser {
+     sample_rate: f64,
+     ring: VecDeque<f32>,
++    /// How many of the newest samples are kept: one window, or more for a mean spectrum.
++    keep: usize,
+     fft: Arc<dyn Fft<f64>>,
+     window: Vec<f64>,
+ }
+@@ -52,6 +62,13 @@ impl SpectrumAnalyser {
+     /// Build one for audio at `sample_rate`.
+     #[must_use]
+     pub fn new(sample_rate: f64) -> Self {
++        Self::holding(sample_rate, 0.0)
++    }
++
++    /// Build one that keeps at least the last `seconds` of audio, for [`Self::mean_to`].
++    #[must_use]
++    pub fn holding(sample_rate: f64, seconds: f64) -> Self {
++        let keep = ((seconds * sample_rate).ceil() as usize).max(WINDOW);
+         let fft = FftPlanner::new().plan_fft_forward(WINDOW);
+         // Hann: a tone stays a tone, and the noise floor beside it is the floor rather than
+         // the leakage of the tone
+@@ -60,16 +77,17 @@ impl SpectrumAnalyser {
+             .collect();
+         Self {
+             sample_rate,
+-            ring: VecDeque::with_capacity(WINDOW),
++            ring: VecDeque::with_capacity(keep),
++            keep,
+             fft,
+             window,
+         }
+     }
+ 
+-    /// Remember the newest audio; the oldest is forgotten past one window.
++    /// Remember the newest audio; the oldest is forgotten past what it keeps.
+     pub fn push(&mut self, audio: &[f32]) {
+-        let keep = audio.len().min(WINDOW);
+-        let excess = (self.ring.len() + keep).saturating_sub(WINDOW);
++        let keep = audio.len().min(self.keep);
++        let excess = (self.ring.len() + keep).saturating_sub(self.keep);
+         self.ring.drain(..excess);
+         self.ring.extend(&audio[audio.len() - keep..]);
+     }
+@@ -77,7 +95,7 @@ impl SpectrumAnalyser {
+     /// Whether a whole window has been heard yet.
+     #[must_use]
+     pub fn ready(&self) -> bool {
+-        self.ring.len() == WINDOW
++        self.ring.len() >= WINDOW
+     }
+ 
+     /// How much audio one transform covers, in seconds — about 85 ms at 48 kHz. A spectrum
+@@ -104,7 +122,7 @@ impl SpectrumAnalyser {
+         }
+         let mut buffer: Vec<Complex64> = self
+             .ring
+-            .iter()
++            .range(self.ring.len() - WINDOW..)
+             .zip(&self.window)
+             .map(|(&sample, &w)| Complex64::new(f64::from(sample) * w, 0.0))
+             .collect();
+@@ -124,12 +142,108 @@ impl SpectrumAnalyser {
+             .collect();
+         Some(Spectrum { bin_hz, bins_db })
+     }
++
++    /// The mean power spectrum of the last `seconds` of audio, up to `top_hz`: transforms one
++    /// window long and half a window apart, the newest ending at the newest sample and none
++    /// starting more than `seconds` back, their powers averaged before they are turned to
++    /// decibels. One transform's bins scatter about ±5.6 dB around the noise's mean; half a
++    /// second's ten scatter about ±1.5 dB, so a reading over many of them can tell a signal's
++    /// spectra from its gaps (`docs/research/receive-filter/07-r5-registered.md`). `None` until
++    /// that much has been heard.
++    #[must_use]
++    pub fn mean_to(&self, top_hz: f64, seconds: f64) -> Option<Spectrum> {
++        let span = ((seconds * self.sample_rate).round() as usize).max(WINDOW);
++        let held = self.ring.len();
++        if held < span || span > self.keep {
++            return None;
++        }
++        let bin_hz = self.sample_rate / WINDOW as f64;
++        let top = ((top_hz / bin_hz) as usize).min(WINDOW / 2);
++        let mut power = vec![0.0f64; top + 1];
++        let mut transforms = 0usize;
++        let mut end = held;
++        while end - WINDOW >= held - span {
++            let mut buffer: Vec<Complex64> = self
++                .ring
++                .range(end - WINDOW..end)
++                .zip(&self.window)
++                .map(|(&sample, &w)| Complex64::new(f64::from(sample) * w, 0.0))
++                .collect();
++            self.fft.process(&mut buffer);
++            for (sum, bin) in power.iter_mut().zip(&buffer) {
++                *sum += bin.norm_sqr();
++            }
++            transforms += 1;
++            if end < WINDOW + HOP {
++                break;
++            }
++            end -= HOP;
++        }
++        // scaled as `compute_to`: a full-scale sine reads 0 dBFS
++        let gain = self.window.iter().sum::<f64>() / 2.0;
++        let floor = 1e-24;
++        let bins_db = power
++            .iter()
++            .map(|&sum| {
++                (10.0 * (sum / transforms as f64 / (gain * gain)).max(floor).log10()) as f32
++            })
++            .collect();
++        Some(Spectrum { bin_hz, bins_db })
++    }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn a_mean_spectrum_keeps_a_tones_level_and_steadies_the_noise() {
++        // half a second of a quarter-scale 1500 Hz sine over white noise: the mean reads the
++        // tone where one transform does, and the noise's bins scatter about a quarter as much
++        let fs = 48_000.0;
++        let mut analyser = SpectrumAnalyser::holding(fs, 0.5);
++        let mut state = 0x2545_F491_4F6C_DD1Du64;
++        let mut uniform = move || {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
++        };
++        let samples: Vec<f32> = (0..36_000)
++            .map(|n| {
++                let tone = 0.25 * (std::f64::consts::TAU * 1500.0 * f64::from(n) / fs).sin();
++                (tone + 0.02 * uniform()) as f32
++            })
++            .collect();
++        assert!(analyser.mean_to(TOP_HZ, 0.5).is_none(), "nothing heard yet");
++        for block in samples.chunks(960) {
++            analyser.push(block);
++        }
++        let one = analyser.compute_to(TOP_HZ).expect("a window heard");
++        let mean = analyser.mean_to(TOP_HZ, 0.5).expect("half a second heard");
++        let at = (1500.0 / one.bin_hz).round() as usize;
++        assert!(
++            (one.bins_db[at] - mean.bins_db[at]).abs() < 0.5,
++            "{} against {}",
++            one.bins_db[at],
++            mean.bins_db[at]
++        );
++        assert!((mean.bins_db[at] - 20.0 * 0.25f32.log10()).abs() < 1.0);
++        // the scatter of the noise's bins over 2-3 kHz, in decibels
++        let spread = |s: &Spectrum| {
++            let bins: Vec<f32> =
++                s.bins_db[(2000.0 / s.bin_hz) as usize..(3000.0 / s.bin_hz) as usize].to_vec();
++            let mean = bins.iter().sum::<f32>() / bins.len() as f32;
++            (bins.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / bins.len() as f32).sqrt()
++        };
++        let (single, averaged) = (spread(&one), spread(&mean));
++        assert!(single > 4.5 && averaged < 2.0, "{single} and {averaged} dB");
++        // the display's analyser keeps one window and has no mean to give
++        let mut display = SpectrumAnalyser::new(fs);
++        display.push(&samples);
++        assert!(display.compute().is_some() && display.mean_to(TOP_HZ, 0.5).is_none());
++    }
++
+     #[test]
+     fn a_tone_shows_as_a_peak_at_its_frequency_and_at_its_level() {
+         let fs = 48_000.0;
+diff --git a/core/aetherd/src/station.rs b/core/aetherd/src/station.rs
+index 43301f8..70e3196 100644
+--- a/core/aetherd/src/station.rs
++++ b/core/aetherd/src/station.rs
+@@ -67,7 +67,7 @@ use crate::{
+     busy::BusyConfig,
+     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
+     cwid::CwId,
+-    passband::{Clipping, FilterReading, ReceiveFilter, SPECTRUM_TOP_HZ, Verdict},
++    passband::{Clipping, FilterReading, LOOK_EVERY_S, ReceiveFilter, SPECTRUM_TOP_HZ, Verdict},
+     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
+     regulatory::{
+         AirOccupancy, Authorization, Ceiling, Decision, DialSource, Direction, Edges, EmissionKind,
+@@ -1403,7 +1403,7 @@ impl<P: Ptt> Station<P> {
+             finished: Vec::new(),
+             last_frame: None,
+             last_symbols: Vec::new(),
+-            spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
++            spectrum: SpectrumAnalyser::holding(params.audio_rate as f64, LOOK_EVERY_S),
+             passband: ReceiveFilter::for_air(params),
+             clipping: Clipping::new(params.audio_rate as f64),
+             filter_said: Verdict::Waiting,
+@@ -5275,8 +5275,8 @@ impl<P: Ptt> Station<P> {
+     fn sample_passband(&mut self, now: f64) {
+         let listening = !self.transmitting && !self.receiving() && now >= self.deaf_until;
+         let analyser = &self.spectrum;
+-        let folded = self.passband.step(now, listening, analyser.window_s(), || {
+-            analyser.compute_to(SPECTRUM_TOP_HZ)
++        let folded = self.passband.step(now, listening, LOOK_EVERY_S, || {
++            analyser.mean_to(SPECTRUM_TOP_HZ, LOOK_EVERY_S)
+         });
+         // the reading changes as a look folds in; a move to the other bandwidth shows at the next
+         if folded.is_empty() {
