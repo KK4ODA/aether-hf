@@ -12,8 +12,9 @@
 //!    the runner-up so a caller can retry if the CRC fails;
 //! 4. estimates the channel on every symbol — full estimates on the pilot symbols once their
 //!    chips are known, comb estimates smoothed over neighbouring symbols and interpolated
-//!    across carriers elsewhere, the neighbours weighed less when the channel moves within
-//!    the frame (ADR-0082);
+//!    across carriers elsewhere — the channel's phase slope across frequency taken out before
+//!    the straight line between pilots and put back after (ADR-0131) — the neighbours weighed
+//!    less when the channel moves within the frame (ADR-0082);
 //! 5. equalises the data carriers and returns the symbols with a **per-symbol** noise
 //!    variance.
 //!
@@ -253,6 +254,27 @@ fn follow(comb: &[Vec<Complex>], pre: usize, weight: f64) -> Vec<Vec<Complex>> {
     out
 }
 
+/// The channel's phase turn from one carrier to the next, in radians (ADR-0131): `arg Σ
+/// Ĥ[k+1]·Ĥ*[k]` over the full pilot symbols' direct estimates, every carrier known there.
+/// Carrier to adjacent carrier, 40 Hz apart, so a channel centred up to 12.5 ms from the
+/// timing is read without aliasing (from the comb pilots it would alias past 3.1 ms); the
+/// product turns by the slope whatever the channel's magnitude. `None` when there is nothing
+/// to read it from.
+fn phase_slope(raw: &[Vec<Complex>], known: &[Vec<Complex>], full: &[bool]) -> Option<f64> {
+    let mut sum = (0.0, 0.0);
+    for (symbol, _) in full.iter().enumerate().filter(|&(_, &f)| f) {
+        let direct: Vec<Complex> = raw[symbol]
+            .iter()
+            .zip(&known[symbol])
+            .map(|(&r, &k)| c::div(r, k))
+            .collect();
+        for pair in direct.windows(2) {
+            sum = c::add(sum, c::mul(pair[1], c::conj(pair[0])));
+        }
+    }
+    (c::norm_sq(sum) > 0.0).then(|| sum.1.atan2(sum.0))
+}
+
 /// A pilot carrier whose residual is over this many times the median pilot's carries an
 /// interferer, and is left out of the reported SNR (ADR-0043).
 const OUTLIER_PILOT: f64 = 4.0;
@@ -271,6 +293,7 @@ fn median(values: &[f64]) -> f64 {
 
 /// Turns a located frame into symbols and LLR weights.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent receiver settings, each its own ADR's
 pub struct FrameReceiver {
     params: WaveformParams,
     air: AirInterface,
@@ -304,6 +327,15 @@ pub struct FrameReceiver {
     /// the per-symbol figure's mean. Off, one figure per symbol for every carrier, as the
     /// band's noise would be if nothing shaped it.
     pub noise_shape: bool,
+    /// Take the channel's phase slope across frequency out before interpolating between the
+    /// comb pilots, and put it back after (ADR-0131). The pilots are 160 Hz apart, and a
+    /// channel centred 1 ms after the receiver's timing turns 58° between two of them: a
+    /// straight line between two points of a rotating phasor cuts the corner, and on ITU Poor
+    /// at 24 dB the data carriers lost 10–12 dB that the pilots did not; taken out, ITU Poor
+    /// decodes 44 % more frames on both airs. The slope is read carrier to adjacent carrier on
+    /// the full pilot symbols, 40 Hz apart, so it does not alias below 12.5 ms. The reported
+    /// SNR is the same either way, to the bit.
+    pub derotate: bool,
 }
 
 impl Default for FrameReceiver {
@@ -327,6 +359,7 @@ impl FrameReceiver {
             carrier_noise_threshold: 2.0,
             track_motion: true,
             noise_shape: true,
+            derotate: true,
         }
     }
 
@@ -621,6 +654,37 @@ impl FrameReceiver {
                 known[symbol][carrier] = pilot_reference[slot];
             }
         }
+        let rotation: Option<Vec<Complex>> = if self.derotate {
+            phase_slope(&raw, &known, &is_pilot_symbol).map(|angle| {
+                (0..n_carriers)
+                    .map(|carrier| c::from_angle(angle * carrier as f64))
+                    .collect()
+            })
+        } else {
+            None
+        };
+        // the phase slope out, a straight line between the pilots, the slope back; at the pilots
+        // themselves their own values, exactly, so the residual the noise and the SNR are read
+        // from is the plain interpolation's to the last bit (ADR-0131 §2.3)
+        let estimate = |row: &[Complex]| -> Vec<Complex> {
+            let Some(rotation) = &rotation else {
+                return interpolate(row);
+            };
+            let turned: Vec<Complex> = row
+                .iter()
+                .zip(&pilot_carriers)
+                .map(|(&value, &carrier)| c::mul(value, c::conj(rotation[carrier])))
+                .collect();
+            let mut out: Vec<Complex> = rotation
+                .iter()
+                .zip(interpolate(&turned))
+                .map(|(&turn, value)| c::mul(turn, value))
+                .collect();
+            for (slot, &carrier) in pilot_carriers.iter().enumerate() {
+                out[carrier] = row[slot];
+            }
+            out
+        };
         let moving = if self.track_motion {
             motion(&comb, &raw, &known, &is_pilot_symbol, pre)
         } else {
@@ -644,7 +708,7 @@ impl FrameReceiver {
                     };
                 }
             } else {
-                channel[symbol] = interpolate(&smoothed[symbol]);
+                channel[symbol] = estimate(&smoothed[symbol]);
             }
         }
 
@@ -684,26 +748,32 @@ impl FrameReceiver {
             *value = *value / data_symbols.len().max(1) as f64 * bias;
         }
         let mut reported = self.reported_noise(&per_pilot, sigma2);
+        let mut followed = None;
         if let Some((weight, noise)) = moving {
             // re-estimate between the full pilot symbols with the weight the motion asks for;
             // the residuals above, from the steady estimate, keep their shape — which symbols an
             // impulse hit, which carriers an interferer sits on — scaled to what the frame's
             // noise is, read across frequency, plus the error this estimate leaves
-            let followed = follow(&comb, pre, weight);
+            let rows = follow(&comb, pre, weight);
             for &symbol in &data_symbols {
-                channel[symbol] = interpolate(&followed[symbol]);
+                channel[symbol] = estimate(&rows[symbol]);
             }
             let scale = (noise * (5.0 / 3.0 - 2.0 * weight) / sigma2.max(1e-12)).min(1.0);
             for value in &mut sigma2_symbol {
                 *value *= scale;
             }
             reported *= scale;
+            followed = Some(rows);
         }
 
+        // the SNR is reported against the plain interpolation's power, de-rotated or not
+        // (ADR-0131 §2.3): the de-rotated estimate does not cut the corners between the pilots,
+        // so its power is higher, and the rate controller is told the SNR it always was
+        let rows = followed.as_ref().unwrap_or(&smoothed);
         let signal_power: f64 = data_symbols
             .iter()
-            .flat_map(|&s| (0..n_carriers).map(move |carrier| (s, carrier)))
-            .map(|(s, carrier)| c::norm_sq(channel[s][carrier]))
+            .flat_map(|&s| interpolate(&rows[s]))
+            .map(c::norm_sq)
             .sum::<f64>()
             / (data_symbols.len() * n_carriers) as f64;
         let snr_carrier = signal_power / reported.max(1e-12);
@@ -1084,6 +1154,105 @@ mod tests {
                 reported[1] > 10.0 && reported[0] + 10.0 < reported[1],
                 "seed {seed}: reported {reported:?}"
             );
+        }
+    }
+
+    /// `Σ amplitude · x[k − delay] · exp(j(2π·f·k/fs + phase))` over `(amplitude, f, phase,
+    /// delay)` rays: a late channel, two paths, or two paths whose Doppler shifts beat.
+    fn through_rays(x: &[Complex], rays: &[(f64, f64, f64, usize)]) -> Vec<Complex> {
+        let mut y = vec![(0.0, 0.0); x.len()];
+        for &(amplitude, f, phase, delay) in rays {
+            for k in delay..x.len() {
+                let a = std::f64::consts::TAU * f * k as f64 / WIDE_2300.fs_baseband + phase;
+                y[k] = c::add(
+                    y[k],
+                    c::mul(c::scale(x[k - delay], amplitude), c::from_angle(a)),
+                );
+            }
+        }
+        y
+    }
+
+    /// A test channel: its label, its `(amplitude, f, phase, delay)` rays, whether it moves
+    /// within the frame.
+    type TestChannel = (&'static str, &'static [(f64, f64, f64, usize)], bool);
+
+    #[test]
+    fn the_slope_comes_out_of_the_estimate_and_the_reported_snr_does_not_move() {
+        // ADR-0131: a channel centred a millisecond after the timing turns 58° between two comb
+        // pilots, and a straight line between them cuts the corner; with the slope taken out the
+        // equalised symbols land nearer what was sent. The SNR the rate controller is told is
+        // the plain interpolation's either way, to the bit — on a channel that moves within the
+        // frame too, where the estimate is made again with a lighter weight (ADR-0082).
+        let mode_index = 8; // 16-QAM ½
+        let codec = FrameCodec::new(MODES[mode_index], LONG).expect("codec");
+        let (clean, data, sync) = transmit(mode_index, 0, 500);
+        let sent = codec.encode(&data, 0).expect("encode");
+        let power =
+            clean.iter().map(|&x| c::norm_sq(x)).sum::<f64>() / (clean.len() - 500 - 600) as f64;
+        let cases: [TestChannel; 3] = [
+            ("one ray 1 ms late", &[(1.0, 0.0, 0.3, 8)], false),
+            (
+                "two rays 2 ms apart, 1 Hz",
+                &[(1.0, 0.5, 0.0, 0), (1.0, -0.5, 1.1, 16)],
+                false,
+            ),
+            (
+                "two rays beating at 10 Hz",
+                &[(1.0, -5.0, 0.0, 0), (0.9, 5.0, 0.7, 8)],
+                true,
+            ),
+        ];
+        for (label, rays, moves) in cases {
+            let mut rng = Gauss(0x5EED_0131);
+            // white noise 24 dB under the signal in 3 kHz of the 8 kHz baseband
+            let noise = power / 10f64.powf(2.4) * WIDE_2300.fs_baseband / 3000.0;
+            let buffer: Vec<Complex> = through_rays(&clean, rays)
+                .into_iter()
+                .map(|x| c::add(x, rng.complex(noise)))
+                .collect();
+            let [off, on] = [false, true].map(|derotate| {
+                FrameReceiver {
+                    derotate,
+                    ..FrameReceiver::default()
+                }
+                .receive(&buffer, &sync, None)
+                .expect("receive")
+            });
+            assert_eq!(
+                on.snr_carrier_db.to_bits(),
+                off.snr_carrier_db.to_bits(),
+                "{label}: per-carrier SNR {} vs {}",
+                on.snr_carrier_db,
+                off.snr_carrier_db
+            );
+            assert_eq!(
+                on.snr_3k_db.to_bits(),
+                off.snr_3k_db.to_bits(),
+                "{label}: 3 kHz SNR"
+            );
+            assert_eq!(on.motion_weight.is_some(), moves, "{label}: motion");
+            assert_eq!(off.motion_weight, on.motion_weight, "{label}: weight");
+            // the error against what was sent, weighed as the decoder weighs each symbol, by the
+            // inverse of its noise: an unweighed mean is all the carriers in a notch
+            let error_db = |frame: &ReceivedFrame| {
+                let (mut error, mut signal) = (0.0, 0.0);
+                for ((&got, &want), &variance) in
+                    frame.symbols.iter().zip(&sent).zip(&frame.noise_var)
+                {
+                    error += c::norm_sq(c::sub(got, want)) / variance;
+                    signal += c::norm_sq(want) / variance;
+                }
+                10.0 * (error / signal).log10()
+            };
+            let (before, after) = (error_db(&off), error_db(&on));
+            if moves {
+                // the estimate made again with a lighter weight is de-rotated too, and no worse
+                assert!(after < before + 0.5, "{label}: error {before} → {after} dB");
+            } else {
+                // measured −17.6 → −24.7 dB and −9.5 → −17.7 dB
+                assert!(after < before - 5.0, "{label}: error {before} → {after} dB");
+            }
         }
     }
 

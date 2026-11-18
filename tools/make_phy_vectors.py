@@ -789,6 +789,14 @@ OFDM_FILTERED_CASES = (
 (ADR-0104): two taps ``delay`` samples apart, which take the 2300 Hz signal's edges 13 dB down
 and the 500 Hz signal's 7 dB — a shape the pilots read well over their scatter, so the
 receiver's noise across the carriers is not flat."""
+OFDM_LATE_CASES = (
+    # (waveform, mode index, rv, follows, rays, noise)
+    (WIDE_2300, 6, 0, 0, [[1.0, 0.5, 0.0, 0], [1.0, -0.5, 1.1, 16]], 0.01),
+    (NARROW_500, 5, 0, 0, [[1.0, 0.5, 0.4, 0], [0.9, -0.5, 2.3, 16]], 0.01),
+)
+"""OFDM frames on two paths 2 ms apart, as ITU Poor puts them (ADR-0131): the channel's energy is
+centred about a millisecond after the receiver's timing, so it turns 58° between two comb pilots
+and the receiver takes that phase slope out before it interpolates, on both airs."""
 
 
 def ofdm_receive_cases() -> list[dict[str, object]]:
@@ -801,7 +809,11 @@ def ofdm_receive_cases() -> list[dict[str, object]]:
     whether it decodes."""
     out = []
     rng = np.random.default_rng(4242)
-    cases = [(*case, None, 0.0) for case in OFDM_RECEIVE_CASES] + list(OFDM_FILTERED_CASES)
+    cases = (
+        [(*case, None, 0.0) for case in OFDM_RECEIVE_CASES]
+        + list(OFDM_FILTERED_CASES)
+        + [(*case, None, 0.0) for case in OFDM_LATE_CASES]
+    )
     for i, (params, mode_index, rv, follows, rays, noise, shaping, floor) in enumerate(cases):
         air = NARROW if params is NARROW_500 else WIDE
         control = mode_index is None
@@ -834,6 +846,13 @@ def ofdm_receive_cases() -> list[dict[str, object]]:
         shaped = bool(np.max(np.abs(np.log(frame.noise_var / flat))) > 1e-9)
         if shaping is not None:
             assert shaped, (params.bandwidth, mode_index)
+        # the slope taken out moves the symbols, never the SNR the rate controller is told
+        # (ADR-0131 §2.3)
+        straight_rx = FrameReceiver(params)
+        straight_rx.derotate = False
+        straight = straight_rx.receive(y, sync)
+        assert straight.snr_3k_db == frame.snr_3k_db, (params.bandwidth, mode_index)
+        assert straight.snr_carrier_db == frame.snr_carrier_db, (params.bandwidth, mode_index)
         out.append(
             {
                 **filtered,

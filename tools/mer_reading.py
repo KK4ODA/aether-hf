@@ -40,8 +40,9 @@ measured against the truth, not against the nearest constellation point. Per fra
 audio shows as a band that stays down from frame to frame. Tone frames have no constellation and
 are counted, not measured.
 
-``--receiver KEY=VALUE`` sets a ``FrameReceiver`` setting for the run (``derotate=true``, ADR-0131;
-the settings as ``bench_cut.py`` takes them), to measure a receiver change.
+``--receiver KEY=VALUE`` sets a ``FrameReceiver`` setting for the run (``derotate=false`` is the
+receiver before ADR-0131; the settings as ``bench_cut.py`` takes them), to measure a receiver
+change.
 
 ``sim`` runs the same measurement on the model's channel (OFDM rungs at a set SNR), where the SNR
 is known: the check that the tool reads what is there, and the loss by channel class.

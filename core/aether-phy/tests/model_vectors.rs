@@ -1019,7 +1019,8 @@ fn ofdm_receive_input(case: &Value) -> OfdmInput {
 fn ofdm_frames_are_received_as_the_model_receives_them() {
     // ADR-0082: a frame on a steady channel and one whose two paths beat at 9–12 Hz, on both
     // airs — the receiver decides the same about the channel's motion, follows it with the
-    // same weight, and reports the same offset, SNR, symbols and noise variances
+    // same weight, and reports the same offset, SNR, symbols and noise variances; ADR-0131: on
+    // two paths 2 ms apart it takes out the same phase slope before it interpolates
     let doc = vectors();
     let tol = float(&doc, "ofdm_receive_tolerance");
     let cases = doc["ofdm_receive"].as_array().expect("ofdm receive");
@@ -1033,6 +1034,17 @@ fn ofdm_frames_are_received_as_the_model_receives_them() {
             && cases.iter().any(|c| c["noise_shaped"] == false),
         "the vectors must cover noise read flat and noise read across the carriers (ADR-0104)"
     );
+    for hz in [500, 2300] {
+        assert!(
+            cases.iter().any(|c| int(c, "bandwidth_hz") == hz
+                && c["rays"]
+                    .as_array()
+                    .expect("rays")
+                    .iter()
+                    .any(|ray| ray[3].as_u64().expect("delay") >= 16)),
+            "the vectors must cover a channel centred a millisecond late at {hz} Hz (ADR-0131)"
+        );
+    }
     let close = |got: f64, want: f64| (got - want).abs() <= tol * (1.0 + want.abs());
     for case in cases {
         let OfdmInput {

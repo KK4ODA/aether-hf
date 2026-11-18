@@ -532,7 +532,12 @@ A conforming receiver is not required to use any particular algorithm, but must 
   clear of the noise their second difference across frequency shows on the full pilot
   symbols, it weighs the neighbours by `w = 2·noise / D2` instead, under a fifth (ADR-0082): on
   ITU flutter (10 Hz) the three-symbol average had averaged a channel that turns over in
-  three symbols, and its own error was the frame's noise.
+  three symbols, and its own error was the frame's noise. Between the comb pilots, 160 Hz
+  apart, the reference receiver interpolates with the channel's phase slope across frequency
+  taken out and put back after, the slope read carrier to adjacent carrier on the full pilot
+  symbols (ADR-0131): a channel centred a millisecond after the timing turns 58° between two
+  pilots, and a straight line between them cut the corner — on ITU Poor the data carriers had
+  lost 10–12 dB the pilots did not.
 * **Per-symbol noise variance**, so a symbol damaged by impulsive noise is discounted rather
   than trusted. This matters more on HF than the interpolation does: the FFT spreads a single
   hot sample across every carrier of its symbol.

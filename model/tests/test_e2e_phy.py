@@ -543,7 +543,7 @@ def test_the_estimate_takes_the_delay_out_before_it_interpolates(
     its carriers. On AWGN, where nothing turns, the estimate is what it was. The reported SNR is
     the same either way, bit for bit."""
     params = NARROW_500 if bandwidth == 500 else WIDE_2300
-    plain, derotated = _receiver(params), _receiver(params, derotate=True)
+    plain, derotated = _receiver(params, derotate=False), _receiver(params, derotate=True)
     gains = []
     for (off, on), sent in _received_by(
         params, "poor", 24.0, mode_index, 6, 31, [plain, derotated]
