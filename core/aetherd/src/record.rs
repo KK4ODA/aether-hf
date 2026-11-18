@@ -219,13 +219,6 @@ pub struct Recording {
     busy_readings: Vec<Value>,
     /// The station clock of the next busy reading kept.
     next_busy_reading: f64,
-    /// The receive-filter estimate's noise profile when the recording began and when it ended
-    /// (`{bin_hz, looks, db}`), so the profile behind a reading can be read after the fact.
-    passband_start: Option<Value>,
-    passband_end: Option<Value>,
-    /// Each look the estimate folded in: `[t_s, taken_s, looks, look_db, low_hz, high_hz,
-    /// reference_db, threshold_db, floor_db]`, the edges null until it reads.
-    passband_readings: Vec<Value>,
     /// Who and what: callsigns, settings, the operator's notes.
     meta: Value,
 }
@@ -374,9 +367,6 @@ impl Recording {
             busy_state: None,
             busy_readings: Vec::new(),
             next_busy_reading: f64::NEG_INFINITY,
-            passband_start: None,
-            passband_end: None,
-            passband_readings: Vec::new(),
             meta,
         };
         recording.write_sidecar(None)?;
@@ -525,53 +515,6 @@ impl Recording {
         ]));
     }
 
-    /// The receive filter's noise profile at the recording's start or at its end (ADR-0105):
-    /// `{bin_hz, looks, db}`, each bin to a tenth of a decibel over the passband's level, null
-    /// where signals held it. `profile` is `None` before the first look kept.
-    pub fn passband_profile(
-        &mut self,
-        at_end: bool,
-        profile: Option<(f64, Vec<f32>)>,
-        looks: usize,
-    ) {
-        let kept = profile.map(|(bin_hz, db)| {
-            let db: Vec<Option<f64>> = db
-                .iter()
-                .map(|v| v.is_finite().then(|| (f64::from(*v) * 10.0).round() / 10.0))
-                .collect();
-            json!({"bin_hz": bin_hz, "looks": looks, "db": db})
-        });
-        if at_end {
-            self.passband_end = kept;
-        } else {
-            self.passband_start = kept;
-        }
-    }
-
-    /// A look the receive filter's reading folded in at `now_s`, taken at `taken_s` (the end of
-    /// its 85 ms of audio), the reading after it and the share of the audio clipping then:
-    /// `[t, taken, verdict, low_drop_db, high_drop_db, over_floor_db, looks, clipping_pct]`, the
-    /// line `aetherd --passband-trace` gives for a recording.
-    pub fn passband_reading(
-        &mut self,
-        now_s: f64,
-        taken_s: f64,
-        reading: &crate::passband::FilterReading,
-        clipping: f64,
-    ) {
-        let db = |v: Option<f32>| v.map(|v| (f64::from(v) * 100.0).round() / 100.0);
-        self.passband_readings.push(json!([
-            millis(now_s - self.t0),
-            millis(taken_s - self.t0),
-            reading.verdict.word(),
-            db(reading.low_drop_db),
-            db(reading.high_drop_db),
-            db(reading.over_floor_db),
-            reading.looks,
-            (clipping * 100_000.0).round() / 1000.0,
-        ]));
-    }
-
     /// The radio's S-meter at `now_s`, on `scale`.
     pub fn meter(&mut self, now_s: f64, value: f64, scale: &'static str) {
         self.radio.meter_scale.get_or_insert(scale);
@@ -666,11 +609,6 @@ impl Recording {
             "busy": {
                 "state": self.busy_state,
                 "readings": self.busy_readings,
-            },
-            "passband": {
-                "start": self.passband_start,
-                "end": self.passband_end,
-                "readings": self.passband_readings,
             },
             "counters": counters,
         });
@@ -1219,49 +1157,6 @@ mod tests {
             state.at_s.abs() < 1e-9,
             "the state is kept on the recording's clock: {}",
             state.at_s
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_receive_filter_is_kept_look_by_look_with_its_profile_at_both_ends() {
-        let dir = temp_dir("passband");
-        let mut recording =
-            Recording::start(&dir, "passband", 48_000, 100.0, json!({})).expect("start");
-        recording.passband_profile(false, None, 0);
-        let waiting = crate::passband::FilterReading {
-            verdict: crate::passband::Verdict::Waiting,
-            low_drop_db: None,
-            high_drop_db: None,
-            over_floor_db: Some(48.123),
-            looks: 3,
-        };
-        recording.passband_reading(101.0, 100.4, &waiting, 0.0);
-        let top = crate::passband::FilterReading {
-            verdict: crate::passband::Verdict::Top,
-            low_drop_db: Some(0.4),
-            high_drop_db: Some(27.71),
-            looks: 12,
-            ..waiting
-        };
-        recording.passband_reading(108.5, 107.9, &top, 0.0263);
-        recording.passband_profile(true, Some((11.71875, vec![-0.14, f32::NAN, -21.96])), 12);
-        let summary = recording.finish(&json!({})).expect("finish");
-        let sidecar: Value =
-            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
-                .expect("json");
-        let passband = &sidecar["passband"];
-        assert!(passband["start"].is_null(), "no look before the start");
-        assert_eq!(passband["end"]["looks"], 12);
-        assert_eq!(passband["end"]["db"], json!([-0.1, null, -22.0]));
-        let readings = passband["readings"].as_array().expect("readings");
-        assert_eq!(
-            readings[0],
-            json!([1.0, 0.4, "waiting", null, null, 48.12, 3, 0.0])
-        );
-        assert_eq!(
-            readings[1],
-            json!([8.5, 7.9, "top", 0.4, 27.71, 48.12, 12, 2.63])
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

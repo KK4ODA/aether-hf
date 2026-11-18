@@ -18,10 +18,6 @@ and ``serious.md``) and writes what failed and why into an issue labelled ``nigh
 one when none is open, a comment on the open one otherwise, so a broken week is one thread. A
 night with nothing serious opens nothing, and says so on an open issue as it closes it.
 
-It also lists the runs whose receive filter warned on a radio that cuts nothing (the
-``filter_warnings`` column: ``docs/research/receive-filter/05-busy-band.md``, H1), every night, as
-a warning and not serious on its own.
-
 Uses the ``gh`` command line (on GitHub's runners) with the job's token; ``--dry-run`` prints
 the text instead. Standard library only: the job that runs it installs nothing.
 """
@@ -62,21 +58,6 @@ def failed_rows(path: Path, *, invariants: bool | None = None) -> list[str]:
             if r.get("pass") != "True"
             and (invariants is None or bool(r.get("invariants")) == invariants)
         ]
-
-
-def filter_rows(runs: Path) -> list[str]:
-    """The scenario runs whose receive filter warned on a radio that cuts nothing (the
-    ``filter_warnings`` column, ``session_matrix.filter_warnings``): a false warning the panel
-    would show, reported every night and not serious on its own."""
-    lines: list[str] = []
-    for csv_path in sorted(runs.glob("scenarios-*/results.csv")):
-        with csv_path.open(newline="", encoding="utf-8") as f:
-            lines += [
-                f"- `{r['scenario']}`: {r['filter_warnings']}"
-                for r in csv.DictReader(f)
-                if r.get("filter_warnings")
-            ]
-    return lines
 
 
 def minor_rows(runs: Path) -> list[str]:
@@ -151,17 +132,6 @@ def body(runs: Path, results: dict[str, str], run_url: str, sha: str, today: str
             "</details>",
             "",
         ]
-    filters = filter_rows(runs)
-    if filters:
-        lines += [
-            "<details><summary>The receive filter warned on a radio that cuts nothing"
-            f" ({len(filters)})</summary>",
-            "",
-            *filters,
-            "",
-            "</details>",
-            "",
-        ]
     lines.append("Closed by the first night with nothing serious.")
     return "\n".join(lines)
 
@@ -174,12 +144,6 @@ def quiet(runs: Path, run_url: str, sha: str, today: str) -> str:
         if minor
         else ""
     )
-    filters = len(filter_rows(runs))
-    if filters:
-        also += (
-            f" The receive filter warned on a radio that cuts nothing in {filters}"
-            f" {'run' if filters == 1 else 'runs'}, a warning on the run."
-        )
     return f"Nothing serious on {today} at `{sha[:7]}` — [the run]({run_url}).{also} Closing."
 
 

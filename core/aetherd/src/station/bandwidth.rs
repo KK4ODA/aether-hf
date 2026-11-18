@@ -815,8 +815,6 @@ impl<P: Ptt> Station<P> {
         // a move is between sessions: the new receiver starts on the dial (ADR-0079)
         self.front_end_rebuilt(now, false);
         self.was_busy = false;
-        // the receive filter is the same radio's: its looks stay, judged at the new span
-        self.passband.set_air(params);
         self.occupancy = crate::regulatory::occupancy::air(hz).ok();
         let top = self.top_rung();
         self.config.link.max_mode = top;

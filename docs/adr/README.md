@@ -109,7 +109,7 @@ context → decision → alternatives considered → consequences.
 | [0102](0102-a-programs-call-goes-in-the-bandwidth-it-chose.md) | A program's call goes in the bandwidth it chose | accepted |
 | [0103](0103-a-called-program-hears-its-acceptance-keyed-before-connected.md) | A called program hears its acceptance keyed before CONNECTED | accepted |
 | [0104](0104-the-receivers-read-the-noise-across-the-band.md) | The receivers read the noise across the band | accepted |
-| [0105](0105-the-receive-filter-is-read-at-the-signals-edges.md) | The receive filter is read at the signal's edges | accepted |
+| [0105](0105-the-receive-filter-is-read-at-the-signals-edges.md) | The receive filter is read at the signal's edges | superseded by 0132, its clipping warning (§2.2) kept |
 | [0106](0106-each-program-answers-for-its-own-callsigns.md) | Each program answers for its own callsigns and owns the sessions under them | accepted |
 | [0107](0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md) | Under automatic control only a program answers calls, and a program's session goes with it | accepted |
 | [0108](0108-every-program-speaks-for-the-station-and-setup-says-whose-callsign-it-is.md) | Every program speaks for the station, and Setup says whose callsign it is | accepted |
@@ -136,3 +136,4 @@ context → decision → alternatives considered → consequences.
 | [0129](0129-the-station-scans-for-a-program.md) | The station scans its channels for the program that asks, and never leaves one a caller may be on | accepted for building (§8): the harness first (§6), then the air |
 | [0130](0130-a-short-transmission-goes-at-the-most-robust-rung-that-carries-it.md) | A short transmission goes at the most robust rung that carries it | accepted |
 | [0131](0131-the-channel-estimate-takes-the-delay-out-before-it-interpolates.md) | The channel estimate takes the delay out before it interpolates | accepted for building: the model step (off), the port to come (§9) |
+| [0132](0132-the-receive-filter-is-not-read.md) | The receive filter is not read; the waterfall shows it | accepted |

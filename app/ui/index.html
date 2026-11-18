@@ -113,14 +113,7 @@
         <button class="small" id="btn-mismatch-call" title="Call the station heard under the same callsign with another SSID" hidden>Call it</button>
         <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">Dismiss</button>
       </div>
-      <!-- the radio's receive filter cuts an edge of the signal (ADR-0105): on every tab,
-           Compact included, with the side, how far down and the knob -->
-      <div class="note warn unsaved-banner" id="filter-banner" title="The radio's receive filter takes an edge of the signal away, read from the band's noise while the station listens: an edge 12 dB or more under the passband's own level is cut. Frames lose that edge, and the link runs slower than the path allows" role="alert" hidden>
-        <span id="filter-banner-text" title="Which edge of the signal the radio's filter cuts, about how far down, and what on the radio to turn"></span>
-        <button class="small" id="btn-filter-setup" title="Open Setup step 4, where the modem's bandwidth is set: the 500 Hz signal fits inside a narrow filter" hidden>Setup step 4</button>
-        <button class="small quiet" id="btn-filter-dismiss" title="Hide this warning until the reading changes: another edge, 3 dB further down, or another bandwidth">Dismiss</button>
-      </div>
-      <!-- the receive audio clips (ADR-0105 §2.2): on every tab, Compact included -->
+      <!-- the receive audio clips (ADR-0132): on every tab, Compact included -->
       <div class="note warn unsaved-banner" id="clip-banner" title="More than 0.1 % of the audio heard over the last ten seconds reached full scale: the sound card's input is overdriven, and what clips is lost to the receiver" role="alert" hidden>
         <span id="clip-banner-text" title="What is clipping and what to turn">The receive audio is clipping: turn the radio's audio output or the sound card's input down.</span>
         <button class="small quiet" id="btn-clip-dismiss" title="Hide this warning until the audio stops clipping and starts again">Dismiss</button>
@@ -200,11 +193,6 @@
                   <div class="label">Queued</div>
                   <div class="value" id="v-queued">—</div>
                   <div class="sub" id="v-compress-sub">bytes still to send</div>
-                </div>
-                <div class="reading tile wide" id="rx-filter-tile" title="What the radio's receive filter does to the edges of Aether's signal, read from the band's noise while the station listens: how far each edge lies under the passband's own level. An edge 12 dB or more down is cut, and a banner says which knob to turn. Can't check means the band's noise sits too close to the sound card's own floor to show a cut: turn the radio's audio up, or wait for the band to open">
-                  <div class="label">Receive filter</div>
-                  <div class="value" id="v-rx-filter">—</div>
-                  <div class="sub" id="v-rx-filter-sub">reading the band's noise</div>
                 </div>
               </div>
             </section>

@@ -65,9 +65,9 @@ use crate::{
     air::{Air, ChannelSense, FrameDecoder, HeardFrame, HfAir, Listening},
     audio::OnsetGuard,
     busy::BusyConfig,
+    clipping::Clipping,
     compress::{Compressor, Decompressor, negotiated, offered_capabilities},
     cwid::CwId,
-    passband::{Clipping, FilterReading, ReceiveFilter, SPECTRUM_TOP_HZ, Verdict},
     ptt::{Ptt, PttError, PttWatchdog, WatchdogState},
     regulatory::{
         AirOccupancy, Authorization, Ceiling, Decision, DialSource, Direction, Edges, EmissionKind,
@@ -1209,15 +1209,8 @@ pub struct Station<P: Ptt> {
     last_symbols: Vec<crate::air::Iq>,
     /// What the sound card is delivering, for the spectrum display.
     spectrum: SpectrumAnalyser,
-    /// The radio's receive filter, read from the noise the station hears while it listens, so
-    /// a filter that cuts an edge of the signal is caught without asking the rig (ADR-0105).
-    passband: ReceiveFilter,
-    /// The share of the audio heard at full scale over the last ten seconds (ADR-0105 §2.2).
+    /// The share of the audio heard at full scale over the last ten seconds (ADR-0132).
     clipping: Clipping,
-    /// The receive filter's verdict the log last said: a change is one `filter` line, so a
-    /// warning given while the station idled can be placed after the fact
-    /// (`docs/research/receive-filter/05-busy-band.md` §6.3, L1).
-    filter_said: Verdict,
     /// Until when a burst is known to be arriving: a preamble was found and its frame
     /// has not finished, or a frame just finished and the next may follow.
     rx_until: f64,
@@ -1404,9 +1397,7 @@ impl<P: Ptt> Station<P> {
             last_frame: None,
             last_symbols: Vec::new(),
             spectrum: SpectrumAnalyser::new(params.audio_rate as f64),
-            passband: ReceiveFilter::for_air(params),
             clipping: Clipping::new(params.audio_rate as f64),
-            filter_said: Verdict::Waiting,
             rx_until: f64::NEG_INFINITY,
             link: None,
             moved: VecDeque::new(),
@@ -1704,15 +1695,8 @@ impl<P: Ptt> Station<P> {
             .map(|frame| (frame, self.last_symbols.as_slice()))
     }
 
-    /// What the radio's receive filter does to the signal's edges, read from the noise the
-    /// station hears while it listens (ADR-0105).
-    #[must_use]
-    pub fn rx_filter(&self) -> FilterReading {
-        self.passband.reading()
-    }
-
     /// The share of the audio heard over the last ten seconds at full scale, and whether that
-    /// is clipping (ADR-0105 §2.2).
+    /// is clipping (ADR-0132).
     #[must_use]
     pub fn clipping(&self) -> (f64, bool) {
         (self.clipping.share(), self.clipping.clips())
@@ -2977,8 +2961,6 @@ impl<P: Ptt> Station<P> {
         }
         // where the busy detector stood, so a trace of the audio can carry on from it
         recording.busy_state(self.air.sense().state(self.now()));
-        // and the receive filter's profile, which a trace of the audio starts without
-        recording.passband_profile(false, self.passband.noise_profile(), self.passband.looks());
         let path = recording.path().to_path_buf();
         self.recording = Some(recording);
         // its S-meter, dial and settings are asked for from the next pass, its marks from 1
@@ -2989,8 +2971,7 @@ impl<P: Ptt> Station<P> {
 
     /// Stop the recording, if one is running, and say what it holds.
     pub fn stop_recording(&mut self) -> Option<crate::record::Summary> {
-        let mut recording = self.recording.take()?;
-        recording.passband_profile(true, self.passband.noise_profile(), self.passband.looks());
+        let recording = self.recording.take()?;
         let counters = crate::control::methods::counters(self);
         match recording.finish(&counters) {
             Ok(summary) => {
@@ -3244,7 +3225,6 @@ impl<P: Ptt> Station<P> {
         }
         self.reservation.channel(now, self.air.sense().busy(now));
         self.trace_after_release(now);
-        self.sample_passband(now);
 
         self.refresh_burst_cap(now);
         self.refresh_ceiling(false);
@@ -3906,9 +3886,8 @@ impl<P: Ptt> Station<P> {
             let detected = decoded.detect_confidence;
             let span_start = decoded.start_s;
             let span_end = span_start + decoded.length_s;
-            // its blocks are a frame's, not the noise's (ADR-0076), and so is its spectrum
+            // its blocks are a frame's, not the noise's (ADR-0076)
             self.air.sense_mut().explain(span_start, span_end);
-            self.passband.frame(span_start, span_end);
             let record = self.frame_record(&decoded, rung, (span_start, span_end), now);
             self.keep_frame(record, now);
             // A beacon belongs to no session, so it is handled before anything the engine
@@ -5192,11 +5171,9 @@ impl<P: Ptt> Station<P> {
         for pending in arrivals {
             let trusted = pending.floor || pending.detect_confidence >= DETECT_CONFIDENCE_TRUSTED;
             let start_s = pending.start_s;
-            // a frame arriving: none of it is the noise floor, heeded or not (ADR-0076), nor
-            // the noise the receive filter is read from (ADR-0105)
+            // a frame arriving: none of it is the noise floor, heeded or not (ADR-0076)
             let end_s = pending.end_s;
             self.air.sense_mut().explain(start_s, end_s);
-            self.passband.frame(start_s, end_s);
             // every announcement, heeded or not, so a frame can be placed against the key's
             // release and a phantom just after it seen (ADR-0037)
             if let Some(recording) = &mut self.recording {
@@ -5264,51 +5241,6 @@ impl<P: Ptt> Station<P> {
                 samples as f64 * 1000.0 / rate
             ),
         );
-    }
-
-    /// Take a look at the receive filter every half second the station listens, and fold in
-    /// the looks held until no frame under them can still be announced (ADR-0105). Listening is
-    /// neither keyed, nor deaf to this station's own tail, nor counting a burst as arriving: a
-    /// frame's spectrum ends at the signal's own edges and would read as a cut. A look needs no
-    /// quiet channel: the bins a signal holds are left out of it, so a band of FT8 is read in
-    /// seconds, where the estimate before waited minutes for whole windows of quiet.
-    fn sample_passband(&mut self, now: f64) {
-        let listening = !self.transmitting && !self.receiving() && now >= self.deaf_until;
-        let analyser = &self.spectrum;
-        let folded = self.passband.step(now, listening, analyser.window_s(), || {
-            analyser.compute_to(SPECTRUM_TOP_HZ)
-        });
-        // the reading changes as a look folds in; a move to the other bandwidth shows at the next
-        if folded.is_empty() {
-            return;
-        }
-        let reading = self.passband.reading();
-        self.note_filter(&reading);
-        if let Some(recording) = &mut self.recording {
-            let clipping = self.clipping.share();
-            for taken in folded {
-                recording.passband_reading(now, taken, &reading, clipping);
-            }
-        }
-    }
-
-    /// One `filter` line when the receive filter's verdict changes, in the form of the busy
-    /// detector's transitions: `clear -> top | bottom 5.1 dB, top 12.4 dB, 120 looks`.
-    fn note_filter(&mut self, reading: &FilterReading) {
-        if reading.verdict == self.filter_said {
-            return;
-        }
-        let db = |drop: Option<f32>| drop.map_or_else(|| "-".to_owned(), |d| format!("{d:.1}"));
-        let detail = format!(
-            "{} -> {} | bottom {} dB, top {} dB, {} looks",
-            self.filter_said.word(),
-            reading.verdict.word(),
-            db(reading.low_drop_db),
-            db(reading.high_drop_db),
-            reading.looks
-        );
-        self.filter_said = reading.verdict;
-        self.note("filter", &detail);
     }
 
     /// Log a change of the busy state with the numbers that decided it.
@@ -6326,7 +6258,6 @@ fn asked_by(payload: Option<&[u8]>, ours: &[String]) -> Option<(Asked, String)> 
 mod tests {
     use super::*;
     use crate::control::protocol::{ConnectionId, ConnectionKind};
-    use crate::passband::Verdict;
     use crate::ptt::NullPtt;
     use aether_phy::{AudioToBaseband, BasebandToAudio, Complex};
 
@@ -6703,112 +6634,6 @@ mod tests {
                 (f64::from(state) / f64::from(u32::MAX) - 0.5) as f32 * 0.004
             })
             .collect()
-    }
-
-    /// A station that records into a fresh temporary folder named for `name`, and the folder.
-    fn recording_station(name: &str) -> (Station<NullPtt>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("aether-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let station = Station::new(
-            StationConfig {
-                callsign: "W4ODA".to_owned(),
-                wait_for_clear: false,
-                record_dir: Some(dir.clone()),
-                ..StationConfig::default()
-            },
-            NullPtt::default(),
-            1,
-        );
-        (station, dir)
-    }
-
-    #[test]
-    fn a_recording_keeps_the_receive_filter_look_by_look() {
-        // the receive-filter review (2026-11-08): what the reading took in and what it said
-        // after each look goes into the sidecar, with its noise profile at both ends, so a field
-        // case can be read after the fact as `aetherd --passband-trace` reads a recording
-        let (mut station, dir) = recording_station("passband-rec");
-        let rate = station.config.params.audio_rate as f64;
-        let block = station.config.params.audio_rate / 50;
-        // a radio's band noise through a 250-3500 Hz filter, over its audio chain's floor
-        let mut noise =
-            crate::passband::test_noise::ReceiverNoise::new(250.0, 3500.0, rate, 0.3, 0.001);
-        // ten seconds before the recording, ten in it: a look is held six before it is kept
-        for _ in 0..500 {
-            station.capture(&noise.take(block)).expect("capture");
-        }
-        let looks_before = station.rx_filter().looks;
-        assert!(looks_before > 0, "no look kept in ten seconds of noise");
-        station
-            .start_recording(Some("passband"), None)
-            .expect("start the recording");
-        for _ in 0..500 {
-            station.capture(&noise.take(block)).expect("capture");
-        }
-        let looks_after = station.rx_filter().looks;
-        let summary = station.stop_recording().expect("a recording");
-        let sidecar: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
-                .expect("json");
-        let passband = &sidecar["passband"];
-        assert_eq!(passband["start"]["looks"], looks_before);
-        assert_eq!(passband["end"]["looks"], looks_after);
-        let readings = passband["readings"].as_array().expect("readings");
-        assert_eq!(
-            readings.len(),
-            looks_after - looks_before,
-            "one reading a look folded in while recording"
-        );
-        let last = readings.last().expect("a reading");
-        assert_eq!(last[2], "clear", "{last}");
-        assert!(
-            last[3].is_number() && last[4].is_number(),
-            "no drops after {looks_after} looks: {last}"
-        );
-        assert!(
-            last[0].as_f64() > last[1].as_f64(),
-            "folded in before it was taken: {last}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_log_says_when_the_receive_filter_changes_its_verdict() {
-        // L1 (05-busy-band.md §6.3): the banners of 2026-11-17 came while the stations idled,
-        // and nothing placed them. A radio cut at 1900 Hz, then the same radio opened
-        let mut station = idle_station();
-        let rate = station.config.params.audio_rate as f64;
-        let block = station.config.params.audio_rate / 50;
-        let mut lines = Vec::new();
-        let mut listen = |station: &mut Station<NullPtt>, low: f64, high: f64, seconds: usize| {
-            let mut noise =
-                crate::passband::test_noise::ReceiverNoise::new(low, high, rate, 0.3, 0.001);
-            for _ in 0..seconds * 50 {
-                station.capture(&noise.take(block)).expect("capture");
-                lines.extend(
-                    station
-                        .take_events()
-                        .into_iter()
-                        .filter(|e| e.starts_with("filter:")),
-                );
-            }
-        };
-        listen(&mut station, 300.0, 1900.0, 30);
-        assert_eq!(station.rx_filter().verdict, Verdict::Top);
-        // the knob turned: the cut clears once most of the looks kept are new
-        listen(&mut station, 250.0, 3500.0, 90);
-        assert_eq!(station.rx_filter().verdict, Verdict::Clear);
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(
-            lines[0].starts_with("filter:waiting -> top | bottom ")
-                && lines[0].ends_with(" dB, 12 looks"),
-            "{lines:?}"
-        );
-        assert!(
-            lines[1].starts_with("filter:top -> clear | bottom "),
-            "{lines:?}"
-        );
     }
 
     /// A station that will transmit on demand: no channel gate, no keying to fail.
@@ -10808,151 +10633,6 @@ mod tests {
             (peak - 1500.0).abs() < 2.0 * spectrum.bin_hz,
             "peak at {peak} Hz"
         );
-    }
-
-    /// One OFDM data frame at rung 10 of the 2300 Hz air as it leaves a sound card, at RMS
-    /// `rms`: wide and flat across the signal's span, so a look of the passband under it would
-    /// read the frame's own edges as a cut.
-    fn ofdm_frame_audio(rms: f32) -> Vec<f32> {
-        let params = aether_phy::WIDE_2300;
-        let mut modem = aether_phy::Modem::new(params, false);
-        let air = aether_phy::modes::air_interface(params);
-        let aether_phy::Rung::Ofdm(mode, _) = air.rung(10) else {
-            panic!("rung 10 is an OFDM rung");
-        };
-        let payload = vec![0x5a; modem.payload_bytes(Some(mode))];
-        let baseband = modem.rung_burst(&payload, 10, 0).expect("a frame");
-        let mut to_audio = aether_phy::BasebandToAudio::new(params);
-        let mut audio = to_audio.process(&baseband);
-        audio.extend(to_audio.flush());
-        let now = (audio.iter().map(|x| x * x).sum::<f32>() / audio.len() as f32).sqrt();
-        audio.iter().map(|x| x * rms / now).collect()
-    }
-
-    #[test]
-    fn a_frame_heard_as_the_station_listens_again_is_not_taken_for_its_passband() {
-        // The bench pair at 12 dB (2026-09-26): the panel said the radio's receive filter looked
-        // about 650 Hz wide while frames went back and forth. The estimate then had been sampling
-        // the other station's frames: a station's deafness to its own tail ends with the answer
-        // already arriving, and a look taken as a frame starts is the frame's spectrum, whose
-        // edges are the signal's own. On the harness half the looks taken while listening fell
-        // under frames announced only part way in, and a 10 dB cut read 15-19 (ADR-0105 §2.1).
-        // So OFDM frames, wide across the span, answer this station's transmissions and arrive
-        // while it listens, a little before a look is due, over a receiver's noise that passes
-        // the whole signal: no look kept may lie under a frame, the reading has to stay clear,
-        // and it has to go on learning between the frames.
-        let (mut station, dir) = recording_station("passband-frames");
-        let rate = station.config.params.audio_rate as f64;
-        let block = 960; // a sound card's period, 20 ms
-        let frame = ofdm_frame_audio(0.05);
-        // the receiver's noise 250-3500 Hz, about 23 dB under the frames
-        let mut noise =
-            crate::passband::test_noise::ReceiverNoise::new(250.0, 3500.0, rate, 0.04, 0.0001);
-        let mut out = vec![0.0f32; block];
-        // one period: the station plays what it has, and hears the noise and `signal`
-        let mut step = |station: &mut Station<NullPtt>, signal: &[f32]| {
-            station.playback(&mut out).expect("playback");
-            let heard: Vec<f32> = noise
-                .take(block)
-                .iter()
-                .enumerate()
-                .map(|(i, x)| signal.get(i).copied().unwrap_or(0.0) + x)
-                .collect();
-            station.capture(&heard).expect("capture");
-        };
-        let blocks = |seconds: f64| (seconds * rate) as usize / block;
-        for _ in 0..blocks(15.0) {
-            step(&mut station, &[]);
-        }
-        let first = station.rx_filter();
-        assert_eq!(first.verdict, Verdict::Clear, "noise alone: {first:?}");
-        let looks_before = first.looks;
-        station
-            .start_recording(Some("frames"), None)
-            .expect("start the recording");
-        // the recording's file begins with the audio held before it was started
-        let t0 = station.now() - PREROLL_S.min(station.now());
-        // where each frame was on the air, seconds of the recording
-        let mut frames: Vec<(f64, f64)> = Vec::new();
-        // where the frame's energy is in its audio: the interpolator's onset and run-out either
-        // side of it are near silence
-        let rms = (frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32).sqrt();
-        let loud = |x: &f32| x.abs() > 0.1 * rms;
-        let onset_s = frame.iter().position(loud).expect("a frame") as f64 / rate;
-        let ends_s = (frame.iter().rposition(loud).expect("a frame") + 1) as f64 / rate;
-        // a session's turnarounds: this station transmits (a tune tone will do: the deafness
-        // after it is the same whatever was sent) and the answer comes at once, starting while
-        // the station is still deaf to its own tail, on the air when that ends
-        for _ in 0..3 {
-            station.tune(0.5).expect("an idle station tunes");
-            let mut keyed = false;
-            while !keyed || station.transmitting() {
-                step(&mut station, &[]);
-                keyed |= station.transmitting();
-            }
-            let start = station.now() - t0;
-            for chunk in frame.chunks(block) {
-                step(&mut station, chunk);
-            }
-            frames.push((start + onset_s, start + ends_s));
-        }
-        // then frames that start while the station listens, each a little before a look is due
-        for lead in [0.02, 0.1, 0.2, 0.3, 0.4] {
-            let since = station.now();
-            for _ in 0..blocks(1.5) {
-                step(&mut station, &[]);
-            }
-            while station.passband.next_look_s() - station.now() > lead {
-                assert!(station.now() - since < 5.0, "the reading stopped looking");
-                step(&mut station, &[]);
-            }
-            let start = station.now() - t0;
-            for chunk in frame.chunks(block) {
-                step(&mut station, chunk);
-            }
-            frames.push((start + onset_s, start + ends_s));
-        }
-        // and the noise after them, which the reading must still learn from
-        for _ in 0..blocks(12.0) {
-            step(&mut station, &[]);
-        }
-        let summary = station.stop_recording().expect("a recording");
-        let sidecar: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&summary.sidecar).expect("sidecar"))
-                .expect("json");
-        let readings = sidecar["passband"]["readings"]
-            .as_array()
-            .expect("readings")
-            .clone();
-        let window = crate::spectrum::WINDOW as f64 / rate;
-        for r in &readings {
-            let taken = r[1].as_f64().expect("taken");
-            // the receiver places a frame within a few milliseconds of its energy
-            for &(start, end) in &frames {
-                assert!(
-                    taken <= start + 0.005 || taken - window >= end - 0.005,
-                    "a look of {:.3}-{taken:.3} s kept under a frame at {start:.3}-{end:.3} s",
-                    taken - window
-                );
-            }
-            assert_eq!(r[2], "clear", "a frame taken for the filter: {r}");
-        }
-        let after = station.rx_filter();
-        let drops = |r: &crate::passband::FilterReading| {
-            (r.low_drop_db.unwrap_or(0.0), r.high_drop_db.unwrap_or(0.0))
-        };
-        assert!(
-            drops(&after).0 < drops(&first).0 + 3.0 && drops(&after).1 < drops(&first).1 + 3.0,
-            "the frames moved the reading's edges to {:?} from {:?}",
-            drops(&after),
-            drops(&first)
-        );
-        assert!(
-            after.looks >= looks_before + 12,
-            "only {} looks kept between the frames: the reading stopped listening",
-            after.looks - looks_before
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

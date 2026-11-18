@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.6.0 |
-| **Updated** | 2026-11-17 |
+| **Version** | 1.7.0 |
+| **Updated** | 2026-11-18 |
 | **Describes** | Aether HF 0.2.0-beta.162 |
 | **Licence** | CC BY 4.0 |
 
@@ -339,9 +339,9 @@ choice. The waterfall keeps its own colours.
 A banner across every tab tells you about something that needs attention. Each says what to do,
 and most have buttons that do it.
 
-![Two banners under the header: the receive filter cuts the top of the signal, and a station called in the other bandwidth](screens/banners.png)
+![Two banners under the header: a station called in the other bandwidth, and the receive audio is clipping](screens/banners.png)
 
-*Figure 10. Banners: a receive filter that cuts the signal, and a bandwidth mismatch.*
+*Figure 10. Banners: a bandwidth mismatch, and clipped receive audio.*
 
 | Banner | What it means | What to do |
 |---|---|---|
@@ -349,13 +349,11 @@ and most have buttons that do it.
 | Setup needed | The rules, the control or the licence class is not set, so nothing transmits | **Open Setup**, step 1 |
 | Unsaved changes | Setup has changes the modem is not using yet | **Review in Setup** and save, or **Discard changes** |
 | Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a program's callsign while that program is not running | Follow its buttons: **Setup step 4**, **Check for Updates**, **Answer as it too**, **Call it**, or **Dismiss**. For a program that is not running, start it again |
-| Receive filter | The radio's receive filter cuts the top, the bottom or both edges of Aether's signal by 12 dB or more. It names the knob: the IF shift, the high or low cut, or the filter width | Turn that knob. The banner goes when the cut does. **Dismiss** hides it until the reading changes |
 | Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down |
 | Debug mode | Shown once: sessions run by a program are sent to the project | **Keep it on** or **Turn it off** ([Step 5](#step-5-application-settings)) |
 | Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2 |
 
-The receive filter and clipping banners show in Compact too. Aether tells a host program nothing
-of either.
+The clipping banner shows in Compact too. Aether tells a host program nothing of it.
 
 ### Arranging the windows
 
@@ -717,8 +715,7 @@ the air should carry ([Reporting a problem](#29-reporting-a-problem)).
 *Figure 17. The Status tab during a session.*
 
 - **Link**: the rung, the SNR, the throughput and the session (who, and for how long).
-- **Channel**: signal above noise, tuning offset, receive level, bytes still queued, and the
-  **Receive filter** line: what the radio's receive filter does to the edges of Aether's signal.
+- **Channel**: signal above noise, tuning offset, receive level and bytes still queued.
 - **History**: two charts.
   - **Speed** is the session's data rate, both ways added together. Two dashed lines show the rate
     on the air of the rung the data went at: **sending at** (your data, in the transmit colour)
@@ -769,7 +766,9 @@ touched.
   - The **red lines** on the spectrum and the waterfall are the edges of your widest
     transmission at the bandwidth you run, by the FCC's 26 dB measure. They sit a little outside
     the bandwidth's own number, because the signal's skirts reach past it. A signal between them
-    is on your frequency: wait for it to clear before you call.
+    is on your frequency: wait for it to clear before you call. The band's noise should look
+    even between them: noise that fades out inside a red line is the radio's receive filter
+    cutting that edge ([The receive audio](#the-receive-audio)).
   - **Span** is the audio shown: **0–3 kHz** (the default), **0–4 kHz**, or **Channel**, a close
     view of your own channel.
   - The waterfall draws the noise dark and a signal bright. **Floor** sets the level drawn black
@@ -813,7 +812,7 @@ one entry a line. Hold the mouse over a line for the whole of it. Filters: *All*
 *Rules*, *Sessions*, *Beacons*. **Clear** empties the window's copy; the modem's own log file is
 kept.
 
-Three kinds of line are worth knowing:
+Two kinds of line are worth knowing:
 
 - A **keying** line says how long your radio takes to key and how long Aether takes to prepare a
   transmission. Aether starts its transmissions that much sooner, so its answers reach the air on
@@ -822,10 +821,6 @@ Three kinds of line are worth knowing:
   late, and says why: a slow render, a slow radio, or the computer falling behind. One now and then
   is harmless. Many in a session mean the computer is too busy: close other programs, or send
   your files to the project.
-- A **filter** line says the receive filter's reading changed, as in
-  *clear -> top | bottom 5.1 dB, top 12.4 dB, 120 looks*: what it said before and now, how far
-  each edge of Aether's signal lies under the passband's level, and how many looks it rests on.
-  It tells you when a receive filter banner came and went, even while you were away.
 
 ### Sending files
 
@@ -1282,7 +1277,6 @@ The plan, step by step, is Phase 10 of the project's [roadmap](../ROADMAP.md).
 | **Signal above noise** | Channel | The level in Aether's channel over the learned noise floor. Noise alone reads a few decibels either side of 0 dB. Frames the modem finds never count as noise |
 | **Receive level** | Channel, Setup step 3 | The sound card's whole input over the last 3 seconds: the radio's whole passband. Aim for *Good* |
 | **Queued** | Channel | Bytes still waiting to be sent or acknowledged, counted as you or your program gave them |
-| **Receive filter** | Channel | What the radio's filter does to the edges of Aether's signal, read from the band's noise while the station listens. *Passes the signal* with both edges within 12 dB; *Cuts the top*, *Cuts the bottom* or *Cuts both edges* past that. *Can't check* means the band's noise is too weak to show a cut. It needs about twelve seconds of listening after the modem starts |
 | **Clipping** | Receive level, banner | The share of the audio at full scale over the last ten seconds. Over 0.1 % the audio clips |
 | **Mode confidence** | Diagnostics | How clearly the last frame's rung was read. Below 1.3 is a guess |
 | **Busy lamp** | Header | The channel carries a signal: a level over the threshold, a narrow signal's shape, or a frame that decoded |
@@ -1345,20 +1339,19 @@ frames at a good SNR, check the receive level, the drive and the receive filter.
 
 *Figure 33. When the radio's receive filter cuts the signal.*
 
-**The receive filter banner says the top of the signal is cut.** The radio's passband ends below the top
-of Aether's signal. Usually the IF shift (or passband tuning) has moved the passband down: centre it.
-Otherwise the high cut is set low, or the filter is too narrow: open it. The reading follows the knob
-within about a minute.
+**Checking the radio's receive filter.** Open the Diagnostics tab and look at the waterfall. The red lines
+are the edges of Aether's signal, and the band's noise should look even between them. Aether does not
+check this for you: the other stations on a busy band look too much like a filter.
 
-**The receive filter banner says the bottom is cut.** The IF shift has moved the passband up, or the low
+**The noise fades out inside the top red line.** The radio's passband ends below the top of Aether's
+signal. Usually the IF shift (or passband tuning) has moved the passband down: centre it. Otherwise the
+high cut is set low, or the filter is too narrow: open it.
+
+**The noise fades out inside the bottom red line.** The IF shift has moved the passband up, or the low
 cut is set high: centre the shift, or set the low cut to 300 Hz or below.
 
-**The receive filter banner says both edges are cut.** The filter is narrower than the signal, such as a
-CW or narrow data filter under the 2300 Hz signal. Widen it to 2.4 to 3 kHz, or run at 500 Hz.
-
-**The Receive filter line says *Can't check*.** The band's noise is too close to the sound card's own
-noise for a cut to show. Turn the radio's audio output up, or the sound card's input, or wait for the
-band. Nothing is wrong with the filter for saying so.
+**The noise fades out inside both red lines.** The filter is narrower than the signal, such as a CW or
+narrow data filter under the 2300 Hz signal. Widen it to 2.4 to 3 kHz, or run at 500 Hz.
 
 **The clipping banner shows.** The radio sends the sound card more than it can take. Turn the radio's USB
 or data audio output down, or the sound card's input, until **Receive level** reads *Good*. Clipped audio
@@ -1518,3 +1511,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.4.0 | 2026-11-17 | Scanning: up to four dials; 4 to 5 s on a quiet dial, and about 19 s where a call is heard under way (ADR-0129 §11). |
 | 1.5.0 | 2026-11-17 | A short message goes at the slowest rung of its kind that carries it in as many frames (ADR-0130): **Slow and sure, or fast** says so, and why the header's rung can read lower while short replies go. |
 | 1.6.0 | 2026-11-17 | The Log tab's **filter** line: the receive filter's reading each time it changes. |
+| 1.7.0 | 2026-11-18 | The receive filter is no longer read (ADR-0132): the **Receive filter** banner and line and the Log's **filter** line are gone. Check the filter on the waterfall instead: [The receive audio](#the-receive-audio). The clipping banner stays. |

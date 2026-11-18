@@ -510,7 +510,7 @@ impl<P: Ptt> Station<P> {
     /// Called every pass: move the radio when the visit is over and nothing holds the dial.
     pub(super) fn advance_scan(&mut self, now: f64) {
         if self.scanner.scan.is_none() {
-            self.go_home(now);
+            self.go_home();
             return;
         }
         self.restart_after_move(now);
@@ -591,7 +591,6 @@ impl<P: Ptt> Station<P> {
         // the receiver keeps nothing heard on the dial the radio has left: a call whose end it
         // was still settling would be answered on this one
         self.restart_receiver();
-        self.passband.frame(now, now + deaf);
         self.read_dial(dial, now);
         self.frequency.next_ask_s = now + 2.0;
         self.refresh_ceiling(true);
@@ -687,7 +686,6 @@ impl<P: Ptt> Station<P> {
     ) {
         let deaf = move_deaf_s();
         self.restart_receiver();
-        self.passband.frame(now, now + deaf);
         self.note(
             "scan",
             &format!(
@@ -850,7 +848,7 @@ impl<P: Ptt> Station<P> {
     }
 
     /// Back to the home dial after a scan, once nothing holds the radio where it is.
-    fn go_home(&mut self, now: f64) {
+    fn go_home(&mut self) {
         let Some(home) = self.scanner.home else {
             return;
         };
@@ -862,10 +860,7 @@ impl<P: Ptt> Station<P> {
         }
         self.scanner.home = None;
         match self.tune_to(home) {
-            Ok(()) => {
-                self.restart_receiver();
-                self.passband.frame(now, now + move_deaf_s());
-            }
+            Ok(()) => self.restart_receiver(),
             Err(why) => self.note(
                 "scan",
                 &format!(

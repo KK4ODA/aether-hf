@@ -679,10 +679,7 @@ function world(scene) {
     tx_peak_dbfs: configured ? -7.9 : null, snr_db: null, cfo_hz: null, last_frame_s: null,
     peer_snr_db: null, rate_snr_db: null, missed_there: null, throughput_bps: 0,
     sending_rung: null, receiving_rung: null,
-    rx_filter: scene.filter ?? (configured
-      ? {verdict: "clear", low_drop_db: 2.4, high_drop_db: 3.1, looks: 120}
-      : {verdict: "waiting", low_drop_db: null, high_drop_db: null, looks: 5}),
-    clipping: {share: 0, clips: false},
+    clipping: scene.clipping ?? {share: 0, clips: false},
     link: null,
   };
   const caps = CAPS[String(bandwidth)];
@@ -1015,8 +1012,8 @@ const SCENES = {
   signal: {page: "signal.html", width: 860, height: 640, settle: 52000, hold: "rx"},
   scanning: {timeline: "idle", scan: true, after: [tab("session")], clip: ["#op-card"]},
   banners: {timeline: "idle", bandwidth: 500, mismatch: true, signal: false,
-            filter: {verdict: "top", low_drop_db: 3.4, high_drop_db: 17.6, looks: 120},
-            clip: ["#mismatch-banner", "#filter-banner"]},
+            clipping: {share: 0.0042, clips: true},
+            clip: ["#mismatch-banner", "#clip-banner"]},
 };
 
 // the ended banner comes down by itself 15 s after a session ends: the shot is of the panel

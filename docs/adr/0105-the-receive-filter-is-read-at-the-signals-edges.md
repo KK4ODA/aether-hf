@@ -1,7 +1,9 @@
 # ADR-0105: The receive filter is read at the signal's edges
 
-**Status:** accepted, 2026-11-09: the author's decision at the receive-filter review's Gate 4,
-with the answers to `docs/research/receive-filter/04-results.md` §11. Built at Gate 5 the same
+**Status:** superseded, 2026-11-18, by [ADR-0132](0132-the-receive-filter-is-not-read.md): the
+reading is removed and §2.2 (clipping) stays. Accepted 2026-11-09: the author's decision at the
+receive-filter review's Gate 4, with the answers to `docs/research/receive-filter/04-results.md`
+§11. Built at Gate 5 the same
 day (`04-results.md` §12): the daemon, the panel and the manual. **No wire change, no
 configuration key, no schema bump.** The control API's `metrics` changes (§2.6).
 

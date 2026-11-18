@@ -165,62 +165,6 @@ def test_a_scenario_that_misses_on_one_draw_is_not_serious() -> None:
     ]
 
 
-def test_a_filter_warning_on_an_uncut_radio_is_listed_and_one_on_a_cut_radio_is_not(
-    tmp_path: Path,
-) -> None:
-    import json
-
-    import nightly_report as nr
-
-    # H1 (docs/research/receive-filter/05-busy-band.md): a and b's radios cut nothing, c's does
-    scenario = {"stations": {"c": {"radio": {"rx_filter_hz": [300, 1900]}}}}
-    run = sm.Run(scenario, tmp_path, tmp_path / "channel.progress")
-
-    def recording(who: str, name: str, readings: list[list[object]]) -> None:
-        folder = tmp_path / who / "recordings"
-        folder.mkdir(parents=True, exist_ok=True)
-        side = {"passband": {"readings": readings}}
-        (folder / f"{name}.json").write_text(json.dumps(side), encoding="utf-8")
-
-    clear = [1.0, 0.5, "clear", 3.0, 4.0, 40.0, 12, 0.0]
-    recording("a", "20261117-200314_W4ODA_KK4XYZ", [clear, [2.0, 1.5, "bottom", 13.4, 5.0,
-              40.0, 13, 0.0], [3.0, 2.5, "both", 14.9, 12.2, 40.0, 14, 0.0]])  # fmt: skip
-    recording("b", "20261117-200315_KK4XYZ_W4ODA", [clear, clear])
-    recording("c", "20261117-200316_N4CCC_W4ODA", [[2.0, 1.5, "top", 2.0, 25.0, 40, 13, 0.0]])
-    (tmp_path / "a" / "recordings" / "sessions.json").write_text("[1, 2]", encoding="utf-8")
-    # b's warning came while it idled, before any recording: only its log says so (L1)
-    (tmp_path / "b" / "aetherd.out").write_text(
-        "2026-11-17T23:00:51.339Z info  filter: waiting -> both | bottom 12.1 dB, top 14.5 dB,"
-        " 12 looks (Idle)\n"
-        "2026-11-17T23:00:58.000Z info  ptt: keyed (Connecting)\n"
-        "2026-11-17T23:01:20.010Z info  filter: both -> clear | bottom 8.2 dB, top 9.0 dB,"
-        " 40 looks (Idle)\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "c" / "aetherd.out").write_text(
-        "x info  filter: waiting -> top | bottom 2.0 dB, top 25.0 dB, 12 looks (Idle)\n",
-        encoding="utf-8",
-    )
-    assert sm.filter_warnings(run) == [
-        "a: both/bottom up to 14.9 dB in 2 of 3 readings (20261117-200314_W4ODA_KK4XYZ)",
-        "b: both up to 14.5 dB at 1 of 2 changes (log)",
-    ]
-    # the nightly lists them, a warning on a green run as on a red one
-    runs = tmp_path / "artifacts"
-    (runs / "scenarios-1").mkdir(parents=True)
-    with (runs / "scenarios-1" / "results.csv").open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["scenario", "pass", "why", "invariants",
-                                          "filter_warnings"])  # fmt: skip
-        w.writeheader()
-        w.writerow({"scenario": "rtty-s1", "pass": "True", "filter_warnings": "a: bottom"})
-        w.writerow({"scenario": "plain-s1", "pass": "True", "filter_warnings": ""})
-    assert nr.filter_rows(runs) == ["- `rtty-s1`: a: bottom"]
-    text = nr.body(runs, nr.parse_results("full=failure"), "https://run", "0123456", "2026-11-17")
-    assert "cuts nothing (1)</summary>\n\n- `rtty-s1`: a: bottom" in text
-    quiet = nr.quiet(runs, "https://run", "0123456789", "2026-11-17")
-    assert "cuts nothing in 1 run, a warning on the run." in quiet
-
-
 def test_the_runner_fails_on_invariants_alone_when_asked() -> None:
     missed = {"scenario": "a", "pass": False, "invariants": ""}
     broke = {"scenario": "b", "pass": False, "invariants": "b panicked"}

@@ -2588,14 +2588,7 @@ the first row. Compact and Mini each keep the size the operator gives them
 keeps the windows' place and maximized state (`tauri-plugin-window-state`, `POSITION |
 MAXIMIZED`, the updates window left out); RadioPost's two shells keep size, place and maximized
 the same way. Check a header change with a fresh page a width (a page resized in place measured
-stale). **The receive-filter estimate, replaced (beta.131, its
-second fix after d1b0992):** on 7.074 MHz FT8 through a 3 kHz filter the panel said "about
-850 Hz wide" — the monitor averaged its quiet spectra, and FT8 fills the passband's middle in
-every period. `PassbandMonitor` now keeps the last 120 quiet spectra and takes each bin's 10th
-percentile (a bin's noise between the signals), needs 12 before it reads, draws the edge
-6 dB under the middle or halfway to the profile's floor, whichever is lower, and takes a dip as
-the edge only when the next 150 Hz stays down (a notch is not an edge). A third fault in it
-gets a review, not a patch.
+stale).
 
 **The gateway sessions of 2026-11-06 (beta.136 → beta.137; ADR-0100, ADR-0101).** Two Winlink
 sessions from the mobile (KK4ODA, Winlink Express 1.8.6.0, TS-480 keyed by RTS on a DigiRig's
@@ -2749,55 +2742,29 @@ after the slot keyed), read 23:20:37, forced 23:21:07, closed 23:21:14.5, identi
 close its data port to end a session: it keeps it for its whole run, and after `FQ` nothing from it
 reaches the modem until the client's forced disconnect, 30 s later.
 
-**The receive-filter estimate's third fault, and its review (2026-11-08; the author: "start the
-review").** The mobile's TS-480 had its IF SHIFT turned fully left on Saturday night: its receive
-audio was flat to 1.4 kHz, 16 dB down at 1.8 and 23 dB down from 2 kHz, where the 2300 Hz signal
-spans 360–2640 Hz. The estimate read 1934–2273 Hz (live 1957–1980), over the panel's warning line
-(occupied less 400 Hz, 1880 Hz), so nothing was said; the author found the knob by the waterfall
-the next day (centred, the mobile is flat to 2.6 kHz and 11 dB down at 2.8). Why it missed:
-`aetherd --passband-trace WAV --expect SIDECAR` (`passband_trace.rs`: the daemon's own monitor
-over a recording, looks chosen by `sample_passband`'s rule from the busy detector run on the same
-audio and the sidecar's keying, announcements and frames; one CSV line a look, with both edges —
-`spectrum::passband_edges`, `PassbandMonitor::edges`) shows the estimate saw the cut and drew the
-edge "halfway to the floor", 15 dB down the skirt, near 2 kHz; at 6 dB it falls near 1.65 kHz.
-That rule came with the FT8 fix; it reads clean 300–2700 Hz noise as 211–3176 Hz. And the warning
-tests the width, not whether the passband covers the signal's span, and says "widen the filter"
-for a passband that was moved. A Python mirror of the first look blamed the 10th percentile and a
-21–35 dB swing of the noise level; its looks let in the other station's frames, and the real
-looks swing 3–10 dB in 17 recordings of 19 — that explanation is withdrawn. Two Saturday sessions
-remain unexplained (28–32 dB swing, a 26–29 dB slope); every Saturday session clipped (1.3–1.7 %
-of samples at full scale). The brief is `docs/research/receive-filter/00-brief.md` (the job, the
-gates, the author's answers: other work keeps shipping, the warning's threshold is measured on
-the harness, the decoded frames may be a second witness, CAT stays out, and overdriven receive
-audio is in scope); `01-evidence.md` is Gate 0's first evidence. In the uploads the mobile is
-`KK4ODA` (sessions), `WD5EMA` (P2P) or `KK4ODA-2`; the home station is `KK4ODA-1`, and `KK4ODA` for
-the P2P test (its `diagnostics.json` at 01:26Z, 3141 Hz, is the FTDX10's, not the mobile's).
-**Gate 0 (same day, `01-evidence.md` §6–10):** a sidecar keeps the estimate (`passband.readings`
-in the trace's columns, `passband.start`/`end` the noise profile); `tools/rxfilter_corpus.py
-make|judge` (130 synthetic clips: thirteen responses × steady/AGC/QSB/FT8/hot × a deep or shallow
-chain floor; today's estimate warns for 10 of 60 cuts of 20 dB or more, none of 20 smaller, falsely
-for a notch over a shallow floor, and reads the full 4 kHz under an AGC over a shallow floor); the
-channel server's `[stations.<who>.radio]` gained `rx_filter_hz` (eighth order, before the AGC),
-`rx_floor_db` (the chain's floor under the band noise) and `rx_gain_db` (hot, clipping), and
-`tools/rxfilter_cost.py OUT` runs a Test per cut, paired draws: 3–10 dB at either edge costs nothing
-beyond the measure's ~14 % step, 20 dB costs (the bottom edge more, and as much over a deep floor
-as a shallow one — open), Saturday's receiver costs the 2300 Hz Test 37–43 % and the 500 Hz one
-nothing. The mobile clipped only on Saturday (20 dB hotter than its other sessions); the panel's
-clipping line sits in the Channel card, which Compact hides.
-**Gate 1 (same day, `02-survey.md`):** a cut costs because the receivers take the band's noise as
-flat across their band — the OFDM receiver charges every data carrier one noise per symbol over
-its `|h|²` (`sigma2_sym / |h|²` in `rx.py`/`rx.rs`), so a carrier the radio's filter cut, noise and
-all, is all but discarded (ADR-0043's factor only raises noise), and the tone receiver uses one noise
-level for all its tones. `tools/bench_cut.py` (each rung through a cut, decoded by the model;
-`--model DIR` runs another tree): 10–20 dB at the very edge costs nothing, Saturday's cut takes the
-fast tone rungs and OFDM 13 and up, and with the noise read per pilot carrier (a scratch copy, not in
-the tree) rung 13 goes 0 → 20 of 20, uncut unchanged. `tools/passband_witness.py WAV SIDECAR`
-reads the other station's frames (OFDM channel estimate per carrier, tone energies per sent tone,
-each against its own median): Saturday's cut shows in one fast-tone frame, agreeing with the noise
-profile. Nothing published (WSJT-X, fldigi, ardopc, FreeDATA, JS8, Mercury, Pat, VARA's site)
-measures or warns of a cut passband. **The author's answers:** the receiver change goes first, as
-separate work with its own ADR, before the review's Gate 3 (the review waits at Gate 2); and the
-warnings show as a banner in every view, Compact included.
+**The receive filter: reviewed, read, and removed (2026-11-08 … 11-18; ADR-0105, ADR-0132).**
+The mobile's TS-480 had its IF SHIFT turned fully left on 2026-11-07, its 2300 Hz signal's top
+600 Hz arrived 16–30 dB down, and the panel's estimate of the passband said nothing (its third
+fault). The review (`docs/research/receive-filter/`, `00-brief.md` … `08-r5-results.md`) found why
+a cut costs (the receivers took the band's noise as flat: fixed by ADR-0104, below), built a reading
+from the band's noise (R3, ADR-0105, beta.145), and on 2026-11-17 that reading warned at both
+stations on 7.101 MHz with both filters set right: other stations' signals look like a filter. Two
+more readings (R4, R5) were judged against criteria fixed before the runs and missed; no reading
+that tells a signal from the filter by time clears the station's first half minute on a busy band,
+a signal on nearly all the time, or a 500 Hz signal over the 500 Hz channel. **The author's
+decision (2026-11-18): remove it** — false warnings would be noise for every new operator, and no
+other modem has one. The check is the waterfall: its red lines are the signal's edges, and noise
+that fades out inside one is the filter cutting that edge (the manual's *The receive audio*).
+Kept: clipping (`crate::clipping`, `metrics.clipping`, `#clip-banner`, the Receive level line);
+the channel server's radio (`[stations.<who>.radio]` `rx_filter_hz`, `rx_floor_db`, `rx_gain_db`),
+`tools/rxfilter_cost.py` (a Test per cut, paired draws), `tools/bench_cut.py` (each rung through a
+cut, decoded by the model) and `tools/passband_witness.py` (the other station's frames as a witness
+of the passband): they measure the receivers, not a warning. Gone: `crate::passband`,
+`aetherd --passband-trace`, `metrics.rx_filter`, a recording's `passband` section, the Log's
+`filter` line, `tools/rxfilter_corpus.py`, the harness's `filter_warnings` column; the review's
+scripts run at `b31eb8d`, the last tree with them. A reading of the filter comes back only if it
+is simple, robust and passes `05-busy-band.md` §7, Q1 included. In the uploads the mobile is
+`KK4ODA` (sessions), `WD5EMA` (P2P) or `KK4ODA-2`; the home station is `KK4ODA-1`.
 
 **ADR-0104, the receivers read the noise across the band (2026-11-08, the author's "do it first"; no
 wire change, no configuration key).** Both receivers took the band's noise as flat. Now
@@ -2832,122 +2799,7 @@ half +0.8 %, tone half +1.7 %, both +5 %, mostly `80m-agc-carrier-inside-500`): 
 rung 5 a little more there and the rate controller tries it more — owed to the controller's review;
 the author chose to ship both halves with it (2026-11-09). One harness build repeats only 2–3 of 18
 runs to the second: judge a few-percent difference on two passes of each build, and split a change
-to find its half. The receive-filter review resumes at Gate 2 on this receiver.
-
-**The receive-filter review's Gates 2 and 3 (2026-11-09; `docs/research/receive-filter/03-candidates.md`,
-`04-results.md`).** The candidates live in `core/aetherd/src/passband.rs` and run only offline:
-`aetherd --passband-trace WAV [--expect SIDECAR] --passband-variant r0|r1|r2|r3 [--no-clip-veto]`
-adds the verdict, both edges' drops, the look's height over the chain's floor, the looks kept and
-C1's clipping share. R0 is today's estimate, column for column. `tools/rxfilter_corpus.py` builds
-the corpus (`make [--seed N]`, now with line and joined clips) and judges every reading:
-`judge` (the corpus), `field INBOX` (the nineteen recordings), and `harness RUNS` (the cut grid's
-recordings, truth from each run's own filter). A variant `r3+keep` turns the veto off.
-**R3**, the one that passed: a look every half second whenever the station listens. It leaves
-out the bins a signal holds (14 dB over the lower quartile of 150 Hz each side, and the main
-lobe beside them). It holds each look for the air's longest frame and drops it if a frame lay
-under it. Each look is divided by its own ninth decile over the signal's span, and kept only if
-that stands 12 dB over the chain's floor (6–10 kHz). The profile is each bin's median over 120
-kept looks, smoothed by a ±50 Hz running median. The drop at each span edge below its ninth
-decile names the side at 12 dB. R3 scored 48 of 48 cuts, no false warning on two corpus draws,
-21 of 24 cuts and none false on the harness, and K4 5 of 5 on the field; eleven constants.
-**Two bench faults were found and fixed**:
-- `rxfilter_cost.py`'s bottom cuts were deeper than named, at 500 Hz 6/10/20 → 10.2/19.8/42.1 dB;
-  a real 20 dB cut at the 500 Hz bottom costs nothing.
-- The corpus's FT8 band reached full scale.
-**Gate 4, ADR-0105 (the author agreed all four answers, 2026-11-09):** R3 and C1 are the
-decision. C1 warns on its own and does not veto the reading. W1 is not built. The line is 12 dB
-at every edge. The 2026-11-07 15:06Z recording counts in the free band. Gate 5, the port, comes
-next:
-- the station's reading and C1 replace `PassbandMonitor` and the quiet-window wait;
-- `metrics.rx_filter` and `metrics.clipping` replace `rx_passband_hz` and `occupied_hz`;
-- two banners in every view, and a *Receive filter* line in the Status tab;
-- the manual;
-- R0–R2 and the trace's variants are deleted.
-
-**Gate 5, the port (2026-11-09, beta.145).** `crate::passband` is the station's reading:
-`ReceiveFilter` (`step(now, listening, window, take)` takes a look every `LOOK_EVERY_S` while the
-station is neither keyed, deaf nor receiving, holds it `hold_for(params)` — the air's longest
-frame of any family and half a second — and drops it if a frame announced or reported lay under
-it; `frame(start, end)` from `absorb` and `heed_preambles`; `set_air` in `move_to` keeps the
-looks, divided again by the new span's level; `reading()` → `FilterReading`) and `Clipping` (C1,
-fed in `capture` while the station hears the radio). **A frame's span is on the receiver's clock,
-about 20 ms after its audio** (`AudioToBaseband::rx_delay_samples`); the reading shifts it, or a
-look ending in a frame's first 20 ms is kept (found by the port's station test). `metrics.rx_filter`
-`{verdict, low_drop_db, high_drop_db, looks}` and `metrics.clipping` `{share, clips}` replace
-`rx_passband_hz` and `occupied_hz`; a sidecar's `passband.readings` are `[t, taken, verdict,
-low_drop_db, high_drop_db, over_floor_db, looks, clipping_pct]` and `aetherd --passband-trace`
-prints the same columns (one line a look, and a half-second beat between). Panel: `#filter-banner`
-and `#clip-banner` on every tab, Compact included (`applyRxFilter`, `applyClipping`; a dismissal
-in `aether.filterDismissed` holds until another edge, 3 dB more or another bandwidth, and is
-cleared by a clear reading; `aether.clipDismissed` until the audio stops clipping), the Channel
-card's *Receive filter* tile (`#rx-filter-tile`, the whole row), the Receive level line reading
-C1. Gone: `PassbandMonitor`, `passband_edges`, `passband_width_hz`, `PassbandEdges`,
-`Spectrum::level_around`, `PASSBAND_SAMPLE_S`, `PASSBAND_MIN_LEVEL_DBFS`, the quiet-window wait,
-`applyPassband`, `#rx-passband-note`, `--passband-variant`, `--no-clip-veto`. The test noise of a
-receiver (band-limited over a chain floor) is `passband::test_noise::ReceiverNoise`: flat noise
-to 24 kHz, as `[sim]` adds it, has no chain floor and reads *can't check*.
-
-**R3 on a busy band (2026-11-17, `docs/research/receive-filter/05-busy-band.md`; the author:
-"fix all items", built from its §10 by a session with Rust).** The banner warned at both stations on 7.101 MHz with both filters set
-right. No file caught the warnings themselves: they came while the stations were idle, recordings
-cover only sessions and their 30 s pre-roll, and the daemon does not log the verdict. The cause is
-other stations' signals wider than the leave-out reaches (150 Hz sides, so anything over about
-300 Hz, or RTTY's pairs): a 500 Hz multicarrier, a PACTOR-class pair, a 2.4 kHz signal over half
-the span. They set each look's ninth decile and stay in the median over looks when on more than
-half the time, and a fast AGC deepens them. A block 5–7 dB over a look's median, on 33–77 % of the
-looks, took the FTDX10 from 2–4 dB to 9–15 dB. R3 traced over the gateway's own idle pre-rolls
-warns on three of nine, and the nightly's `40m-rtty-contest-2300` warns every night unjudged. The
-gateway's scan had diluted it with 80 m looks until it stopped at 20:14:50Z. R3 does what ADR-0105
-says, and §6 of the ADR lists this case as untested: it is a judgement, not a bug. The bench gained:
-* a *qrm* kind in `tools/rxfilter_corpus.py` (72 clips; R3 warns on 36 of 120 uncut
-  clip-bandwidths);
-* today's sixteen recordings in its field set;
-* the field judge adding a pre-roll's keying from the upload's `aetherd.log`, since a recording's
-  events start at its start.
-
-The build, specified step by step in §10 with the criteria of §7 fixed before any run:
-* R4: each look divided by its span median, each bin's 20th percentile over the looks
-  (`TIME_QUANTILE`);
-* L1: the verdict's changes in the log;
-* H1: the nightly lists a warning on an uncut radio, an invariant once R4 clears the harness;
-* S1, a scan hop into a frame under way: only if measured to matter.
-
-W2 (the frames as a veto) only on the author's explicit word. The frames' witness agrees that
-neither radio cut. The per-look tools and an R3 mirror are in that folder's `scratch/`.
-
-**R4, built and judged: it misses (2026-11-17, `06-r4-results.md`).** R4 as §10 specified misses
-§7's Q1 on both corpus draws (22 and 20 of 84 qrm clips over uncut radios warn; R3 18 and 20), Q2
-by one on each (23 of 24), and K2/K3 on the held-out draw (2 of 160 plain clips, a radio 8 dB down
-at an edge read 12–13 dB in the first readings). So it stops before step 7: no ADR amends ADR-0105
-(ADR-0130 went to a8f1385's short-transmission rung), R4 is not merged, its patch is
-`scratch/r4.patch`, and the decision is the author's. Why it buys less than §6.1 expected: most of
-Q1 is the first half minute (a signal on since the station started listening reads as a filter
-under any rule of time); a 500 Hz signal covers more than half the 500 Hz span, so the median
-division does not reach it; and a look is one 85 ms periodogram, so a bin's 20th percentile over
-the looks a signal held in a share *p* of them sits at the 0.2/(1 − *p*) quantile of its noise,
-2–10 dB over its free neighbours for *p* = 33–77 % (`scratch/offset_check.py`). After 35 s of
-listening R4 leaves 6 of 84 warning on each draw (R3 8 and 10). On the harness's H(a), R4 warned in
-2 of 24 runs (`40m-rtty-contest-2300`'s station b, in its first 6–18 s of listening), R3 in all
-three of that scenario's draws at both stations and in session too; the cut grid (H(b)) holds under
-R4, 22 of 24 cuts named and none of 138 uncut recordings warned. **H1 now reads the daemon's
-`filter:` log lines as well as the recordings**: the recordings alone missed warnings given while a
-station idled before its session. Merged and independent of R4: the trace follows a scan's hops
-(and `preroll_keying` adds the pre-roll's from `dial: moved to` lines), L1's `filter:` log line
-(`Station::note_filter`, the manual's Log section, 1.6.0), and H1's `filter_warnings` column in
-`session_matrix.py` and the nightly report (a report, not an invariant). S1 was not built. The
-upload script refused this session's read key, so K2 field and K4 are owed. **`--keep-passing` does
-not exist**: `session_matrix.py` keeps a run's audio unless `--drop-passing-audio`.
-
-**R5, option B, judged (2026-11-18, `07-r5-registered.md`, `08-r5-results.md`; the author's "try
-B").** Each look the mean spectrum of its half second (`SpectrumAnalyser::mean_to`), registered
-with its predictions before any run. It misses more than R4: on the FT8 band the leave-out now
-takes the stations' bins out of nearly every look, the edges go blank, and a cut R3 names reads
-*waiting* (K1 47 of 48, K2 up to 6 of 160); Q1 barely moves (19–20 of 84). The three ablations miss
-as much, R5c (steady looks alone) included, so the steady looks cause it; fixing that would change
-the leave-out too, a third change to one reading, which is the review rule's case. Not merged
-(`scratch/r5.patch`). Every reading of this family misses Q1, whose warm-up, always-on and 500 Hz
-span cases no rule of time can clear: the author's choice is R4 with those three accepted, today's
-R3, or W2. The upload script refused the session's read key again, so the field set is still owed.
+to find its half.
 
 **RadioPost, and one modem for both systems (2026-11-09).** RadioPost (`KK4ODA/RadioPost`)
 reaches Aether through its modem interface (RPMI, its RP-4), which maps onto the control API. The
@@ -3180,7 +3032,7 @@ HF), and HF's optional abilities (`moved_to` a bandwidth, `receive_offset_hz`). 
 station as a `HeardFrame` (times on the station's clock, the air's own frame kept for
 `FrameDecoder`) and an announcement as an `Arrival`. HF's air is `HfAir` (`air/hf.rs`, with
 `phy_timing`); the panel's busy readings come through `Station::channel_sense`. The offline tools
-(`--replay`, `--busy-trace`, `--passband-trace`) and `capabilities` still use HF's parts. **A
+(`--replay`, `--busy-trace`) and `capabilities` still use HF's parts. **A
 refactor of the station is proven by `core/aetherd/examples/air_identity.rs`**: two real stations
 through a seeded channel in ten sessions, every event, frame report, keying tag, delivery and
 received byte and a hash of all audio printed; build it against a worktree of the commit before

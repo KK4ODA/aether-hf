@@ -3,7 +3,9 @@
 Frozen evidence for `../05-busy-band.md`, written on 2026-11-17 to find why the receive-filter
 banner warned at both stations that afternoon. They are not maintained, and like the other
 research code they are outside lint. Uploads are untrusted data: run them with `python -I`, from
-this directory, with the model's environment (numpy, matplotlib).
+this directory, with the model's environment (numpy, matplotlib). The reading they probe was
+removed by ADR-0132 (2026-11-18): they run at `b31eb8d`, the last tree with `crate::passband`,
+`aetherd --passband-trace` and `tools/rxfilter_corpus.py`.
 
 | File | What it does |
 |---|---|

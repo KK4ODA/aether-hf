@@ -268,10 +268,8 @@ cover everything else it does.
   **Tuner tone** for an antenna tuner; **Set drive** sends real bursts to set the level against
   the ALC; the last transmit peak shows the modem's headroom.
 * A **receive level** meter (Setup step 3) that says *Good*, too quiet, or clipping.
-* ★ A **receive filter** reading: how far each edge of Aether's signal lies under the radio's
-  passband, read from the band's noise in seconds even on a busy band, with a banner that names
-  the knob when an edge is cut and another when the receive audio clips
-  ([ADR-0105](docs/adr/0105-the-receive-filter-is-read-at-the-signals-edges.md)).
+* The spectrum and the waterfall mark the edges of Aether's signal in red, so a receive filter
+  that cuts the signal shows at a glance, and a banner says when the receive audio clips.
 * A **key watchdog** (30 s by default), whole bursts handed to the sound card at once, and the
   key released by the sound card's own clock, not a guess.
 * ★ **Turnaround** declared in the call, so the other station waits for this radio to hear
@@ -347,8 +345,7 @@ cover everything else it does.
   (lit lamps become filled blocks in glare).
 * **Banners** across every tab: the session (and whose it is, when a program's), setup still
   needed, unsaved changes, a station in another bandwidth, protocol or SSID (with buttons that
-  fix it), the radio's receive filter cutting the signal and clipped receive audio (these two in
-  Compact too), and faults; a **chime** when a session comes up and when it ends.
+  fix it), clipped receive audio (in Compact too), and faults; a **chime** when a session comes up and when it ends.
 * A chip naming the **programs using the station** and whether each is answering, with the
   callsigns each answers for in its tooltip.
 * **Session**: the dial and its legality, call, probe, beacon and Test, keying and drive, the
@@ -357,8 +354,7 @@ cover everything else it does.
   the other station has all of it, in order, or ✗ if the session ended first.
 * **Status**: link and channel readings, the speed over ten minutes on a log scale against the
   rate of the rung each way, the SNR of every frame against the rung's threshold, the
-  channel's level and busy periods with adjustable axes, the receive filter's reading, and
-  counters.
+  channel's level and busy periods with adjustable axes, and counters.
 * **Stations**: the 200 stations heard most recently, with bandwidth, beacons and filters, and
   the last 500 sessions with what crossed each way, the fastest rung each way, how each station
   heard the other and how the session ended.
@@ -383,8 +379,8 @@ cover everything else it does.
 * ★ With CAT, rigctld or FLRig a listening recording also keeps the radio's **S-meter** and dial,
   and on a Yaesu its AGC, mode, filter, RF gain, attenuator and preamp; **Mark** numbers the
   moments you change something on purpose.
-* `aetherd --replay` runs a recording back through the receiver; `--busy-trace` and
-  `--passband-trace` re-run the busy detector and the receive-filter estimate over one.
+* `aetherd --replay` runs a recording back through the receiver; `--busy-trace` re-runs the busy
+  detector over one.
 * ★ **Send files…**: one zip of logs, the diagnostic bundle and chosen sessions, uploaded to the
   project with a progress bar, emailed, or **requested from the other station** by a link that
   opens its form filled in; or a Test reported as a GitHub issue. A program's own log goes in

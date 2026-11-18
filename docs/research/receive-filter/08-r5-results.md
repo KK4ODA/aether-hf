@@ -84,3 +84,10 @@ the author's:
 2. keep today's reading (R3);
 3. use the other station's decoded frames to cancel a warning (W2, `05-busy-band.md` §6.2). This
    reverses the author's Gate 2 answer, and acts only after a session.
+
+## 6. The author's decision
+
+On 2026-11-18 the author chose none of the three: the warning goes. False warnings would be noise
+for every new operator, and no other modem has one. The check is the waterfall, whose red lines mark
+the signal's edges. ADR-0132 records it. The clipping warning stays. This folder's scripts and
+`tools/rxfilter_corpus.py` run at `b31eb8d`, the last tree with the reading.

@@ -834,7 +834,6 @@ function applyMetrics(metrics) {
   }
   applyTxPeak(metrics.tx_peak_dbfs);
   keyingSummary();
-  if (metrics.rx_filter !== undefined) applyRxFilter(metrics.rx_filter);
   if (metrics.clipping !== undefined) applyClipping(metrics.clipping);
   // the link: the receiver's last frame, what the other end reports, the account
   if (metrics.snr_db !== undefined) {
@@ -5107,20 +5106,15 @@ function theirsOlder(mismatch) {
   return mismatch.theirs_protocol < mismatch.ours_protocol;
 }
 
-// ── the receive filter and clipping (ADR-0105) ──────────────────────
+// ── clipping (ADR-0132) ─────────────────────────────────────────────
 //
-// The modem reads the radio's receive filter from the band's noise while it listens, and calls
-// an edge of its signal cut 12 dB or more down. A cut and clipping are each said on every tab,
-// Compact included, with the knob to turn; a dismissed warning comes back when its reading
-// changes: another edge, 3 dB further down, or another bandwidth. "Can't check" is said only
-// on the Status tab's Receive filter line.
-const FILTER_DISMISSED_KEY = "aether.filterDismissed";
+// More than 0.1 % of the audio at full scale over ten seconds is said on every tab, Compact
+// included, with the knob to turn; a dismissed warning comes back once the audio has stopped
+// clipping and starts again.
 const CLIP_DISMISSED_KEY = "aether.clipDismissed";
-const CUTS = ["top", "bottom", "both"];
 // what the last metrics said of clipping, for the Receive level line
 let lastClipping = null;
 // when storage is refused (a private window), dismissed for the page's life
-let filterDismissedHere = null;
 let clipDismissedHere = false;
 
 function readStored(key) {
@@ -5138,92 +5132,6 @@ function writeStored(key, value) {
   } catch {
     // remembered for this page only
   }
-}
-
-// the drops at the edges a verdict names, whole decibels
-function cutDrops(f) {
-  const low = Math.round(f.low_drop_db ?? 0);
-  const high = Math.round(f.high_drop_db ?? 0);
-  return { low, high };
-}
-
-function filterSentence(f) {
-  const { low, high } = cutDrops(f);
-  if (f.verdict === "top") {
-    return `The radio's receive filter cuts the top of the signal, about ${high} dB down: the IF shift, the high cut, or the filter width.`;
-  }
-  if (f.verdict === "bottom") {
-    return `The radio's receive filter cuts the bottom of the signal, about ${low} dB down: the IF shift, the low cut, or the filter width.`;
-  }
-  const narrower = stationBandwidthHz === 2300 ? ", or run the modem at 500 Hz" : "";
-  return `The radio's receive filter cuts both edges of the signal, about ${low} and ${high} dB down: the filter width${narrower}.`;
-}
-
-// whether a warning dismissed as `was` still holds for the reading `f`
-function filterStillDismissed(was, f) {
-  if (!was || was.verdict !== f.verdict || was.hz !== stationBandwidthHz) return false;
-  const { low, high } = cutDrops(f);
-  const lowCut = f.verdict !== "top";
-  const highCut = f.verdict !== "bottom";
-  return (!lowCut || low < was.low + 3) && (!highCut || high < was.high + 3);
-}
-
-function filterDismissed() {
-  const stored = readStored(FILTER_DISMISSED_KEY);
-  if (stored === null) return filterDismissedHere;
-  try {
-    return JSON.parse(stored);
-  } catch {
-    return null;
-  }
-}
-
-function applyRxFilter(f) {
-  renderFilterTile(f);
-  const banner = $("filter-banner");
-  if (f?.verdict === "clear") {
-    // the cut went: the next one is said again
-    filterDismissedHere = null;
-    writeStored(FILTER_DISMISSED_KEY, null);
-  }
-  if (!f || !CUTS.includes(f.verdict)) {
-    banner.hidden = true;
-    return;
-  }
-  $("filter-banner-text").textContent = filterSentence(f);
-  $("btn-filter-setup").hidden = !(f.verdict === "both" && stationBandwidthHz === 2300);
-  banner.dataset.reading = JSON.stringify({ verdict: f.verdict, ...cutDrops(f), hz: stationBandwidthHz });
-  banner.hidden = filterStillDismissed(filterDismissed(), f);
-}
-
-function renderFilterTile(f) {
-  const value = $("v-rx-filter");
-  const sub = $("v-rx-filter-sub");
-  const verdict = f?.verdict ?? "waiting";
-  const { low, high } = f ? cutDrops(f) : { low: 0, high: 0 };
-  const words = {
-    waiting: ["—", f?.looks ? `${f.looks} of 12 looks` : "reading the band's noise"],
-    unknown: ["Can't check", "band noise too weak"],
-    clear: ["Passes the signal", `bottom ${low} dB, top ${high} dB down`],
-    top: ["Cuts the top", `top ${high} dB down`],
-    bottom: ["Cuts the bottom", `bottom ${low} dB down`],
-    both: ["Cuts both edges", `bottom ${low} dB, top ${high} dB down`],
-  }[verdict] ?? ["—", ""];
-  value.textContent = words[0];
-  sub.textContent = words[1];
-  value.classList.toggle("warn", CUTS.includes(verdict));
-}
-
-function dismissFilter() {
-  const banner = $("filter-banner");
-  const reading = banner.dataset.reading ?? null;
-  try {
-    filterDismissedHere = reading ? JSON.parse(reading) : null;
-  } catch {
-    filterDismissedHere = null;
-  }
-  writeStored(FILTER_DISMISSED_KEY, reading);
-  banner.hidden = true;
 }
 
 function applyClipping(c) {
@@ -5245,14 +5153,8 @@ function dismissClipping() {
   $("clip-banner").hidden = true;
 }
 
-function wireRxFilter() {
-  $("btn-filter-dismiss").addEventListener("click", dismissFilter);
+function wireClipping() {
   $("btn-clip-dismiss").addEventListener("click", dismissClipping);
-  $("btn-filter-setup").addEventListener("click", () => {
-    selectTab($("tab-setup"));
-    document.querySelector('.step[data-step="4"]')?.scrollIntoView({ behavior: "smooth", block: "start" });
-    $("radio-bandwidth").focus({ preventScroll: true });
-  });
 }
 
 // ── debug mode (ADR-0050) ───────────────────────────────────────────
@@ -6333,7 +6235,7 @@ function wire() {
   wireStepper();
   wireMismatch();
   wireDebug();
-  wireRxFilter();
+  wireClipping();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
   $("radio-identify-by").addEventListener("change", showIdentifyBy);
   $("radio-cwid").addEventListener("change", () => {

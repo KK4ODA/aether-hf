@@ -621,7 +621,7 @@ impl BusyDetector {
     /// all of it for one keyed half the time. One block more for the one still being
     /// gathered. Audio further back than this, with the channel still reading clear, held
     /// nothing either path could see — what a caller measuring the noise *between* signals
-    /// has to wait for before it trusts a window (`Station::sample_passband`).
+    /// has to wait for before it trusts a window.
     #[must_use]
     pub fn attack_s(&self) -> f64 {
         ((3 * SHAPE_BLOCKS).max(ATTACK_WINDOW) + 1) as f64 * self.config.block_s
