@@ -485,3 +485,75 @@ def test_a_steady_channel_is_estimated_as_it_always_was(
         assert np.array_equal(follows.symbols, steady.symbols)
         assert np.array_equal(follows.noise_var, steady.noise_var)
         assert follows.snr_3k_db == steady.snr_3k_db
+
+
+def _received_by(
+    params: WaveformParams,
+    profile: str,
+    snr_db: float,
+    mode_index: int,
+    frames: int,
+    seed: int,
+    receivers: list[FrameReceiver],
+) -> list[tuple[list[ReceivedFrame], np.ndarray]]:
+    """``frames`` DATA frames through ``profile``, each received by every receiver at the same
+    sync, with the symbols that were sent (ADR-0131's measure: the error against the truth)."""
+    modem = Modem(params)
+    mode = modem.air.modes[mode_index]
+    codec = modem.codec(mode, modem.air.long)
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(frames):
+        payload = bytes(rng.integers(0, 256, codec.payload_bytes, dtype=np.uint8))
+        y = make_channel(
+            profile, snr_db=snr_db, fs=FS, seed=int(rng.integers(0, 2**31)), signal_power=1.0
+        ).process(_buffer(modem.data_burst(payload, mode)))
+        y = modem.detector.condition(y)
+        (sync,) = modem.detector.detect(y, max_frames=1)
+        out.append(([rx.receive(y, sync) for rx in receivers], codec.encode(payload, 0)))
+    return out
+
+
+def _data_error_db(frame: ReceivedFrame, sent: np.ndarray, params: WaveformParams) -> float:
+    """The data carriers' error over their power, each symbol weighted by |Ĥ|² (dB): the
+    ``mer|h|`` of ``tools/mer_reading.py``, negated."""
+    rx = FrameReceiver(params)
+    rows = [i for i in range(frame.channel.shape[0]) if i not in frame.layout.pilot_symbol_indices]
+    h2 = np.abs(frame.channel[rows][:, rx.data_c]).reshape(-1) ** 2
+    err = np.abs(frame.symbols - sent) ** 2
+    return float(10 * np.log10(np.sum(h2 * err) / np.sum(h2 * np.abs(sent) ** 2)))
+
+
+def _receiver(params: WaveformParams, **settings: bool) -> FrameReceiver:
+    rx = FrameReceiver(params)
+    for key, value in settings.items():
+        setattr(rx, key, value)
+    return rx
+
+
+@pytest.mark.parametrize(
+    ("bandwidth", "mode_index", "median_gain_db"), [(2300, 4, 3.0), (500, 4, 1.5)]
+)
+def test_the_estimate_takes_the_delay_out_before_it_interpolates(
+    bandwidth: int, mode_index: int, median_gain_db: float
+) -> None:
+    """ADR-0131: on ITU Poor at 24 dB the data carriers lost 10–12 dB to the corners a straight
+    line cuts between pilots on a channel turning in phase; with the slope taken out no frame loses
+    and the median frame gains several decibels — less at 500 Hz, whose 480 Hz turns less across
+    its carriers. On AWGN, where nothing turns, the estimate is what it was. The reported SNR is
+    the same either way, bit for bit."""
+    params = NARROW_500 if bandwidth == 500 else WIDE_2300
+    plain, derotated = _receiver(params), _receiver(params, derotate=True)
+    gains = []
+    for (off, on), sent in _received_by(
+        params, "poor", 24.0, mode_index, 6, 31, [plain, derotated]
+    ):
+        assert on.snr_3k_db == off.snr_3k_db
+        gains.append(_data_error_db(off, sent, params) - _data_error_db(on, sent, params))
+    assert min(gains) > 0.0, gains
+    assert np.median(gains) > median_gain_db, gains
+    for (off, on), sent in _received_by(
+        params, "awgn", 24.0, mode_index, 3, 32, [plain, derotated]
+    ):
+        assert on.snr_3k_db == off.snr_3k_db
+        assert abs(_data_error_db(off, sent, params) - _data_error_db(on, sent, params)) < 0.3

@@ -1,10 +1,10 @@
 """The modulation error ratio of OFDM frames, beside the receiver's own SNR (issue #15).
 
     python -I tools/mer_reading.py field RECORDING.wav SIDECAR.json [WAV SIDECAR ...]
-                                   [--frames] [--carriers]
+                                   [--frames] [--carriers] [--receiver KEY=VALUE ...]
     python -I tools/mer_reading.py sim [--hz 2300|500] [--profile awgn,good,moderate,poor,nvis]
                                    [--snr 6,12,18,24] [--rung R,R,...] [--frames N] [--no-papr]
-                                   [--no-blanker] [--seed S]
+                                   [--no-blanker] [--seed S] [--receiver KEY=VALUE ...]
 
 Every frame is received again by the model. A frame that decodes has its payload re-encoded at
 the redundancy version it came at: the symbols that went on the air, exactly, so its error is
@@ -40,6 +40,9 @@ measured against the truth, not against the nearest constellation point. Per fra
 audio shows as a band that stays down from frame to frame. Tone frames have no constellation and
 are counted, not measured.
 
+``--receiver KEY=VALUE`` sets a ``FrameReceiver`` setting for the run (``derotate=true``, ADR-0131;
+the settings as ``bench_cut.py`` takes them), to measure a receiver change.
+
 ``sim`` runs the same measurement on the model's channel (OFDM rungs at a set SNR), where the SNR
 is known: the check that the tool reads what is there, and the loss by channel class.
 """
@@ -57,6 +60,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aether_model.channel import make_channel
 from aether_model.frame.modes import air_interface
@@ -403,6 +407,7 @@ def main() -> None:
     f.add_argument("pairs", nargs="+", type=Path)
     f.add_argument("--frames", action="store_true", help="a line per frame")
     f.add_argument("--carriers", action="store_true", help="per-carrier readings by band")
+    f.add_argument("--receiver", action="append", default=[], help="a FrameReceiver KEY=VALUE")
     s = sub.add_parser("sim", help="OFDM rungs through the model's channel")
     s.add_argument("--hz", type=int, default=2300, choices=(2300, 500))
     s.add_argument("--profile", default="awgn")
@@ -416,7 +421,13 @@ def main() -> None:
         help="the receiver's impulse blanker off (with --no-papr: it takes the peaks for impulses)",
     )
     s.add_argument("--seed", type=int, default=1)
+    s.add_argument("--receiver", action="append", default=[], help="a FrameReceiver KEY=VALUE")
     args = ap.parse_args()
+    if args.receiver:
+        from bench_cut import configure
+
+        configure(tuple(args.receiver))
+        print("receiver:", ", ".join(args.receiver))
     if args.cmd == "field":
         if len(args.pairs) % 2:
             raise SystemExit("field takes WAV SIDECAR pairs")

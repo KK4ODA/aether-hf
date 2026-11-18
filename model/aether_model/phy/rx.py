@@ -18,7 +18,8 @@ Given a :class:`~aether_model.phy.sync.FrameSync`, the receiver
    * comb estimates (every 4th carrier) on data symbols, smoothed over the neighbouring
      symbols (3-tap, ±1 symbol — well inside the coherence time of a 1 Hz Doppler channel)
      and linearly interpolated across carriers (both edges are pilots, so nothing is ever
-     extrapolated);
+     extrapolated) — with ``derotate``, the channel's phase slope across frequency taken out
+     first and put back after (ADR-0131);
 5. equalizes the data carriers by division and returns the constellation symbols in
    time-major order together with a per-symbol noise variance ``σ²/|Ĥ|²`` — the LLR
    weighting that lets the LDPC decoder discount faded carriers instead of trusting them.
@@ -170,6 +171,15 @@ class FrameReceiver:
     path's, and 16-QAM ½ decoded 4 frames of 20 at +8 dB of the 18 that following the channel
     decodes. Where the pilots' change from symbol to symbol stands clear of their noise, the
     neighbours' weight is the one that leaves the least error (:meth:`_motion`)."""
+    derotate: bool = False
+    """Take the channel's phase slope across frequency out before interpolating between the comb
+    pilots, and put it back after (ADR-0131, accepted; off until ``rx.rs`` has it too). The
+    pilots are 160 Hz apart, and a channel centred 1 ms after the receiver's timing turns 58°
+    between two of them: a straight line between two points of a rotating phasor cuts the corner,
+    and on ITU Poor at 24 dB the data carriers lost 10–12 dB that the pilots did not
+    (``tools/mer_reading.py``); taken out, ITU Poor decodes 44 % more frames on both airs. The
+    slope is read carrier to adjacent carrier on the full pilot symbols, 40 Hz apart, so it does
+    not alias below 12.5 ms. Linear interpolation only."""
     MOTION_SHARE = 0.1
     """How much the channel must move for the receiver to follow it: the comb pilots' second
     difference in time, less what their noise puts there, at least this share of their power.
@@ -342,7 +352,21 @@ class FrameReceiver:
                 sm[s_i] = comb[lo : hi + 1].mean(axis=0)
 
             def interp(row: ComplexArray) -> ComplexArray:
-                return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
+                if rot is None:
+                    return plain(row)
+                # the phase slope out, a straight line between the pilots, the slope back; at the
+                # pilots themselves their own values, exactly, so the residual the noise and the
+                # SNR are read from is the plain interpolation's to the last bit (ADR-0131 §2.3)
+                out = rot * plain(row * np.conj(rot[pc]))
+                out[pc] = row
+                return out
+
+        def plain(row: ComplexArray) -> ComplexArray:
+            return np.interp(carriers, pc, row.real) + 1j * np.interp(carriers, pc, row.imag)
+
+        # the channel's phase slope across frequency (ADR-0131), once the full pilot symbols'
+        # chips are known (step 4); until then the interpolation is plain
+        rot: ComplexArray | None = None
 
         # 3. mode and redundancy version from the pilot-symbol chips (DATA frames)
         mode_idx, rv, runner_up, confidence, follows = 0, 0, 0, 1.0, 0
@@ -377,6 +401,13 @@ class FrameReceiver:
             full[s_i] = True
         for s_i in data_syms:
             known[s_i, pc] = ref
+        if self.derotate and self.channel_estimator == "linear":
+            # carrier to adjacent carrier on the full pilot symbols, every carrier now known:
+            # H[k+1]·H*[k] turns by the slope whatever the channel's magnitude
+            direct_full = raw[full] / known[full]
+            slope = complex(np.sum(direct_full[:, 1:] * np.conj(direct_full[:, :-1])))
+            if abs(slope) > 0.0:
+                rot = np.exp(1j * np.angle(slope) * carriers)
         motion = (
             self._motion(comb, raw, known, full, pre)
             if self.track_motion and self.channel_estimator == "linear"
@@ -423,7 +454,12 @@ class FrameReceiver:
             scale = min(1.0, noise * (5.0 / 3.0 - 2.0 * weight) / max(sigma2, 1e-12))
             sigma2_sym = sigma2_sym * scale
             reported *= scale
-        sig_power = float(np.mean(np.abs(h[data_syms]) ** 2))
+        if rot is None:
+            sig_power = float(np.mean(np.abs(h[data_syms]) ** 2))
+        else:
+            # the SNR is reported as it was (ADR-0131 §2.3): the plain interpolation's power, which
+            # cuts the corners the de-rotated one does not
+            sig_power = float(np.mean([np.abs(plain(sm[s_i])) ** 2 for s_i in data_syms]))
         snr_carrier = sig_power / max(reported, 1e-12)
         bw_ratio = self.p.occupied_bandwidth_hz / 3000.0
         # 5. equalize data carriers of payload symbols, time-major

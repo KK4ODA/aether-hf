@@ -3371,6 +3371,25 @@ family apart (`below`). To find what part two harness builds on one draw, compar
 `sent` data frames (mode, RV, seq) in order: the first difference says whether a rule acted or the
 draw did.
 
+**The MER tool and ADR-0131 (2026-11-17, issue #15; the author's "start on 1 and 2", then
+"de-rotation only").** `tools/mer_reading.py` (`field` over recordings, `sim` over the model's
+channel, `--receiver KEY=VALUE`) re-encodes each decoded OFDM frame and measures the data carriers'
+error against what was sent: the pilot SNR, the textbook and |H|²-weighted MER, the same on a
+channel re-estimated from the data (`da`), the decision-directed MER, and the error over the noise
+the decoder was given (`model`). On ITU Poor at 24 dB the data lost 10–12 dB that the pilots did
+not: linear interpolation across the channel's phase slope between pilots 160 Hz apart. ADR-0131
+(accepted for building): `FrameReceiver.derotate` reads the slope carrier to carrier on the full
+pilot symbols, takes it out before interpolating and puts it back, each pilot carrier kept exact
+and the SNR reported from the plain interpolation, so the rate controller's SNR does not move;
+`tools/bench_estimate.py` (`bench/baselines/channel_estimate.csv`): +44 % decodes on Poor at both
+airs, +3–7 % on Moderate, no point anywhere more than a frame under. The switch is **off until
+`rx.rs` has it** (ADR-0131 §9: the port, the vectors regenerated with a slope case, the harness
+A/B) — this PC has no Rust. Measured and not built: the estimate's error in the decoder's noise
+(normalised min-sum ignores a near-uniform scale). The Wiener estimator stays (it wins on AWGN,
+180/180 against 156, and 2 300 Hz NVIS). Also seen with the tool, not yet explained: on report
+18's sessions the mobile's pilot SNR read 3–4 dB over what its data carriers met (not the
+estimate, timing, the blanker or hum) — evidence for the rate review.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
