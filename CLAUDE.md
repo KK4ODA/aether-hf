@@ -3382,9 +3382,16 @@ not: linear interpolation across the channel's phase slope between pilots 160 Hz
 pilot symbols, takes it out before interpolating and puts it back, each pilot carrier kept exact
 and the SNR reported from the plain interpolation, so the rate controller's SNR does not move;
 `tools/bench_estimate.py` (`bench/baselines/channel_estimate.csv`): +44 % decodes on Poor at both
-airs, +3–7 % on Moderate, no point anywhere more than a frame under. The switch is **off until
-`rx.rs` has it** (ADR-0131 §9: the port, the vectors regenerated with a slope case, the harness
-A/B) — this PC has no Rust. Measured and not built: the estimate's error in the decoder's noise
+airs, +3–7 % on Moderate, no point anywhere more than a frame under. **The port (2026-11-18,
+ADR-0131 §10) is built and its A/B missed**: `rx.rs`'s `phase_slope`/`estimate`, on in both, the
+SNR bit-identical, the vectors with two late-centred cases; harness 130 → 128 of 132, no overlap,
+air ×0.986, but `80m-leave-together-500` 2/2 → 0/2 (7/8 → 5/8 over eight draws), and on ITU NVIS
+(two rays 7 ms apart, past the 6.25 ms the 160 Hz comb can follow) de-rotation aliases both rays
+where the old line aliased one: 2 300 Hz NVIS 372 → 301 of 1 200 decodes
+(`bench/baselines/channel_estimate_nvis.csv`, `bench_estimate.py --snrs`), E3 missed at NVIS's own
+points, which §7's bench never reached. The change stopped: it is on branch
+`claude/compassionate-albattani-m7oohe`, not on `master`; the author's options are §10.5 (gate it
+on the slope's coherence, land it off, or take it). Measured and not built: the estimate's error in the decoder's noise
 (normalised min-sum ignores a near-uniform scale). The Wiener estimator stays (it wins on AWGN,
 180/180 against 156, and 2 300 Hz NVIS). Also seen with the tool, not yet explained: on report
 18's sessions the mobile's pilot SNR read 3–4 dB over what its data carriers met (not the

@@ -3,9 +3,13 @@
     python -I tools/bench_estimate.py OUT.csv [--arms before,derotate,wiener]
         [--frames 30] [--jobs 4] [--channels awgn,good,moderate,poor,flutter,nvis]
     python -I tools/bench_estimate.py OUT.csv --judge    # read OUT.csv back and judge it
+    python -I tools/bench_estimate.py OUT.csv --channels nvis --air 2300 --modes 0,2,4
+        --snrs 4,8,12,16 --arms before,derotate          # a grid of one's own
 
 The points are ``bench_noise_shape.py``'s: every air, channel and OFDM mode the committed curves
-hold, at the SNRs nearest 30 % and 10 % frame errors, flutter and NVIS at Poor's points. Each
+hold, at the SNRs nearest 30 % and 10 % frame errors, flutter and NVIS at Poor's points — or,
+with ``--snrs``, every channel, mode and SNR named on the airs named (``--air``, ``--modes``):
+NVIS at Poor's points decodes almost nothing, so its own operating points are a grid. Each
 point's frames go through ``bench_phy.run_point`` once per arm, so every arm sees the same frames,
 channel and noise. The arms set ``FrameReceiver`` settings in the worker:
 
@@ -160,6 +164,9 @@ def main() -> None:
     ap.add_argument("--channels", default="awgn,good,moderate,poor,flutter,nvis")
     ap.add_argument("--seed", type=int, default=9000)
     ap.add_argument("--judge", action="store_true", help="judge an existing OUT.csv")
+    ap.add_argument("--snrs", help="a grid of SNRs in place of the curves' points")
+    ap.add_argument("--modes", default="0,2,4", help="the grid's OFDM modes")
+    ap.add_argument("--air", default="500,2300", help="the grid's airs")
     args = ap.parse_args()
     if args.judge:
         rows = read(args.out)
@@ -172,7 +179,17 @@ def main() -> None:
         raise SystemExit(f"no such arm: {', '.join(sorted(unknown))} (arms: {', '.join(ARMS)})")
     from bench_noise_shape import ofdm_points
 
-    points = ofdm_points(args.channels.split(","))
+    points = (
+        [
+            (hz, channel, mode, float(snr))
+            for hz in args.air.split(",")
+            for channel in args.channels.split(",")
+            for mode in args.modes.split(",")
+            for snr in args.snrs.split(",")
+        ]
+        if args.snrs
+        else ofdm_points(args.channels.split(","))
+    )
     jobs = [
         (hz, channel, mode, snr, args.frames, args.seed + 7919 * i, arm)
         for i, (hz, channel, mode, snr) in enumerate(points)

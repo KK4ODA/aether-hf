@@ -135,4 +135,4 @@ context → decision → alternatives considered → consequences.
 | [0128](0128-the-first-burst-starts-safe.md) | The first burst after a call starts safe and tries the bold rung with one frame | proposed: behind switches, off; results in — fails F2–F4 as built and as variant J, awaiting the author |
 | [0129](0129-the-station-scans-for-a-program.md) | The station scans its channels for the program that asks, and never leaves one a caller may be on | accepted for building (§8): the harness first (§6), then the air |
 | [0130](0130-a-short-transmission-goes-at-the-most-robust-rung-that-carries-it.md) | A short transmission goes at the most robust rung that carries it | accepted |
-| [0131](0131-the-channel-estimate-takes-the-delay-out-before-it-interpolates.md) | The channel estimate takes the delay out before it interpolates | accepted for building: the model step (off), the port to come (§9) |
+| [0131](0131-the-channel-estimate-takes-the-delay-out-before-it-interpolates.md) | The channel estimate takes the delay out before it interpolates | accepted for building: the port built on a branch, its A/B missed on NVIS (§10), waits on the author |

@@ -3,10 +3,13 @@
 **Status:** accepted for building, 2026-11-17 — de-rotation only, the author's answer (§8) to the
 measurements of §7. Started on the author's "start on 1 and 2" after the MER tool's first readings
 (issue #15, `tools/mer_reading.py`). The model step is built behind `FrameReceiver.derotate`
-(`model/aether_model/phy/rx.py`), off; the port (`aether-phy/src/rx.rs`) turns it on in the model
-and the core together, with the vectors regenerated and the harness A/B (§9). No wire change, no
-configuration key. The reported SNR does not move (§2.3), so the rate controller's rule is not
-touched.
+(`model/aether_model/phy/rx.py`). **The port is built, and its harness A/B missed (§10,
+2026-11-18):** de-rotation loses decodes on ITU NVIS, whose two rays 7 ms apart the comb pilots
+cannot follow, by 19 % at 2 300 Hz — E3 missed at NVIS's own operating points, which §7's bench
+never reached — and a 500 Hz NVIS scenario completed less often. The change stopped there: the
+port, with de-rotation on, is on branch `claude/compassionate-albattani-m7oohe`, not on `master`,
+and waits on the author (§10.5). No wire change, no configuration key. The reported SNR does not
+move (§2.3), so the rate controller's rule is not touched.
 
 ## 1. Context
 
@@ -202,3 +205,121 @@ On a machine with a Rust toolchain, in one change:
    about a millisecond from the timing, so the slope is exercised.
 3. The harness A/B (every scenario × 2 draws against the build before), then a beta, with the
    manual unchanged (nothing an operator sees or sets changes).
+
+## 10. Built, and the A/B's miss (2026-11-18)
+
+### 10.1 The port
+
+`FrameReceiver::receive` in `aether-phy/src/rx.rs`, as §9.1 says: after the full pilot symbols'
+known values are set, `phase_slope` reads `arg Σ Ĥ[k+1]·Ĥ*[k]` over their direct estimates, and
+the data symbols' estimate (`estimate`, and ADR-0082's re-estimate through it) takes
+`e^{−jφc}` off the comb pilots, interpolates, puts `e^{+jφk}` back and keeps each pilot carrier's
+own value. The chip detection keeps the plain interpolation. The signal power the SNR is
+reported against is the plain interpolation's of the rows the estimate came from (smoothed, or
+followed when the channel moves), summed in the same order as before, so the SNR is the same to
+the bit with de-rotation on or off. `FrameReceiver::derotate` is on by default, and
+`FrameReceiver.derotate = True` in the model; off is the receiver before (`bench_estimate.py`'s
+`before` arm sets it). The spec's reference receiver (`air-interface.md`) says so.
+
+`phy_vectors.json`: the `ofdm_receive` cases' symbols and noise variances moved, none of their
+SNRs (the generator checks it, receiving every case again with de-rotation off), and two cases
+were added on two rays 2 ms apart, the channel centred a millisecond late, one on each air
+(`OFDM_LATE_CASES`; `model_vectors.rs` asserts the vectors cover one). A Rust test
+(`the_slope_comes_out_of_the_estimate_and_the_reported_snr_does_not_move`) holds the SNR's bits
+on a ray 1 ms late, an ITU Poor-like pair and a pair beating at 10 Hz (the motion branch), and the
+error weighted as the decoder weighs it falls −17.6 → −24.7 dB and −9.5 → −17.7 dB on the first
+two. `check_vectors.py` clean; `cargo test --release --workspace`, clippy, ruff, mypy and the
+quick pytest set green. The model test of §7 now names its plain receiver's switch.
+
+### 10.2 The harness A/B
+
+Every scenario in `bench/scenarios/` × 2 draws (132 runs an arm), this build against `186ddc4`
+(the model step, de-rotation off in the port), the two arms run side by side on one machine:
+
+| | before | after |
+|---|---|---|
+| passed | 130 / 132 | 128 / 132 |
+| radiated overlaps | 0 | 0 |
+| air, runs both passed (128) | 30 662 s | 30 226 s (×0.986) |
+| air, paired geometric mean | | ×0.975 at 500 Hz (64), ×0.998 at 2 300 Hz (64) |
+| Test message / file rate | | ×1.021 / ×1.011 (38 pairs) |
+
+Faster where the delay spread is: `80m-flutter-500` ×0.90, `80m-qsb-dropout-500` ×0.90,
+`80m-poor-500-pactor-signalink` ×0.87, `80m-agc-carrier-inside-500` ×0.89,
+`80m-agc-carrier-outside-500` ×0.93, `20m-dx-500` ×0.93, `40m-gateway-three-clients-2300` ×0.86.
+`scenario_trend.py` against `bench/baselines/scenarios.csv` flags nothing slower in either arm.
+The two failures both arms share are `80m-agc-carrier-inside-500` s1033 (its message's budget)
+and `80m-trimode-gateway-client-vanishes-500` s1046 (no connect within 180 s).
+
+**The miss: `80m-leave-together-500`** (ITU NVIS, 8 dB, 500 Hz; a 1 000-byte message within
+300 s of air after both stations left a transfer together) passed both draws before and neither
+after — `scenario_trend.py` calls it serious. Eight draws on each build (`--seeds 8`): before
+7 of 8, after 5 of 8 (s4042 fails on both); the message's time, paired by draw, before → after:
+248 → lost, 276 → lost, 247 → 253, 192 → 256, lost → lost, 212 → 252, 205 → 205, 182 → 171 s.
+Draws 0 and 1 repeated their verdicts on a second run of each build. Before, the message already
+took 182–276 s of its 300.
+
+The trace (draw 0, the sidecars' sent and received data frames in order): the two arms part at
+the second session's first transmission, six frames at rung 5 (QPSK, the first OFDM rung), where
+the de-rotated receiver decoded seq 3 and the old one did not; from there the session runs another
+course. Before, the sender settled on rung 2 (a four-tone kind) from 130 s into the session and
+the message took 226 s; after, it went back and forth between rung 5, the floor and rung 2 — rung 5
+decoded alone 5 times in 32 at the receiver (7 in 22 before), by combining 11 times (6), and rung 2
+lost three frames in a row in a fade at 170–181 s — and the message was not through at 300 s.
+
+### 10.3 Why: a 7 ms channel between pilots 160 Hz apart
+
+The comb pilots, 160 Hz apart, sample a channel whose delays fall within a 6.25 ms window. ITU NVIS
+(F.1487 mid-latitude disturbed) is two Rayleigh rays 7 ms apart: outside it however the window
+is placed. Without de-rotation the first ray is at the timing and interpolates exactly, and the
+second aliases. The slope `arg Σ Ĥ[k+1]·Ĥ*[k]` lies between the two rays' turns, weighted by
+their powers, so with comparable rays it centres the window between them, both rays at about
+±3.5 ms, both outside it: both alias.
+
+On a static two-ray channel (30 dB, the frame's data error weighted as the decoder weighs it,
+de-rotation off → on), equal rays: 2 ms apart −10.5 → −21.0 dB at 500 Hz, −9.8 → −19.0 dB at
+2 300 Hz; 4 ms −0.5 → −5.8 and +0.2 → −4.5; 5 and 6 ms within ±0.6 dB either way; 7 ms
++6.9 → +9.0, +1.7 → +5.4 at 500 Hz and +1.5 → +5.5 at 2 300 Hz. With the second ray at 0.3 of the
+first, 7 ms is unchanged (±0.2 dB): the slope stays on the first ray.
+
+On the model's NVIS at its own operating points (`bench_estimate.py --channels nvis --snrs
+4,8,12,16`, 100 frames a point, `bench/baselines/channel_estimate_nvis.csv`), decodes before →
+de-rotated:
+
+| air | mode | 4 dB | 8 dB | 12 dB | 16 dB | all |
+|---|---|---|---|---|---|---|
+| 2 300 | 0 (BPSK ⅕) | 44 → 32 | 63 → 52 | 65 → 54 | 70 → 52 | 242 → 190 |
+| 2 300 | 2 | 12 → 9 | 20 → 18 | 33 → 27 | 33 → 29 | 98 → 83 |
+| 2 300 | 4 | 4 → 4 | 4 → 3 | 8 → 6 | 16 → 15 | 32 → 28 |
+| 500 | 3 (rung 5) | 16 → 14 | 18 → 20 | 22 → 20 | 17 → 17 | 73 → 71 |
+| 500 | 4 (rung 6) | 6 → 6 | 9 → 9 | 13 → 13 | 8 → 8 | 36 → 36 |
+
+E3 as registered: **2 300 Hz NVIS misses** (301 against 372 of 1 200, −19 %); 500 Hz NVIS passes
+(107 against 109 of 800). A second draw of the 500 Hz points (other seeds, 150 frames a point,
+modes 3 and 4) gave 169 → 162 of 1 200. §7's bench put NVIS at Poor's points, where it decodes 4–6
+frames of 180–300 on either receiver, so it could not see this. ITU Poor at 500 Hz, mode 3, at 4
+and 8 dB on the same tool: 99 → 99 and 100 → 100 of 100 (the curve's own points are §7's).
+
+The harness has little 2 300 Hz NVIS (`80m-band-closes-2300`, ×0.996, on tone rungs), so its
+small 500 Hz loss is what it showed; BPSK ⅕ is the 2 300 Hz air's robust OFDM frame, the one a
+call carries.
+
+### 10.4 What is on the branch
+
+The port and the switch on (`4f09ebd`), and this record with `bench_estimate.py`'s grid
+(`--snrs`, `--modes`, `--air`) and its CSV. Nothing is on `master`: by §5 a miss goes to the
+author with its trace, and the change stops until then.
+
+### 10.5 For the author
+
+1. **De-rotate only where the comb can follow the channel** — a new candidate, registered before
+   its runs, with E3 judged at NVIS's own operating points as well as Poor's. The evidence above
+   suggests what to gate on: the slope's own coherence, `|Σ Ĥ[k+1]·Ĥ*[k]| / Σ |Ĥ[k]|²`, is near 1
+   for one dominant ray and falls as two comparable rays spread (for two equal rays τ apart it is
+   about `|cos(π·40 Hz·τ)|`: 0.97 at 2 ms, 0.81 at 5 ms, 0.64 at 7 ms) — or the delay the slope
+   implies. Not measured.
+2. **Land the port with the switch off** in both: the receiver as it was on the air, the port
+   and its vectors kept, the decision left to item 1.
+3. **Take it as it is**, the NVIS loss accepted for the gains on Poor, Moderate and the harness's
+   fading scenarios.
+
