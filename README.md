@@ -114,14 +114,16 @@ the dial; only a gateway that scans several channels has it off, since Aether ca
 channel it is on. Or Aether keys the radio the way the program did (CAT, or an RTS/DTR line); the
 program's radio is then *Manual* with no PTT port, since only one program can hold the CAT port.
 
-Aether only reads the programs' files and never changes them. A setup above 30 MHz, or one whose
-only TNC is VARA FM or AGW, waits for Aether FM and cannot be ticked.
+Aether changes a program's settings only when you tick *Set it in* that program, never while it
+runs, and only the settings it names. A setup above 30 MHz, or one whose only TNC is VARA FM or
+AGW, waits for Aether FM and cannot be ticked.
 
-![Setup step 5's Winlink programs: four installs and six setups found. Winlink Express N1CALL and N2CALL point at Aether on 127.0.0.1:8300, a test copy of Winlink Express points at port 8310, the RMS Trimode gateway N1CALL-1 points at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked. Three rows are ticked, and under the list is what each profile will set and, in amber, what the program must say](docs/manual/screens/hostapps.png)
+![Setup step 5's Winlink programs: four installs and six setups found. Winlink Express N1CALL and N2CALL point at Aether on 127.0.0.1:8300, a test copy of Winlink Express points at port 8310, the RMS Trimode gateway N1CALL-1 points at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked. Three rows are ticked, and under the list is what each profile will set, the dial its rules check uses, Set it in RMS Trimode with the program Trimode starts as its VARA changed to Aether's application, and, in amber, what the program must say](docs/manual/screens/hostapps.png)
 
 <sub>Setup step 5 on a computer with two copies of Winlink Express, an RMS Trimode gateway and RMS
-Packet (example data). The Trimode profile is under automatic control and waits for a clear
-channel. The RMS Packet rows wait for Aether FM.</sub>
+Packet (example data). The Trimode profile is under automatic control, waits for a clear
+channel and checks the rules at its channel's dial. *Set it in RMS Trimode* points the program
+Trimode starts as its VARA at Aether. The RMS Packet rows wait for Aether FM.</sub>
 
 ### What a session looks like
 
@@ -442,7 +444,9 @@ cover everything else it does.
 * **Winlink's programs found** (Windows): Setup lists every install of Winlink Express, RMS
   Trimode and RMS Packet on the computer, one row per callsign, with the port each points at, and
   makes an Aether profile of the ones ticked from their own radio and TNC settings (callsign,
-  bandwidth, keying, port). It reads the programs' files and never changes them.
+  bandwidth, keying, port). It changes a program's own settings (Winlink Express's *Auto Launch
+  Vara*, the program Trimode starts as its VARA) only when asked, with the program closed, and
+  keeps the old file.
 * Either side can own the radio: **Aether keys** (CAT, rigctld, FLRig, serial, CM108, VOX), or
   the **host program keys** and tunes it on Aether's `PTT ON`/`PTT OFF`.
 * **One place for each setting**: while a program is attached, its callsign and its `BW500`
