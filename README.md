@@ -453,6 +453,8 @@ cover everything else it does.
 * **Fuzzing** of every parser that takes bytes from outside: frames off the air, datagram
   fragments, the decompressor, the KISS port and the host program's commands
   ([`core/fuzz/`](core/fuzz/README.md)).
+* The four places a change is tried before an operator relies on it, and what each can and
+  cannot show: [From the model to the air](#from-the-model-to-the-air).
 
 ## Getting it
 
@@ -560,6 +562,47 @@ waveform and generates the golden vectors the Rust core in `core/` is held to, b
 CI. The desktop shell in `app/` supervises the daemon and serves its panel (ADR-0001, ADR-0005).
 Diagrams and rationale:
 [`docs/ROADMAP.md` §4](docs/ROADMAP.md#4-recommended-target-architecture).
+
+## From the model to the air
+
+A change to the modem is tried in four places before an operator relies on it. Each is slower
+and harder to repeat than the one before, and each sees something the one before cannot.
+
+Think of the rungs as a car's gears and the rate controller as its automatic gearbox. The model
+tests the engine on a bench. The harness drives the whole car round a test track. The oracle
+drives the track once in each gear and compares each lap with the automatic's. The air is the
+open road, where the hills come when they come and a good automatic can beat any single gear.
+
+| | The model | The harness | The oracle | The air |
+|---|---|---|---|---|
+| **What runs** | The Python reference model ([`model/`](model/)), which the Rust core must match bit for bit | Two copies of the real daemon, the program that ships | The harness, run again and again | Released betas at two stations, run by their operators |
+| **The radio path** | Simulated signals handed straight to the receiver: no sound card, no clock | A channel server between the two daemons' audio: fading paths from NVIS to polar, noise, other stations, static crashes, AGC, radios slow to switch, stand-ins for host programs and gateways | One scenario on one draw of its fading, once with the rate controller choosing the rung and once at each fixed rung | The ionosphere, real radios, real noise and neighbours |
+| **Speed** | As fast as the computer goes; the same seed gives the same answer every time | 2.5–5× faster than real time; two runs of one build can differ a little, so builds are compared over many draws | About eight harness runs for each case | Real time, and only when two operators are on |
+| **When it runs** | Every push (the tests and the cross-validation vectors); every release is gated on its benchmark curves | Every push (a quick set), nightly (every scenario, three draws), weekly (a gateway's day) | By hand, when a rate question needs an answer | Test sessions, mail and P2P, from beta builds |
+| **What it shows** | Whether a waveform or receiver change decodes more frames, at every SNR and on every channel class | Whole sessions: taking turns, timing, collisions, the programs around the modem; every run judged on rules that must always hold as well as on speed | How far the rate controller is from the best rung in hindsight | The paths operators actually meet; both stations' recordings, read frame by frame, settle what happened |
+| **What it cannot show** | Timing, two stations taking turns, everything around the modem | How often operators meet each of its band conditions: they were written to hunt bugs, not to match the field | Paths that change during a session, where following the path beats any fixed rung; gains outside the choice of rung | The same path twice: a recording can be replayed through the receiver, but the session cannot be run again on another build |
+
+A change goes through them in order:
+
+1. **The model.** The change is made and measured in the Python model first.
+2. **The port.** The Rust core takes it, and the vectors the model generates hold it there bit for
+   bit.
+3. **The harness.** The new build and the last one run the same scenarios on the same draws. Every
+   run must complete without a daemon failing, a key held too long or two stations keyed over each
+   other, and the new build must deliver at least as much
+   ([ADR-0042](docs/adr/0042-the-scenario-harness.md), [`bench/scenarios/`](bench/scenarios/)).
+4. **The air.** A beta, then sessions with other stations, read from both sides' recordings
+   ([`docs/user/field-test.md`](docs/user/field-test.md)). A problem the air turns up becomes a
+   harness scenario before it becomes a fix.
+
+**Tuning waits for the air.** The model and the harness can say whether a change is safe and
+whether it is faster on a given path. They cannot say which paths matter most. The rate controller
+shows why: on 2026-11-17 the best fixed rung in hindsight delivered a median 14 % more than the
+controller over 78 harness cases, but the controller sat too low on fast-fading and QRM paths and
+too high on NVIS paths
+([`docs/research/first-burst/02-oracle-breakdown.md`](docs/research/first-burst/02-oracle-breakdown.md)).
+No one setting is best on all of them, and which way to trade is a question about the field, so
+changes like that wait for sessions on the air.
 
 ## Repository layout
 
