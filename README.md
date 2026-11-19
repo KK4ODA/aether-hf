@@ -68,6 +68,108 @@ window in Mini. While VarAC is attached it sets the callsign and the bandwidth, 
 radio and sets its frequency, as it does with VARA. The GPS position in VarAC's status bar is
 covered; the grid square is left.</sub>
 
+## Works with Winlink apps
+
+Winlink's own programs talk to Aether as they talk to VARA. They use VARA HF's published host
+interface (commands on port 8300, data on 8301) or, for packet, a KISS port, so nothing in them
+changes except where they point. On the air Aether talks only to Aether: both ends of a contact
+run it.
+
+| Program | What it is | With Aether |
+|---|---|---|
+| **Winlink Express** | Winlink's client | *Vara HF Winlink* sessions to an Aether gateway, and *Vara HF P2P* sessions to another Aether station |
+| **RMS Trimode** | Winlink's HF gateway | Answers Winlink Express and Pat through Aether and forwards their mail to Winlink's servers; on the air since 2026-11-06 |
+| **RMS Packet** | Winlink's VHF/UHF gateway | Both of its ways in (VARA FM and KISS packet) work on the bench; on the air it waits for Aether FM |
+
+### The program finder
+
+You don't copy settings from one program to the other. On Windows, Aether finds the programs and
+turns their own settings into Aether profiles:
+
+1. **It looks for every copy.** Setup step 5, *Winlink programs*, searches the usual folders
+   (`C:\RMS Express`, `C:\RMS\…`), Windows' list of installed programs, Start-menu and desktop
+   shortcuts and the programs running, plus any folder you add. A test copy, a second gateway or
+   a copy on another drive each get a row of their own, told apart by their folder.
+2. **One row per setup.** Winlink Express gets a row for each callsign it is set up for, RMS
+   Trimode one per gateway, RMS Packet one per channel. Each row shows the version, whether the
+   program is running, and the TNC port it points at (*Aether* when it is this Aether's).
+3. **Tick the ones you want.** Under the list, each ticked row shows the profile it will make
+   and, in amber, anything the program must change. Usually nothing does.
+4. **Import** saves one profile per row, named for the program and the callsign (*Winlink Express
+   KK4ODA*). Each profile sets:
+   - the program's callsign and bandwidth (VARA's 2750 runs as 2300);
+   - the port the program already uses, so Aether listens there;
+   - for a gateway, automatic control and waiting for a clear channel;
+   - who keys the radio.
+
+   Import again after you change the program, and the profile catches up. Its sound card and
+   levels are kept.
+
+**Who keys the radio.** By default the program keeps its radio setup and keys on Aether's
+`PTT ON`, as it did with VARA. Aether's rules check is off then, as it is with VARA. Or Aether
+keys the radio the way the program did (CAT, or an RTS/DTR line) and keeps its rules check on;
+the program's radio is then *Manual* with no PTT port, since only one program can hold the CAT
+port.
+
+Aether only reads the programs' files and never changes them. A setup above 30 MHz, or one whose
+only TNC is VARA FM or AGW, waits for Aether FM and cannot be ticked.
+
+![Setup step 5's Winlink programs: four installs and six setups found. Winlink Express N1CALL and N2CALL point at Aether on 127.0.0.1:8300, a test copy of Winlink Express points at port 8310, the RMS Trimode gateway N1CALL-1 points at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked. Three rows are ticked, and under the list is what each profile will set and, in amber, what the program must say](docs/manual/screens/hostapps.png)
+
+<sub>Setup step 5 on a computer with two copies of Winlink Express, an RMS Trimode gateway and RMS
+Packet (example data). The Trimode profile is under automatic control and waits for a clear
+channel. The RMS Packet rows wait for Aether FM.</sub>
+
+### What a session looks like
+
+These pictures are from the bench, not the air: two Aether stations (`0.2.0-beta.167`) on one
+computer, joined by Aether's simulated channel at 15 dB SNR, with test copies of Winlink Express
+1.8.5.0 and RMS Trimode 1.4.4.0. Each Winlink Express window is cut above its closing line about
+VARA's registration. In the gateway session the secure login's challenge and answer are covered.
+
+**Peer to peer.** WD5EMA's Winlink Express opens a *Vara HF P2P* session to KK4ODA at 2300 Hz and
+sends a message with a 6 kB attachment. Both copies of Winlink Express run as they do with VARA.
+
+![Two Winlink Express "Vara HF Peer-to-Peer Session" windows. Left, WD5EMA calls KK4ODA at 2300 Hz and sends one message, 6460 bytes in 29 s, average SNR 14.2 dB. Right, KK4ODA receives it, average SNR 14.8 dB](docs/images/bench-wle-p2p.png)
+
+<sub>Left, the calling station; right, the answering station. The message, 6,460 bytes, crossed
+in 29 s.</sub>
+
+**Through a gateway.** WD5EMA's Winlink Express opens a *Vara HF Winlink* session to the KK4ODA
+gateway, which is RMS Trimode with Aether as its modem. Trimode greets it, the secure login
+passes, and the client has nothing to send or collect (`FF`, `FQ`). Winlink Express asked for
+2750 Hz, and Aether runs that as 2300 Hz: the log's *Signal bandwidth 2300 Hz* is what Aether
+reported.
+
+![Left, Winlink Express's "Vara HF Winlink Session" window: a connection to KK4ODA, RMS Trimode's welcome, the secure login with its challenge and answer covered, FF and FQ, average SNR 14.4 dB. Right, RMS Trimode 1.4.4.0's window: its Vara 2300 line shows WD5EMA, and its log shows the same session from the gateway's side, average SNR 14.1 dB](docs/images/bench-wle-trimode.png)
+
+<sub>Left, the client; right, the gateway. Trimode's *Vara 2300* line is Aether: it sees the
+same commands and ports it uses with VARA.</sub>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/bench-p2p-panel.png" alt="The calling station's Aether panel during the P2P transfer: connected to KK4ODA for the host program, sending at rung 17 (64-QAM 2/3), 1.44 kbit/s, SNR 14.8 dB"></td>
+<td width="50%"><img src="docs/images/bench-gateway-panel.png" alt="The gateway's Aether panel during the gateway session: connected to WD5EMA for the host program, the header's host program · listening chip, SNR 14.1 dB"></td>
+</tr>
+<tr>
+<td><sub><b>The P2P caller's Aether</b> during the transfer. The session belongs to the host
+program, Winlink Express. Aether picks the rung, here 17 (64-QAM 2/3) at 1.44 kbit/s.</sub></td>
+<td><sub><b>The gateway's Aether</b> during the session. <i>host program · listening</i> means
+Trimode holds the callsign and is listening, so Aether answers calls to it.</sub></td>
+</tr>
+</table>
+
+**RMS Packet** reaches Aether two ways. Its *Vara FM* settings point at the host-program port,
+and its packet channels (*KISS ACKMODE* over TCP) at the KISS port. Both carried a Winlink
+session on the bench. RMS Packet's users are on VHF and UHF, and it reports its channel to
+Winlink as VARA FM, so it stays off the air until Aether FM.
+
+The full setup is in the manual
+([Finding Winlink's programs](docs/manual/manual.md#finding-winlinks-programs),
+[A Winlink gateway](docs/manual/manual.md#22-a-winlink-gateway)) and the guides:
+[host programs](docs/user/host-programs.md), [a Winlink gateway](docs/user/winlink-gateway.md)
+and [RMS Packet](docs/user/rms-packet.md).
+
 ## Screenshots
 
 Two stations on one machine, joined by the simulated channel at 12 dB SNR. The calling

@@ -1218,9 +1218,9 @@ levels in *VarAC default* are kept too.
 On Windows, Aether finds Winlink Express, RMS Trimode and RMS Packet and reads each one's radio and
 TNC settings into an Aether profile. It only reads the programs' files; it never changes them.
 
-![Setup step 5's Winlink programs: Find, Add folder, and a table of three setups found, Winlink Express N1CALL and N2CALL in C:\RMS Express, both pointing at Aether on 127.0.0.1:8300, and N1CALL in a test copy pointing at port 8310; the first two ticked, one keyed by the host program and one by Aether; under it what each profile will set (callsign, Host programs on, bandwidth, keying, rules or CAT port and speed) and, in amber, what the program must say](screens/hostapps.png)
+![Setup step 5's Winlink programs: Find, Add folder, and a table of six setups in four installs: Winlink Express N1CALL and N2CALL in C:\RMS Express, both pointing at Aether on 127.0.0.1:8300, N1CALL in a test copy pointing at port 8310, the RMS Trimode gateway N1CALL-1 pointing at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10, which cannot be ticked; three rows ticked, Winlink Express keyed by the host program and by Aether, and the Trimode gateway; under it what each profile will set (callsign, Host programs on, bandwidth, for the gateway automatic control and wait for clear, keying, rules or CAT port and speed) and, in amber, what the program must say](screens/hostapps.png)
 
-*Figure 34. Winlink's programs found, two setups ticked, and what each profile will set.*
+*Figure 34. Winlink's programs found, three setups ticked, and what each profile will set.*
 
 1. Setup step 5, **Winlink programs**. The list fills by itself when the window opens: one row per
    setup, with the program, the callsign, the version, whether it is running, the TNC port it
