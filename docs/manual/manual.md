@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.11.1 |
+| **Version** | 1.12.0 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.166 |
 | **Licence** | CC BY 4.0 |
@@ -303,14 +303,18 @@ two small plots side by side: the speed over the last ten minutes (or the SNR, i
 in Full) and the channel's activity. **Mini** is the state and the four readings alone, for a
 corner of the screen.
 
-![Aether in Compact: the header's display, four link readings and two small plots](screens/compact.png)
+![Aether in Compact: the header's display with Tune beside it, four link readings and two small plots](screens/compact.png)
 
 *Figure 7. Compact: the readings and two plots.*
 
-![Aether in Mini: the header's display and four readings in a small window](screens/mini.png)
+![Aether in Mini: the header's display with Tune beside it, and four readings in a small window](screens/mini.png)
 
 *Figure 8. Mini: for a corner of the screen.*
 
+- **Tune**, beside the display in Compact and Mini, is the Session tab's *Tuner tone*: a steady
+  tone for ten seconds, for an antenna tuner. While the tone plays it reads **Stop**; press it to
+  stop. If the modem refuses the tone (a session, a busy channel, the rules), the display says why
+  for a few seconds, in place of the state.
 - The plots in Compact take whatever height the window has: make the window taller for taller
   plots. When a banner comes up, the plots get shorter for as long as it shows.
 - Compact has no **Axes** button, but the chart keeps its two level sliders and **Auto**. Change
@@ -689,6 +693,7 @@ Click the box's heading to open it.
   whether the radio's receive audio changed while it was keyed. A radio that transmits goes quiet
   (or plays back its own signal); if the audio stayed the same as the band, the radio did not key.
 - **Tuner tone**: a steady tone for ten seconds, for an antenna tuner. Do not set drive with it.
+  Compact and Mini have it as **Tune** ([Full, Compact and Mini](#full-compact-and-mini)).
 - **Set drive**: four six-second bursts of Aether's real signal, five seconds apart.
 - **Transmit level**: the slider, in dB below full scale. **Last transmit peak** is the modem's
   own headroom.
@@ -1608,3 +1613,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.10.1 | 2026-11-19 | [Finding an Aether gateway](#finding-an-aether-gateway): Aether gateways are listed under Winlink's service code `AETHER`; how to see them in Winlink Express and Pat, and how a gateway publishes under it. |
 | 1.11.0 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): VarAC's **TUNE** button plays Aether's tuner tone, at Aether's transmit level. |
 | 1.11.1 | 2026-11-19 | [Full, Compact and Mini](#full-compact-and-mini) and [Arranging the windows](#arranging-the-windows): the window stays on its screen. Going from Compact or Mini to Full, it grows to the left or upwards where the screen's edge or the taskbar is in the way, and at start a window that would run off its screen moves back onto it. |
+| 1.12.0 | 2026-11-19 | **Tune** in Compact and Mini, beside the display: the Session tab's *Tuner tone*, stopped by a second press; a refusal shows in the display for a few seconds ([Full, Compact and Mini](#full-compact-and-mini)). |

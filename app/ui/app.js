@@ -5639,15 +5639,19 @@ async function finishSetupSave(answer) {
   refreshStatus();
 }
 
-async function transmitTest(method, seconds, label) {
+// `said`, when given, is told the modem's refusal too (and "" on success): Compact's Tune, whose
+// window has no Keying and drive box to show it.
+async function transmitTest(method, seconds, label, said = null) {
   $("wz-tx-note").textContent = `${label}…`;
   try {
     await call(method, { duration_s: seconds });
     $("wz-tx-note").textContent = `${label} — watch the radio.`;
+    said?.("");
     log(label);
     return true;
   } catch (error) {
     $("wz-tx-note").textContent = error.message;
+    said?.(error.message);
     log(error.message, true);
     return false;
   }
@@ -5697,11 +5701,31 @@ async function saveTxLevel() {
   }
 }
 
+// The tone has two buttons and one path: the Session tab's Tuner tone and Compact's Tune (shown
+// in Mini too, beside the display well), so a tone started in one view is stopped from the
+// other.
 function tuneButton(playing) {
   $("wz-tune").textContent = playing ? "Stop the tone" : "Tuner tone";
-  $("wz-tune").setAttribute("aria-pressed", String(playing));
+  $("btn-compact-tune").textContent = playing ? "Stop" : "Tune";
+  for (const id of ["wz-tune", "btn-compact-tune"]) {
+    $(id).setAttribute("aria-pressed", String(playing));
+  }
   clearTimeout(tuneTimer);
   tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
+}
+
+// Why Compact's Tune did not key, in the display well in the state's place for a few seconds:
+// a line of its own would move the readings and plots, and in Mini push them out of the window.
+let wellSaidTimer = null;
+
+function sayInWell(text) {
+  const said = $("strip-said");
+  clearTimeout(wellSaidTimer);
+  said.textContent = text;
+  said.title = text || "What the modem answered when it refused the tone";
+  said.hidden = !text;
+  $("strip").classList.toggle("saying", Boolean(text));
+  if (text) wellSaidTimer = setTimeout(() => sayInWell(""), 8000);
 }
 
 // A drive check is real bursts, not a tone: measured at the sound card the waveform's peaks
@@ -5764,7 +5788,8 @@ function applyTxPeak(dbfs) {
   box.classList.toggle("warn", dbfs > -3 && dbfs <= -1);
 }
 
-async function toggleTune() {
+// `said`: where else to say a refusal (Compact's display well), as `transmitTest` takes it.
+async function toggleTune(said = null) {
   if ($("wz-tune").getAttribute("aria-pressed") === "true") {
     tuneButton(false);
     try {
@@ -5772,10 +5797,16 @@ async function toggleTune() {
       $("wz-tx-note").textContent = "Tone stopped.";
     } catch (error) {
       $("wz-tx-note").textContent = error.message;
+      said?.(error.message);
     }
     return;
   }
-  const started = await transmitTest("tune", TUNE_SECONDS, `Tuner tone for ${TUNE_SECONDS} s`);
+  const started = await transmitTest(
+    "tune",
+    TUNE_SECONDS,
+    `Tuner tone for ${TUNE_SECONDS} s`,
+    said,
+  );
   if (started) tuneButton(true);
 }
 
@@ -6749,7 +6780,8 @@ function wire() {
     writeConfig();
   });
   $("wz-ptt").addEventListener("click", () => transmitTest("ptt.test", 1.0, "Keyed for 1 s"));
-  $("wz-tune").addEventListener("click", toggleTune);
+  $("wz-tune").addEventListener("click", () => toggleTune());
+  $("btn-compact-tune").addEventListener("click", () => toggleTune(sayInWell));
   $("wz-drive").addEventListener("click", toggleDrive);
   $("tx-level").addEventListener("input", () => showTxLevel(txLevel()));
   $("tx-level").addEventListener("change", saveTxLevel);

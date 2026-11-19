@@ -31,18 +31,23 @@
         <img class="brand-mark" src="mark.png" alt="" width="20" height="20" />
         <span class="brand-name">Aether <span class="brand-hf">HF</span></span>
       </h1>
-      <!-- the display well: what an operator reads at a glance, on every tab -->
-      <div class="strip" id="strip" title="The station at a glance: what it is doing, the dial, the rung and the signal">
-        <span class="strip-who" id="strip-who" data-state="disconnected" title="The other station in the call or session" hidden></span>
-        <span class="strip-state" id="strip-state" data-state="disconnected" title="What the modem is doing now">Not connected</span>
-        <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT, rigctld or FLRig" hidden></span>
-        <span class="strip-reading" id="strip-rung" title="The rung the data is moving at and its rate on the air: ↓ while receiving, ↑ while sending" hidden></span>
-        <span class="strip-reading" id="strip-snr" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz" hidden></span>
-        <div class="indicators" role="group" aria-label="Indicators">
-          <span class="lamp" id="lamp-ptt" title="Transmitter: lit while the radio is keyed" role="img" aria-label="Transmitter off">TX</span>
-          <span class="lamp" id="lamp-rx" title="Receive: lit while a burst is arriving" role="img" aria-label="Nothing arriving">RX</span>
-          <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal — the level over the threshold, a narrowband signal's shape in the passband, or a decoded frame" role="img" aria-label="Channel clear">Busy</span>
+      <!-- the display well: what an operator reads at a glance, on every tab; in Compact and
+           Mini the tuner tone beside it -->
+      <div class="well-row">
+        <div class="strip" id="strip" title="The station at a glance: what it is doing, the dial, the rung and the signal">
+          <span class="strip-who" id="strip-who" data-state="disconnected" title="The other station in the call or session" hidden></span>
+          <span class="strip-state" id="strip-state" data-state="disconnected" title="What the modem is doing now">Not connected</span>
+          <span class="dial" id="dial" title="Dial frequency, as the radio reports it over CAT, rigctld or FLRig" hidden></span>
+          <span class="strip-reading" id="strip-rung" title="The rung the data is moving at and its rate on the air: ↓ while receiving, ↑ while sending" hidden></span>
+          <span class="strip-reading" id="strip-snr" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz" hidden></span>
+          <span class="strip-said" id="strip-said" title="What the modem answered when it refused the tone" role="status" hidden></span>
+          <div class="indicators" role="group" aria-label="Indicators">
+            <span class="lamp" id="lamp-ptt" title="Transmitter: lit while the radio is keyed" role="img" aria-label="Transmitter off">TX</span>
+            <span class="lamp" id="lamp-rx" title="Receive: lit while a burst is arriving" role="img" aria-label="Nothing arriving">RX</span>
+            <span class="lamp" id="lamp-busy" title="Busy: lit while the channel carries a signal — the level over the threshold, a narrowband signal's shape in the passband, or a decoded frame" role="img" aria-label="Channel clear">Busy</span>
+          </div>
         </div>
+        <button id="btn-compact-tune" aria-pressed="false" title="Key the radio with a steady tone at the transmit level for ten seconds, for an antenna tuner; press again to stop. Refused during a session and while the channel is busy, and judged by the rules first">Tune</button>
       </div>
       <div class="head-right">
         <button class="reg-badge" id="reg-badge" data-verdict="unknown" aria-expanded="false" aria-controls="reg-detail" title="Whether this station may transmit here under the rules it operates under; click for the reasoning" hidden>

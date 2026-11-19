@@ -338,6 +338,35 @@ header.bar {
   color: var(--status-error);
 }
 
+/* What the modem answered when it refused Compact's tuner tone: in the state's place for a few
+   seconds, in the caution colour, so nothing in the window moves to make room for it; the
+   whole of it is in the tooltip when the well cuts it short. */
+.strip-said {
+  font: 600 var(--fs-md) / 1 var(--face);
+  color: var(--status-warning);
+  padding-right: 16px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body:not(.compact) .strip-said,
+body.compact .strip.saying > .strip-who,
+body.compact .strip.saying > .strip-state {
+  display: none;
+}
+
+/* The well's row: in Full the well alone (the row is no box of its own), in Compact and Mini
+   the well with the tuner tone beside it. */
+.well-row {
+  display: contents;
+}
+
+#btn-compact-tune {
+  display: none;
+}
+
 /* the dial, read like a rig's display: the largest figures on the panel */
 .dial {
   font: 300 21px / 1 var(--display);
@@ -4219,14 +4248,36 @@ body.compact header.bar {
   border-bottom: 0;
 }
 
-body.compact .strip {
+/* The well has a row of its own, and Tune sits at its end, outside it: the well holds no
+   controls. The row is where the room is: the well's middle is empty at every width the small
+   views open at, where a button in the header's row would shorten the chips or wrap the row.
+   Tune keeps one width whether it says Tune or Stop, so the lamps never shift when it is
+   pressed. */
+body.compact .well-row {
   order: 3;
   flex: 1 0 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* `order: 0` against the narrow Full window's rule, which puts the well on a row of its own */
+body.compact .well-row > .strip {
+  order: 0;
+  flex: 1 1 auto;
   height: 34px;
 }
 
+body.compact #btn-compact-tune {
+  display: inline-flex;
+  flex: none;
+  min-width: 4.6em;
+}
+
 body.compact .strip-state,
-body.compact .strip-who {
+body.compact .strip-who,
+body.compact .strip-said {
   font-size: var(--fs-lg);
 }
 
@@ -4400,6 +4451,12 @@ body.compact.fitting:not(.mini) #history-card canvas {
 
   body.compact .status-readings .tiles > .tile:nth-child(n + 3) {
     border-top: 1px solid var(--border);
+  }
+
+  /* a refusal of the tone takes the lamps' room too, for its few seconds: beside them, in a
+     window this narrow, it read "Cannot …" */
+  body.compact .strip.saying > .indicators {
+    display: none;
   }
 }
 
