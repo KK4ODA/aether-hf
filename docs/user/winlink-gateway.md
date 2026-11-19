@@ -333,9 +333,11 @@ gateway being open to the public, nothing to do with the service code; Aether an
 **Retested on the bench on 2026-11-19** (Trimode 1.4.4.0 with RMS Relay in radio-only mode, two
 Aether stations over the simulated channel, Trimode keying the gateway): messages with attachments
 both ways at 2300 Hz (15 and 0 dB) and 500 Hz (15 and −3 dB), collecting with an empty outbox,
-probes, a call after 17 minutes with nothing keyed, and 37 calls in all. Three races in what Trimode
-is told of a call were found and fixed there (`PENDING` and `CONNECTED` too soon after its
-`LISTEN ON`, and a `LISTEN OFF` crossing a `PENDING`). What the bench cannot show: the radio's own keying, a fading path and the CMS.
+probes, a call after 17 minutes with nothing keyed, and 37 calls in all, with Pat and with Winlink
+Express (which still hangs up 30 s after Trimode's `FQ`: Trimode never hangs up itself). Three races
+in what Trimode is told of a call were found and fixed there (`PENDING` and `CONNECTED` too soon
+after its `LISTEN ON`, and a `LISTEN OFF` crossing a `PENDING`). What the bench cannot show: the
+radio's own keying, a fading path and the CMS.
 
 The bench's notes on Trimode, and every command it and Winlink Express send, are in
 [host-interfaces.md §7](../spec/host-interfaces.md#7-verification-status); the headless Linux
