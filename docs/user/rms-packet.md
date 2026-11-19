@@ -26,6 +26,11 @@ under the service code `AETHER`, never as VARA (see [the manual](../manual/manua
 
 RMS Packet runs its VARA FM channel and its packet channels at the same time.
 
+Setup step 5's **Winlink programs** finds RMS Packet's installs and lists one row for its VARA FM
+channel and one for each packet port, with the callsign and the TNC port each points at
+([the manual](../manual/manual.md#finding-winlinks-programs)). It makes no profile of them: each row
+says it waits for Aether FM.
+
 ## Setting it up (the bench)
 
 1. In Aether's Setup step 5, turn on **Host programs** (port 8300) and, for packet, **KISS
