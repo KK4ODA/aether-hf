@@ -1336,7 +1336,9 @@ mod tests {
         assert_eq!(server.status().clients.len(), 1, "still connected");
         let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
         assert!(
-            notes.iter().any(|n| n.contains("rung 12") && n.contains("stay connected")),
+            notes
+                .iter()
+                .any(|n| n.contains("rung 12") && n.contains("stay connected")),
             "{notes:?}"
         );
 

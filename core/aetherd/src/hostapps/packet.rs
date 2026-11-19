@@ -62,14 +62,21 @@ const APS_KEYS: [&str; 11] = [
 ];
 
 /// The packet ports' link keys copied into a TNC's parameters, as the ini names them.
-const PORT_KEYS: [&str; 4] = ["On-Air Baud Rate", "Packet Length", "Max Outstanding Frames", "Max Streams"];
+const PORT_KEYS: [&str; 4] = [
+    "On-Air Baud Rate",
+    "Packet Length",
+    "Max Outstanding Frames",
+    "Max Streams",
+];
 
 /// Read RMS Packet's files.
 #[must_use]
 pub fn read(files: &Files) -> Reading {
     let mut reading = Reading::default();
     let Some(bytes) = files.get(INI) else {
-        reading.notes.push(format!("no {INI} beside the program: it has not been set up"));
+        reading.notes.push(format!(
+            "no {INI} beside the program: it has not been set up"
+        ));
         return reading;
     };
     let ini = Ini::new(bytes.clone());
@@ -77,7 +84,9 @@ pub fn read(files: &Files) -> Reading {
     if let Some(setup) = vara_fm(&ini, &mut reading.notes) {
         reading.setups.push(setup);
     }
-    reading.setups.extend(packet(&ini, files, &mut reading.notes));
+    reading
+        .setups
+        .extend(packet(&ini, files, &mut reading.notes));
     if reading.setups.is_empty() {
         reading.notes.push("no channel is enabled".into());
     }
@@ -176,7 +185,9 @@ fn packet(ini: &Ini, files: &Files, notes: &mut Vec<String>) -> Vec<ProgramSetup
     };
     // AGW asks one callsign for every port ("AGWPE Requires that only one callsign per TCP
     // connection be used"); the others name each port's own.
-    let agw_call = matches!(route, Route::Agw).then(|| callsign(ini, TNC, "AGW Call sign")).flatten();
+    let agw_call = matches!(route, Route::Agw)
+        .then(|| callsign(ini, TNC, "AGW Call sign"))
+        .flatten();
     let ports = ini
         .get(TNC, "Number of Ports")
         .and_then(|n| n.trim().parse::<usize>().ok())
@@ -192,7 +203,9 @@ fn packet(ini: &Ini, files: &Files, notes: &mut Vec<String>) -> Vec<ProgramSetup
             notes.push(format!("packet port {n} is set up but not enabled"));
             continue;
         }
-        let call = agw_call.clone().or_else(|| callsign(ini, &section, "Callsign"));
+        let call = agw_call
+            .clone()
+            .or_else(|| callsign(ini, &section, "Callsign"));
         let baud = value(ini, &section, "On-Air Baud Rate");
         let session = match &baud {
             Some(b) => format!("Packet {b} baud"),
@@ -228,7 +241,9 @@ fn direct(ini: &Ini, files: &Files, tnc_type: &str, notes: &mut Vec<String>) -> 
     const KISS: &str = "KISS TNC";
     let kiss = tnc_type.to_ascii_uppercase().contains("KISS");
     let serial = value(ini, TNC, "Serial Port");
-    let over_tcp = serial.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("TCP"));
+    let over_tcp = serial
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("TCP"));
     let mut tnc = Tnc {
         kind: if kiss { TncKind::Kiss } else { TncKind::Other },
         said: Some(tnc_type.to_string()),
@@ -261,17 +276,29 @@ fn direct(ini: &Ini, files: &Files, tnc_type: &str, notes: &mut Vec<String>) -> 
 
 /// The KISS driver's timers and limits from the `.aps` the ini names, when it is one of the
 /// examples beside the program; a copy elsewhere is named in a note, not read.
-fn aps_params(aps: &str, files: &Files, params: &mut BTreeMap<String, String>, notes: &mut Vec<String>) {
+fn aps_params(
+    aps: &str,
+    files: &Files,
+    params: &mut BTreeMap<String, String>,
+    notes: &mut Vec<String>,
+) {
     let name = aps.rsplit(['\\', '/']).next().unwrap_or(aps);
     if name.is_empty() {
         return;
     }
     let Some(bytes) = KISS_EXAMPLES
         .iter()
-        .find(|example| example.rsplit('\\').next().is_some_and(|e| e.eq_ignore_ascii_case(name)))
+        .find(|example| {
+            example
+                .rsplit('\\')
+                .next()
+                .is_some_and(|e| e.eq_ignore_ascii_case(name))
+        })
         .and_then(|example| files.get(*example))
     else {
-        notes.push(format!("its TNC settings are in {name}, which was not read"));
+        notes.push(format!(
+            "its TNC settings are in {name}, which was not read"
+        ));
         return;
     };
     for line in String::from_utf8_lossy(bytes).lines() {
@@ -317,7 +344,9 @@ fn port(ini: &Ini, section: &str, key: &str, otherwise: u16, notes: &mut Vec<Str
         Some(v) => match v.parse::<u16>() {
             Ok(p) if p > 0 => p,
             _ => {
-                notes.push(format!("{section}: {key} is not a port number; {otherwise} assumed"));
+                notes.push(format!(
+                    "{section}: {key} is not a port number; {otherwise} assumed"
+                ));
                 otherwise
             }
         },
@@ -402,19 +431,35 @@ mod tests {
             "",
             "TNC Type=AGWPE\nAGW IP Address=localhost\nAGW Call sign=N0CALL-10\nNumber of Ports=2\n\
              AGW IP Port=8000\nAGW Remote=True\nAGW Path=",
-            &format!("{PORT1}\n[Port 2 Properties]\nCallsign=N0CALL-7\nFrequency=440.975\nOn-Air Baud Rate=9600\nPort Enabled=True\n"),
+            &format!(
+                "{PORT1}\n[Port 2 Properties]\nCallsign=N0CALL-7\nFrequency=440.975\nOn-Air Baud Rate=9600\nPort Enabled=True\n"
+            ),
         );
         assert_eq!(r.setups.len(), 2);
         for s in &r.setups {
-            assert_eq!(s.callsigns, ["N0CALL-10"], "AGW asks one callsign for every port");
+            assert_eq!(
+                s.callsigns,
+                ["N0CALL-10"],
+                "AGW asks one callsign for every port"
+            );
             let t = &s.tncs[0];
             assert_eq!(t.kind, TncKind::Agw);
             assert_eq!((t.host.as_deref(), t.port), (Some("localhost"), Some(8000)));
             assert!(!t.launches, "a remote engine is not started by RMS Packet");
         }
         assert_eq!(r.setups[0].session.as_deref(), Some("Packet 1200 baud"));
-        assert_eq!(r.setups[0].tncs[0].params.get("Packet Length").map(String::as_str), Some("128"));
-        assert_eq!(r.setups[1].frequency_hz, Some(440_975_000), "megahertz with a point");
+        assert_eq!(
+            r.setups[0].tncs[0]
+                .params
+                .get("Packet Length")
+                .map(String::as_str),
+            Some("128")
+        );
+        assert_eq!(
+            r.setups[1].frequency_hz,
+            Some(440_975_000),
+            "megahertz with a point"
+        );
         assert_eq!(r.setups[1].session.as_deref(), Some("Packet 9600 baud"));
     }
 
@@ -436,7 +481,10 @@ mod tests {
         let t = &r.setups[0].tncs[0];
         assert_eq!(t.kind, TncKind::Kiss);
         assert_eq!(t.said.as_deref(), Some("KISS ACKMODE"));
-        assert_eq!((t.host.as_deref(), t.port, t.serial.as_deref()), (Some("127.0.0.1"), Some(8105), None));
+        assert_eq!(
+            (t.host.as_deref(), t.port, t.serial.as_deref()),
+            (Some("127.0.0.1"), Some(8105), None)
+        );
         assert_eq!(t.params.get("ACKTIMER").map(String::as_str), Some("10"));
         assert_eq!(t.params.get("ACKMODE").map(String::as_str), Some("TRUE"));
         assert_eq!(t.params.get("MAXFRAMES").map(String::as_str), Some("4"));
@@ -456,9 +504,19 @@ mod tests {
         let t = &r.setups[0].tncs[0];
         assert_eq!(t.kind, TncKind::Other);
         assert_eq!(t.said.as_deref(), Some("Kantronics"));
-        assert_eq!((t.host.as_deref(), t.port, t.serial.as_deref()), (None, None, Some("COM7")));
-        assert_eq!(t.params.get("Serial Baud Rate").map(String::as_str), Some("9600"));
-        assert!(r.notes.iter().any(|n| n.contains("MyKPC3.aps")), "{:?}", r.notes);
+        assert_eq!(
+            (t.host.as_deref(), t.port, t.serial.as_deref()),
+            (None, None, Some("COM7"))
+        );
+        assert_eq!(
+            t.params.get("Serial Baud Rate").map(String::as_str),
+            Some("9600")
+        );
+        assert!(
+            r.notes.iter().any(|n| n.contains("MyKPC3.aps")),
+            "{:?}",
+            r.notes
+        );
     }
 
     #[test]
@@ -478,9 +536,20 @@ mod tests {
 
     #[test]
     fn nothing_personal_is_read_and_a_missing_ini_is_said() {
-        let r = read_one("Use AGWPE=False", VARA_ON, "TNC Type=KISS\nSerial Port=COM3", PORT1);
+        let r = read_one(
+            "Use AGWPE=False",
+            VARA_ON,
+            "TNC Type=KISS\nSerial Port=COM3",
+            PORT1,
+        );
         let all = serde_json::to_string(&r).unwrap();
-        for secret in ["SECRET", "example.invalid", "555-0100", "Placeholder", "AA00aa"] {
+        for secret in [
+            "SECRET",
+            "example.invalid",
+            "555-0100",
+            "Placeholder",
+            "AA00aa",
+        ] {
             assert!(!all.contains(secret), "{secret} leaked into {all}");
         }
         let empty = read(&Files::new());
