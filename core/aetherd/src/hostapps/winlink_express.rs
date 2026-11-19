@@ -381,14 +381,14 @@ mod tests {
         // nothing at all set up: no radio, and a note that there is no VARA HF TNC
         let bare = read(&files("[Properties]\nCallsign=N0CALL\n"));
         assert_eq!(bare.setups[0].radio, None);
-        assert!(bare.setups[0].tncs.is_empty());
+        assert!(bare.setups[0].tncs.is_empty(), "{:?}", bare.setups[0].tncs);
         assert_eq!(bare.notes.len(), 1, "{:?}", bare.notes);
     }
 
     #[test]
     fn a_file_with_no_callsign_has_no_setup() {
         let reading = read(&files("[Main]\nProduct Version=1.8.5.0\n"));
-        assert!(reading.setups.is_empty());
+        assert!(reading.setups.is_empty(), "{:?}", reading.setups);
         assert_eq!(reading.version.as_deref(), Some("1.8.5.0"));
         assert_eq!(reading.notes.len(), 1);
         assert_eq!(read(&Files::new()), Reading::default());

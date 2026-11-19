@@ -309,7 +309,11 @@ mod tests {
             app: Some("C:\\Aether HF\\aether-hf.exe".into()),
         };
         // it runs Aether already, here: nothing to change
-        assert!(point(&files(INI), &target).is_empty());
+        assert!(
+            point(&files(INI), &target).is_empty(),
+            "{:?}",
+            point(&files(INI), &target)
+        );
         // VARA's own program, on another computer, with the TNC turned off
         let text = INI
             .replace(
@@ -494,7 +498,7 @@ mod tests {
         assert_eq!(reading.setups.len(), 1);
         let setup = &reading.setups[0];
         assert_eq!(setup.name, "RMS Trimode");
-        assert!(setup.callsigns.is_empty());
+        assert!(setup.callsigns.is_empty(), "{:?}", setup.callsigns);
         assert_eq!(setup.tncs[0].port, Some(VARA_PORT));
         assert_eq!(setup.radio, None);
         assert!(reading.notes.iter().any(|n| n.contains("no channel")));

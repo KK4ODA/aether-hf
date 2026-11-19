@@ -563,7 +563,7 @@ mod tests {
             assert!(!all.contains(secret), "{secret} leaked into {all}");
         }
         let empty = read(&Files::new());
-        assert!(empty.setups.is_empty());
+        assert!(empty.setups.is_empty(), "{:?}", empty.setups);
         assert_eq!(empty.notes.len(), 1);
     }
 
@@ -575,7 +575,7 @@ mod tests {
             "TNC Type=(None - No packet channels, Vara FM only)",
             "",
         );
-        assert!(r.setups.is_empty());
+        assert!(r.setups.is_empty(), "{:?}", r.setups);
         assert!(r.notes.iter().any(|n| n.contains("not enabled")));
     }
 }

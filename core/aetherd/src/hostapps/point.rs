@@ -271,7 +271,11 @@ mod tests {
         // pointed already: nothing to change
         let done = "[Properties]\nCallsign=N0CALL\n[Vara TNC]\nTCP Port=8300\n\
             TNC Address=127.0.0.1\nAuto Launch Vara=false\n";
-        assert!(changes(Program::WinlinkExpress, &files(done), &target()).is_empty());
+        assert!(
+            changes(Program::WinlinkExpress, &files(done), &target()).is_empty(),
+            "{:?}",
+            changes(Program::WinlinkExpress, &files(done), &target())
+        );
     }
 
     #[test]

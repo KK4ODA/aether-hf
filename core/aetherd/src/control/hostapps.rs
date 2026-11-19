@@ -631,7 +631,11 @@ mod tests {
         let nowhere = json!({ "add": dir.display().to_string() });
         let refused = call(&mut station, &mut daemon, "hostapps.find", nowhere);
         assert_eq!(refused.error.expect("refused").code, "not_found");
-        assert!(daemon.hostapps.remembered.folders.is_empty());
+        assert!(
+            daemon.hostapps.remembered.folders.is_empty(),
+            "{:?}",
+            daemon.hostapps.remembered.folders
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

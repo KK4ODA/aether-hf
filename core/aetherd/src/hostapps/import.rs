@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn vox_and_no_radio_leave_the_keying_alone() {
         let s = setup(Ptt::None, 8300);
-        assert!(keyings(&s).is_empty());
+        assert!(keyings(&s).is_empty(), "{:?}", keyings(&s));
         let p = plan(&install(&s), &s, Some(Keying::Program), &aether());
         assert_eq!(p.keying, None);
         assert!(p.changes.get("ptt.kind").is_none(), "{}", p.changes);

@@ -219,6 +219,10 @@ mod tests {
         assert_eq!(ini.sections(), ["Main", "N0CALL", "Vara"]);
         assert_eq!(ini.get("vara", "x"), None);
         assert_eq!(ini.get("MAIN", "A").as_deref(), Some("1"));
-        assert!(Ini::new(Vec::new()).sections().is_empty());
+        assert!(
+            Ini::new(Vec::new()).sections().is_empty(),
+            "{:?}",
+            Ini::new(Vec::new()).sections()
+        );
     }
 }
