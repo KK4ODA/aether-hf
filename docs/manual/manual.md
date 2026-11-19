@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.13.1 |
+| **Version** | 1.14.0 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.167 |
 | **Licence** | CC BY 4.0 |
@@ -1277,6 +1277,14 @@ Winlink lists them as VARA HF, and a VARA station could not connect to one.
 - **Pat**: add `"service_codes": ["AETHER"]` to its configuration, then run `pat rmslist`.
 - **Running a gateway**: set RMS Trimode's service code (*Site Setup*) to `AETHER` alone.
 
+### RMS Packet
+
+RMS Packet is Winlink's gateway for VHF and UHF. Its *Vara FM* setting connects to Aether's host
+programs port, and its *KISS ACKMODE* packet channel to the KISS port; both carry a Winlink session
+on the bench. Keep it off the air with Aether HF: it reports its channel to Winlink as VARA FM, and
+its users are on VHF and UHF, where Aether HF cannot reach them. It waits for Aether FM.
+[RMS Packet with Aether](../user/rms-packet.md) has the setup, what was tried and what waits.
+
 ## 23. RadioPost
 
 RadioPost sends and receives ordinary email by radio, through Aether. RadioPost is the mail program;
@@ -1601,6 +1609,7 @@ a program, which you can turn off in Setup step 5.
 | Installing, checking downloads, updating, uninstalling | [Installing Aether HF](../user/install.md) |
 | On-air testing, for testers | [The tester's guide](../user/tester-guide.md) |
 | Winlink Express, Pat and VarAC, program by program | [VarAC, Winlink Express and Pat with Aether](../user/host-programs.md) |
+| RMS Packet, today and with Aether FM | [RMS Packet with Aether](../user/rms-packet.md) |
 | KISS programs | [KISS programs](../user/kiss.md) |
 | The rules Aether checks | [FCC regulatory controls](../user/fcc-regulatory-controls.md) |
 | Where to operate | [The frequency plan](../user/frequency-plan.md) |
@@ -1665,3 +1674,5 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.12.1 | 2026-11-19 | VarAC's **Call CQ** and beacons ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)): with the rules at *None*, or with a host program keying the radio, no beacon is refused for *Automatic* control, and none of the rules settings acts under **Host**; under the US rules it is, and a CQ Aether turns down is answered `WRONG`, with the reason in the Log's *host* line and the program's tooltip in the header. **VarAC default** is made under *Local* control ([VarAC in one step](#varac-in-one-step)). |
 | 1.13.0 | 2026-11-19 | **Winlink programs** in Setup step 5 (ADR-0133): every install of Winlink Express, RMS Trimode and RMS Packet found, one row per callsign, and **Import**, which makes an Aether profile of each row ticked from the program's own radio and TNC settings, showing first what it will set and what the program must say ([Finding Winlink's programs](#finding-winlinks-programs)). |
 | 1.13.1 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): a gateway's profile sets **Control** *Automatic* and **Wait for clear**. |
+| 1.13.2 | 2026-11-19 | [KISS programs](#24-kiss-programs): a new rung, *Wait for a clear channel* or client limit no longer closes the KISS port; the programs connected stay connected. |
+| 1.14.0 | 2026-11-19 | [RMS Packet](#rms-packet): Winlink's VHF/UHF gateway works with Aether on the bench, through its *Vara FM* setting or its *KISS ACKMODE* packet channel, and waits for Aether FM for the air. |

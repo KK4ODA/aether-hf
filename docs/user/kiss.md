@@ -161,6 +161,17 @@ Winlink Express's **Packet** sessions only if you want to try them:
 QtTermTCP's KISS ports take the same host and port, `127.0.0.1` and `8100`. It may use ACKMODE,
 which Aether honours.
 
+### RMS Packet
+
+Winlink's VHF/UHF gateway runs AX.25 connected mode itself over a KISS TNC: *Site Properties ›
+Use direct access to TNC*, then *Packet Channels*, TNC type **KISS ACKMODE**, serial port **TCP**
+(127.0.0.1:8100; another port only by editing `TCP Port=` in `RMS Packet.ini`). On the bench
+(2026-11-19) a client's AX.25 session reached its welcome and B2F prompt and back through the KISS
+ports of two daemons: 212 s at rung 1, 43 s at rung 12. Its users are on VHF and UHF, which
+Aether HF does not reach: [RMS Packet with Aether](rms-packet.md) says what works today and what
+waits for Aether FM. With RMS Packet's *Vara FM* door on Aether's host port as well, Winlink
+priority (below) holds every frame it writes here: use one door at a time.
+
 ## What Aether does with a frame
 
 * A frame from a program is joined, as a **datagram**, by the sending station's callsign — so
@@ -231,9 +242,9 @@ parameters are told apart from VARA's frame types by their length:
 * **A one-byte type-2 frame** is read as the P parameter — the price of serving VARA's frame types
   and standard KISS on one port.
 * **On the air: VarAC's broadcasts only** (2026-11-19). On the bench: VarAC's broadcasts
-  (2026-10-07) and relay notifications (2026-11-18), the test suite's own clients and
-  `kiss_test_client.py` between two daemons; not yet Winlink Express Packet or the APRS
-  programs.
+  (2026-10-07) and relay notifications (2026-11-18), RMS Packet's AX.25 sessions (2026-11-19),
+  the test suite's own clients and `kiss_test_client.py` between two daemons; not yet Winlink
+  Express Packet or the APRS programs.
 
 ## Status
 
@@ -244,6 +255,7 @@ parameters are told apart from VARA's frame types by their length:
 | VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, *Re-Broadcast*, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07/08) |
 | VarAC 15.0.18 relay notifications, the same bench (a VMail parked at a relay, the addressee's beacon heard, the `<SMP>` notification over KISS, the VMail collected) | passing (2026-11-18) |
 | VarAC 16.1.8 broadcasts on the air between two stations, 7.082 MHz at 500 Hz (to *ALL* and to a callsign, both ways) | passing (2026-11-19) |
+| RMS Packet 2.2.4.0, *KISS ACKMODE* over TCP, against a scripted AX.25 client on the other daemon (connect, welcome, B2F prompt and answer, disconnect; rung 1 and rung 12) | passing (2026-11-19) |
 | Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

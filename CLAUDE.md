@@ -770,7 +770,8 @@ datagram number 1–255; body = sender's callsign + type + frame; ≤ 16 fragmen
 suites). `station/datagrams.rs` queues 16, feeds one only when the queue is empty and the
 engine idle, applies the client's DCD and p-persistence (not the generic busy hold), bursts
 within `burst_limit_s`, judged by the gate as *originated*. `[kiss]` is live (`sync_kiss`
-restarts it in place; a port that would not bind is retried every 10 s): `enabled` (false),
+restarts it in place — since 2026-11-19 only for a new `bind` or `enabled`, the rest retunes in
+place, `KissServer::retune`; a port that would not bind is retried every 10 s): `enabled` (false),
 `bind` (`127.0.0.1:8100`; `Scope::Machine`, never in a profile), `rung` (1, tone-36: both
 bandwidths hear it), `wait_for_clear`,
 `max_clients` (4), `trace` (never contents). Panel: Setup step 5 *KISS programs*, the header's
@@ -3323,6 +3324,21 @@ the control families of that moment (`_acceptance`). `c1_replay.py` judges agree
 transmission's new blocks (`new_blocks_rung`) and counts copies alone apart (`copies_only`). With
 both, the replay explains every new-block transmission. Run the reading tools with `python -I -X
 utf8`: `-I` ignores `PYTHONIOENCODING`, and Windows' console code page cannot print their marks.
+
+**RMS Packet on the bench (2026-11-19, packet-bench; `docs/research/aether-fm/03-rms-packet.md`,
+`docs/user/rms-packet.md`).** A scratch RMS Packet 2.2.4.0 (`C:\Dev\AetherBench\packet-2026-11\`,
+gateway `KK4ODA-10`, trimode-bench's radio-only Relay on 8772, an outbound firewall rule the author
+added: it posts its channels to winlink.org on raw TCP 8775 at every start) reaches Aether two ways.
+Its *Vara FM* door on the host port: Pat 1.0.0's VARA FM mode completed a B2F session with a 6 kB
+attachment through it; RMS Packet says only `MYCALL` and `LISTEN ON`. Its *KISS ACKMODE* door: a
+scripted AX.25 client reached its welcome and B2F prompt (212 s at rung 1 with T1 repeats, 43 s at
+rung 12). With both doors on one Aether, Winlink priority drops every frame of its KISS door (it
+never says `CHAT ON`). Fixed: a new `[kiss] rung` reopened the port and RMS Packet's KISS driver never
+reconnects. On the air it would list as VARA FM, so it waits for Aether FM (ROADMAP P10-9…P10-12; an
+AGW port is how real RMS Packet gateways run packet). `hostapps/packet.rs` reads its ini. **RMS
+Packet rewrites its ini when it closes**: edit the scratch ini with it stopped. **A scratch Winlink
+Express's first *Vara FM* session launches the real `C:\VARA FM\VaraFM.exe`** (its default path,
+auto-launch on) and hangs on it: set the Vara FM TNC path to a stub before opening one.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
