@@ -133,8 +133,23 @@ after it.
 
 ### 3.1 Aether
 
-Work through Setup, then save it as a profile — *Gateway* — so that it is one click to come back
-to.
+**With Trimode already set up for VARA**, let Aether read it: Setup step 5, **Winlink programs**
+([the manual](../manual/manual.md#finding-winlinks-programs)). Each Trimode install is one row,
+named for its first channel's callsign; a second gateway on the same computer (another base
+callsign, another folder) is a row of its own. Tick it and **Import**: the profile *RMS Trimode
+KK4ODA-1* takes the first VARA channel's callsign, the widest VARA channel's bandwidth (500 or
+2300 Hz; Trimode's 2750 runs as 2300), Control **Automatic** (only Trimode answers calls), *Wait
+for a clear channel*, and **Host programs** on the port Trimode's VARA TNC points at, so Trimode
+needs no change. **Keying**: *Host program* when Trimode keys the radio itself (*Use CAT PTT* or a
+serial PTT port), as it does for VARA — the rules are then *None* and you check the dial; or
+*Aether*, which keys the radio the way Trimode did (CAT on its port and speed, or RTS/DTR) and keeps
+the rules check, with Trimode's radio set to *None*. The row's notes say what to change in Trimode:
+a channel not under the service code `AETHER` (§2.4), the VARA TNC turned off, no channel on VARA.
+Then check the steps below; the import does not set the rules' licence class, the levels or the
+sound card.
+
+Otherwise work through Setup by hand, then save it as a profile — *Gateway* — so that it is one
+click to come back to.
 
 1. **Callsign and rules.** The callsign (`KK4ODA-1`). *United States — FCC Part 97*. Control:
    **Automatic**. Your licence class, USB. Grid, rig, power and antenna: they go into every
@@ -314,6 +329,13 @@ gateway being open to the public, nothing to do with the service code; Aether an
 * What the bench could not show and this test can: the real turnaround of two radios through
   Trimode's scan, the CMS round trip, and a path that fades. Report what happened — a failed
   session with its recording is exactly what the project learns from.
+
+**Retested on the bench on 2026-11-19** (Trimode 1.4.4.0 with RMS Relay in radio-only mode, two
+Aether stations over the simulated channel, Trimode keying the gateway): messages with attachments
+both ways at 2300 Hz (15 and 0 dB) and 500 Hz (15 and −3 dB), collecting with an empty outbox,
+probes, a call after 17 minutes with nothing keyed, and 37 calls in all. Two races in what Trimode
+is told of a call were found and fixed there (`PENDING` and `CONNECTED` too soon after its
+`LISTEN ON`). What the bench cannot show: the radio's own keying, a fading path and the CMS.
 
 The bench's notes on Trimode, and every command it and Winlink Express send, are in
 [host-interfaces.md §7](../spec/host-interfaces.md#7-verification-status); the headless Linux
