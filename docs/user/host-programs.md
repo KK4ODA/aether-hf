@@ -56,6 +56,13 @@ In **VarAC**, *Settings*:
 With no host program attached, Aether refuses to start anything (the Session tab says why):
 nobody would key the radio.
 
+VarAC's **TUNE** button plays Aether's tuner tone: a steady tone for ten seconds at most, which
+VarAC keys the radio for (`PTT ON`) and can stop sooner (`TUNE OFF`). The tone plays at Aether's
+transmit level. The level VarAC sends with it, and its drive level (`DRIVELEVEL`), change nothing
+in Aether. Set the drive with Aether's *Set drive* (the Session tab's *Keying and drive*), not with
+the tone. Like *Tuner tone*, it is refused during a session or while the channel is busy, and the
+Log says so.
+
 VarAC's CQs and beacons go through the host port, not the KISS port, so they work with *KISS
 programs* off. Another VarAC lists a beacon under BEACONS and a CQ under CQ CALLS. VarAC holds
 its beacon while Aether says the channel is busy, and for five minutes after a CQ, while it waits

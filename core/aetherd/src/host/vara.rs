@@ -62,8 +62,9 @@ pub enum HostAction {
     Listen(bool),
     /// Answer to these callsigns from now on, and call as the first of them.
     Callsigns(Vec<String>),
-    /// Put a carrier on the air for tuning, for this many seconds.
-    Tune(f64),
+    /// Put a tone on the air for an antenna tuner (`true`), for as long as the modem plays
+    /// one, or stop one playing (`false`).
+    Tune(bool),
     /// Report the transmit level (`TUNE ?`), which the modem answers with `TUNE <dB>`.
     TuneLevel,
     /// Send an unproto identification frame, under the name the host gave it: `VarAC`'s CQs
@@ -177,6 +178,9 @@ pub struct Recorded {
     /// `DRIVELEVEL <n>`: the transmit level a host would set, on a scale VARA does not
     /// publish. Kept as the host said it; the drive stays the operator's `audio.tx_level`.
     pub drive_level: Option<String>,
+    /// `TUNE <level>`: the level `VarAC`'s TUNE button sends with its tone, kept as the host
+    /// said it, as `DRIVELEVEL`'s is; the tone plays at the operator's `audio.tx_level`.
+    pub tune_level: Option<String>,
 }
 
 impl Default for HostState {
@@ -218,21 +222,26 @@ impl HostState {
         self.callsigns.iter().any(|mine| mine == call)
     }
 
-    /// The `TUNE` family: `ON` is `VarAC`'s TUNE button, a tone until `TUNE OFF` — which
-    /// here means the ten seconds the modem allows a tone at all; `?` is what `VarAC`
-    /// asks after every connection, to keep a level per band, and is answered with the
-    /// line `TUNE <dB>` rather than `OK`; a number of seconds is this modem's own.
-    fn tune(what: &str) -> HostOutcome {
+    /// The `TUNE` family, as `VarAC` speaks it (16.1.8 on the air, 2026-11-19): `TUNE ?` after
+    /// every connection, answered with the line `TUNE <dB>` rather than `OK`; its TUNE button
+    /// sends that level back, `TUNE -16`, to start the tone, and `TUNE OFF` stops it. Any
+    /// number is a level — `TUNE 0` too, which is what a station at full scale was told — and
+    /// starts the tone, for as long as the modem plays one. The level is kept, not acted on:
+    /// VARA's scale is not published, and the tone plays at the operator's transmit level.
+    /// `TUNE` is not in the published list; the adapter's own guesses, `TUNE ON` and a number
+    /// of seconds, are gone — no program sent either, and the seconds read `VarAC`'s level as
+    /// a duration and refused it.
+    fn tune(&mut self, what: &str) -> HostOutcome {
         match what {
-            "OFF" => HostOutcome::acting(HostAction::Tune(0.0)),
-            "ON" => HostOutcome::acting(HostAction::Tune(10.0)),
+            "OFF" => HostOutcome::acting(HostAction::Tune(false)),
             "?" => HostOutcome {
                 replies: Vec::new(),
                 action: HostAction::TuneLevel,
             },
-            seconds => match seconds.parse::<f64>() {
-                Ok(value) if (0.0..=30.0).contains(&value) => {
-                    HostOutcome::acting(HostAction::Tune(value))
+            level => match level.parse::<f64>() {
+                Ok(value) if value.is_finite() => {
+                    self.recorded.tune_level = Some(level.to_owned());
+                    HostOutcome::acting(HostAction::Tune(true))
                 }
                 _ => HostOutcome::wrong(),
             },
@@ -337,7 +346,7 @@ impl HostState {
             ("CQFRAME", args) => Self::cq_frame(args),
             ("VERSION", []) => HostOutcome::just(&format!("VERSION {}", version_string())),
             ("BUFFER", []) => HostOutcome::just(&format!("BUFFER {}", self.buffer)),
-            ("TUNE", [what]) => Self::tune(what),
+            ("TUNE", [what]) => self.tune(what),
             // the level VarAC would set back; recorded, because the scale VARA uses for
             // it is not published and a wrong guess would change the operator's drive
             ("DRIVELEVEL", [level]) => {
@@ -717,20 +726,43 @@ mod tests {
     }
 
     #[test]
-    fn tune_takes_a_bounded_duration() {
+    fn tune_is_varacs_button_and_its_level_is_kept() {
+        // VarAC 16.1.8 on the air (2026-11-19): it asks the level after every connection and
+        // sets its drive, then its TUNE button sends the level back and TUNE OFF stops the
+        // tone. The level had been read as a number of seconds, refused, and the button did
+        // nothing.
         let mut host = state();
-        assert_eq!(host.command("TUNE 5").action, HostAction::Tune(5.0));
-        assert_eq!(host.command("TUNE OFF").action, HostAction::Tune(0.0));
-        // VarAC's TUNE button, and its question after every connection
-        assert_eq!(host.command("TUNE ON").action, HostAction::Tune(10.0));
         let asked = host.command("TUNE ?");
         assert_eq!(asked.action, HostAction::TuneLevel);
         assert!(asked.replies.is_empty(), "{:?}", asked.replies);
-        assert_eq!(host.command("DRIVELEVEL 50").replies, vec!["OK"]);
-        assert_eq!(host.recorded.drive_level.as_deref(), Some("50"));
-        // an unbounded tune is a stuck carrier by another name
-        assert_eq!(host.command("TUNE 600").replies, vec!["WRONG"]);
-        assert_eq!(host.command("TUNE forever").replies, vec!["WRONG"]);
+        assert_eq!(host.command("DRIVELEVEL -6").replies, vec!["OK"]);
+        assert_eq!(host.recorded.drive_level.as_deref(), Some("-6"));
+
+        let pressed = host.command("TUNE -16");
+        assert_eq!(pressed.replies, vec!["OK"]);
+        assert_eq!(pressed.action, HostAction::Tune(true));
+        assert_eq!(host.recorded.tune_level.as_deref(), Some("-16"));
+        let released = host.command("TUNE OFF");
+        assert_eq!(released.replies, vec!["OK"]);
+        assert_eq!(released.action, HostAction::Tune(false));
+
+        // a station at full scale is told `TUNE 0`, and its button sends it back: a level,
+        // not "no seconds", so the tone starts
+        assert_eq!(host.command("TUNE 0").action, HostAction::Tune(true));
+        assert_eq!(host.recorded.tune_level.as_deref(), Some("0"));
+        assert_eq!(host.command("TUNE -12.5").action, HostAction::Tune(true));
+    }
+
+    #[test]
+    fn tune_refuses_what_no_program_sends() {
+        // the adapter's guesses at a TUNE button went with the trace that showed VarAC's
+        let mut host = state();
+        for line in ["TUNE ON", "TUNE forever", "TUNE NAN", "TUNE INF", "TUNE"] {
+            let outcome = host.command(line);
+            assert_eq!(outcome.replies, vec!["WRONG"], "{line}");
+            assert_eq!(outcome.action, HostAction::None, "{line}");
+        }
+        assert_eq!(host.recorded.tune_level, None);
     }
 
     #[test]

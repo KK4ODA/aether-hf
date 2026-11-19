@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.10.1 |
+| **Version** | 1.11.0 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.166 |
 | **Licence** | CC BY 4.0 |
@@ -1136,6 +1136,9 @@ in their places, and your own come back when the program leaves.
 - The program's `MYCALL` names the callsigns it answers for. While it is attached, Aether answers no
   other callsign of its own.
 - A program's `CWID ON` turns the identifier on for its sessions, sent the way Setup step 4 says.
+- VarAC's **TUNE** button plays Aether's **Tuner tone**: ten seconds at most, and VarAC can stop it
+  sooner. It plays at Aether's transmit level: the level VarAC sends with it, and VarAC's drive
+  level, change nothing here. Set the drive with **Set drive**.
 - The first transmission after a program attaches is checked on its own: if the receive audio does
   not change while the radio is keyed, the Log says the radio may not be transmitting. A program set
   to key a port nothing is wired to is found at once.
@@ -1598,3 +1601,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.9.2 | 2026-11-18 | **Debug mode**: with no internet, the sessions wait and go once there is a connection, tried every 10 minutes and kept through a restart. |
 | 1.10.0 | 2026-11-18 | Setup step 2's **Interface** is **Preset** and its **Keying** is **Radio control**, with *Host program* in place of *Host*, and a new **Dial** line says what reads the dial and tunes the radio: a host program that keys the radio tunes it too. |
 | 1.10.1 | 2026-11-19 | [Finding an Aether gateway](#finding-an-aether-gateway): Aether gateways are listed under Winlink's service code `AETHER`; how to see them in Winlink Express and Pat, and how a gateway publishes under it. |
+| 1.11.0 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): VarAC's **TUNE** button plays Aether's tuner tone, at Aether's transmit level. |

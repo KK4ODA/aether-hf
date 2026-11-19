@@ -92,6 +92,10 @@ pub const BUFFER_REPEAT: Duration = Duration::from_secs(50);
 /// How long a read waits for the program before the notification path gets a turn.
 const POLL: Duration = Duration::from_millis(50);
 
+/// How long `VarAC`'s TUNE button keys the radio: the longest tone the modem plays
+/// (`Station::tune`), which the program's `TUNE OFF` cuts short.
+const TUNE_S: f64 = 10.0;
+
 /// The longest a host's `DISCONNECTED` waits for the station's closing identifier (ADR-0075):
 /// a slave whose session ended without a DISC sends it on its own a link timeout on, listening
 /// first. Past it the host is told anyway — it must not wait for ever.
@@ -1482,16 +1486,14 @@ fn apply(
             }
             Applied::Done
         }
-        // `TUNE OFF`: cut the tone short, if one is playing or queued
-        HostAction::Tune(seconds) if *seconds <= 0.0 => {
-            let _ = handle.call(request("tune", json!({ "duration_s": 0.0 })));
-            Applied::Done
-        }
-        HostAction::Tune(seconds) => {
-            // the modem bounds a tone at ten seconds; a host asking for more gets ten, and
-            // the reply already said OK because the command was understood
-            let bounded = seconds.min(10.0);
-            let _ = handle.call(request("tune", json!({ "duration_s": bounded })));
+        // VarAC's TUNE button: the tone for as long as the modem plays one, which `TUNE OFF`
+        // cuts short. Its keying reaches the program as `PTT ON`/`PTT OFF`, as any other does,
+        // so a program that keys the radio keys it for the tone. The reply already said OK,
+        // the command being understood; a tone the modem refuses (a session, a busy channel)
+        // is said in its log.
+        HostAction::Tune(on) => {
+            let seconds = if *on { TUNE_S } else { 0.0 };
+            let _ = handle.call(request("tune", json!({ "duration_s": seconds })));
             Applied::Done
         }
         // the transmit level as decibels below full scale, the one scale a sine amplitude
@@ -3015,6 +3017,54 @@ mod tests {
         assert_eq!(beacons.len(), 2, "{beacons:?}");
         assert_eq!(beacons[0]["callsign"], "K1ABC-9");
         assert!(beacons[1].get("callsign").is_none(), "{beacons:?}");
+    }
+
+    #[test]
+    fn varacs_tune_button_keys_the_tone_and_tune_off_releases_it() {
+        // VarAC 16.1.8 keying the radio itself (KK4ODA-2, 2026-11-19): after every connection
+        // it asks the level and sets its drive; its TUNE button then sends that level back to
+        // start the tone and TUNE OFF to stop it. The level was read as seconds and refused —
+        // three presses, three WRONGs, nothing keyed.
+        let keyed = Arc::new(AtomicBool::new(false));
+        let key = Arc::clone(&keyed);
+        let (modem, server) = Modem::start(move |method, control| match method {
+            "config.get" => json!({ "config": { "audio": { "tx_level": 0.158 } } }),
+            "tune" => {
+                // the tone keys the station and its stop releases it: a station keyed by the
+                // program publishes that it keys (`host_keys`), before the reply, as the
+                // daemon does
+                let on = !key.fetch_xor(true, Ordering::Relaxed);
+                control.publish(&Event::new("ptt", json!({"on": on, "host_keys": true})));
+                json!({})
+            }
+            _ => json!({}),
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("TUNE ?");
+        assert_eq!(client.expect(|l| l.starts_with("TUNE")), "TUNE -16");
+        client.send("DRIVELEVEL -6");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+
+        client.send("TUNE -16");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT ON");
+        client.send("TUNE OFF");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT OFF");
+
+        // the modem's longest tone, then its stop; the operator's drive left alone
+        assert_eq!(
+            params_of(&modem, "tune"),
+            vec![json!({"duration_s": 10.0}), json!({"duration_s": 0.0})]
+        );
+        let methods = modem.methods();
+        assert!(
+            !methods
+                .iter()
+                .any(|m| m == "config.set" || m == "drive.set"),
+            "{methods:?}"
+        );
     }
 
     #[test]
