@@ -25,6 +25,7 @@ pub fn handles(method: &str) -> bool {
     method.starts_with("profile.")
         || method == "config.schema"
         || crate::control::varac::handles(method)
+        || crate::control::hostapps::handles(method)
 }
 
 /// The methods that change something.
@@ -39,6 +40,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "profile.duplicate"
             | "profile.delete"
             | "profile.import"
+            | "hostapps.import"
     )
 }
 
@@ -50,6 +52,9 @@ pub fn dispatch<P: Ptt>(
     params: &Value,
     id: Option<String>,
 ) -> Response {
+    if crate::control::hostapps::handles(method) {
+        return crate::control::hostapps::dispatch(station, daemon, method, params, id);
+    }
     if crate::control::varac::handles(method) {
         return crate::control::varac::dispatch(station, daemon, method, params, id);
     }

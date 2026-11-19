@@ -904,6 +904,13 @@ fn answer_commands(
     if let Some(devices) = daemon.take_new_devices() {
         control.publish(&Event::new("devices", devices));
     }
+    // a find of Winlink's programs, begun by `hostapps.find`, finished off the loop
+    if daemon.hostapps.take_news() {
+        control.publish(&Event::new(
+            "hostapps",
+            aetherd::control::hostapps::answer(daemon),
+        ));
+    }
 }
 
 /// A request and its answer, in one line, with the payload of a `send` left out.

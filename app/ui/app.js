@@ -64,6 +64,7 @@ function connect() {
     await loadConfig();
     loadProfiles();
     loadVarac();
+    findHostapps();
   });
 
   socket.addEventListener("message", (message) => {
@@ -229,6 +230,10 @@ function onEvent(frame) {
       // the daemon listed the devices again, off its loop, and found one plugged in or taken
       // away: the lists follow, keeping what is chosen
       fillDevices(data);
+      break;
+    case "hostapps":
+      // a look for Winlink's programs, made off the modem's loop, finished (ADR-0133)
+      renderHostapps(data);
       break;
     default:
       log(JSON.stringify(data), false, frame.event);
@@ -5531,6 +5536,283 @@ function wireVarac() {
   $("varac-folder").addEventListener("change", () => loadVarac($("varac-folder").value.trim()));
 }
 
+// Winlink's programs found on this computer (`hostapps.find`, ADR-0133): every install of
+// Winlink Express, RMS Trimode and RMS Packet, one row per setup — a Winlink Express callsign,
+// a gateway — with the port it points at. A ticked row shows what its profile will set and
+// what the program must say; Import saves them. The modem finds off its loop: the first
+// answer may be empty, and a `hostapps` event brings the result.
+
+let hostapps = null;
+// the rows ticked, by folder and setup, with the keying chosen for each
+const hostappsTicked = new Map();
+
+const HOSTAPPS_KEYING = {
+  program: ["Host program", "The program keys the radio on Aether's PTT ON and tunes it, as it did with VARA: nothing in it changes. Aether reads no dial, so its rules check is off"],
+  aether: ["Aether", "Aether keys the radio as the program did, and its rules check stays on; the program's radio must be Manual and its PTT port None"],
+};
+
+// a profile's setting as the panel names it, with where it lives in Setup
+function hostappsSetting(key, value) {
+  const yes = value ? "on" : "off";
+  const named = {
+    callsign: ["Callsign", value, "Setup step 1: the callsign the station answers to"],
+    "host.enabled": ["Host programs", yes, "Setup step 5: the VARA-compatible interface the program connects to"],
+    "kiss.enabled": ["KISS programs", yes, "Setup step 5: the KISS port the program connects to"],
+    "radio.bandwidth": ["Bandwidth", `${value} Hz`, "Setup step 4: 2300 Hz for VARA's 2300 and 2750"],
+    "host.bind": ["Host port", String(value).split(":").pop(), "Setup step 5: the port Aether listens on for the program, where the program points"],
+    "ptt.kind": ["Keying", { host: "Host program", cat: "CAT", serial: "Serial line", none: "None" }[value] ?? value, "Setup step 2: radio control"],
+    "ptt.port": ["Port", value, "Setup step 2: the radio's port"],
+    "ptt.protocol": ["CAT", String(value).charAt(0).toUpperCase() + String(value).slice(1), "Setup step 2: the radio's command set"],
+    "ptt.baud": ["Baud", String(value), "Setup step 2: the CAT port's speed, as the program had it"],
+    "ptt.civ_address": ["CI-V", Number(value).toString(16).toUpperCase(), "Setup step 2: the Icom's CI-V address"],
+    "ptt.line": ["Line", String(value).toUpperCase(), "Setup step 2: the serial line that keys the radio"],
+    "regulatory.profile": ["Rules", value === "none" ? "None" : value, "Setup step 1: the rules check"],
+  }[key];
+  return named ?? [key, String(value), key];
+}
+
+function hostappsKey(folder, setup) {
+  return `${folder}\u0000${setup}`;
+}
+
+async function findHostapps(params = {}) {
+  $("hostapps-state").textContent = "looking…";
+  $("hostapps-state").dataset.state = "";
+  try {
+    renderHostapps(await call("hostapps.find", params));
+    return true;
+  } catch (error) {
+    if (error.code === "unknown_method") {
+      // a modem from before the finder
+      $("hostapps-group").hidden = true;
+      return false;
+    }
+    $("hostapps-state").textContent = error.message;
+    $("hostapps-state").dataset.state = "error";
+    return false;
+  }
+}
+
+// the plan a row will import: the keying ticked, else the default
+function hostappsPlan(setup, keying) {
+  const plans = setup.plans ?? [];
+  return plans.find((plan) => plan.keying === keying) ?? plans[0] ?? null;
+}
+
+function hostappsTncText(setup) {
+  const tnc = (setup.tncs ?? []).find((t) => t.kind === "vara_hf") ?? (setup.tncs ?? []).find((t) => t.kind === "kiss");
+  if (!tnc) return ["none", "It points at no VARA HF or KISS TNC"];
+  const where = tnc.serial ? tnc.serial : `${tnc.host}:${tnc.port}`;
+  const said = {
+    aether: [`${where} · Aether`, "It points at this Aether"],
+    other_port: [where, "It points at this computer, on another port than Aether's"],
+    other_host: [where, "It points at another computer"],
+    serial: [where, "It points at a serial port"],
+  }[tnc.pointing] ?? [where, "Where it points"];
+  return said;
+}
+
+function renderHostapps(answer) {
+  hostapps = answer;
+  const group = $("hostapps-group");
+  group.hidden = !answer?.supported && !(answer?.installs ?? []).length;
+  if (group.hidden) return;
+  const installs = answer.installs ?? [];
+  const setups = installs.reduce((n, install) => n + (install.setups ?? []).length, 0);
+  const state = $("hostapps-state");
+  state.dataset.state = "";
+  if (answer.finding && !answer.found) state.textContent = "looking…";
+  else if (!installs.length) state.textContent = "none found";
+  else {
+    const programs = installs.length === 1 ? "1 install" : `${installs.length} installs`;
+    state.textContent = `${programs}, ${setups === 1 ? "1 setup" : `${setups} setups`}${answer.finding ? " · looking…" : ""}`;
+  }
+  const rows = $("hostapps-rows");
+  rows.replaceChildren();
+  const seen = new Set();
+  for (const install of installs) {
+    for (const setup of install.setups ?? []) {
+      const key = hostappsKey(install.folder, setup.name);
+      seen.add(key);
+      const tr = document.createElement("tr");
+      const tickCell = document.createElement("td");
+      const tick = document.createElement("input");
+      tick.type = "checkbox";
+      const refused = (setup.plans ?? [])[0]?.refused;
+      tick.disabled = Boolean(refused);
+      tick.checked = hostappsTicked.has(key) && !refused;
+      tick.title = refused ? `No profile: ${refused}` : `Make the profile ${(setup.plans ?? [])[0]?.profile ?? ""}`;
+      tick.setAttribute("aria-label", `Import ${install.program_name} ${setup.name}`);
+      tick.addEventListener("change", () => {
+        if (tick.checked) hostappsTicked.set(key, hostappsTicked.get(key) ?? (setup.plans ?? [])[0]?.keying ?? null);
+        else hostappsTicked.delete(key);
+        renderHostappsPreview();
+      });
+      tickCell.append(tick);
+      const cell = (text, title) => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        td.title = title;
+        return td;
+      };
+      const [tncText, tncTitle] = hostappsTncText(setup);
+      const tncCell = cell(tncText, tncTitle);
+      tncCell.classList.add("mono");
+      if (tncText.endsWith("Aether")) tncCell.dataset.state = "ok";
+      const keyingCell = document.createElement("td");
+      const keyings = (setup.plans ?? []).map((plan) => plan.keying).filter(Boolean);
+      if (keyings.length) {
+        const select = document.createElement("select");
+        select.className = "narrow";
+        select.title = "Who keys the radio in the profile";
+        select.setAttribute("aria-label", `Keying for ${setup.name}`);
+        for (const keying of keyings) {
+          const option = document.createElement("option");
+          option.value = keying;
+          [option.textContent, option.title] = HOSTAPPS_KEYING[keying] ?? [keying, keying];
+          select.append(option);
+        }
+        const chosen = hostappsTicked.get(key);
+        if (chosen && keyings.includes(chosen)) select.value = chosen;
+        select.addEventListener("change", () => {
+          if (hostappsTicked.has(key)) hostappsTicked.set(key, select.value);
+          else {
+            hostappsTicked.set(key, select.value);
+            tick.checked = !tick.disabled;
+            if (tick.disabled) hostappsTicked.delete(key);
+          }
+          renderHostappsPreview();
+        });
+        keyingCell.append(select);
+      } else {
+        keyingCell.textContent = refused ? "—" : "as it is";
+        keyingCell.title = refused ? refused : "The program keys by VOX or controls no radio: Aether's keying is left as it is";
+      }
+      const folderCell = cell(install.folder, `${install.exe} — found by ${(install.found_by ?? []).join(", ")}`);
+      folderCell.classList.add("path");
+      const callTitle = install.callsigns?.length > 1
+        ? `This install is set up for ${install.callsigns.join(", ")}; this row is ${setup.name}${setup.session ? `, last run as ${setup.session}` : ""}`
+        : `${setup.name}${setup.session ? `, last run as ${setup.session}` : ""}`;
+      const callCell = cell(setup.callsigns?.[0] ?? setup.name, callTitle);
+      callCell.classList.add("mono");
+      tr.append(
+        tickCell,
+        cell(install.program_name, refused ? `${install.program_name}: ${refused}` : install.program_name),
+        callCell,
+        cell(install.version ?? "?", "The program's version"),
+        cell(install.running ? "yes" : "no", install.running ? "Running now" : "Not running"),
+        tncCell,
+        keyingCell,
+        folderCell,
+      );
+      rows.append(tr);
+    }
+  }
+  for (const key of [...hostappsTicked.keys()]) if (!seen.has(key)) hostappsTicked.delete(key);
+  $("hostapps-pane").hidden = !setups;
+  $("hostapps-import-row").hidden = !setups;
+  renderHostappsPreview();
+}
+
+function hostappsChosen() {
+  const out = [];
+  for (const install of hostapps?.installs ?? []) {
+    for (const setup of install.setups ?? []) {
+      const key = hostappsKey(install.folder, setup.name);
+      if (!hostappsTicked.has(key)) continue;
+      const plan = hostappsPlan(setup, hostappsTicked.get(key));
+      if (plan && !plan.refused) out.push({ install, setup, plan });
+    }
+  }
+  return out;
+}
+
+function renderHostappsPreview() {
+  const list = $("hostapps-preview");
+  list.replaceChildren();
+  const chosen = hostappsChosen();
+  for (const { plan } of chosen) {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = plan.profile;
+    name.title = `The Aether profile this makes, or brings up to date: ${plan.profile}`;
+    li.append(name);
+    const sets = document.createElement("span");
+    sets.className = "hostapps-sets";
+    for (const [key, value] of Object.entries(plan.changes ?? {})) {
+      const [label, shown, where] = hostappsSetting(key, value);
+      const chip = document.createElement("span");
+      chip.className = "setting";
+      chip.textContent = `${label} ${shown}`;
+      chip.title = where;
+      sets.append(chip);
+    }
+    li.append(sets);
+    const advice = [...(plan.program_must ?? []).map((a) => ["program", a]), ...(plan.notes ?? []).map((a) => ["note", a])];
+    if (advice.length) {
+      const says = document.createElement("span");
+      says.className = "hostapps-says";
+      for (const [kind, item] of advice) {
+        const chip = document.createElement("span");
+        chip.className = "setting";
+        chip.dataset.kind = kind;
+        chip.textContent = kind === "program" ? `In the program: ${item.what}` : item.what;
+        chip.title = item.why;
+        says.append(chip);
+      }
+      li.append(says);
+    }
+    list.append(li);
+  }
+  list.hidden = !chosen.length;
+  $("btn-hostapps-import").disabled = !chosen.length;
+  $("btn-hostapps-import-load").disabled = chosen.length !== 1;
+}
+
+async function importHostapps(andSwitch) {
+  const chosen = hostappsChosen();
+  if (!chosen.length) return;
+  const imports = chosen.map(({ install, setup, plan }) => ({ folder: install.folder, setup: setup.name, keying: plan.keying }));
+  const buttons = [$("btn-hostapps-import"), $("btn-hostapps-import-load")];
+  for (const button of buttons) button.disabled = true;
+  const note = $("hostapps-note");
+  try {
+    const answer = await call("hostapps.import", { imports });
+    applyProfiles(answer);
+    const made = answer.imported ?? [];
+    const refused = answer.refused ?? [];
+    const names = made.map((m) => m.profile).join(", ");
+    note.textContent = made.length ? `saved ${names}` : "nothing saved";
+    note.title = refused.length
+      ? `Not saved: ${refused.map((r) => `${r.setup} (${r.why})`).join("; ")}`
+      : "What the last import did";
+    for (const m of made) log(`profile ${m.profile} ${m.created ? "made" : "updated"} from ${m.setup} in ${m.folder}`, false, "hostapps");
+    for (const r of refused) log(`${r.setup} in ${r.folder} not imported: ${r.why}`, true, "hostapps");
+    hostappsTicked.clear();
+    renderHostapps(hostapps);
+    if (andSwitch && made.length === 1) {
+      const id = made[0].id;
+      withProfileSaved(`switching to ${made[0].profile}`, () => loadProfile(id));
+    }
+  } catch (error) {
+    note.textContent = error.message;
+    log(`programs not imported: ${error.message}`, true, "hostapps");
+  } finally {
+    renderHostappsPreview();
+  }
+}
+
+function wireHostapps() {
+  $("btn-hostapps-find").addEventListener("click", () => findHostapps());
+  $("btn-hostapps-add").addEventListener("click", async () => {
+    const folder = $("hostapps-folder").value.trim();
+    if (!folder) return;
+    if (await findHostapps({ add: folder })) $("hostapps-folder").value = "";
+  });
+  $("btn-hostapps-import").addEventListener("click", () => importHostapps(false));
+  $("btn-hostapps-import-load").addEventListener("click", () => importHostapps(true));
+}
+
 function wireMismatch() {
   $("btn-mismatch-update").addEventListener("click", () => $("btn-check-updates")?.click());
   $("btn-mismatch-setup").addEventListener("click", () => {
@@ -6590,6 +6872,7 @@ function wire() {
   wireMismatch();
   wireDebug();
   wireVarac();
+  wireHostapps();
   wireClipping();
   $("radio-cwid-wpm").addEventListener("input", showCwidCap);
   $("radio-identify-by").addEventListener("change", showIdentifyBy);

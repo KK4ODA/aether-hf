@@ -334,6 +334,10 @@ cover everything else it does.
   profile, *VarAC_Aether*, a copy of yours with only the modem settings changed, and an Aether
   profile, *VarAC default*. Switch VarAC's profile to run it on Aether, and back to run it on
   VARA. After an update that changes what VarAC needs, Aether offers to bring both up to date.
+* **Winlink's programs found** (Windows): Setup lists every install of Winlink Express, RMS
+  Trimode and RMS Packet on the computer, one row per callsign, with the port each points at, and
+  makes an Aether profile of the ones ticked from their own radio and TNC settings (callsign,
+  bandwidth, keying, port). It reads the programs' files and never changes them.
 * Either side can own the radio: **Aether keys** (CAT, rigctld, FLRig, serial, CM108, VOX), or
   the **host program keys** and tunes it on Aether's `PTT ON`/`PTT OFF`.
 * **One place for each setting**: while a program is attached, its callsign and its `BW500`
@@ -466,7 +470,8 @@ cover everything else it does.
   debug mode sends.
 * **Host programs:** turn on *Host programs* in Setup step 5 and point the program at
   `127.0.0.1`, port 8300. In Winlink Express that is a *Vara HF* session with its automatic
-  launch off and Aether started first; in Pat, the `varahf` transport. How to set up each one,
+  launch off and Aether started first; in Pat, the `varahf` transport. On Windows, Setup step 5's
+  *Winlink programs* reads Winlink Express, RMS Trimode and RMS Packet into profiles. How to set up each one,
   with the program owning the radio or Aether owning it, is in
   [`docs/user/host-programs.md`](docs/user/host-programs.md); what each program sends and what
   has been verified is in [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md).

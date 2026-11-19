@@ -203,6 +203,9 @@ pub struct DaemonState {
     /// `VarAC` as set up for this station (`varac.json` beside the configuration), where
     /// Aether's application is for `VarAC` to start, and where `VarAC` is looked for.
     pub varac: crate::varac::Setup,
+    /// Winlink's programs found on this computer (ADR-0133), off the run loop, and the
+    /// folders the operator added (`hostapps.json` beside the configuration).
+    pub hostapps: crate::hostapps::state::Finder,
     /// Whether the settings or the profiles changed since the run loop last told the
     /// clients: set by the methods, taken by the loop, which publishes a `profile` event.
     profiles_changed: bool,
@@ -289,6 +292,9 @@ impl DaemonState {
             control_handle: None,
             profiles: crate::profile::Store::open(Some(&path)),
             varac: crate::varac::Setup::open(Some(path.with_file_name(crate::varac::STATE_FILE))),
+            hostapps: crate::hostapps::state::Finder::open(Some(
+                path.with_file_name(crate::hostapps::state::STATE_FILE),
+            )),
             profiles_changed: false,
             path,
         }

@@ -10,6 +10,7 @@
 //! client discovers the mode table rather than hard-coding it, that an unknown method is
 //! refused — are checked in the test suite rather than by hand against a running daemon.
 
+pub mod hostapps;
 pub mod methods;
 pub mod profiles;
 pub mod protocol;

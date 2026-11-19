@@ -213,6 +213,55 @@ const VARAC = {
   show_offer: true,
 };
 
+// what `hostapps.find` answers on a made-up computer (ADR-0133): Winlink Express with two
+// callsigns keyed by CAT, a test copy of it on another port, and RMS Trimode
+const HOSTAPPS = (() => {
+  const radio = {rig: "Yaesu FT-991A", cat_port: "COM5", cat_baud: 38400, icom_address: null,
+                 ptt: {kind: "cat"}};
+  const vara = (port, pointing) => ({kind: "vara_hf", said: null, host: "127.0.0.1", port,
+                                     serial: null, program: "C:\\VARA\\VARA.exe", launches: false,
+                                     params: {}, pointing});
+  const advice = (what, why) => ({what, why});
+  const plans = (call, bandwidth, extra = {}, port = null) => {
+    const base = {callsign: call, "host.enabled": true, "radio.bandwidth": bandwidth, ...extra};
+    if (port) base["host.bind"] = `127.0.0.1:${port}`;
+    const notes = port ? [advice(`Aether on port ${port}`, "where it points")] : [];
+    return [
+      {profile: `Winlink Express ${call}`, keying: "program", keyings: ["program", "aether"],
+       changes: {...base, "ptt.kind": "host", "regulatory.profile": "none"},
+       program_must: [advice("Radio setup as it is", "it keys the radio on Aether's PTT ON")],
+       notes: [...notes, advice("Rules check off", "Aether reads no dial with the program keying")],
+       pointing: port ? "other_port" : "aether", refused: null},
+      {profile: `Winlink Express ${call}`, keying: "aether", keyings: ["program", "aether"],
+       changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
+                 "ptt.baud": 38400},
+       program_must: [advice("Radio Manual, PTT port None", "only one program can hold COM5")],
+       notes, pointing: port ? "other_port" : "aether", refused: null},
+    ];
+  };
+  const setup = (call, session, bandwidth, port, pointing) => ({
+    name: call, callsigns: [call], session, bandwidth_hz: bandwidth, frequency_hz: 7083500,
+    gateway: false, radio, tncs: [vara(port, pointing)],
+    plans: plans(call, bandwidth === 500 ? 500 : 2300, {}, pointing === "other_port" ? port : null),
+  });
+  return {
+    supported: true, finding: false, found: true, added: [],
+    aether: {host_port: 8300, kiss_port: 8100},
+    installs: [
+      {program: "winlink_express", program_name: "Winlink Express", folder: "C:\\RMS Express",
+       exe: "C:\\RMS Express\\RMS Express.exe", found_by: ["usual", "registry", "shortcut"],
+       running: true, version: "1.8.6.0", callsigns: ["N1CALL", "N2CALL"], points_at_aether: true,
+       notes: [],
+       setups: [setup("N1CALL", "Vara HF P2P", 500, 8300, "aether"),
+                setup("N2CALL", "Vara HF Winlink", 2750, 8300, "aether")]},
+      {program: "winlink_express", program_name: "Winlink Express", folder: "D:\\Radio\\WLE test",
+       exe: "D:\\Radio\\WLE test\\RMS Express.exe", found_by: ["shortcut"], running: false,
+       version: "1.8.5.0", callsigns: ["N1CALL"], points_at_aether: false, notes: [],
+       setups: [setup("N1CALL", "Vara HF P2P", 2300, 8310, "other_port")]},
+    ],
+  };
+})();
+
 const RADIOPOST = {id: 3, app: "RadioPost client 0.1.0-beta.21", kind: "control",
                    since_ms: NOW - 41 * 60 * MS};
 
@@ -723,6 +772,7 @@ function world(scene) {
     heard: configured ? heardList() : [],
     sessions: configured ? sessionList() : [],
     varac: scene.varac ?? null,
+    hostapps: scene.hostapps ?? {supported: false, finding: false, found: true, installs: [], added: []},
     constellation: configured ? constellation(random) : {frame: null, points: []},
     spectrum: {transmit_hz: wide.edges, passband_hz: [1500 - bandwidth / 2, 1500 + bandwidth / 2],
                // the span the other station's signal fills: the air's nominal width, centred
@@ -926,6 +976,8 @@ function pageWorld(D) {
         return {running: Boolean(D.status.test), results: null};
       case "varac.status":
         return D.varac ?? {};
+      case "hostapps.find":
+        return D.hostapps;
       default:
         return {};
     }
@@ -1043,6 +1095,16 @@ const SCENES = {
   varac: {timeline: "idle", varac: VARAC, after: [tab("setup"),
     `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = s.dataset.step !== "5"`],
           clip: ['.step[data-step="5"]']},
+  // step 5's Winlink programs: two rows ticked, one keyed by the program, one by Aether
+  hostapps: {timeline: "idle", hostapps: HOSTAPPS, height: 1000, after: [tab("setup"),
+    `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = s.dataset.step !== "5"`,
+    `for (const el of document.querySelectorAll('.step[data-step="5"] > *'))
+       el.hidden = !el.matches("#hostapps-group, .tool-row, h3, .step-title")`,
+    `{ const ticks = document.querySelectorAll("#hostapps-rows input[type=checkbox]");
+       ticks[0].click(); ticks[1].click();
+       const keying = document.querySelectorAll("#hostapps-rows select")[1];
+       keying.value = "aether"; keying.dispatchEvent(new Event("change")); }`],
+          clip: ["#hostapps-group"]},
 };
 
 // the ended banner comes down by itself 15 s after a session ends: the shot is of the panel

@@ -1021,6 +1021,43 @@
                 <span class="kiss-state" id="varac-state" title="Whether VarAC_Aether.ini is in VarAC's folder and up to date, and whether the Aether profile VarAC default is in use. In VarAC, Switch profile to VarAC_Aether runs VarAC on Aether" role="status">not checked</span>
                 <button class="small quiet" id="btn-varac-switch" title="Switch this station to the Aether profile VarAC default" hidden>Switch to VarAC default</button>
               </div>
+              <div class="field-group" id="hostapps-group" role="group" aria-labelledby="hostapps-title" hidden>
+                <h4 class="sub-heading" id="hostapps-title" title="Winlink Express, RMS Trimode and RMS Packet on this computer: Aether reads each one's radio and TNC settings into an Aether profile. Nothing is written to the programs' files">Winlink programs</h4>
+                <div class="row">
+                  <label for="btn-hostapps-find" title="Every install of Winlink Express, RMS Trimode and RMS Packet: their usual folders, the installed programs list, Start menu and desktop shortcuts, the programs running now, and the folders added here">Find programs</label>
+                  <button class="small" id="btn-hostapps-find" title="Look for every install of Winlink Express, RMS Trimode and RMS Packet on this computer again">Find</button>
+                  <span class="kiss-state" id="hostapps-state" title="What the last look found" role="status">not looked</span>
+                </div>
+                <div class="row">
+                  <label for="hostapps-folder" title="A folder holding Winlink Express, RMS Trimode or RMS Packet that Find did not find">Add folder</label>
+                  <input id="hostapps-folder" title="A folder holding RMS Express.exe, RMS Trimode.exe or RMS Packet.exe that Find did not find: once added, it is looked in every time" type="text" class="folder" spellcheck="false" placeholder="C:\RMS Express" aria-label="Program folder to add" />
+                  <button class="small quiet" id="btn-hostapps-add" title="Look in this folder every time, too">Add</button>
+                </div>
+                <div class="table-scroll hostapps-scroll" id="hostapps-pane" hidden>
+                  <table class="hostapps" title="Each setup of each install found: one profile each. Tick the ones to import">
+                    <thead>
+                      <tr>
+                        <th scope="col" title="Tick to make an Aether profile of this setup">Import</th>
+                        <th scope="col" title="The program">Program</th>
+                        <th scope="col" title="The callsign the program runs as in this setup; the profile is named for it">Callsign</th>
+                        <th scope="col" title="The program's version">Version</th>
+                        <th scope="col" title="Whether the program is running now">Running</th>
+                        <th scope="col" title="The TNC address and port the program points at: Aether when it is this Aether's">TNC</th>
+                        <th scope="col" title="Who keys the radio in the profile: the program on Aether's PTT ON (Host program), or Aether as the program did">Keying</th>
+                        <th scope="col" title="The install's folder">Folder</th>
+                      </tr>
+                    </thead>
+                    <tbody id="hostapps-rows"></tbody>
+                  </table>
+                </div>
+                <ul class="hostapps-preview" id="hostapps-preview" title="What each ticked profile will set, and what the program must say for it to work" hidden></ul>
+                <div class="row" id="hostapps-import-row" hidden>
+                  <label for="btn-hostapps-import" title="Save an Aether profile for each ticked setup">Profiles</label>
+                  <button class="small" id="btn-hostapps-import" title="Save an Aether profile for each ticked setup, named for the program and the callsign; one made before is brought up to date and keeps its sound card and levels. The station keeps its profile" disabled>Import</button>
+                  <button class="small quiet" id="btn-hostapps-import-load" title="Save the ticked setup's profile and switch this station to it" disabled>Import and switch</button>
+                  <span class="sub" id="hostapps-note" title="What the last import did" role="status" aria-live="polite"></span>
+                </div>
+              </div>
             </li>
 
             <!-- 6: in reach from anywhere on the tab -->

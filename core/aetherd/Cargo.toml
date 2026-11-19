@@ -30,4 +30,10 @@ toml = "1.1.6"
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
+# the host-program finder (ADR-0133): the registry's uninstall entries and the programs
+# running, through safe wrappers — the workspace forbids `unsafe`; Windows only
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+
 [dev-dependencies]

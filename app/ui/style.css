@@ -4632,3 +4632,90 @@ body.compact.fitting:not(.mini) #history-card canvas {
     animation: none !important;
   }
 }
+
+/* Winlink's programs found (ADR-0133): one row per setup, and what each ticked one sets */
+.hostapps-scroll {
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0 0 var(--s2);
+  border: 1px solid var(--border);
+}
+
+table.hostapps {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+table.hostapps th,
+table.hostapps td {
+  padding: 4px 10px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+table.hostapps thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+table.hostapps td.mono {
+  font-family: var(--mono);
+}
+
+table.hostapps td[data-state="ok"] {
+  color: var(--status-rx);
+}
+
+/* a long folder ends in an ellipsis; the whole of it is in the cell's title */
+table.hostapps td.path {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+table.hostapps select {
+  height: var(--control-h-sm);
+}
+
+.hostapps-preview {
+  list-style: none;
+  margin: 0 0 var(--s2);
+  padding: 0;
+  display: grid;
+  gap: var(--s2);
+}
+
+.hostapps-preview li {
+  display: grid;
+  gap: var(--s1);
+  font-size: var(--fs-sm);
+}
+
+.hostapps-sets,
+.hostapps-says {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1) var(--s2);
+}
+
+.hostapps-preview .setting {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.hostapps-preview .setting[data-kind="program"] {
+  border-color: var(--status-warning);
+  color: var(--status-warning);
+}
+
+.hostapps-preview .setting[data-kind="note"] {
+  color: var(--text-2);
+}
