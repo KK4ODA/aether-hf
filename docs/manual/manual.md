@@ -1323,6 +1323,9 @@ change.
 
 - Each KISS frame goes on the air on its own, outside any session, with no acknowledgement.
 - KISS frames go at the second rung by default, which stations of either bandwidth hear.
+- A new rung or *Wait for a clear channel* takes effect at once, and the programs connected stay
+  connected. A new address closes the port and opens it there: restart a program that does not
+  connect again by itself (RMS Packet).
 - Keep the address at `127.0.0.1` unless the program runs on another computer of yours on a network
   you trust: anyone who can reach the port can make your station transmit.
 

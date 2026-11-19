@@ -168,7 +168,9 @@ struct Client {
 }
 
 struct Shared {
-    config: KissConfig,
+    /// What it runs with. The address is fixed for the port's life; the rest changes in place
+    /// (`KissServer::retune`), so a program connected to the port stays connected.
+    config: Mutex<KissConfig>,
     running: AtomicBool,
     clients: Mutex<Vec<Client>>,
     status: Mutex<KissStatus>,
@@ -179,6 +181,13 @@ struct Shared {
 }
 
 impl Shared {
+    /// The settings now: a copy, so no lock is held while they are used.
+    fn config(&self) -> KissConfig {
+        self.config
+            .lock()
+            .map_or_else(|poisoned| poisoned.into_inner().clone(), |c| c.clone())
+    }
+
     fn note(&self, warn: bool, text: impl Into<String>) {
         if let Ok(mut notes) = self.notes.lock() {
             if notes.len() >= 512 {
@@ -205,7 +214,7 @@ impl Shared {
     }
 
     fn trace(&self, text: impl FnOnce() -> String) {
-        if self.config.trace {
+        if self.config().trace {
             self.note(false, text());
         }
     }
@@ -306,7 +315,7 @@ impl KissServer {
         })?;
         let address = listener.local_addr().map_err(|e| e.to_string())?;
         let shared = Arc::new(Shared {
-            config: config.clone(),
+            config: Mutex::new(config.clone()),
             running: AtomicBool::new(true),
             clients: Mutex::new(Vec::new()),
             status: Mutex::new(KissStatus {
@@ -386,8 +395,52 @@ impl KissServer {
 
     /// The configuration it runs with.
     #[must_use]
-    pub fn config(&self) -> &KissConfig {
-        &self.shared.config
+    pub fn config(&self) -> KissConfig {
+        self.shared.config()
+    }
+
+    /// Take new settings without closing the port, when the port itself stays where it is: the
+    /// rung, waiting for a clear channel, the most clients and tracing change in place, and the
+    /// programs connected stay connected. Returns false, changing nothing, when the address or
+    /// `enabled` differ: that is a new port.
+    ///
+    /// A program's KISS driver need not reconnect when its port closes under it, and RMS
+    /// Packet's does not: closing the port for a new rung left its packet channel deaf until it
+    /// was restarted (the packet bench, 2026-11-19).
+    pub fn retune(&self, wanted: &KissConfig) -> bool {
+        let Ok(mut config) = self.shared.config.lock() else {
+            return false;
+        };
+        if wanted.enabled != config.enabled || wanted.bind != config.bind {
+            return false;
+        }
+        if *wanted == *config {
+            return true;
+        }
+        let mut said = Vec::new();
+        if wanted.rung != config.rung {
+            said.push(format!("frames now go at rung {}", wanted.rung));
+        }
+        if wanted.wait_for_clear != config.wait_for_clear {
+            said.push(if wanted.wait_for_clear {
+                "frames wait for a clear channel".to_owned()
+            } else {
+                "frames no longer wait for a clear channel".to_owned()
+            });
+        }
+        if wanted.max_clients != config.max_clients {
+            said.push(format!("at most {} clients", wanted.max_clients));
+        }
+        if wanted.trace != config.trace {
+            said.push(format!("trace {}", if wanted.trace { "on" } else { "off" }));
+        }
+        config.clone_from(wanted);
+        drop(config);
+        self.shared.note(
+            false,
+            format!("{}; the clients stay connected", said.join(", ")),
+        );
+        true
     }
 }
 
@@ -433,13 +486,13 @@ fn admit(stream: &TcpStream, shared: &Arc<Shared>, handle: &ControlHandle) {
     let full = shared
         .clients
         .lock()
-        .map_or(true, |c| c.len() >= shared.config.max_clients);
+        .map_or(true, |c| c.len() >= shared.config().max_clients);
     if full {
         shared.note(
             true,
             format!(
                 "refused a client from {peer}: {} are connected already",
-                shared.config.max_clients
+                shared.config().max_clients
             ),
         );
         let _ = stream.shutdown(Shutdown::Both);
@@ -612,13 +665,13 @@ fn submit(
         );
         return true;
     }
-    let wait_for_clear =
-        shared.config.wait_for_clear && !shared.host.ignore_dcd.load(Ordering::SeqCst);
+    let config = shared.config();
+    let wait_for_clear = config.wait_for_clear && !shared.host.ignore_dcd.load(Ordering::SeqCst);
     let params = json!({
         "data": to_base64(frame),
         "frame_type": frame_type,
         "ref": reference,
-        "rung": shared.config.rung,
+        "rung": config.rung,
         "wait_for_clear": wait_for_clear,
         "persistence": access.persistence,
         "slot_s": access.slot_s,
@@ -1246,6 +1299,58 @@ mod tests {
         wait_for(|| taken(&stub).len() == 1, "sent");
         assert_eq!(taken(&stub)[0]["wait_for_clear"].as_bool(), Some(false));
         assert!(server.status().paused.is_none());
+    }
+
+    #[test]
+    fn a_new_rung_keeps_the_connected_programs_connected() {
+        // RMS Packet's KISS driver does not reconnect when its port closes: a new rung that
+        // reopened the port left its packet channel deaf (the packet bench, 2026-11-19)
+        let (server, stub) = server(
+            16,
+            Duration::from_secs(60),
+            &loopback(),
+            HostFlags::default(),
+        );
+        let mut client = connect(&server);
+        client
+            .write_all(&framing::encode(0, 0, &ax25(5)))
+            .expect("write");
+        wait_for(|| taken(&stub).len() == 1, "a frame at the first rung");
+        assert_eq!(taken(&stub)[0]["rung"].as_u64(), Some(1));
+
+        let faster = KissConfig {
+            rung: 12,
+            wait_for_clear: false,
+            trace: true,
+            ..server.config()
+        };
+        assert!(server.retune(&faster), "nothing about the socket changed");
+        assert_eq!(server.config(), faster);
+        client
+            .write_all(&framing::encode(0, 0, &ax25(6)))
+            .expect("the same connection still writes");
+        wait_for(|| taken(&stub).len() == 2, "a frame at the new rung");
+        assert_eq!(taken(&stub)[1]["rung"].as_u64(), Some(12));
+        assert_eq!(taken(&stub)[1]["wait_for_clear"].as_bool(), Some(false));
+        assert_eq!(server.status().clients.len(), 1, "still connected");
+        let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
+        assert!(
+            notes.iter().any(|n| n.contains("rung 12") && n.contains("stay connected")),
+            "{notes:?}"
+        );
+
+        // another address, or switching the port off, is a new port: refused here, changing nothing
+        let moved = KissConfig {
+            bind: "127.0.0.1:1".to_owned(),
+            ..faster.clone()
+        };
+        assert!(!server.retune(&moved));
+        let off = KissConfig {
+            enabled: false,
+            ..faster.clone()
+        };
+        assert!(!server.retune(&off));
+        assert_eq!(server.config(), faster);
     }
 
     #[test]

@@ -116,7 +116,11 @@ are tried against it, and it cannot destabilise the modem under it.
   reading its socket, so TCP holds the rest and nothing is dropped for arriving early.
 
 The server's settings are live: a changed `[kiss]` restarts it in place (`sync_kiss`), and turning
-it off closes every client and clears the datagrams waiting.
+it off closes every client and clears the datagrams waiting. *Amended 2026-11-19 (the packet
+bench):* only a new address or `enabled` restarts it; the rung, `wait_for_clear`, `max_clients`
+and `trace` change in place (`KissServer::retune`) and the clients stay connected. RMS Packet's
+KISS driver does not reconnect when its port closes, and a new rung had left its packet channel
+deaf until it was restarted.
 
 ### 2.5 The type byte, read as VARA reads it
 

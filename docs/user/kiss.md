@@ -29,7 +29,10 @@ In the panel, **Setup → 5. Application settings → KISS programs**:
 4. **Wait for a clear channel** (on by default) holds a frame until the busy detector says the
    channel is clear, then waits a random number of slots (the program's KISS *P* and *SLOTTIME*,
    0.25 and 100 ms unless it sets them), as a KISS TNC does.
-5. **Save these settings**. The port opens, moves or closes at once — no restart.
+5. **Save these settings**. The port opens, moves or closes at once — no restart. A new rung,
+   *Wait for a clear channel* or client limit takes effect at once and the programs connected
+   stay connected. A new address closes the port and opens it there, and each program has to
+   connect again: RMS Packet's KISS driver does not, so restart RMS Packet after moving the port.
 
 The line under the settings says whether the port is listening, where, and which programs are
 connected, with a **Disconnect** button for each and one for all. The header shows a small chip

@@ -758,6 +758,18 @@ fn sync_kiss(station: &mut Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
     if !changed && !retry {
         return;
     }
+    // a new rung or channel access is not a new port: the programs connected stay connected
+    if changed
+        && let (Some(server), Some(wanted)) = (&daemon.kiss, &desired)
+        && server.retune(wanted)
+    {
+        for note in server.take_notes() {
+            let level = if note.warn { Level::Warn } else { Level::Info };
+            daemon.log.record(level, "kiss", &note.text, &state);
+        }
+        daemon.kiss_tried.clone_from(&desired);
+        return;
+    }
     daemon.kiss_tried.clone_from(&desired);
     if daemon.kiss.take().is_some() {
         daemon
