@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.13.0 |
+| **Version** | 1.13.1 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.167 |
 | **Licence** | CC BY 4.0 |
@@ -1240,7 +1240,8 @@ TNC settings into an Aether profile. It only reads the programs' files; it never
    brings a profile up to date and keeps its sound card and levels.
 
 If the program points at another port on this computer, the profile makes Aether listen there, so
-the program needs no change. A setup above 30 MHz, or one whose only TNC is VARA FM or AGW, waits
+the program needs no change. A gateway's profile (RMS Trimode) also sets **Control** to
+*Automatic*, so only the program answers calls, and **Wait for clear** on. A setup above 30 MHz, or one whose only TNC is VARA FM or AGW, waits
 for Aether FM: its box cannot be ticked.
 
 [VarAC, Winlink Express and Pat with Aether](../user/host-programs.md) has each program's settings,
@@ -1660,3 +1661,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.12.0 | 2026-11-19 | **Tune** in Compact and Mini, beside the display: the Session tab's *Tuner tone*, stopped by a second press; a refusal shows in the display for a few seconds ([Full, Compact and Mini](#full-compact-and-mini)). |
 | 1.12.1 | 2026-11-19 | VarAC's **Call CQ** and beacons ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)): with the rules at *None*, or with a host program keying the radio, no beacon is refused for *Automatic* control, and none of the rules settings acts under **Host**; under the US rules it is, and a CQ Aether turns down is answered `WRONG`, with the reason in the Log's *host* line and the program's tooltip in the header. **VarAC default** is made under *Local* control ([VarAC in one step](#varac-in-one-step)). |
 | 1.13.0 | 2026-11-19 | **Winlink programs** in Setup step 5 (ADR-0133): every install of Winlink Express, RMS Trimode and RMS Packet found, one row per callsign, and **Import**, which makes an Aether profile of each row ticked from the program's own radio and TNC settings, showing first what it will set and what the program must say ([Finding Winlink's programs](#finding-winlinks-programs)). |
+| 1.13.1 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): a gateway's profile sets **Control** *Automatic* and **Wait for clear**. |

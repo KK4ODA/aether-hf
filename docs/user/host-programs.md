@@ -39,6 +39,8 @@ A profile made this way sets:
 * **Host programs** on (or **KISS programs**, for a program that uses a KISS TNC);
 * the port the program points at, when it is another port on this computer: Aether listens
   there while the profile is in use, so the program needs no change;
+* for a gateway (RMS Trimode), automatic control and waiting for a clear channel: only the
+  program answers calls then (ADR-0107);
 * who keys the radio. **Host program** is the default whenever the program keys the radio
   itself: the program's radio setup stays as it was with VARA — it keys on Aether's `PTT ON` and
   keeps tuning the radio — and Aether's rules check is off, as with VARA. The other choice,

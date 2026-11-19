@@ -91,7 +91,9 @@ profile, the station switches to it. The plan sets:
 * `host.enabled` (a VARA HF TNC) or `kiss.enabled` (a KISS TNC);
 * `radio.bandwidth`: 500 for 500, 2300 for VARA's 2300 and 2750;
 * the keying (§2.4);
-* `host.bind`, when the program points at another port on this computer (§2.5).
+* `host.bind`, when the program points at another port on this computer (§2.5);
+* for a gateway, `regulatory.control = "automatic"` and `radio.wait_for_clear`: only a program
+  answers an automatically controlled station's calls (ADR-0107).
 
 It also says, in words, what the program must say for the profile to work (`program_must`), and
 the panel shows both before anything is saved. A setup above 30 MHz, or whose only TNC is VARA FM

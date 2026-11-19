@@ -439,7 +439,7 @@ Winlink Express's, a gateway's setup. A setup becomes a profile named for the pr
 callsign (*Winlink Express KK4ODA*): the station's settings (or the profile's own, when one of
 that name was made before) with the program's callsign, `host.enabled` (or `kiss.enabled` for a
 KISS TNC), `radio.bandwidth` (500 for 500, 2300 for 2300 and 2750), `host.bind` when the program
-points at another port on this computer, and the keying: `program` (the default whenever the
+points at another port on this computer, `regulatory.control = "automatic"` and `radio.wait_for_clear` for a gateway, and the keying: `program` (the default whenever the
 program keys the radio: `ptt.kind = "host"`, `regulatory.profile = "none"`) or `aether` (Aether
 keys by CAT on the program's port, speed and protocol, or by its RTS/DTR line; the program's
 radio set to Manual, its PTT port None). A program that keys by VOX or controls no radio leaves

@@ -5567,6 +5567,8 @@ function hostappsSetting(key, value) {
     "ptt.civ_address": ["CI-V", Number(value).toString(16).toUpperCase(), "Setup step 2: the Icom's CI-V address"],
     "ptt.line": ["Line", String(value).toUpperCase(), "Setup step 2: the serial line that keys the radio"],
     "regulatory.profile": ["Rules", value === "none" ? "None" : value, "Setup step 1: the rules check"],
+    "regulatory.control": ["Control", String(value).charAt(0).toUpperCase() + String(value).slice(1), "Setup step 1: a gateway is under automatic control, so only its program answers calls"],
+    "radio.wait_for_clear": ["Wait for clear", yes, "Setup step 4: nothing the station starts goes over another station"],
   }[key];
   return named ?? [key, String(value), key];
 }
@@ -5697,7 +5699,10 @@ function renderHostapps(answer) {
       callCell.classList.add("mono");
       tr.append(
         tickCell,
-        cell(install.program_name, refused ? `${install.program_name}: ${refused}` : install.program_name),
+        cell(
+          install.program_name,
+          [refused ? `${install.program_name}: ${refused}` : install.program_name, ...(install.notes ?? [])].join(". "),
+        ),
         callCell,
         cell(install.version ?? "?", "The program's version"),
         cell(install.running ? "yes" : "no", install.running ? "Running now" : "Not running"),

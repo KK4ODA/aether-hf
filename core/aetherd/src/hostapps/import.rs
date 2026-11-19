@@ -253,6 +253,12 @@ pub fn plan(
     if let Some(hz) = aether_bandwidth(setup.bandwidth_hz) {
         changes.insert("radio.bandwidth".into(), json!(hz));
     }
+    if setup.gateway {
+        // a gateway is an automatically controlled station: only a program answers its calls
+        // (ADR-0107), and nothing it starts goes over another station
+        changes.insert("regulatory.control".into(), json!("automatic"));
+        changes.insert("radio.wait_for_clear".into(), json!(true));
+    }
     match pointing {
         Pointing::Aether | Pointing::NotServed => {}
         Pointing::OtherPort if tnc.kind == TncKind::VaraHf => {
@@ -529,6 +535,26 @@ mod tests {
             p.program_must.iter().any(|m| m.why.contains("192.168.1.9")),
             "{:?}",
             p.program_must
+        );
+    }
+
+    #[test]
+    fn a_gateway_is_under_automatic_control_and_waits_for_a_clear_channel() {
+        let mut gate = setup(Ptt::Cat, 8700);
+        gate.gateway = true;
+        gate.bandwidth_hz = Some(2750);
+        let p = plan(&install(&gate), &gate, None, &aether());
+        assert_eq!(p.changes["regulatory.control"], "automatic");
+        assert_eq!(p.changes["radio.wait_for_clear"], true);
+        assert_eq!(p.changes["radio.bandwidth"], 2300);
+        assert_eq!(p.changes["host.bind"], "127.0.0.1:8700");
+        assert_eq!(p.changes["ptt.kind"], "host", "the gateway program keys");
+        let client = setup(Ptt::Cat, 8300);
+        let p = plan(&install(&client), &client, None, &aether());
+        assert!(
+            p.changes.get("regulatory.control").is_none(),
+            "{}",
+            p.changes
         );
     }
 
