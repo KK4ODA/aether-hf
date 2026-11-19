@@ -24,6 +24,8 @@ pub mod devices;
 pub mod grid;
 pub mod heard;
 pub mod host;
+pub mod hostapps;
+pub mod ini;
 pub mod kiss;
 pub mod log;
 pub mod memories;
