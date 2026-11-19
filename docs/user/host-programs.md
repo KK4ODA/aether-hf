@@ -165,8 +165,9 @@ PTT **off**.
   laptop, 2026-10-25).
 * The bandwidth is Winlink Express's session setting: Aether moves to it when it is asked, and
   runs 2300 Hz for Winlink Express's widest, 2750. Calls go out in it, even to a station Aether
-  last heard running 500 Hz. If four tries at 2300 Hz get no answer, Aether tries the rest at
-  500 Hz, and the session runs at 500 Hz if it is answered there.
+  last heard running 500 Hz. With Setup step 4's *Call tries* above 4 (6, 8, 10 or 15), if four
+  tries at 2300 Hz get no answer, Aether tries the rest at 500 Hz, and the session runs at 500 Hz
+  if it is answered there. At the default, 2 tries, a call stays at 2300 Hz to its end.
 * Winlink Express keys the radio itself only when its *Radio Setup* names a PTT port: it then
   keys on the modem's `PTT ON`/`PTT OFF`, as VarAC does, and Aether's *Radio control* must be
   *Host program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
@@ -221,7 +222,8 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   says when the other station runs another bandwidth ("WC4Y hears us at 3 dB … — runs 2300 Hz,
   this station 500 Hz"). A 2300 Hz station calling one it has heard run 500 Hz — from a beacon, a
   call, a probe or a probe's answer — calls at 500 Hz and comes back 20 s after. A 2300 Hz call to a
-  station whose bandwidth is not known goes on at 500 Hz after four unanswered tries (ADR-0058).
+  station whose bandwidth is not known goes on at 500 Hz after four unanswered tries, when Setup
+  step 4's *Call tries* is above 4 (ADR-0058, ADR-0126 §9); a call of 2 tries, the default, does not.
   The crossing that cannot be made is a call that stays at 2300 Hz to a 500 Hz station: it is
   not answered, and the panel says so
   in a warning across every tab, naming the station, both bandwidths and the fix — Setup step 4's

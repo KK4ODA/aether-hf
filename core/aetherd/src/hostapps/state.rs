@@ -14,23 +14,24 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::find::Install;
+use super::find::{Found, Install};
 
 /// The file beside the configuration that remembers the folders the operator added.
 pub const STATE_FILE: &str = "hostapps.json";
 
 /// How installs are found: a function, so a test can stand in for the computer.
-pub type Source = fn(&[PathBuf]) -> Vec<Install>;
+pub type Source = fn(&[PathBuf]) -> Found;
 
 /// Find on this computer, with the folders added.
 #[must_use]
-pub fn this_computer(added: &[PathBuf]) -> Vec<Install> {
-    super::find::installs(&super::find::Sources::gather(added))
+pub fn this_computer(added: &[PathBuf]) -> Found {
+    super::find::found(added)
 }
 
 #[derive(Debug, Default)]
 struct Shared {
     last: Option<Vec<Install>>,
+    took_ms: Vec<(&'static str, u64)>,
     busy: bool,
     finished: u64,
 }
@@ -109,7 +110,8 @@ impl Finder {
         if self.inline {
             let found = (self.source)(&added);
             if let Ok(mut shared) = self.shared.lock() {
-                shared.last = Some(found);
+                shared.last = Some(found.installs);
+                shared.took_ms = found.took_ms;
                 shared.finished += 1;
             }
             return;
@@ -130,7 +132,8 @@ impl Finder {
             .spawn(move || {
                 let found = source(&added);
                 if let Ok(mut state) = shared.lock() {
-                    state.last = Some(found);
+                    state.last = Some(found.installs);
+                    state.took_ms = found.took_ms;
                     state.busy = false;
                     state.finished += 1;
                 }
@@ -148,6 +151,14 @@ impl Finder {
         self.shared
             .lock()
             .map_or((None, false), |s| (s.last.clone(), s.busy))
+    }
+
+    /// How long each stage of the last find took, in milliseconds.
+    #[must_use]
+    pub fn took_ms(&self) -> Vec<(&'static str, u64)> {
+        self.shared
+            .lock()
+            .map_or_else(|_| Vec::new(), |s| s.took_ms.clone())
     }
 
     /// Whether a find finished since the clients were last told, and note that they are now.

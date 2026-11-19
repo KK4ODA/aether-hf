@@ -57,6 +57,9 @@ pub struct Sources {
     pub running: Vec<PathBuf>,
     /// The folders the operator added.
     pub added: Vec<PathBuf>,
+    /// How long each stage of gathering took, in milliseconds: what to look at when a find
+    /// is slow.
+    pub took_ms: Vec<(&'static str, u64)>,
 }
 
 /// An install found, and what its files say.
@@ -111,7 +114,8 @@ pub fn path_in(text: &str) -> Option<PathBuf> {
             None => text.split(',').next()?,
         }
     };
-    let path = path.trim();
+    // a folder named with its separator after it is the folder
+    let path = path.trim().trim_end_matches(['\\', '/']);
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
@@ -424,6 +428,7 @@ impl Sources {
                 sources.roots.push(dir);
             }
         }
+        let mut clock = Stopwatch::start();
         let mut links = Vec::new();
         let start_menu = Path::new("Microsoft")
             .join("Windows")
@@ -445,10 +450,50 @@ impl Sources {
             .filter_map(|l| std::fs::read(l).ok())
             .filter_map(|b| shortcut_target(&b))
             .collect();
+        sources.took_ms.push(("shortcuts", clock.lap()));
         sources.uninstall = system::uninstall_entries();
+        sources.took_ms.push(("registry", clock.lap()));
         sources.running = system::running_executables();
+        sources.took_ms.push(("processes", clock.lap()));
         sources
     }
+}
+
+/// Milliseconds between laps.
+struct Stopwatch(std::time::Instant);
+
+impl Stopwatch {
+    fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
+
+    /// The milliseconds since the last lap, or the start.
+    fn lap(&mut self) -> u64 {
+        let now = std::time::Instant::now();
+        let ms = now.duration_since(self.0).as_millis();
+        self.0 = now;
+        u64::try_from(ms).unwrap_or(u64::MAX)
+    }
+}
+
+/// A find: the installs, and how long each stage took.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Found {
+    /// The installs.
+    pub installs: Vec<Install>,
+    /// Each stage's milliseconds, gathering and reading.
+    pub took_ms: Vec<(&'static str, u64)>,
+}
+
+/// Gather what this computer says, with the folders added, and read every install found.
+#[must_use]
+pub fn found(added: &[PathBuf]) -> Found {
+    let sources = Sources::gather(added);
+    let mut clock = Stopwatch::start();
+    let installs = installs(&sources);
+    let mut took_ms = sources.took_ms.clone();
+    took_ms.push(("reading", clock.lap()));
+    Found { installs, took_ms }
 }
 
 /// What only the system can say: the registry and the processes.
@@ -565,6 +610,7 @@ mod tests {
             ],
             running: vec![PathBuf::from("D:\\Radio\\Express 2\\RMS Express.exe")],
             added: vec![PathBuf::from("E:\\Not An Install")],
+            took_ms: Vec::new(),
         };
         let exists = exists_in(&[
             "C:\\RMS Express\\RMS Express.exe",

@@ -124,6 +124,7 @@ pub fn answer(daemon: &DaemonState) -> Value {
         "found": last.is_some(),
         "installs": installs,
         "added": daemon.hostapps.remembered.folders,
+        "took_ms": daemon.hostapps.took_ms().into_iter().map(|(stage, ms)| (stage.to_owned(), json!(ms))).collect::<serde_json::Map<String, Value>>(),
         "aether": {
             "host_port": aether.host_port(),
             "kiss_port": aether.kiss_port(),
@@ -357,7 +358,14 @@ mod tests {
 
     /// Two made-up installs: Winlink Express with two callsigns keyed by CAT, pointing at
     /// Aether, and a copy on another port with no radio.
-    fn computer(_added: &[PathBuf]) -> Vec<Install> {
+    fn computer(_added: &[PathBuf]) -> crate::hostapps::find::Found {
+        crate::hostapps::find::Found {
+            installs: installs(),
+            took_ms: vec![("reading", 1)],
+        }
+    }
+
+    fn installs() -> Vec<Install> {
         let radio = Radio {
             rig: Some("Yaesu FTDX10".into()),
             cat_port: Some("COM3".into()),
