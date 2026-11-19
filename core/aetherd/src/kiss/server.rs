@@ -407,6 +407,7 @@ impl KissServer {
     /// A program's KISS driver need not reconnect when its port closes under it, and RMS
     /// Packet's does not: closing the port for a new rung left its packet channel deaf until it
     /// was restarted (the packet bench, 2026-11-19).
+    #[must_use]
     pub fn retune(&self, wanted: &KissConfig) -> bool {
         let Ok(mut config) = self.shared.config.lock() else {
             return false;
