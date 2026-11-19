@@ -54,10 +54,11 @@ Two Aether daemons joined by the simulated channel at 15 dB and 2300 Hz; a scrat
 | Door | Client | Result |
 |---|---|---|
 | VARA FM | Pat 1.0.0, its VARA FM mode | **Passes.** Secure login, a message with a 6 kB attachment accepted (`FS Y`), `FF`/`FQ`, a clean end, in 2 min 13 s. RMS Packet said only `MYCALL` and `LISTEN ON`, and Aether answered both `OK` |
+| VARA FM | Winlink Express 1.8.5.0, *Vara FM Winlink* | **Passes.** Secure login, `FF`/`FQ`, a clean end in under a minute. It said only `MYCALL`, `LISTEN ON`, `CONNECT` and `DISCONNECT` |
 | VARA FM | A scripted VARA client | **Passes.** RMS Packet's welcome, its B2F prompt and the secure login challenge |
 | KISS ACKMODE | A scripted AX.25 client on the other daemon's KISS port | **Passes.** Connect, RMS Packet's welcome, its B2F prompt, the client's reply, the Relay's answer, the disconnect. At rung 1 (the default) it took 212 s and RMS Packet repeated frames when its 10 s timer ran out; at rung 12, 43 s with none repeated |
+| KISS ACKMODE | Winlink Express 1.8.5.0, *Packet Winlink*, TNC type *KISS*, model *ACKMODE*, TCP to the other daemon's KISS port, its default timers | **Passes at rung 12** (1 min 12 s, secure login, `FF`/`FQ`). **Fails at rung 1**: connected and got the welcome, then gave up after 4 minutes (FRACK 2 s, 5 retries) |
 | KISS ACKMODE with the VARA FM door on | The same | **Fails, by design:** Winlink priority holds every frame RMS Packet writes to the KISS port |
-| Either | Winlink Express | Not yet tried |
 
 ## Packet timing on Aether HF
 
@@ -73,3 +74,9 @@ RMS Packet's KISS ACKMODE file waits 10 s for an answer after a frame has gone (
 Winlink Express's default FRACK is 2 s. At rung 1 an answer takes about 8 s, so timers this short
 repeat frames. Use **KISS ACKMODE**, and a faster KISS rung if both stations run 2300 Hz on a good
 path.
+
+Each frame is its own transmission, and each waits for a clear channel. While RMS Packet sends a
+window of frames, the other station's answers wait; they then go out one transmission each. At
+rung 1 Winlink Express's six RRs waited 72 s and took another 37 s on the air, and RMS Packet had
+resent its window meanwhile. AX.25 expects a TNC to send a window in one keying; Aether's KISS port
+does not yet.

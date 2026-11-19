@@ -156,6 +156,11 @@ Winlink Express's **Packet** sessions only if you want to try them:
    the radio: the acknowledgement comes back after the last burst carrying the frame has been
    played, so its AX.25 timers start from the real end of the transmission.
 
+In its TNC settings that is TNC type **KISS**, model **ACKMODE**, serial port **TCP**. On the bench
+(2026-11-19) a *Packet Winlink* session to an RMS Packet gateway on another Aether passed at rung 12
+and failed at rung 1 with Winlink Express's default timers (FRACK 2 s, 5 retries): every AX.25 frame
+is a transmission of its own, so the answers wait behind the other station's window.
+
 ### QtTermTCP
 
 QtTermTCP's KISS ports take the same host and port, `127.0.0.1` and `8100`. It may use ACKMODE,
@@ -243,8 +248,8 @@ parameters are told apart from VARA's frame types by their length:
   and standard KISS on one port.
 * **On the air: VarAC's broadcasts only** (2026-11-19). On the bench: VarAC's broadcasts
   (2026-10-07) and relay notifications (2026-11-18), RMS Packet's AX.25 sessions (2026-11-19),
-  the test suite's own clients and `kiss_test_client.py` between two daemons; not yet Winlink
-  Express Packet or the APRS programs.
+  Winlink Express's *Packet Winlink* to it (2026-11-19, at rung 12), the test suite's own clients
+  and `kiss_test_client.py` between two daemons; not yet the APRS programs.
 
 ## Status
 
@@ -256,6 +261,7 @@ parameters are told apart from VARA's frame types by their length:
 | VarAC 15.0.18 relay notifications, the same bench (a VMail parked at a relay, the addressee's beacon heard, the `<SMP>` notification over KISS, the VMail collected) | passing (2026-11-18) |
 | VarAC 16.1.8 broadcasts on the air between two stations, 7.082 MHz at 500 Hz (to *ALL* and to a callsign, both ways) | passing (2026-11-19) |
 | RMS Packet 2.2.4.0, *KISS ACKMODE* over TCP, against a scripted AX.25 client on the other daemon (connect, welcome, B2F prompt and answer, disconnect; rung 1 and rung 12) | passing (2026-11-19) |
-| Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
+| Winlink Express 1.8.5.0 *Packet Winlink* (KISS, ACKMODE, TCP) to RMS Packet on another daemon | passing at rung 12, failing at rung 1 with its default timers (2026-11-19) |
+| QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.

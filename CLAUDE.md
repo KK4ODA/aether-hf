@@ -3332,8 +3332,10 @@ added: it posts its channels to winlink.org on raw TCP 8775 at every start) reac
 Its *Vara FM* door on the host port: Pat 1.0.0's VARA FM mode completed a B2F session with a 6 kB
 attachment through it; RMS Packet says only `MYCALL` and `LISTEN ON`. Its *KISS ACKMODE* door: a
 scripted AX.25 client reached its welcome and B2F prompt (212 s at rung 1 with T1 repeats, 43 s at
-rung 12). With both doors on one Aether, Winlink priority drops every frame of its KISS door (it
-never says `CHAT ON`). Fixed: a new `[kiss] rung` reopened the port and RMS Packet's KISS driver never
+rung 12). Winlink Express 1.8.5.0's *Vara FM Winlink* passes; its *Packet Winlink* (KISS ACKMODE over
+TCP) passes at rung 12 and fails at rung 1 (FRACK 2 s): each AX.25 frame is a datagram of its own
+with its own wait for the channel, so answers queue behind a window and go out stale. With both
+doors on one Aether, Winlink priority drops every frame of its KISS door (it never says `CHAT ON`). Fixed: a new `[kiss] rung` reopened the port and RMS Packet's KISS driver never
 reconnects. On the air it would list as VARA FM, so it waits for Aether FM (ROADMAP P10-9…P10-12; an
 AGW port is how real RMS Packet gateways run packet). `hostapps/packet.rs` reads its ini. **RMS
 Packet rewrites its ini when it closes**: edit the scratch ini with it stopped. **A scratch Winlink

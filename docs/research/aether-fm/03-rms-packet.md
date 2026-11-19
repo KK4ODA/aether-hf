@@ -58,14 +58,16 @@ The bench (`C:\Dev\AetherBench\packet-2026-11\`, not in the repository): two dae
 at 15 dB and 2 300 Hz; a scratch RMS Packet 2.2.4.0 as the gateway `KK4ODA-10` on the gateway
 daemon's host port (VARA FM door) and KISS port (*KISS ACKMODE*, `ExampleKissAckmode.aps`); the
 trimode bench's radio-only RMS Relay 3.3.5.0 behind it; an outbound firewall block on the scratch
-RMS Packet (it tried to post its channels at every start, and failed). Winlink Express could not
-be driven (the desktop grant was not given), so the clients were Pat 1.0.0 and two scripts.
+RMS Packet (it tried to post its channels at every start, and failed). The clients were Winlink
+Express 1.8.5.0, Pat 1.0.0 and two scripts (`vara_client.py`, `ax25_client.py` in the bench
+folder).
 
 ### 3.1 The VARA FM door
 
 | Client | Result |
 |---|---|
 | Pat 1.0.0, `varafm:///KK4ODA-10` | **Passes.** Secure login, a 6 000-byte random attachment accepted (`FC EM … 6302`, `FS Y`), `FF`/`FQ`, a clean end, 2 min 13 s |
+| Winlink Express, *Vara FM Winlink* | **Passes.** Secure login, `FF`/`FQ`, a clean end in under a minute |
 | A scripted VARA client | **Passes** to the secure login (no password in the script) |
 
 What each program said, all of it answered `OK` (nothing `WRONG`):
@@ -76,6 +78,10 @@ What each program said, all of it answered `OK` (nothing `WRONG`):
   keeps a session ten minutes idle.
 - **Pat's VARA FM driver**: `PUBLIC ON`, `COMPRESSION TEXT`, `MYCALL`, `LISTEN OFF`, `VERSION`,
   `CONNECT <me> <them>`, `DISCONNECT`.
+- **Winlink Express's Vara FM sessions**: `MYCALL`, `LISTEN ON`, `CONNECT <me> <them>`, and
+  `DISCONNECT` again every second or two until `DISCONNECTED` comes (Aether holds it for the closing
+  identifier, ADR-0075). A scratch copy whose Vara FM TNC was never set up launches the real
+  `C:\VARA FM\VaraFM.exe` (its default, auto-launch on) when the session window opens.
 
 VARA FM's published command list (EA5HVK, *VARA Protocol Native TNC Commands*) could not be read in
 this session (its copy is on mega.nz, and the browser prompt went unanswered). Comparing it with the
@@ -87,10 +93,22 @@ adapter, as ADR-0124 §2.2 asks, is still owed: until then this note rests on wh
 |---|---|
 | RMS Packet on the gateway's KISS port, a scripted AX.25 2.0 client (ACKMODE) on the client's, rung 1 | **Passes**: connect in 14 s, the welcome, the B2F prompt, the client's SID and `FF`, the Relay's answer, the disconnect, 212 s. RMS Packet polled and repeated frames as its 10 s `ACKTIMER` ran out |
 | The same at rung 12 | **Passes** in 43 s, nothing repeated |
+| Winlink Express 1.8.5.0, *Packet Winlink* (*KISS*, *ACKMODE*, TCP), its default timers (FRACK 2 s, 5 retries), rung 12 | **Passes**: secure login, `FF`/`FQ`, 1 min 12 s |
+| The same at rung 1 | **Fails**: connected, the welcome, then Winlink Express gave up after 4 minutes |
 | The same with RMS Packet's VARA FM door also on the gateway's host port | **Fails, as built**: RMS Packet never says `CHAT ON`, so Winlink priority (ADR-0019 §2.6) drops every frame it writes to the KISS port |
 
 RMS Packet's KISS driver sends `P` (128), `SLOTTIME` (7) and `TXDELAY` (50) on connecting, and a
-window as plain frames with ACKMODE on its last. **Found and fixed:** a new `[kiss] rung` closed and
+window as plain frames with ACKMODE on its last.
+
+Why rung 1 fails Winlink Express: **every AX.25 frame is a transmission of its own**, each with its
+own wait for a clear channel and p-persistence (`station/datagrams.rs` feeds one datagram at a time).
+RMS Packet's answer and window went out as six transmissions over 62 s; Winlink Express answered
+each I-frame with an RR, and those six RRs waited for the channel the whole time (72 s), then went out
+as six transmissions of 5.4 s each, five of them already stale. RMS Packet's T1 had run out meanwhile
+and it resent the window. A packet TNC sends a window in one keying and AX.25's timers assume it.
+Sending a client's queued frames together in one transmission — several datagrams a burst, up to the
+key limit — would cut both the waits and the stale answers; that is a change to the datagram queue,
+left to the author (§5). **Found and fixed:** a new `[kiss] rung` closed and
 reopened the port, and RMS Packet's driver does not connect again, so its packet channel stayed
 deaf until it was restarted; the rung and channel access now change in place (ADR-0019 §2.4,
 amended).
@@ -141,3 +159,6 @@ Two things outside the modem:
    one Aether loses its packet door (§3.2), as VARA's published KISS note says it should. Keep that
    on HF and change it only for FM's packet mode (P10-12)?
 3. **The listing** of an Aether FM channel behind RMS Packet (§4): ask Winlink for a mode of its own?
+4. **A window in one transmission** (§3.2): let the KISS port's queued frames from one client go
+   together, several datagrams in a burst, as a packet TNC sends a window? It would make AX.25 over
+   Aether HF's KISS port usable at the default rung; Aether FM's packet mode (P10-11) needs it anyway.
