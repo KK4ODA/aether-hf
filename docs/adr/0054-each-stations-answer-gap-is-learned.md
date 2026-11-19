@@ -57,3 +57,29 @@ over the next four sessions. At 100 ms a session it fell to 700 ms by the fourth
   answer, but it needs a protocol change and the operator to enter the number.
 * A gap for a station that only ever receives from this one: nothing it does says an answer was lost
   until it asks again.
+
+## 5. Amendment (2026-11-18): asking again counts from the answer on the air
+
+Report 19 §7 (`docs/research/link-architecture/19-radiopost-p2p-40m-beta164.md`): the house learned
+a longer gap for `WD5EMA` at each of the mobile's both-ways calls (ADR-0126), 75 → 325 → 575 ms over
+two sessions. A both-ways try is accepted at its OFDM part, and the acceptance keys once its tone part
+has ended. The tone part is decoded after the acceptance was decided and before it went out, and
+`called` read it as the caller asking again: the decode time against the decision.
+
+Now each answer is watched from the moment it is keyed. A call or probe says the answer was lost only
+when it began on the air after that keying, within `CALL_AGAIN_S` or `PROBE_AGAIN_S` of it. An answer
+decided and never keyed (the rules refused it, its slot passed) says nothing.
+
+* `LearnedGaps::aired(Answer, at_s)`: the first keying after the decision is the answer's.
+  `called` and `probed` take the frame's start on the air (`SoftFrame::t_start`), not the time it was
+  decoded.
+* The station notes what each rendered transmission answers (`answer_in`: an acceptance, a
+  `CONNECT_ACK`, a `PROBE_ACK`; `Station::answer_rendered`) and tells the gaps when it keys it.
+* Removed: counting a repeat from the decision.
+* Tests: `a_call_begun_before_the_acceptance_went_out_did_not_miss_it` and
+  `an_answer_never_keyed_was_never_missed` (`gaps.rs`), and
+  `a_both_ways_try_heard_whole_teaches_the_called_station_no_gap` (`station.rs`, two stations over
+  real audio; it fails on the rule before).
+
+No wire change, no configuration key. A gap already learned this way is eased by clean sessions, as
+any other.

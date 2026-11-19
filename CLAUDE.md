@@ -3294,14 +3294,16 @@ opening through a 6 dB fade under another station's 500 Hz-wide signal and compl
 on the floor kept the link up at −6.7 to −9 dB, copies combined. Session 3's calls were heard
 and answered by nothing: the house's client closed its Aether connection 88 ms after each session
 ended. Found, each the author's call (§11):
-- **The data identifier is refused after a program's session.** Its frames name the session's
-  callsign (`GrantedEngine::id_call`, here `WD5EMA`). The program's claim ends with the session,
-  and the gate's `foreign_identifier` then counts only the station's own. In Morse the same race
-  names the station's own callsign (`render_link_identifier` uses `engine.my_call` at render). The
-  mobile never identified from 21:07 to 21:13.
-- **A both-ways try's tone part reads as "called again"** (`station/gaps.rs` `called`, decode time
-  against the decision), raising the caller's learned gap 250 ms each time (75 → 575 ms for
-  `WD5EMA`); no cost yet.
+- **The data identifier was refused after a program's session.** Its frames name the session's
+  callsign (`id_call`, here `WD5EMA`), the program's claim ended with the session, and the gate's
+  `foreign_identifier` counted only the station's own; in Morse the same race named the station's
+  own callsign. The mobile never identified from 21:07 to 21:13. **Fixed the same day** (ADR-0075
+  §7, ADR-0127 §11): `GrantedEngine::identifier_call` (model and port) names the owed identifier's
+  callsign, the Morse paths render it, and the gate accepts it and `setup_call`.
+- **A both-ways try's tone part read as "called again"**, raising the caller's learned gap 250 ms
+  each time (75 → 575 ms for `WD5EMA`). **Fixed the same day** (ADR-0054 §5): an answer is watched
+  from its keying (`LearnedGaps::aired`, `Station::answer_rendered`, `answer_in`), and a call or
+  probe counts only when it began on the air after it.
 - **The ordinary headers at the edge**: an acceptance stating −2 dB, 0.1 dB over −5.1 + 3, put the
   first two headers in the ordinary frame, and the QRM cost two silent slots, 28 s.
 - **Blocks keep the rung they were cut at**: C1 chose rung 3 from the first silent slot, but the

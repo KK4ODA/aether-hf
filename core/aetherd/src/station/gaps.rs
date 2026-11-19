@@ -23,6 +23,14 @@
 //! repeated call only ever a VOX hold — the acceptance may simply have faded — but a step
 //! costs a quarter second on that station's exchanges and nothing on anyone else's, and the
 //! clean sessions after take it back.
+//!
+//! A call or probe asks again only once the answer is on the air: one that began before the
+//! answer was keyed cannot have missed it. A both-ways try (ADR-0126) is accepted at its OFDM
+//! part and its acceptance keys once its tone part has ended, so the tone part is decoded after
+//! the acceptance was decided and before it went out; read as a second call, it raised
+//! `WD5EMA`'s gap a step at each such call, 75 → 575 ms over two sessions (report 19 §7). So
+//! each answer is watched from the moment it is keyed, and a call or probe counts against it
+//! only when it began after that.
 
 use std::collections::HashMap;
 
@@ -48,6 +56,15 @@ pub const PROBE_AGAIN_S: f64 = 60.0;
 /// caller tries again within a few of its frames, and later is a new call.
 pub const CALL_AGAIN_S: f64 = 60.0;
 
+/// Which kind of answer went on the air.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    /// A call's acceptance.
+    Call,
+    /// A probe's answer.
+    Probe,
+}
+
 /// What this station answered last, waiting to see whether it was heard.
 #[derive(Debug, Clone, PartialEq)]
 struct Answered {
@@ -55,6 +72,9 @@ struct Answered {
     callsign: String,
     /// When the answer was decided, in the station's seconds.
     at_s: f64,
+    /// When the answer was keyed, in the station's seconds: until then nothing the other
+    /// station sends can say it was missed.
+    aired_s: Option<f64>,
     /// Whether this answer's loss has been counted already: a caller that never hears the
     /// acceptance calls three or four times, and that is one lost answer, not four.
     counted: bool,
@@ -140,9 +160,25 @@ impl LearnedGaps {
         self.accepted = Some(Answered {
             callsign,
             at_s,
+            aired_s: None,
             counted: false,
             after_loss,
         });
+    }
+
+    /// The answer of `kind` this station decided last was keyed at `at_s`. The first keying
+    /// after the decision is the one that carries it; a later one changes nothing.
+    pub fn aired(&mut self, kind: Answer, at_s: f64) {
+        let answered = match kind {
+            Answer::Call => self.accepted.as_mut(),
+            Answer::Probe => self.probed.as_mut(),
+        };
+        if let Some(answered) = answered
+            && answered.aired_s.is_none()
+            && at_s >= answered.at_s
+        {
+            answered.aired_s = Some(at_s);
+        }
     }
 
     /// This station answered a probe from `callsign` at `at_s`.
@@ -150,28 +186,30 @@ impl LearnedGaps {
         self.probed = Some(Answered {
             callsign: base_callsign(callsign).to_ascii_uppercase(),
             at_s,
+            aired_s: None,
             counted: false,
             after_loss: false,
         });
     }
 
-    /// A call to this station from `callsign` at `at_s`: when it follows an acceptance of the
-    /// same station's call, the acceptance was lost.
-    pub fn called(&mut self, callsign: &str, at_s: f64) -> Option<Learned> {
+    /// A call to this station from `callsign` that began on the air at `began_s`: when it
+    /// follows the acceptance of the same station's call on the air, the acceptance was lost.
+    pub fn called(&mut self, callsign: &str, began_s: f64) -> Option<Learned> {
         let call = base_callsign(callsign).to_ascii_uppercase();
-        let lost = self.accepted.as_mut().filter(|a| {
-            a.callsign == call && !a.counted && at_s - a.at_s <= CALL_AGAIN_S && at_s > a.at_s
-        })?;
+        let lost = self
+            .accepted
+            .as_mut()
+            .filter(|a| a.callsign == call && !a.counted && asks_again(a, began_s, CALL_AGAIN_S))?;
         lost.counted = true;
         Some(self.raise(&call, "it called again after its call was accepted"))
     }
 
-    /// A probe to this station from `callsign` at `at_s`: when it follows an answer to the same
-    /// station's probe, the answer was lost.
-    pub fn probed(&mut self, callsign: &str, at_s: f64) -> Option<Learned> {
+    /// A probe to this station from `callsign` that began on the air at `began_s`: when it
+    /// follows the answer to the same station's probe on the air, the answer was lost.
+    pub fn probed(&mut self, callsign: &str, began_s: f64) -> Option<Learned> {
         let call = base_callsign(callsign).to_ascii_uppercase();
         let lost = self.probed.as_mut().filter(|a| {
-            a.callsign == call && !a.counted && at_s - a.at_s <= PROBE_AGAIN_S && at_s > a.at_s
+            a.callsign == call && !a.counted && asks_again(a, began_s, PROBE_AGAIN_S)
         })?;
         lost.counted = true;
         Some(self.raise(&call, "it probed again after its probe was answered"))
@@ -203,6 +241,15 @@ impl LearnedGaps {
         })
     }
 
+    #[cfg(test)]
+    fn aired_s(&self, kind: Answer) -> Option<f64> {
+        match kind {
+            Answer::Call => self.accepted.as_ref(),
+            Answer::Probe => self.probed.as_ref(),
+        }
+        .and_then(|a| a.aired_s)
+    }
+
     fn raise(&mut self, call: &str, why: &'static str) -> Learned {
         let gap = self.gaps.entry(call.to_owned()).or_insert(0.0);
         *gap = (*gap + STEP_S).min(MOST_S);
@@ -214,6 +261,14 @@ impl LearnedGaps {
     }
 }
 
+/// Whether a call or probe that began at `began_s` asks again after `answered`: it began once
+/// the answer was on the air, and within `window` of it.
+fn asks_again(answered: &Answered, began_s: f64, window: f64) -> bool {
+    answered
+        .aired_s
+        .is_some_and(|aired| began_s > aired && began_s - aired <= window)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,12 +277,14 @@ mod tests {
     fn each_lost_acceptance_raises_that_stations_gap_once() {
         let mut gaps = LearnedGaps::default();
         gaps.accepted("KE4QCM", 10.0);
+        gaps.aired(Answer::Call, 11.0);
         // the caller never heard it, and tries again: one lost answer, however many tries
         let learned = gaps.called("KE4QCM", 17.0).expect("a lost acceptance");
         assert!((learned.gap_s - STEP_S).abs() < 1e-9, "{}", learned.gap_s);
         assert!(gaps.called("KE4QCM", 24.0).is_none(), "one lost answer");
         // the station answers the try with its acceptance again, and that one is lost too
         gaps.accepted("KE4QCM", 24.0);
+        gaps.aired(Answer::Call, 25.0);
         let learned = gaps
             .called("KE4QCM", 31.0)
             .expect("a second lost acceptance");
@@ -245,23 +302,72 @@ mod tests {
     fn a_call_from_another_station_or_much_later_says_nothing() {
         let mut gaps = LearnedGaps::default();
         gaps.accepted("KE4QCM", 10.0);
+        gaps.aired(Answer::Call, 10.5);
         assert!(gaps.called("ND1J", 15.0).is_none());
-        assert!(gaps.called("KE4QCM", 10.0 + CALL_AGAIN_S + 1.0).is_none());
+        assert!(gaps.called("KE4QCM", 10.5 + CALL_AGAIN_S + 1.0).is_none());
         // and a call before the acceptance is the one it accepted
         gaps.accepted("KE4QCM", 100.0);
+        gaps.aired(Answer::Call, 100.5);
         assert!(gaps.called("KE4QCM", 99.0).is_none());
+    }
+
+    #[test]
+    fn a_call_begun_before_the_acceptance_went_out_did_not_miss_it() {
+        // 2026-11-18, session 1 at the house (report 19 §7): WD5EMA's both-ways try, its OFDM
+        // part decoded and accepted at 32.8 s; its tone part, begun at 31.6 s, decoded at 38.0 s;
+        // the acceptance keyed at 38.4 s, once the tone part had ended. The tone part is the
+        // same try, not a second call: it had raised the gap 75 → 325 ms
+        let mut gaps = LearnedGaps::default();
+        gaps.accepted("WD5EMA", 32.8);
+        assert!(
+            gaps.called("WD5EMA", 31.6).is_none(),
+            "before the acceptance was keyed"
+        );
+        gaps.accepted("WD5EMA", 38.0); // the station watches the try heard again
+        gaps.aired(Answer::Call, 38.4);
+        assert!(
+            gaps.called("WD5EMA", 31.6).is_none(),
+            "decoded after the keying, begun before it"
+        );
+        assert_eq!(gaps.gap_s("WD5EMA"), None);
+        // a try begun after the acceptance went out says it was missed
+        let learned = gaps.called("WD5EMA", 50.0).expect("a lost acceptance");
+        assert!((learned.gap_s - STEP_S).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_answer_never_keyed_was_never_missed() {
+        // decided and dropped before it went (the rules refused it, its slot passed): the
+        // caller trying again says nothing of a gap
+        let mut gaps = LearnedGaps::default();
+        gaps.accepted("KE4QCM", 10.0);
+        assert!(gaps.called("KE4QCM", 17.0).is_none());
+        gaps.probe_answered("KE4QCM", 30.0);
+        assert!(gaps.probed("KE4QCM", 40.0).is_none());
+        assert_eq!(gaps.gap_s("KE4QCM"), None);
+        // the first keying after the decision is the answer's; one before it, or a later one,
+        // is not
+        gaps.accepted("KE4QCM", 100.0);
+        gaps.aired(Answer::Call, 99.0);
+        assert_eq!(gaps.aired_s(Answer::Call), None);
+        gaps.aired(Answer::Call, 101.0);
+        gaps.aired(Answer::Call, 105.0);
+        assert_eq!(gaps.aired_s(Answer::Call), Some(101.0));
+        assert!(gaps.called("KE4QCM", 103.0).is_some());
     }
 
     #[test]
     fn a_second_probe_after_an_answer_raises_it_too() {
         let mut gaps = LearnedGaps::default();
         gaps.probe_answered("KE4QCM", 0.0);
+        gaps.aired(Answer::Probe, 0.5);
         let learned = gaps.probed("KE4QCM", 20.0).expect("a lost answer");
         assert!((learned.gap_s - STEP_S).abs() < 1e-9, "{}", learned.gap_s);
         assert!(gaps.probed("KE4QCM", 30.0).is_none());
         // a probe a long while later is a new question
         gaps.probe_answered("KE4QCM", 100.0);
-        assert!(gaps.probed("KE4QCM", 100.0 + PROBE_AGAIN_S + 1.0).is_none());
+        gaps.aired(Answer::Probe, 100.5);
+        assert!(gaps.probed("KE4QCM", 100.5 + PROBE_AGAIN_S + 1.0).is_none());
     }
 
     #[test]
@@ -270,11 +376,13 @@ mod tests {
         for i in 0..20 {
             let t = f64::from(i) * 100.0;
             gaps.accepted("KE4QCM", t);
+            gaps.aired(Answer::Call, t + 1.0);
             gaps.called("KE4QCM", t + 5.0);
         }
         assert_eq!(gaps.gap_s("KE4QCM"), Some(MOST_S));
         // a session whose acceptance was lost does not ease it
         gaps.accepted("KE4QCM", 5000.0);
+        gaps.aired(Answer::Call, 5001.0);
         gaps.called("KE4QCM", 5005.0);
         assert!(gaps.session_went_on("KE4QCM").is_none());
         // one heard the first time does, a step smaller than a raise
@@ -289,6 +397,7 @@ mod tests {
     fn an_eased_gap_is_forgotten_at_zero_and_ssids_are_one_station() {
         let mut gaps = LearnedGaps::default();
         gaps.accepted("KE4QCM-1", 0.0);
+        gaps.aired(Answer::Call, 1.0);
         gaps.called("KE4QCM", 5.0);
         assert_eq!(gaps.gap_s("ke4qcm-7"), Some(STEP_S));
         // ten clean sessions undo one raise (the first, after the raise, eases nothing)

@@ -1224,6 +1224,10 @@ pub struct Station<P: Ptt> {
     /// showed tone-36 under data arriving at tone4x100-75 (12-two-paths-80m.md §16).
     data_sent: Option<(f64, usize)>,
     data_heard: Option<(f64, usize)>,
+    /// The answer the transmission rendered last carries — a call's acceptance or a probe's
+    /// answer — told to the learned gaps when it is keyed: until then nothing the other
+    /// station sends can say it was missed (ADR-0054, report 19 §7).
+    answer_rendered: Option<gaps::Answer>,
     /// The engine's acknowledged-plus-delivered count when `moved` was last fed.
     crossed: usize,
     frequency: FrequencyCache,
@@ -1403,6 +1407,7 @@ impl<P: Ptt> Station<P> {
             moved: VecDeque::new(),
             data_sent: None,
             data_heard: None,
+            answer_rendered: None,
             crossed: 0,
             frequency: FrequencyCache::default(),
             scanner: scan::Scanner::default(),
@@ -3347,6 +3352,9 @@ impl<P: Ptt> Station<P> {
                     lead: (self.config.key_lead_s * self.air.info().audio_rate as f64) as u64,
                 });
             self.transmitting = true;
+            if let Some(kind) = self.answer_rendered.take() {
+                self.gaps.aired(kind, now);
+            }
             if let Some(watch) = &mut self.keyed_audio {
                 watch.keyed(now);
             }
@@ -3998,25 +4006,34 @@ impl<P: Ptt> Station<P> {
         let was_connected = self.engine.connected();
         let probes_answered = self.engine.stats.probes_answered;
         self.engine.on_frame(frame, now);
-        self.learn_gap(asked, was_connected, probes_answered, decoded, now);
+        self.learn_gap(
+            asked,
+            was_connected,
+            probes_answered,
+            decoded,
+            frame.t_start(),
+            now,
+        );
     }
 
     /// What a frame just given to the engine says about the answers this station gives
-    /// (ADR-0054): a call or probe from a station whose last one was answered says the answer
-    /// was lost; one the engine has just answered is watched; a frame of a session the station
-    /// accepted says the acceptance was heard.
+    /// (ADR-0054): a call or probe from a station whose last one was answered, begun on the
+    /// air (`began`) after that answer was keyed, says the answer was lost; one the engine has
+    /// just answered is watched; a frame of a session the station accepted says the acceptance
+    /// was heard.
     fn learn_gap(
         &mut self,
         asked: Option<(Asked, String)>,
         was_connected: bool,
         probes_answered: usize,
         decoded: bool,
+        began: f64,
         now: f64,
     ) {
         let mut changed = Vec::new();
         match asked {
             Some((Asked::Call, from)) => {
-                changed.extend(self.gaps.called(&from, now));
+                changed.extend(self.gaps.called(&from, began));
                 // a first call accepted, or a call heard again in the session it opened, which
                 // the engine answers with its acceptance again: each is watched, and each one
                 // the caller does not hear is a sign of its own
@@ -4029,7 +4046,7 @@ impl<P: Ptt> Station<P> {
                 self.gaps.asked_by(from);
             }
             Some((Asked::Probe, from)) => {
-                changed.extend(self.gaps.probed(&from, now));
+                changed.extend(self.gaps.probed(&from, began));
                 if self.engine.stats.probes_answered > probes_answered {
                     self.gaps.probe_answered(&from, now);
                 }
@@ -4658,6 +4675,8 @@ impl<P: Ptt> Station<P> {
         let Some(outgoing) = self.pending.pop_front() else {
             return;
         };
+        // whatever is rendered now is what the next key carries
+        self.answer_rendered = None;
         let cuttable = matches!(outgoing, Outgoing::Drive(_));
         let mut link: Option<(KeyWindow, f64, usize)> = None;
         let (frames, origin) = match outgoing {
@@ -4705,6 +4724,7 @@ impl<P: Ptt> Station<P> {
             self.data_sent = Some((now, rung));
         }
         self.record_sent(&frames, now);
+        self.answer_rendered = answer_in(&frames);
         if is_beacon(&frames) {
             self.beacon_sent();
         }
@@ -5080,7 +5100,8 @@ impl<P: Ptt> Station<P> {
         let audio_rate = self.air.info().audio_rate as f64;
         let lead = (self.config.key_lead_s * audio_rate) as usize;
         let tail = (self.tail_s() * audio_rate) as usize;
-        let call = self.engine.my_call.clone();
+        // the ended session's callsign, whoever holds it now (report 19 §6)
+        let call = self.engine.identifier_call().to_owned();
         let audio = if self.unkeyable_identifier() {
             None
         } else {
@@ -5417,7 +5438,7 @@ impl<P: Ptt> Station<P> {
         if identifier_s <= 0.0 || self.unkeyable_identifier() {
             return false;
         }
-        let call = self.engine.my_call.clone();
+        let call = self.engine.identifier_call().to_owned();
         let Some(audio) = self.identifier_audio_for(&call, now, audio_rate) else {
             return false;
         };
@@ -5557,7 +5578,7 @@ impl<P: Ptt> Station<P> {
         match outgoing {
             // the engine's closing identifier on its own (ADR-0075)
             Outgoing::Link(LinkTx { frames, .. }) if frames.is_empty() => {
-                Ok(self.identifier_transmission(&self.engine.my_call))
+                Ok(self.identifier_transmission(self.engine.identifier_call()))
             }
             Outgoing::Link(LinkTx { frames, .. })
             | Outgoing::Frames(frames, _)
@@ -5712,7 +5733,8 @@ impl<P: Ptt> Station<P> {
     }
 
     /// The callsign an identification frame of a queued transmission carries when it is none
-    /// of this station's (ADR-0127 §2.5, C6): `None` when it carries none, or the station's.
+    /// of this station's (ADR-0127 §2.5, C6): `None` when it carries none, or the station's —
+    /// one of its callsigns now, or the one its last session or call went as.
     fn foreign_identifier(&self, outgoing: &Outgoing) -> Option<String> {
         let setup;
         let frames = match outgoing {
@@ -5724,12 +5746,21 @@ impl<P: Ptt> Station<P> {
             _ => return None,
         };
         let call = identified_as(frames)?;
+        // the station's callsigns now, and the ones its last contact went as: a program that ran
+        // a session or a call under a callsign of its own may have left, and its claim with it,
+        // before the identifier goes — RadioPost closes its connection as a session ends, and
+        // the mobile's identifiers of 2026-11-18 were all refused (report 19 §6)
         let ours = self
             .engine
             .callsigns
             .iter()
-            .chain(std::iter::once(&self.engine.my_call))
-            .any(|own| crate::cwid::sent_as(own) == call);
+            .map(String::as_str)
+            .chain([
+                self.engine.my_call.as_str(),
+                self.engine.identifier_call(),
+                self.identifier.setup_call.as_str(),
+            ])
+            .any(|own| !own.is_empty() && crate::cwid::sent_as(own) == call);
         (!ours).then_some(call)
     }
 
@@ -6137,6 +6168,20 @@ fn identified_as(frames: &[aether_link::TxFrame]) -> Option<String> {
         .map(|ident| ident.text)
         .collect();
     (!texts.is_empty()).then(|| texts.concat())
+}
+
+/// The answer a transmission carries to a call or a probe, if any: what the learned gaps
+/// watch from the moment it is keyed (ADR-0054).
+fn answer_in(frames: &[aether_link::TxFrame]) -> Option<gaps::Answer> {
+    frames.iter().find_map(|frame| match frame.container {
+        Container::Control if is_acceptance(&frame.payload) => Some(gaps::Answer::Call),
+        Container::Data => match decode_data(&frame.payload).map(|(header, _)| header.kind) {
+            Ok(DataKind::ConnectAck) => Some(gaps::Answer::Call),
+            Ok(DataKind::ProbeAck) => Some(gaps::Answer::Probe),
+            _ => None,
+        },
+        Container::Control => None,
+    })
 }
 
 /// Whether a transmission sets up a contact — a call, an acceptance, a probe or its answer —
@@ -7155,6 +7200,28 @@ mod tests {
         );
         assert_eq!(air.a.role(), Role::Master);
         assert_eq!(air.b.role(), Role::Slave);
+    }
+
+    #[test]
+    fn a_both_ways_try_heard_whole_teaches_the_called_station_no_gap() {
+        // 2026-11-18 (report 19 §7): a call to a station not heard lately goes as a both-ways
+        // try, its OFDM part and its tone part back to back (ADR-0126). The called station
+        // accepts at the OFDM part and keys its acceptance once the tone part has ended, so it
+        // decodes the tone part after deciding and before keying. That is the same try, not a
+        // second call; read as one, it raised the caller's learned gap 250 ms at every such
+        // call (WD5EMA at KK4ODA-1: 75 → 325 → 575 ms over two sessions).
+        let mut air = Air::new(1.0, 0.0005);
+        air.a.connect("KK4XYZ").expect("idle");
+        let mut heard = 0;
+        air.run(40.0, |a, b| a.connected() && b.connected());
+        air.run(3.0, |_, _| false);
+        for event in air.b.take_events() {
+            heard += usize::from(event.starts_with("heard:call from W4ODA"));
+            assert!(!event.starts_with("gap:"), "{event}");
+        }
+        assert!(air.a.connected() && air.b.connected());
+        assert_eq!(heard, 2, "both parts of the try were heard");
+        assert_eq!(air.b.gaps.gap_s("W4ODA"), None);
     }
 
     #[test]
@@ -9345,6 +9412,94 @@ mod tests {
         );
         ends_with_its_identifier(&mut air.a, "id");
         ends_with_its_identifier(&mut air.b, "DiscAck");
+    }
+
+    #[test]
+    fn a_programs_session_is_identified_as_its_callsign_after_the_program_left() {
+        // 2026-11-18 (report 19 §6): RadioPost at the mobile ran its sessions as WD5EMA, a
+        // callsign the station answers to only while the program holds it, and closed its
+        // connection 60 ms after each session ended. In the data signal the closing identifier
+        // named WD5EMA, and the gate, judging it after the claim had gone, refused it as another
+        // station's: the mobile never identified. In Morse it went out as the station's own
+        // callsign. Either way the end of a session names the callsign the session went as.
+        const PROGRAM: ConnectionId = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        for identify_by in [IdentifyBy::Morse, IdentifyBy::Data] {
+            let mut air = Air::with(1.0, 0.0005, |config| StationConfig {
+                identify_by,
+                ..config
+            });
+            air.a
+                .claim(PROGRAM, Some("RadioPost"), &["WD5EMA".to_owned()])
+                .expect("valid");
+            air.a
+                .connect_for(Some(PROGRAM), "KK4XYZ", None, false, None)
+                .expect("idle");
+            air.run(60.0, |a, b| a.connected() && b.connected());
+            assert!(
+                air.a.connected(),
+                "{identify_by:?}: {:?}",
+                air.a.take_events()
+            );
+            air.a.send(&[0x42; 300]);
+            air.a.disconnect();
+            air.run(150.0, |a, _| a.state() == State::Idle);
+            // the program goes the moment its session has ended, as RadioPost does
+            air.a.connection_closed(PROGRAM);
+            air.run(60.0, |a, b| a.quiescent() && b.quiescent());
+            let refused = air.a.take_regulatory_reports();
+            assert!(refused.is_empty(), "{identify_by:?}: {refused:?}");
+            let events = air.a.take_events();
+            let went = events
+                .iter()
+                .filter_map(|e| e.strip_prefix("identified:"))
+                .collect::<Vec<_>>();
+            assert_eq!(went.len(), 1, "{identify_by:?}: {events:?}");
+            assert!(
+                went[0].starts_with("the closing identifier went out as WD5EMA"),
+                "{identify_by:?}: {}",
+                went[0]
+            );
+            assert_eq!(air.a.stats.cw_ids, 1, "{identify_by:?}");
+            if identify_by == IdentifyBy::Data {
+                assert!(
+                    air.b
+                        .take_events()
+                        .iter()
+                        .any(|e| e == "ident:identified WD5EMA"),
+                    "the other station read it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_programs_unanswered_call_is_identified_as_its_callsign_after_the_program_left() {
+        // 2026-11-18, session 3 (report 19 §6): the mobile's RadioPost calls as WD5EMA went
+        // unanswered and the program let its callsign go; the identifier owed for the setup
+        // (ADR-0055) named WD5EMA and the gate refused it. It names the callsign the call went
+        // as, and goes.
+        const PROGRAM: ConnectionId = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        let mut air = data_air();
+        air.a
+            .claim(PROGRAM, Some("RadioPost"), &["WD5EMA".to_owned()])
+            .expect("valid");
+        air.a
+            .connect_for(Some(PROGRAM), "N0NONE", None, false, None)
+            .expect("idle");
+        air.run_a_alone(200.0, |a| a.state() == State::Idle);
+        assert_eq!(air.a.state(), State::Idle, "the call gave up");
+        air.a.connection_closed(PROGRAM);
+        air.run_a_alone(SETUP_ID_WAIT_S + 30.0, |a| a.stats.cw_ids > 0);
+        let refused = air.a.take_regulatory_reports();
+        assert!(refused.is_empty(), "{refused:?}");
+        let ids = air.a.stats.cw_ids;
+        assert_eq!(ids, 1, "{:?}", air.a.take_events());
     }
 
     /// Two stations that identify in their data signal (ADR-0127).

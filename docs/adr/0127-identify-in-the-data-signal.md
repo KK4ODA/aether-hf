@@ -285,3 +285,19 @@ draw, the second Morse run had the same 3 overlaps: harness variance, not this c
 **Not changed, noted.** The heard list's new activity `identified` cannot be read by an older
 build: going back to beta.160 after hearing a data identifier, its `heard.json`, and the answer
 gaps kept in it, start empty, as ADR-0019's `datagram` did before.
+
+## 11. Amendment (2026-11-18): the gate accepts the callsign the contact went as
+
+§2.5's check names "the session's callsign", but it was built against the callsigns the station
+answers to at the moment it judges (`engine.callsigns`, `engine.my_call`). A program that ran a session
+or a call under a callsign of its own may have closed its connection, and its claim with it, by
+then. RadioPost does so 60 ms after a session ends. On 2026-11-18 the mobile's identification frames
+named `WD5EMA` and the gate refused every one ("the identifier names WD5EMA, not this station"): after
+its unanswered calls and at the end of its session it never identified (report 19 §6).
+
+Now the gate also accepts the callsign the owed identifier names (`GrantedEngine::identifier_call`,
+ADR-0075 §7) and the one a setup's identifier names (`setup_call`, ADR-0055). Neither can be another
+station's: both are a callsign the station called or answered as. A frame naming any other callsign is
+still refused, as C6 holds. Tests: `a_programs_session_is_identified_as_its_callsign_after_the_program_left`
+and `a_programs_unanswered_call_is_identified_as_its_callsign_after_the_program_left` (`station.rs`;
+both reproduce the field's refusal on the gate before).

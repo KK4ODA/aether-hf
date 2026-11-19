@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.9.0 |
+| **Version** | 1.9.1 |
 | **Updated** | 2026-11-18 |
 | **Describes** | Aether HF 0.2.0-beta.164 |
 | **Licence** | CC BY 4.0 |
@@ -541,6 +541,9 @@ quiet leaves the signal inside the sound card's own noise.
   - It sends your callsign without its SSID: `N1CALL-1` goes out as `N1CALL`, and a `-T` or `-R`
     is dropped too. The rules ask for your assigned call sign (§97.119), and the SSID is not part
     of it. A `/` part such as `/P` is kept.
+  - A session or call that a program made under a callsign of its own, such as RadioPost calling
+    as a club callsign, is identified as that callsign, even when the program has already
+    closed.
   - **A US callsign always identifies.** The box is ticked and greyed, and its tooltip says why.
     For any other callsign it is your choice, off by default; a host program's `CWID ON` turns it
     on for the program's sessions. The program cannot choose Morse: it identifies the way you
@@ -1568,3 +1571,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.7.1 | 2026-11-18 | VarAC's relay notifications travel on the KISS port: **KISS programs** on at both stations. |
 | 1.8.0 | 2026-11-18 | [VarAC in one step](#varac-in-one-step): the **VarAC** banner and Setup step 5's **VarAC** row write a VarAC profile that runs on Aether and the Aether profile *VarAC default*, and bring them up to date after an update. |
 | 1.9.0 | 2026-11-18 | [Profiles](#profiles): the **×** beside each profile in the list deletes it, once you confirm; **More** no longer has Delete. |
+| 1.9.1 | 2026-11-18 | **Identify by**: a session or call a program made under a callsign of its own is identified as that callsign, also after the program has closed (report 19 §6). |

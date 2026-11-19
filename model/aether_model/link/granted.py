@@ -1101,6 +1101,15 @@ class GrantedEngine:
             raise ValueError(f"no identifier method {method!r}")
         self.cfg.identify_by = method
 
+    @property
+    def identifier_call(self) -> str:
+        """The callsign the closing identifier owed names: the ended session's own, kept when it
+        ended (ADR-0127), or the one this station calls as when nothing has been owed yet. A
+        program that ran the session under a callsign of its own may have left before the
+        identifier goes, and the station's callsigns gone back to its own with it; the identifier
+        still names the session's (report 19 §6)."""
+        return self._id_call or self.my_call
+
     def data_identifier_s(self, call: str) -> float:
         """The length a station that identifies in its data signal declares (ADR-0127 §2.3):
         its identification frames on the floor, in 0.5 s steps — the closing's family is not
@@ -1754,7 +1763,7 @@ class GrantedEngine:
             floor = self._is_floor_tx(frames[-1]) if frames else self._sent_floor
             idents = [
                 TxFrame(Container.CONTROL, f.encode(), floor=floor)
-                for f in identification_frames(self._id_call or self.my_call)
+                for f in identification_frames(self.identifier_call)
             ]
             frames = [*frames, *idents]
             ident_frames = len(idents)

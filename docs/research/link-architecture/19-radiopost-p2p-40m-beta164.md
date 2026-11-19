@@ -50,7 +50,7 @@ twelve first copies decoded.
 **Findings, ranked by what they cost.**
 
 1. **The mobile's closing identifier never went out in session 4, nor after session 3's calls**
-   (§6). Both stations changed to identifying in the data signal at 20:58Z. The mobile's
+   (§6; fixed after the report, §12). Both stations changed to identifying in the data signal at 20:58Z. The mobile's
    identification frames named `WD5EMA`, the callsign its session ran under, and the rules gate
    refused them: "the identifier names WD5EMA, not this station". RadioPost had left Aether 60 ms
    after the session ended, and with its claim went `WD5EMA` from the callsigns the gate counts as
@@ -60,7 +60,8 @@ twelve first copies decoded.
    to Aether closed 88 ms after session 2 ended. The mobile's calls in session 3 were heard and
    answered by nothing, as the rules say (ADR-0107, 0108). RadioPost's to fix; another session is
    on it.
-3. **A both-ways call teaches the house a longer answer gap for the caller** (§7). The house
+3. **A both-ways call teaches the house a longer answer gap for the caller** (§7; fixed after
+   the report, §12). The house
    accepts a both-ways try at its OFDM part; its tone part arrives five seconds later and is read
    as "called again after its call was accepted", so `WD5EMA`'s learned gap rose 75 → 325 →
    575 ms over sessions 1 and 2. No cost yet; a few more such calls and every exchange with
@@ -433,7 +434,8 @@ decode budget, `KEY` and the guard), and all three sessions ran at level 0 excep
 slots raised it. Two or three more both-ways calls take it past that, and from then on every
 exchange with `WD5EMA` waits 0.5 s longer, up to 2 s at the ceiling. `heard.json` keeps it across
 restarts. The fix is small: a repeated call says the acceptance was lost only when the repeat
-began after the acceptance ended on the air. A station test should hold it with a both-ways try.
+began after the acceptance went on the air. A station test should hold it with a both-ways try
+(done, §12).
 
 ## 8. The stations
 
@@ -507,9 +509,9 @@ RadioPost.
 
 | # | change | where | whose call |
 |---|---|---|---|
-| 1 | A session's or a setup's identifier names the callsign it went as (the engine's `id_call`, the setup's `setup_call`), and the gate accepts that callsign after the program has left; Morse and data alike | Aether, `station.rs` (`foreign_identifier`, `link_identifier`, `render_link_identifier`) | the author's (regulatory); a bug against ADR-0127 §2.5's intent |
+| 1 | A session's or a setup's identifier names the callsign it went as (the engine's `id_call`, the setup's `setup_call`), and the gate accepts that callsign after the program has left; Morse and data alike | Aether, `station.rs` (`foreign_identifier`, `link_identifier`, `render_link_identifier`) | **done** (§12; ADR-0075 §7, ADR-0127 §11) |
 | 2 | The RadioPost client listens again after a P2P session ends | RadioPost | in hand in another session |
-| 3 | A repeated call teaches a gap only when it began after the acceptance ended on the air | Aether, `station/gaps.rs` | a bug against ADR-0054's intent; the author's go |
+| 3 | A repeated call teaches a gap only when it began after the acceptance went on the air | Aether, `station/gaps.rs` | **done** (§12; ADR-0054 §5) |
 | 4 | Bench the fast tone kinds (2300 Hz rungs 2–5) under a partial-band interferer, with and without per-tone noise, and on NVIS | `tools/bench_cut.py`-style bench | the author's |
 | 5 | The scan's restart pass is not logged as a slow pass, or is made cheaper | Aether, the run loop's pass report or `Air::listen_after_silence` | the author's; low |
 | 6 | The house's capture losses under 10 ms: count them (the samples a callback delivers against its timestamps) before deciding anything | Aether, `audio::CaptureSkips` | the author's; low |
@@ -518,3 +520,26 @@ RadioPost.
 
 The rate controller (§10) and the busy detector (§8) wait for their reviews, by the author's
 rules.
+
+## 12. Fixed after the report (the author's go, 2026-11-18)
+
+**Change 1, the identifier.** The engine already keeps the ended session's callsign for its owed
+identifier (`id_call`); it now says so (`GrantedEngine::identifier_call`, model and port). The
+daemon's Morse paths render that callsign instead of `my_call` at the moment they key. The rules gate
+accepts it, and the setup identifier's `setup_call`, beside the station's callsigns of the moment. A
+frame naming any other callsign is still refused. Two station tests run the mobile's case through
+real audio: a program's session ends, the program leaves at once, and the identifier names its
+callsign, in Morse and in data; and a program's unanswered call is identified as its callsign after
+the program left. On the code before, each reproduces the field: Morse "went out as" the station's
+own callsign, and data "is not sent", refused with "the identifier names WD5EMA, not this station".
+ADR-0075 §7, ADR-0127 §11; the manual's **Identify by** says it (1.9.1).
+
+**Change 3, the learned gap.** An answer is watched from the moment it is keyed: the station notes
+what each rendered transmission answers and tells the gaps when it keys it (`LearnedGaps::aired`). A
+call or probe says the answer was lost only when it began on the air after that keying. A both-ways
+try's tone part, begun before the acceptance went out, no longer counts. A two-station test runs a
+both-ways call over real audio, checks both parts are heard and no gap is learned, and fails on the
+rule before. ADR-0054 §5.
+
+Neither changes the wire, a configuration key or the replay vectors. The house's `heard.json` still
+holds 550 ms for `WD5EMA`; clean sessions ease it, 25 ms each.

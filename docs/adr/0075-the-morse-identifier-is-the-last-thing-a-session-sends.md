@@ -265,3 +265,19 @@ So the overlap is beta.108's own, and it ends when that station updates.
 Schema 13 (`identifier_at_the_end`) removes `radio.cw_id_interval_s`, and the settings registry,
 the panel, the manual and the profiles lose it. A profile carrying it goes through the migration
 chain. Fixture `0.2.0-beta.110-identifier.toml`. Forcing needs no key.
+
+## 7. Amendment (2026-11-18): the identifier names the session's callsign after its program left
+
+§2's third point decides it from "the callsign the identifier sends, the session's own". The engine
+keeps that callsign for the owed identifier (`id_call`, set as the session ends). The daemon rendered
+the Morse identifier from `engine.my_call` at the moment it keyed. When a program ran the session
+under a callsign of its own and closed its connection as the session ended (RadioPost does, 60 ms
+after), its claim had ended by then, `my_call` was the station's own again, and the identifier named
+that. The mobile identified its `WD5EMA` sessions of 2026-11-18 as `KK4ODA` (report 19 §6).
+
+Now the engine says which callsign its owed identifier names (`GrantedEngine::identifier_call`, model
+and port: `id_call`, or the callsign the station calls as when none has been owed), and the daemon's
+Morse paths (`link_identifier`, `render_link_identifier`, the gate's account of an identifier alone)
+render that one. ADR-0127's identification frames already used it; §8 there has the gate's side.
+Test: `a_programs_session_is_identified_as_its_callsign_after_the_program_left`, in Morse and in the
+data signal. No wire change; the replay vectors do not move (the engine's actions are unchanged).

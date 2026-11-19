@@ -2019,6 +2019,20 @@ impl GrantedEngine {
         self.config.identify_by = method;
     }
 
+    /// The callsign the closing identifier owed names: the ended session's own, kept when it
+    /// ended (ADR-0127), or the one this station calls as when nothing has been owed yet. A
+    /// program that ran the session under a callsign of its own may have left before the
+    /// identifier goes, and the station's callsigns gone back to its own with it; the identifier
+    /// still names the session's (report 19 §6).
+    #[must_use]
+    pub fn identifier_call(&self) -> &str {
+        if self.id_call.is_empty() {
+            &self.my_call
+        } else {
+            &self.id_call
+        }
+    }
+
     /// The length a station that identifies in its data signal declares (ADR-0127 §2.3): its
     /// identification frames on the floor, in 0.5 s steps — the closing's family is not known
     /// at the call, and the floor's frames are the longer, so the other station's reckoning
@@ -2661,11 +2675,7 @@ impl GrantedEngine {
             let floor = frames
                 .last()
                 .map_or(self.sent_floor, |f| self.is_floor_tx(f));
-            let call = if self.id_call.is_empty() {
-                self.my_call.clone()
-            } else {
-                self.id_call.clone()
-            };
+            let call = self.identifier_call().to_owned();
             for ident in identification_frames(&call) {
                 if let Ok(payload) = ident.encode() {
                     frames.push(TxFrame {
