@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.9.1 |
+| **Version** | 1.9.2 |
 | **Updated** | 2026-11-18 |
 | **Describes** | Aether HF 0.2.0-beta.164 |
 | **Licence** | CC BY 4.0 |
@@ -566,7 +566,8 @@ quiet leaves the signal inside the sound card's own noise.
 - **Debug mode**: on by default. After each session that Winlink Express, Pat, VarAC or RadioPost
   runs through this station, its recording (with the audio), the logs and your settings (never a
   password) go to the Aether project, so problems on real paths can be found. Sessions you run
-  from the window, and Tests, are not sent this way.
+  from the window, and Tests, are not sent this way. With no internet they wait and go once
+  there is a connection, tried every 10 minutes, kept through a restart.
 - **Recording notes**: written into every recording that starts by itself.
 - **Host programs**: lets Winlink Express, Pat or VarAC use this station on the VARA-compatible
   port. The command port is 8300 by default and the data port the next number up. While a
@@ -1572,3 +1573,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.8.0 | 2026-11-18 | [VarAC in one step](#varac-in-one-step): the **VarAC** banner and Setup step 5's **VarAC** row write a VarAC profile that runs on Aether and the Aether profile *VarAC default*, and bring them up to date after an update. |
 | 1.9.0 | 2026-11-18 | [Profiles](#profiles): the **×** beside each profile in the list deletes it, once you confirm; **More** no longer has Delete. |
 | 1.9.1 | 2026-11-18 | **Identify by**: a session or call a program made under a callsign of its own is identified as that callsign, also after the program has closed (report 19 §6). |
+| 1.9.2 | 2026-11-18 | **Debug mode**: with no internet, the sessions wait and go once there is a connection, tried every 10 minutes and kept through a restart. |

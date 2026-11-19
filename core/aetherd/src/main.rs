@@ -395,7 +395,7 @@ fn run() -> Result<Exit, String> {
         "Idle",
     );
 
-    say_debug_mode(&config, &mut daemon);
+    say_debug_mode(&config, &station, &mut daemon);
 
     let mut audio: Box<dyn AudioIo> = match harness {
         Some(link) => Box::new(link),
@@ -1123,16 +1123,28 @@ fn seed_from_heard(station: &mut Station<Box<dyn Ptt>>, heard: &aetherd::heard::
 /// bundle, and log a pass slower than [`LOOP_STALL_MS`] with where the time went — the
 /// receiver's decode, a command, or the playback render — rate-limited so a slow machine
 /// says so once in a while rather than in every line.
+///
+/// A pass in which a scan started the receiver again after a move (`restarted`) is counted
+/// apart, with its own slowest: the restart feeds the new receiver the longest tone frame of
+/// silence, about 0.4 s of work on KK4ODA-1's 4-core mini PC, at every move. Counted as slow,
+/// those were 1 556 of the gateway's "slow" passes in three hours and every warning in its log
+/// (report 19 §8).
 fn note_pass(
     daemon: &mut DaemonState,
     last_logged: &mut Option<std::time::Instant>,
     station: &Station<Box<dyn Ptt>>,
     [commands_ms, capture_ms, playback_ms]: [f64; 3],
     machine_late_ms: Option<f64>,
+    restarted: bool,
 ) {
     // what the pass waited on outside the modem: taken every pass, said when it was slow
     let [radio_ms, recording_ms, card_ms] = aetherd::waits::take();
     let total_ms = commands_ms + capture_ms + playback_ms;
+    if restarted {
+        daemon.loop_scan_restarts += 1;
+        daemon.loop_scan_restart_slowest_ms = daemon.loop_scan_restart_slowest_ms.max(total_ms);
+        return;
+    }
     let phase = if capture_ms >= commands_ms && capture_ms >= playback_ms {
         "capture"
     } else if playback_ms >= commands_ms {
@@ -1416,12 +1428,14 @@ fn serve(
         read_card(station, audio, daemon, &mut last_ptt_fault);
         fill_card(station, audio, backlog, block, daemon, &mut last_ptt_fault);
         let playback_ms = pass_began.elapsed().as_secs_f64() * 1000.0 - commands_ms - capture_ms;
+        let restarted = station.take_receiver_restart();
         note_pass(
             daemon,
             &mut last_stall_logged,
             station,
             [commands_ms, capture_ms, playback_ms],
             heartbeat.take_ms(),
+            restarted,
         );
 
         // frames before the state they produced: a host learns the SNR of the frame that
@@ -1560,8 +1574,10 @@ fn stop(
             &state_name(station),
         );
     }
-    // a session the wind-down ended is history too
+    // a session the wind-down ended is history too, and debug mode's queue is kept for the
+    // next run with it
     note_sessions(station, None, daemon);
+    save_debug_queue(daemon, &state_name(station));
     // Report the failure but do not return on it: there is nothing left to try, and
     // exiting quietly would hide a radio that is still keyed.
     if let Err(error) = station.shut_down() {
@@ -1838,12 +1854,15 @@ fn report_frames(
     }
     note_sessions(station, Some(control), daemon);
     debug_uploads(station, control, daemon);
+    // what the sessions that ended and the upload changed, kept for a restart
+    save_debug_queue(daemon, &state_name(station));
 }
 
 /// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
-/// every start, as the panel does once on screen.
+/// every start, as the panel does once on screen; and what an earlier run left to go.
 /// What debug mode does on this station.
-fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
+fn say_debug_mode(config: &Config, station: &Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
+    restore_debug_queue(station, daemon);
     if config.record.send_to_project && daemon.simulated {
         daemon.log.record(
             Level::Info,
@@ -1860,6 +1879,68 @@ fn say_debug_mode(config: &Config, daemon: &mut DaemonState) {
              the recording with its audio, the logs, the settings without their secrets — go to \
              the Aether project a minute after it ends ([record] send_to_project)",
             "Idle",
+        );
+    }
+}
+
+/// What an earlier run left waiting to go to the Aether project: kept while its recording is
+/// still on this computer, and said in the log (`debug::QUEUE_FILE`).
+fn restore_debug_queue(station: &Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
+    if daemon.debug.waiting.is_empty() {
+        return;
+    }
+    if !daemon.config.record.send_to_project {
+        // turned off while the daemon was stopped: the recordings stay, nothing goes
+        daemon.debug.clear();
+        return;
+    }
+    let recordings = station.record_dir().map(std::path::Path::to_path_buf);
+    let gone = daemon.debug.keep(|pending| {
+        recordings
+            .as_ref()
+            .is_some_and(|dir| dir.join(format!("{}.json", pending.recording)).is_file())
+    });
+    let left = daemon.debug.waiting.len();
+    if left > 0 {
+        daemon.log.record(
+            Level::Info,
+            "debug",
+            &format!(
+                "{left} session{} from before the restart still to go to the Aether project{}",
+                if left == 1 { "" } else { "s" },
+                if gone > 0 {
+                    format!(" ({gone} more whose recording is no longer here are let go)")
+                } else {
+                    String::new()
+                }
+            ),
+            "Idle",
+        );
+    }
+}
+
+/// What the log says when debug mode's upload could not reach the script, once a spell.
+fn offline_sentence(error: &str) -> String {
+    format!(
+        "not sent to the Aether project: {error} What waits goes once there is a connection \
+         (tried every {} minutes), and is kept if Aether restarts.",
+        aetherd::debug::OFFLINE_RETRY_MS / 60_000
+    )
+}
+
+/// Write the debug queue's file when it changed; a failure is said once.
+fn save_debug_queue(daemon: &mut DaemonState, state: &str) {
+    if let Err(error) = daemon.debug.save_if_changed()
+        && daemon.debug.first_save_failure()
+    {
+        daemon.log.record(
+            Level::Warn,
+            "debug",
+            &format!(
+                "the sessions waiting to go to the Aether project could not be kept for a \
+                 restart: {error}"
+            ),
+            state,
         );
     }
 }
@@ -1909,6 +1990,13 @@ fn debug_uploads(
                         if n == 1 { "" } else { "s" }
                     ),
                 );
+            }
+            "failed" if progress.unreached => {
+                // no Internet: no try is counted, and the log says so once a spell
+                let error = progress.error.unwrap_or_else(|| "no connection".into());
+                if daemon.debug.unreached(error.clone(), now) {
+                    say(daemon, Level::Warn, &offline_sentence(&error));
+                }
             }
             "failed" => {
                 let error = progress.error.unwrap_or_else(|| "it failed".into());

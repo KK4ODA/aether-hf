@@ -163,8 +163,10 @@ know. Aether says so once, the first time you open it with debug mode on, with *
 *Turn it off*. To turn it off later: Setup step 5, untick **Debug mode**, Save. Sessions you
 start from Aether's own Session tab and Test sessions are never sent automatically.
 
-Every upload is written to the Log tab as it happens. If an upload fails (no internet), it is
-tried again later, and after three tries the files stay in your recordings folder.
+Every upload is written to the Log tab as it happens. With no internet, the sessions wait and
+go once there is a connection: Aether tries every 10 minutes, and keeps them through a restart.
+If the upload fails another way, it is tried again later, and after three tries the files stay
+in your recordings folder.
 
 ## 7. Known limits
 

@@ -89,3 +89,28 @@ honoured, ADR-0075 §2.7). The panel's own sessions have no owner and Tests are 
 before. `StationConfig::record_host_sessions` is now `record_program_sessions`. The notice,
 Setup's tooltip, the start-up log line, the manual and the guides name RadioPost.
 
+## 6. Amended 2026-11-18: offline is not a failure, and the queue outlives a restart
+
+On 2026-11-18 the mobile (`KK4ODA-2`) had no Internet. Its first upload failed with "No such host
+is known" and waited half an hour for a second try. Twenty-one minutes later the daemon restarted
+for a profile switch, and the queue was gone; the author sent the files by hand that evening
+(report 19 §0).
+
+* **An upload that never reached the script counts no try.** That is a connection that failed
+  before the script answered: the begin's `POST`, or, for debug mode's zip, a request made before
+  the zip is written (`Http::reachable`, any answer will do, through the environment's proxy as the
+  upload goes). `upload::Progress.unreached` says so. The sessions wait at the front and go again
+  every `OFFLINE_RETRY_MS` (10 minutes) for as long as it takes (`DebugUploads::unreached`). The
+  log says so once a spell, not at every try. Nothing is zipped while nothing answers: a mobile
+  offline for hours would have written tens of megabytes at every try. A failure after the script
+  answered counts its tries as before (§2, point 5).
+* **The queue is kept beside the configuration** (`debug::QUEUE_FILE`, `debug-waiting.json`): what
+  waits and what is on its way, written when it changes (`save_if_changed`). At start what an
+  earlier run left goes a minute later, as after a session; one whose recording is no longer on
+  this computer is let go, and the log says how many of each. Point 5's "the queue is not kept
+  across a restart" no longer holds.
+* Tests: `offline_costs_no_try_and_the_sessions_wait_until_the_internet_is_back`,
+  `the_queue_outlives_a_restart` (`debug.rs`),
+  `a_station_offline_is_told_from_a_failure_and_writes_no_zip_for_nowhere` (`upload.rs`).
+
+No configuration key. The uninstaller leaves the file, as it leaves `program-logs.json`.

@@ -77,7 +77,7 @@ twelve first copies decoded.
 6. **The house's capture and its scan** (§8). The house lost about 150 ms of capture in session 4
    in pieces under the 10 ms that the skip report counts, and every scan move costs a 400 ms pass
    that the log calls slow (1 556 of them since 18:10Z). No frame was lost to either that the
-   records show.
+   records show. (The restart passes are counted apart since, §12.)
 
 ## 1. The sessions
 
@@ -513,9 +513,9 @@ RadioPost.
 | 2 | The RadioPost client listens again after a P2P session ends | RadioPost | in hand in another session |
 | 3 | A repeated call teaches a gap only when it began after the acceptance went on the air | Aether, `station/gaps.rs` | **done** (§12; ADR-0054 §5) |
 | 4 | Bench the fast tone kinds (2300 Hz rungs 2–5) under a partial-band interferer, with and without per-tone noise, and on NVIS | `tools/bench_cut.py`-style bench | the author's |
-| 5 | The scan's restart pass is not logged as a slow pass, or is made cheaper | Aether, the run loop's pass report or `Air::listen_after_silence` | the author's; low |
+| 5 | The scan's restart pass is not logged as a slow pass, or is made cheaper | Aether, the run loop's pass report or `Air::listen_after_silence` | **done**: counted apart (§12) |
 | 6 | The house's capture losses under 10 ms: count them (the samples a callback delivers against its timestamps) before deciding anything | Aether, `audio::CaptureSkips` | the author's; low |
-| 7 | Debug mode keeps a zip it could not send and tries it again when the Internet is back, not only twice | Aether, `debug.rs` | the author's; low |
+| 7 | Debug mode keeps a zip it could not send and tries it again when the Internet is back, not only twice | Aether, `debug.rs` | **done** (§12; ADR-0050 §6) |
 | 8 | The mobile keys by Kenwood CAT on COM9 (report 18's change 3), and the two VarAC copies get different callsigns | the mobile's Setup, VarAC | the author |
 
 The rate controller (§10) and the busy detector (§8) wait for their reviews, by the author's
@@ -543,3 +543,15 @@ rule before. ADR-0054 §5.
 
 Neither changes the wire, a configuration key or the replay vectors. The house's `heard.json` still
 holds 550 ms for `WD5EMA`; clean sessions ease it, 25 ms each.
+
+**Change 5, the scan's restart pass.** A pass in which the scan started the receiver again after a
+move is counted apart (`Station::take_receiver_restart`; the diagnostic bundle's `loop.scan_restarts`
+and `scan_restart_slowest_ms`) and no longer logged as slow. The work is unchanged: feeding the new
+receiver the longest tone frame of silence is what lets it read a try begun before the scan
+arrived (ADR-0129 §12), and making it cheaper would change the receiver, which wants a bench of its
+own. A slow pass of any other kind is said as before.
+
+**Change 7, debug mode offline.** An upload that never reached the upload script counts no try:
+what waits goes again every 10 minutes until there is a connection, the log says so once a spell,
+and no zip is written while nothing answers. The queue is kept beside the configuration
+(`debug-waiting.json`), so a restart no longer loses it. ADR-0050 §6.

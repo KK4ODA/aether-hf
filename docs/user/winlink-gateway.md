@@ -271,8 +271,8 @@ gateway being open to the public, nothing to do with the service code; Aether an
 6. Nothing to collect by hand. Both sessions are host-program sessions — the gateway's through
    Trimode, the client's through Winlink Express — so with debug mode on both stations upload
    theirs (audio, logs, settings) a minute after each session ends: the gateway at once, the
-   client as soon as it has Internet (it tries again after 30 and 60 minutes, then keeps the
-   files in the recordings folder for *Log › Send files…* later).
+   client as soon as it has Internet (it tries every 10 minutes while it has none, and keeps
+   what waits through a restart).
 
 ---
 

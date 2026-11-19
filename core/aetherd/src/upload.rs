@@ -103,6 +103,15 @@ pub trait Http: Send {
     /// # Errors
     /// The connection's failure, in a sentence.
     fn put(&self, url: &str, content_range: &str, body: &[u8]) -> Result<Reply, String>;
+    /// Whether anything answers at `url`, whatever it answers: asked before debug mode writes a
+    /// zip of tens of megabytes that could not go anywhere. A stand-in takes it as yes.
+    ///
+    /// # Errors
+    /// The connection's failure, in a sentence.
+    fn reachable(&self, url: &str) -> Result<(), String> {
+        let _ = url;
+        Ok(())
+    }
 }
 
 /// HTTP over the network: `ureq` with rustls, through the proxy the environment names.
@@ -175,6 +184,16 @@ impl Http for Web {
                 .send(body),
         )
     }
+
+    fn reachable(&self, url: &str) -> Result<(), String> {
+        // any answer will do — the script's redirect, an error page — and through the proxy the
+        // environment names, as the upload itself goes: only a failure to connect is no
+        self.agent
+            .get(url)
+            .call()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// One upload asked for.
@@ -211,6 +230,9 @@ pub struct Progress {
     pub total: u64,
     /// Why it failed, in a sentence.
     pub error: Option<String>,
+    /// It failed without reaching the upload script: no Internet, or nothing on the way to it
+    /// answered. Debug mode counts no try for it (`debug::DebugUploads::unreached`).
+    pub unreached: bool,
     /// Where the file is now, as the script says.
     pub link: Option<String>,
     /// Who it went to, as the script names the station that asked.
@@ -266,7 +288,20 @@ impl Upload {
         std::thread::Builder::new()
             .name("upload".into())
             .spawn(move || {
-                let outcome = write(&job)
+                // a zip still to be written is not written for nowhere: a mobile offline for
+                // hours would write tens of megabytes at every try
+                let reached = if job.zip.is_some() {
+                    http.reachable(&job.endpoint).map_err(|error| {
+                        if let Ok(mut progress) = shared.lock() {
+                            progress.unreached = true;
+                        }
+                        format!("No connection to the upload script: {error}")
+                    })
+                } else {
+                    Ok(())
+                };
+                let outcome = reached
+                    .and_then(|()| write(&job))
                     .and_then(|()| run(http.as_ref(), &job, &shared, Duration::from_secs(2)));
                 if let Ok(mut progress) = shared.lock() {
                     match outcome {
@@ -308,41 +343,65 @@ fn write(job: &Job) -> Result<(), String> {
     Ok(())
 }
 
+/// Why a question to the script got no yes.
+#[derive(Debug)]
+enum Unasked {
+    /// It never got there: the connection failed.
+    Unreached(String),
+    /// It got there and the answer was no, or not the script's.
+    Answered(String),
+}
+
+impl From<Unasked> for String {
+    fn from(unasked: Unasked) -> Self {
+        match unasked {
+            Unasked::Unreached(error) | Unasked::Answered(error) => error,
+        }
+    }
+}
+
 /// Ask the script something: a `POST` of `payload`, its answer fetched where the redirect
 /// points (a script web app answers that way), read as JSON.
 ///
 /// # Errors
-/// The connection's failure, an answer that is not the script's, or the script's refusal.
-fn ask(http: &dyn Http, endpoint: &str, payload: &Value) -> Result<Value, String> {
-    let mut reply = http.post(endpoint, &payload.to_string())?;
+/// The connection's failure before the script answered at all (`Unreached`), or an answer
+/// that is not the script's, or the script's refusal (`Answered`).
+fn ask(http: &dyn Http, endpoint: &str, payload: &Value) -> Result<Value, Unasked> {
+    let mut reply = http
+        .post(endpoint, &payload.to_string())
+        .map_err(Unasked::Unreached)?;
     if (300..400).contains(&reply.status) {
         let Some(location) = reply.location.clone() else {
-            return Err(format!(
+            return Err(Unasked::Answered(format!(
                 "The upload script answered {} without an address.",
                 reply.status
-            ));
+            )));
         };
-        reply = http.get(&location)?;
+        reply = http.get(&location).map_err(Unasked::Answered)?;
     }
     if reply.status != 200 {
-        return Err(format!(
+        return Err(Unasked::Answered(format!(
             "The upload script answered {}: is the address in the request link right?",
             reply.status
-        ));
+        )));
     }
     let answer: Value = serde_json::from_str(&reply.body).map_err(|_| {
-        "The upload address did not answer as the upload script does: is the request link \
-         whole?"
-            .to_owned()
+        Unasked::Answered(
+            "The upload address did not answer as the upload script does: is the request link \
+             whole?"
+                .to_owned(),
+        )
     })?;
     if answer.get("ok").and_then(Value::as_bool) == Some(true) {
         Ok(answer)
     } else {
-        Err(answer
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("The upload script refused, and did not say why.")
-            .to_owned())
+        Err(Unasked::Answered(
+            answer
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("The upload script refused, and did not say why.")
+                .to_owned(),
+        ))
     }
 }
 
@@ -476,7 +535,13 @@ pub fn run(
             "callsign": job.callsign,
             "version": env!("CARGO_PKG_VERSION"),
         }),
-    )?;
+    )
+    .map_err(|unasked| {
+        if matches!(unasked, Unasked::Unreached(_)) {
+            set(&|p| p.unreached = true);
+        }
+        String::from(unasked)
+    })?;
     let Some(session) = begun.get("upload_url").and_then(Value::as_str) else {
         return Err("The upload script gave no place to put the file.".into());
     };
@@ -497,7 +562,8 @@ pub fn run(
             "callsign": job.callsign,
             "note": job.note,
         }),
-    )?;
+    )
+    .map_err(String::from)?;
     let link = finished
         .get("link")
         .and_then(Value::as_str)
@@ -722,6 +788,69 @@ mod tests {
             "{error}"
         );
         assert!(error.contains("no route to host"), "{error}");
+        // the script answered: a failure, not a station offline
+        assert!(!shared.lock().unwrap().unreached);
+    }
+
+    #[test]
+    fn a_station_offline_is_told_from_a_failure_and_writes_no_zip_for_nowhere() {
+        // 2026-11-18: the mobile had no Internet, "No such host is known". Debug mode counts no
+        // try for an upload that never reached the script (debug::DebugUploads::unreached), and
+        // writes no zip of tens of megabytes while nothing answers
+        struct Offline;
+        impl Http for Offline {
+            fn post(&self, _: &str, _: &str) -> Result<Reply, String> {
+                Err("io: No such host is known. (os error 11001)".into())
+            }
+            fn get(&self, _: &str) -> Result<Reply, String> {
+                Err("io: No such host is known. (os error 11001)".into())
+            }
+            fn put(&self, _: &str, _: &str, _: &[u8]) -> Result<Reply, String> {
+                unreachable!()
+            }
+            fn reachable(&self, _: &str) -> Result<(), String> {
+                Err("io: No such host is known. (os error 11001)".into())
+            }
+        }
+        // the begin's connection failing: unreached
+        let (path, _) = zip_of(1000);
+        let shared = Mutex::new(Progress::default());
+        let error = run(&Offline, &job(path), &shared, Duration::ZERO).expect_err("offline");
+        assert!(error.contains("No such host"), "{error}");
+        assert!(shared.lock().unwrap().unreached);
+        // debug mode's zip, still to be written: not written, and the upload says why
+        let dir =
+            std::env::temp_dir().join(format!("aether-upload-offline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let zip = dir.join("aether-KK4ODA-2-test-debug.zip");
+        let upload = Upload::default();
+        let debug = Job {
+            file: zip.clone(),
+            zip: Some((
+                vec![(
+                    "README.txt".to_owned(),
+                    crate::share::Entry::Bytes(b"debug".to_vec()),
+                )],
+                0,
+            )),
+            ..job(zip.clone())
+        };
+        upload.start(debug, Box::new(Offline)).expect("started");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while upload.busy() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let progress = upload.progress();
+        assert_eq!(progress.state, "failed");
+        assert!(progress.unreached, "{progress:?}");
+        assert!(
+            progress
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("No connection to the upload script")),
+            "{progress:?}"
+        );
+        assert!(!zip.exists(), "no zip written for nowhere");
     }
 
     #[test]

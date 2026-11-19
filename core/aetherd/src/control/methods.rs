@@ -141,6 +141,11 @@ pub struct DaemonState {
     /// pass, in milliseconds: near the pass's own time, the machine was starving every
     /// thread; near nothing, the time was the modem's.
     pub loop_machine_late_ms: f64,
+    /// Passes in which a scan started the receiver again after a move, counted apart from the
+    /// slow ones: their work is the scan's, at every move.
+    pub loop_scan_restarts: u64,
+    /// The slowest of those passes, in milliseconds.
+    pub loop_scan_restart_slowest_ms: f64,
     /// Why the sound card could not be opened, when it could not. The station runs on
     /// silence until the devices are corrected, and the panel says so.
     pub audio_fault: Option<String>,
@@ -251,12 +256,17 @@ impl DaemonState {
             loop_slowest_phase: String::new(),
             loop_stalls: 0,
             loop_machine_late_ms: 0.0,
+            loop_scan_restarts: 0,
+            loop_scan_restart_slowest_ms: 0.0,
             audio_fault: None,
             config_note: None,
             devices: device_inventory,
             upload: crate::upload::Upload::default(),
             upload_http: web,
-            debug: crate::debug::DebugUploads::default(),
+            debug: crate::debug::DebugUploads::open(
+                Some(path.with_file_name(crate::debug::QUEUE_FILE)),
+                unix_ms(std::time::SystemTime::now()),
+            ),
             simulated: false,
             device_list: crate::devices::DeviceList::default(),
             devices_told: 0,
@@ -1145,6 +1155,9 @@ fn diagnostics<P: Ptt>(
                 "slowest_phase": daemon.loop_slowest_phase,
                 "stalls": daemon.loop_stalls,
                 "machine_late_ms": (daemon.loop_machine_late_ms * 10.0).round() / 10.0,
+                "scan_restarts": daemon.loop_scan_restarts,
+                "scan_restart_slowest_ms":
+                    (daemon.loop_scan_restart_slowest_ms * 10.0).round() / 10.0,
             }),
         );
         object.insert("log".into(), json!(daemon.log.recent()));

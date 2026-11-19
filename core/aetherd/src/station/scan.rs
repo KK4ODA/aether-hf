@@ -254,6 +254,10 @@ pub(super) struct Scanner {
     home: Option<u64>,
     /// Why the last scan ended, until another starts.
     ended: Option<ScanEnd>,
+    /// The receiver was started again after a move since the run loop last asked: that pass
+    /// fed it the longest tone frame of silence (rule 2), about 0.4 s of work on a 4-core mini
+    /// PC, and is not the modem falling behind (report 19 §8).
+    restarted: bool,
 }
 
 impl<P: Ptt> Station<P> {
@@ -762,10 +766,18 @@ impl<P: Ptt> Station<P> {
         if due {
             self.air.restart_front_end();
             self.air.listen_after_silence(self.readable_lead_s());
+            self.scanner.restarted = true;
             if let Some(scan) = self.scanner.scan.as_mut() {
                 scan.restart_at = None;
             }
         }
+    }
+
+    /// Whether the receiver was started again after a scan's move since the last call: the run
+    /// loop counts that pass apart from the slow ones, since the restart's work is the scan's
+    /// own (rule 2) and comes at every move.
+    pub fn take_receiver_restart(&mut self) -> bool {
+        std::mem::take(&mut self.scanner.restarted)
     }
 
     /// How much silence the receiver is given behind it on a new dial (rule 2): the longest
@@ -1161,6 +1173,28 @@ mod tests {
             [DIALS[0], DIALS[1], DIALS[2], DIALS[0]]
         );
         assert_eq!(station.scan_status()["hops"], 4);
+    }
+
+    #[test]
+    fn each_move_restarts_the_receiver_once_and_the_run_loop_is_told() {
+        // the run loop counts the pass that started the receiver again apart from the slow
+        // ones (report 19 §8): told once a move, and never without one
+        let (mut station, rig) = scanning_station();
+        listen(&mut station, 1.0);
+        assert!(!station.take_receiver_restart(), "no scan, no restart");
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        let mut restarts = 0;
+        let end = station.now() + 3.0 * (dwell(&station) + DWELL_JITTER_S) + 1.0;
+        while station.now() < end {
+            listen(&mut station, 0.1);
+            restarts += usize::from(station.take_receiver_restart());
+        }
+        let moves = rig.lock().expect("rig").set.len();
+        assert!(moves >= 3, "{moves} moves");
+        assert!(
+            (moves - 1..=moves).contains(&restarts),
+            "{moves} moves, {restarts} restarts"
+        );
     }
 
     #[test]

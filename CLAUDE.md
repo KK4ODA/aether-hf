@@ -3312,7 +3312,12 @@ ended. Found, each the author's call (§11):
   level (ADR-0104).
 - **The house's capture lost about 150 ms in session 4 in pieces under 10 ms** (recording 153 ms
   short of its wall-clock span, the loops' offset +182 ms), unreported.
-- **Every scan move costs a ~400 ms pass** that the log calls slow (`listen_after_silence`).
+- **Every scan move costs a ~400 ms pass** that the log called slow (`listen_after_silence`).
+  **Counted apart the same day** (`take_receiver_restart`, `loop.scan_restarts`), not logged.
+- **Debug mode lost the offline mobile's sessions.** An upload that never reached the script now
+  counts no try, goes again every 10 minutes until it does (`Progress.unreached`,
+  `DebugUploads::unreached`, `Http::reachable` before a zip is written), and the queue is kept in
+  `debug-waiting.json` through a restart (ADR-0050 §6).
 `rung_reading.replay_sender` now seeds a protocol 13 master from the SNR its acceptance states, in
 the control families of that moment (`_acceptance`). `c1_replay.py` judges agreement on a
 transmission's new blocks (`new_blocks_rung`) and counts copies alone apart (`copies_only`). With
