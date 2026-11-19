@@ -60,6 +60,15 @@ logging program: the display strip with the state and the lamps, and under it th
 readings. Every control and indicator carries a tooltip (`title`), and a new one
 without one is not done (`CONTRIBUTING.md` §8).
 
+The shell keeps where each window is (`tauri-plugin-window-state`) and the panel sets its size,
+one a view. Every size the panel sets goes through `ui/placement.js` (`sizeOnScreen`), which
+keeps the window inside the work area of the monitor it is on, moving it left or up and making
+it smaller only when the screen cannot hold it: a small view parked by the screen's edge grows
+into Full without running off it. The arithmetic is `placeWindow`, tested by Node's own runner
+(`node --test app/tests/placement.test.mjs`, in CI); the calls it needs are
+`core:window:allow-current-monitor`, `-outer-position`, `-outer-size` and `-set-position`, and
+under a shell without them the panel sizes the window where it stands, as before.
+
 Every reading is the modem's own (`metrics` and `frame` events, and the `spectrum`,
 `constellation` and `heard.list` methods of the control API); the panel draws and never
 computes. The spectrum and constellation are polled only while the Diagnostics tab is on

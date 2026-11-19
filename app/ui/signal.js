@@ -4,6 +4,7 @@
 // panel hears it on a BroadcastChannel — and draws nothing of its own meanwhile.
 
 import { createScopes, mountSignalBody } from "./scopes.js";
+import { sizeOnScreen } from "./placement.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -331,7 +332,8 @@ async function sizeWindow(which) {
     const least = VIEW_MIN[which];
     const size = sizeFor(which);
     await win.setMinSize(new LogicalSize(least.width, least.height));
-    await win.setSize(new LogicalSize(size.width, size.height));
+    // kept on its screen: Mini parked in a corner grows into Full towards the screen's middle
+    await sizeOnScreen(win, size, least);
   } catch {
     // an older shell without the window capability, or a refusal: the layout changes alone
   } finally {

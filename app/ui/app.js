@@ -6,6 +6,7 @@
 // gateway needs no Node toolchain to build.
 
 import { createScopes, mountSignalBody, surface, tokens } from "./scopes.js";
+import { sizeOnScreen } from "./placement.js";
 
 const endpoint = () => {
   // Served by the daemon: talk to wherever we were loaded from. Opened as a file (the Tauri
@@ -2384,6 +2385,11 @@ function renderFrames() {
 const VIEWS = ["full", "compact", "mini"];
 // how wide each small view's window is at most, in logical pixels, until the operator sizes it
 const VIEW_WIDTH = { compact: 640, mini: 520 };
+// the least each view's window may be made, in logical pixels
+const FULL_LEAST = { width: 420, height: 300 };
+const SMALL_LEAST = { width: 360, height: 120 };
+// Full's size before the operator has kept one: the window the shell opens (tauri.conf.json)
+const FULL_FIRST = { width: 1000, height: 700 };
 let currentView = "full";
 let sizeBeforeCompact = null;
 // The size the panel last gave a small view's window itself, in logical pixels: a window still
@@ -2396,9 +2402,11 @@ let sizeOnRestore = null;
 
 // In the desktop shell the window follows the view: a small view takes the size the operator
 // last gave it, or else fits the state strip, the four readings and, in Compact, the two plots;
-// coming back restores what the operator had. In a browser tab there is no window to size; the
-// layout still compacts.
-async function fitShellWindow(view) {
+// coming back restores what the operator had. Whatever the size, the window stays on its screen
+// (`sizeOnScreen`): a small view parked by the screen's right edge grows into Full leftwards.
+// `from` is the view before, null when the panel opens in this one (a launch, or a reload after
+// the daemon restarted). In a browser tab there is no window to size; the layout still compacts.
+async function fitShellWindow(view, from) {
   const tauri = window.__TAURI__;
   const getWindow = tauri?.window?.getCurrentWindow;
   const LogicalSize = tauri?.dpi?.LogicalSize ?? tauri?.window?.LogicalSize;
@@ -2407,9 +2415,15 @@ async function fitShellWindow(view) {
     const win = getWindow();
     if (view !== "full") {
       // from one small view to the other, the full view's size is the one kept; a maximized
-      // window's is the screen, so the size kept for Full is the one to come back to
+      // window's is the screen, so the size kept for Full is the one to come back to; and a
+      // panel that opens in a small view finds its window at the shell's first size, or at the
+      // small view's after a reload, neither of them Full's
       if (!sizeBeforeCompact) {
-        if (await win.isMaximized()) sizeBeforeCompact = sizeOnRestore ?? savedWindowSize();
+        if (await win.isMaximized()) {
+          sizeBeforeCompact = sizeOnRestore ?? savedWindowSize();
+        } else if (from !== "full") {
+          sizeBeforeCompact = savedWindowSize() ?? FULL_FIRST;
+        }
         if (!sizeBeforeCompact) {
           const scale = await win.scaleFactor();
           const size = await win.innerSize();
@@ -2417,12 +2431,12 @@ async function fitShellWindow(view) {
         }
       }
       sizeOnRestore = null;
-      await win.setMinSize(new LogicalSize(360, 120));
+      await win.setMinSize(new LogicalSize(SMALL_LEAST.width, SMALL_LEAST.height));
       // the size the operator gave this view, kept from one launch to the next; otherwise the
       // fit to the page
       const kept = savedViewSize(view);
       if (kept) {
-        await win.setSize(new LogicalSize(kept.width, kept.height));
+        await sizeOnScreen(win, kept, SMALL_LEAST);
         fittedSize = null;
         return;
       }
@@ -2438,15 +2452,18 @@ async function fitShellWindow(view) {
         document.body.classList.remove("fitting");
       }
       const width = Math.min(sizeBeforeCompact.width, VIEW_WIDTH[view]);
+      // known before the window changes, and then as made: smaller on a screen too small for
+      // the fit, and the panel's own size still
       fittedSize = { width, height };
-      await win.setSize(new LogicalSize(width, height));
-    } else if (sizeBeforeCompact) {
+      fittedSize = await sizeOnScreen(win, fittedSize, SMALL_LEAST);
+    } else if (from && from !== "full") {
+      const back = sizeBeforeCompact ?? savedWindowSize() ?? FULL_FIRST;
       if (await win.isMaximized()) {
         // the window stays as the operator made it; Full's size waits for its restore
-        sizeOnRestore = sizeBeforeCompact;
+        sizeOnRestore = back;
       } else {
-        await win.setMinSize(new LogicalSize(420, 300));
-        await win.setSize(new LogicalSize(sizeBeforeCompact.width, sizeBeforeCompact.height));
+        await win.setMinSize(new LogicalSize(FULL_LEAST.width, FULL_LEAST.height));
+        await sizeOnScreen(win, back, FULL_LEAST);
       }
       sizeBeforeCompact = null;
     }
@@ -2473,8 +2490,8 @@ function followMaximize() {
       } else if (sizeOnRestore && currentView === "full") {
         const size = sizeOnRestore;
         sizeOnRestore = null;
-        await win.setMinSize(new LogicalSize(420, 300));
-        await win.setSize(new LogicalSize(size.width, size.height));
+        await win.setMinSize(new LogicalSize(FULL_LEAST.width, FULL_LEAST.height));
+        await sizeOnScreen(win, size, FULL_LEAST);
       }
     } catch {
       // an older shell without the panel's window capability: the view stays as chosen
@@ -2583,7 +2600,7 @@ async function openWindow() {
   try {
     const win = getWindow();
     if (await win.isMaximized()) return;
-    await win.setSize(new LogicalSize(size.width, size.height));
+    await sizeOnScreen(win, size, FULL_LEAST);
   } catch {
     // an older shell without the panel's window capability, or a refusal: keep its size
   }
@@ -2593,7 +2610,8 @@ async function openWindow() {
 // the scaling and the banners showing, so at the first open the panel sizes the window's height
 // itself: the History card's two plots end where the window does, and the counters are a scroll
 // below. Once per launch (a restart's reload keeps the operator's size), never in Compact or
-// maximised, and never taller than the screen.
+// maximised, and never taller than the screen; a window the shell put back where a screen no
+// longer reaches is brought onto the one it is nearest first.
 async function fitWindowToCharts() {
   const tauri = window.__TAURI__;
   const getWindow = tauri?.window?.getCurrentWindow;
@@ -2608,6 +2626,7 @@ async function fitWindowToCharts() {
   try {
     const win = getWindow();
     if (await win.isMaximized()) return;
+    await sizeOnScreen(win, null, FULL_LEAST);
     const scale = await win.scaleFactor();
     // two passes: the History card stretches with the window, so the first resize can leave
     // it a little long or short of where it settles
@@ -2624,7 +2643,7 @@ async function fitWindowToCharts() {
       const chrome = Math.max(0, window.outerHeight - window.innerHeight);
       const room = (window.screen?.availHeight || 10000) - chrome;
       const height = Math.max(300, Math.min(room, size.height / scale + diff));
-      await win.setSize(new LogicalSize(size.width / scale, height));
+      await sizeOnScreen(win, { width: size.width / scale, height }, FULL_LEAST);
     }
   } catch {
     // an older shell without the panel's window capability, or a refusal: keep its size
@@ -2649,8 +2668,10 @@ function wireTheme() {
   show();
 }
 
-function setView(view) {
+// `opening`: the panel opens in this view, so there is no view before it
+function setView(view, opening = false) {
   if (!VIEWS.includes(view)) view = "full";
+  const from = opening ? null : currentView;
   currentView = view;
   document.body.classList.toggle("compact", view !== "full");
   document.body.classList.toggle("mini", view === "mini");
@@ -2660,7 +2681,7 @@ function setView(view) {
   if (view !== "full") selectTab($("tab-status"));
   // Compact has no captions, so nothing to hold the axes' panel open over
   closeAxes();
-  fitShellWindow(view);
+  fitShellWindow(view, from);
   try {
     localStorage.setItem("aether.view", view);
     localStorage.removeItem("aether.compact");
@@ -6684,7 +6705,7 @@ function wire() {
   } catch {
     // nothing kept
   }
-  if (view !== "full") setView(view);
+  if (view !== "full") setView(view, true);
   window.addEventListener("resize", rememberWindowSize);
   window.addEventListener("resize", followMaximize);
   followMaximize();

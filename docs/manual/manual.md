@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.11.0 |
+| **Version** | 1.11.1 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.166 |
 | **Licence** | CC BY 4.0 |
@@ -320,6 +320,9 @@ corner of the screen.
   shows.
 - **Full** brings the window back to its size. Maximizing the window in Compact or Mini switches
   it to Full, and so does a banner's button that opens another tab, such as **Open Setup**.
+- The window stays on its screen when it changes view. Compact parked by the screen's right edge
+  or the taskbar grows into Full to the left or upwards, and a size the screen cannot hold is cut
+  to fit.
 - Aether remembers the view, each view's size and where the window is on the screen, for the next
   start ([Arranging the windows](#arranging-the-windows)).
 
@@ -367,7 +370,9 @@ single screen:
 - Aether in **Compact** at the top right. Stretch it to the width you want.
 - The RadioPost client under Aether, as wide as Aether.
 
-A window left on a screen that is no longer connected opens where the system puts it.
+A window left on a screen that is no longer connected opens where the system puts it. A window
+that would open partly off its screen, after a change of screens or of the taskbar, moves back
+onto it, and is made smaller only if the screen cannot hold it.
 
 ### Tooltips and the chime
 
@@ -1602,3 +1607,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.10.0 | 2026-11-18 | Setup step 2's **Interface** is **Preset** and its **Keying** is **Radio control**, with *Host program* in place of *Host*, and a new **Dial** line says what reads the dial and tunes the radio: a host program that keys the radio tunes it too. |
 | 1.10.1 | 2026-11-19 | [Finding an Aether gateway](#finding-an-aether-gateway): Aether gateways are listed under Winlink's service code `AETHER`; how to see them in Winlink Express and Pat, and how a gateway publishes under it. |
 | 1.11.0 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): VarAC's **TUNE** button plays Aether's tuner tone, at Aether's transmit level. |
+| 1.11.1 | 2026-11-19 | [Full, Compact and Mini](#full-compact-and-mini) and [Arranging the windows](#arranging-the-windows): the window stays on its screen. Going from Compact or Mini to Full, it grows to the left or upwards where the screen's edge or the taskbar is in the way, and at start a window that would run off its screen moves back onto it. |

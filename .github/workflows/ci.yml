@@ -224,3 +224,8 @@ jobs:
       - name: The panel parses
         shell: bash
         run: for f in app/ui/*.js; do node --input-type=module --check < "$f" || exit 1; done
+
+      # where the panel puts its windows (app/ui/placement.js): the sums that keep a window on
+      # its screen, and the shell's calls against a stand-in window
+      - name: The panel's window placement
+        run: node --test app/tests/placement.test.mjs
