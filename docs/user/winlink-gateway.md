@@ -212,7 +212,7 @@ cycling is Trimode scanning its one channel, and it is normal: Aether answers a 
 `LISTEN` is on, tells Trimode `PENDING` the moment it takes the call (Trimode then stops
 scanning, as it does for VARA), then `PTT ON` as it keys its answer, and `CONNECTED` after
 that — 1.5 s after the `PENDING` at the least if the call came at the end of a listening window,
-once Trimode's half second of deafness is over (ADR-0051, ADR-0096, ADR-0100, ADR-0103). Turning Trimode's scanning off does not stop the cycling: it runs on one channel
+once Trimode's half second of deafness is over (ADR-0051, ADR-0096, ADR-0100, ADR-0103). A call taken in that half second is told once Trimode has been listening again 0.3 s: Trimode ignores a `PENDING` or `CONNECTED` it reads just after its own `LISTEN ON`. Turning Trimode's scanning off does not stop the cycling: it runs on one channel
 too. The Log tab says *LISTEN turned on and off … the program scans* once
 a minute. The header's chip keeps reading *host program · listening* through that rhythm; it
 drops the word only when `LISTEN` has stayed off for ten seconds. `PUBLIC ON` is a VARA command about the

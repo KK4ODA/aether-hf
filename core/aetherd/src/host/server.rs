@@ -109,6 +109,14 @@ const CLOSING_ID_WAIT: Duration = Duration::from_secs(150);
 /// and holds listening, so the `CONNECTED` goes this long after the `PENDING`.
 const PENDING_SETTLE: Duration = Duration::from_millis(1500);
 
+/// How long after a program's `LISTEN ON` it is told of a call held for it (`PENDING`, then
+/// `CONNECTED`). RMS Trimode marks itself listening only once its `LISTEN ON` has been answered,
+/// on a thread of its own, and reads what follows the `OK` without waiting for it: a held call's
+/// `PENDING` and `CONNECTED` written 1 ms after the `OK` were "ignored while LISTEN=OFF" and the
+/// session was never served (the Trimode bench, 2026-11-19 16:28:45), where the same lines 241 ms
+/// after it were taken. Its listening window lasts about three seconds.
+const LISTEN_ON_SETTLE: Duration = Duration::from_millis(300);
+
 /// The longest a called session's `CONNECTED` waits for the keying of its acceptance to be told
 /// as `PTT ON` (ADR-0103). RMS Trimode judges a link hung when no PTT has come for some minutes
 /// at the moment it hears `CONNECTED`, and the acceptance's keying, the station's last
@@ -335,6 +343,13 @@ impl Scan {
         let open = at.saturating_duration_since(since);
         open + guard >= window && open < window * 2
     }
+}
+
+/// Whether the program has been listening long enough to take what is said of a call: `LISTEN`
+/// on, and on for `LISTEN_ON_SETTLE` since it last came on.
+fn listening_settled(host: &HostState, on_since: Option<Instant>, now: Instant) -> bool {
+    host.listening
+        && on_since.is_none_or(|at| now.saturating_duration_since(at) >= LISTEN_ON_SETTLE)
 }
 
 fn bind_pair(address: &str) -> Result<(TcpListener, TcpListener), HostError> {
@@ -755,6 +770,12 @@ fn serve_commands(
     let mut held_for_listen = false;
     // the program was told PTT ON and has not been told PTT OFF
     let mut ptt_told = false;
+    // the PENDING of a call taken while the program had LISTEN off went the moment it listened
+    // again, and it has not turned LISTEN off since: it heard it, so the CONNECTED does not
+    // say it a second time
+    let mut pending_on_listen = false;
+    // when the program last turned LISTEN on: it is told of a held call `LISTEN_ON_SETTLE` after
+    let mut listen_on_at: Option<Instant> = None;
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
         if trace {
@@ -851,6 +872,14 @@ fn serve_commands(
                         buffer_said = Instant::now();
                     }
                 }
+                // When LISTEN last went on, and a LISTEN OFF ends the PENDING said as it came
+                // back (`pending_on_listen`)
+                if host.listening && !was_listening {
+                    listen_on_at = Some(Instant::now());
+                }
+                if !host.listening {
+                    pending_on_listen = false;
+                }
                 let own = connected_to.is_some() || calling;
                 match apply(&outcome.action, own, handle, &mut host, &mut writer, &say) {
                     Applied::Done => {}
@@ -874,7 +903,26 @@ fn serve_commands(
         // already deaf.
         // It also waits for its acceptance's PTT ON to be told, or `ACCEPTANCE_KEY_WAIT` if the
         // acceptance never keys (ADR-0103).
-        let listening_again = host.listening && !scan.late(Instant::now());
+        // A call taken while the program had LISTEN off: its PENDING once the program has been
+        // listening `LISTEN_ON_SETTLE`, before anything more of the call's acceptance. It holds
+        // its scan for it, and hears the acceptance's keying after it. Said with the CONNECTED
+        // instead, it came after the keying of a station the host keys, which the program hears
+        // whether it listens or not: Trimode heard PTT ON, PENDING, CONNECTED, PTT OFF (the
+        // Trimode bench, 2026-11-19 16:14:23; ADR-0096, ADR-0103 §5).
+        let heard_listening = listening_settled(&host, listen_on_at, Instant::now());
+        if heard_listening && pending_connected.is_some() && !pending_said {
+            if trace {
+                eprintln!("host (PENDING now: the program listens again)");
+            }
+            if !say(&mut writer, &Notification::Pending.line()) {
+                return;
+            }
+            pending_said = true;
+            pending_at = Some(Instant::now());
+            pending_on_listen = true;
+            untold = false;
+        }
+        let listening_again = heard_listening && !scan.late(Instant::now());
         let settled = pending_at.is_some_and(|at| at.elapsed() >= PENDING_SETTLE);
         let unkeyed = acceptance
             .as_ref()
@@ -911,10 +959,14 @@ fn serve_commands(
                 );
             }
             // PENDING again with a CONNECTED held for LISTEN, or the first time if the program
-            // had LISTEN off when the call was taken: either way before the acceptance's keying
-            if (!pending_said || held) && !say(&mut writer, &Notification::Pending.line()) {
+            // had LISTEN off when the call was taken: either way before the acceptance's keying.
+            // Not again if it went as the program listened again and LISTEN has stayed on.
+            if (!pending_said || (held && !pending_on_listen))
+                && !say(&mut writer, &Notification::Pending.line())
+            {
                 return;
             }
+            pending_on_listen = false;
             // That keying, told now if the program had LISTEN off while it went: a program told
             // CONNECTED with no PTT for minutes takes the link for hung, whichever moment the call
             // landed in its scan (ADR-0103 §2.3). It has just said LISTEN ON and heard PENDING, so
@@ -1035,13 +1087,17 @@ fn serve_commands(
                         {
                             return;
                         }
-                        if host.listening && !pending_said {
+                        let heard_listening =
+                            listening_settled(&host, listen_on_at, Instant::now());
+                        if heard_listening && !pending_said {
                             if !say(&mut writer, &Notification::Pending.line()) {
                                 return;
                             }
                             pending_said = true;
                             pending_at = Some(Instant::now());
                         }
+                        // held for LISTEN: off, or at the end of a window; a program that has
+                        // only just turned it on hears the PENDING `LISTEN_ON_SETTLE` after
                         if !host.listening || scan.late(Instant::now()) {
                             if trace {
                                 eprintln!("host (held CONNECTED until LISTEN on)");
@@ -1096,6 +1152,7 @@ fn serve_commands(
                         }
                         pending_said = false;
                         pending_at = None;
+                        pending_on_listen = false;
                         acceptance = None;
                         held_for_listen = false;
                         // the closing identifier of a call that came to nothing is not the
@@ -2237,6 +2294,8 @@ mod tests {
         assert_eq!(client.expect(|l| l == "OK"), "OK");
         client.send("LISTEN ON");
         assert_eq!(client.expect(|l| l == "OK"), "OK");
+        // listening a while, so the PENDING goes as the call is taken
+        std::thread::sleep(LISTEN_ON_SETTLE);
         modem.publish(
             "state",
             json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
@@ -2301,6 +2360,92 @@ mod tests {
         assert_eq!(said(&mut client), "CONNECTED KK4XYZ W4ODA 2300");
         modem.publish("ptt", json!({"on": false, "host_keys": false}));
         assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT OFF");
+        drop(modem);
+    }
+
+    #[test]
+    fn a_program_listening_again_before_the_acceptance_keys_hears_pending_first() {
+        // The Trimode bench, 2026-11-19 16:14:23: the call taken 58 ms after Trimode's LISTEN
+        // OFF, its LISTEN ON half a second later, and the acceptance keyed after that. The
+        // station is keyed by the host program, which hears every keying: it heard PTT ON,
+        // PENDING, CONNECTED, PTT OFF — a keying for a call it had not been told of. PENDING goes
+        // the moment the program listens again, and once only.
+        for host_keys in [true, false] {
+            let (modem, server) = Modem::start(|_, _| json!({}));
+            let mut client = Client::connect(&server);
+            client.send("MYCALL W4ODA");
+            assert_eq!(client.expect(|l| l == "OK"), "OK");
+            client.send("LISTEN ON");
+            assert_eq!(client.expect(|l| l == "OK"), "OK");
+            client.send("LISTEN OFF");
+            assert_eq!(client.expect(|l| l == "OK"), "OK");
+            modem.publish(
+                "state",
+                json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+            );
+            std::thread::sleep(Duration::from_millis(200));
+            client.send("VERSION");
+            let said = |client: &mut Client| {
+                client.expect(|l| {
+                    l == "PENDING"
+                        || l.starts_with("PTT")
+                        || l.starts_with("CONNECTED")
+                        || l.starts_with("VERSION")
+                })
+            };
+            assert!(said(&mut client).starts_with("VERSION"), "{host_keys}");
+            client.send("LISTEN ON");
+            assert_eq!(client.expect(|l| l == "OK"), "OK");
+            assert_eq!(said(&mut client), "PENDING", "{host_keys}");
+            modem.publish("ptt", json!({"on": true, "host_keys": host_keys}));
+            assert_eq!(said(&mut client), "PTT ON", "{host_keys}");
+            assert_eq!(
+                said(&mut client),
+                "CONNECTED KK4XYZ W4ODA 2300",
+                "{host_keys}"
+            );
+            modem.publish("ptt", json!({"on": false, "host_keys": host_keys}));
+            assert_eq!(said(&mut client), "PTT OFF", "{host_keys}");
+            drop(modem);
+        }
+    }
+
+    #[test]
+    fn a_held_call_is_told_a_moment_after_listen_on() {
+        // The Trimode bench, 2026-11-19 16:28:45: a call taken in Trimode's deaf half second,
+        // its acceptance keyed and told (the host keys the radio), then Trimode's LISTEN ON — and
+        // the held PENDING and CONNECTED written 1 ms after the OK were "ignored while
+        // LISTEN=OFF": Trimode marks itself listening only once the OK is in. They go
+        // `LISTEN_ON_SETTLE` after it.
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": true}));
+        let said = |client: &mut Client| {
+            client.expect(|l| l == "PENDING" || l.starts_with("PTT") || l.starts_with("CONNECTED"))
+        };
+        assert_eq!(said(&mut client), "PTT ON");
+        modem.publish("ptt", json!({"on": false, "host_keys": true}));
+        assert_eq!(said(&mut client), "PTT OFF");
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        let listening = Instant::now();
+        assert_eq!(said(&mut client), "PENDING");
+        assert!(
+            listening.elapsed() + Duration::from_millis(50) >= LISTEN_ON_SETTLE,
+            "{:?}",
+            listening.elapsed()
+        );
+        assert_eq!(said(&mut client), "CONNECTED KK4XYZ W4ODA 2300");
         drop(modem);
     }
 
