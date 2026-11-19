@@ -106,7 +106,9 @@ const CLOSING_ID_WAIT: Duration = Duration::from_secs(150);
 /// `LISTEN` at all: KK4ODA-1's Trimode, 2026-11-06, logged its scan's `LISTEN=False` and
 /// `LISTEN=True` "while … Pending=True" and sent neither, and the `CONNECTED` held for a
 /// `LISTEN ON` waited two minutes for one. Its scan finishes the deaf step it is in (half a second)
-/// and holds listening, so the `CONNECTED` goes this long after the `PENDING`.
+/// and holds listening, so the `CONNECTED` goes this long after the `PENDING`. Unless its
+/// `LISTEN OFF` crossed the `PENDING`: then it holds with `LISTEN` off and ignores the `CONNECTED`,
+/// and the adapter says `CANCELPENDING` and tells the call again once it listens (ADR-0100 §4).
 const PENDING_SETTLE: Duration = Duration::from_millis(1500);
 
 /// How long after a program's `LISTEN ON` it is told of a call held for it (`PENDING`, then
@@ -879,6 +881,35 @@ fn serve_commands(
                 }
                 if !host.listening {
                     pending_on_listen = false;
+                }
+                // A LISTEN OFF after the PENDING of a call whose CONNECTED is not yet said: the
+                // program's scan had decided its deaf step before the PENDING arrived. Trimode
+                // then holds its scan for the call with LISTEN off, says no LISTEN ON while the
+                // call is pending, and ignores the CONNECTED ("Ignoring CONNECTED while
+                // LISTEN=FALSE", the Trimode bench, 2026-11-19 19:59:08; the session it was
+                // never told of lasted until the caller left). Told CANCELPENDING it restarts its
+                // scan and listens again within two seconds (KK4ODA-1, 2026-11-06), and the call
+                // is told afresh: PENDING, then CONNECTED (ADR-0100 §4).
+                if was_listening && !host.listening && pending_said && pending_connected.is_some() {
+                    if trace {
+                        eprintln!(
+                            "host (CANCELPENDING: LISTEN OFF crossed the PENDING; the call is \
+                             told again once the program listens)"
+                        );
+                    }
+                    note(
+                        notes,
+                        false,
+                        "the program turned LISTEN off after the call's PENDING: CANCELPENDING, \
+                         and the call is told again once it listens",
+                    );
+                    if !say(&mut writer, &Notification::CancelPending.line()) {
+                        return;
+                    }
+                    pending_said = false;
+                    pending_at = None;
+                    held_for_listen = true;
+                    untold = true;
                 }
                 let own = connected_to.is_some() || calling;
                 match apply(&outcome.action, own, handle, &mut host, &mut writer, &say) {
@@ -2184,13 +2215,15 @@ mod tests {
     }
 
     #[test]
-    fn a_program_holding_its_scan_for_pending_hears_connected_without_listening_again() {
-        // KK4ODA-1, 2026-11-06 22:41:36: a call taken in the last quarter of Trimode's window.
-        // PENDING went at once and the CONNECTED was held for the next LISTEN ON; Trimode's
-        // LISTEN OFF crossed the PENDING, and holding its scan for the pending call ("Request
-        // LISTEN=True while … Pending=True") it sent no LISTEN ON. Nothing more was said for two
-        // minutes, until the caller gave up and the call was cancelled. The CONNECTED now goes
-        // `PENDING_SETTLE` after the PENDING, LISTEN or no (ADR-0100).
+    fn a_listen_off_crossing_the_pending_cancels_it_and_the_call_is_told_again() {
+        // KK4ODA-1, 2026-11-06 22:41:36, and the Trimode bench, 2026-11-19 19:59:06: a call taken
+        // in the last quarter of Trimode's window. PENDING went at once and Trimode's LISTEN OFF,
+        // decided before it, crossed it; holding its scan for the pending call ("Request
+        // LISTEN=True while … Pending=True") it said no LISTEN ON. ADR-0100 then said CONNECTED
+        // 1.5 s after the PENDING, and Trimode ignored it: "Ignore PENDING notification while
+        // LISTEN=OFF", "Ignoring CONNECTED while LISTEN=FALSE". Now the crossing LISTEN OFF draws
+        // CANCELPENDING — told it, Trimode restarts its scan and listens again (2026-11-06) — and
+        // the call is told afresh once it listens: PENDING, then CONNECTED (ADR-0100 §4).
         let (modem, server) = Modem::start(|_, _| json!({}));
         let mut client = Client::connect(&server);
         client.send("MYCALL W4ODA");
@@ -2202,38 +2235,33 @@ mod tests {
             json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
         );
         modem.publish("ptt", json!({"on": true, "host_keys": false}));
-        assert_eq!(
-            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
-            "PENDING"
-        );
-        let pending = Instant::now();
-        // its scan's LISTEN OFF, sent as the PENDING arrived, and then nothing
+        let said = |client: &mut Client| {
+            client.expect(|l| {
+                l == "PENDING"
+                    || l == "CANCELPENDING"
+                    || l.starts_with("CONNECTED")
+                    || l.starts_with("VERSION")
+            })
+        };
+        assert_eq!(said(&mut client), "PENDING");
+        // its scan's LISTEN OFF, sent as the PENDING arrived
         client.send("LISTEN OFF");
         assert_eq!(client.expect(|l| l == "OK"), "OK");
-        // not at once: a VERSION asked now is answered first
+        assert_eq!(said(&mut client), "CANCELPENDING");
+        // and no CONNECTED into its deafness, however long it holds
+        std::thread::sleep(PENDING_SETTLE + Duration::from_millis(500));
         client.send("VERSION");
-        let next = client.expect(|l| l.starts_with("VERSION") || l.starts_with("CONNECTED"));
-        assert!(next.starts_with("VERSION"), "{next}");
-        assert_eq!(
-            client.expect(|l| l == "PENDING" || l.starts_with("CONNECTED")),
-            "PENDING",
-            "said again with the CONNECTED"
-        );
-        assert_eq!(
-            client.expect(|l| l.starts_with("CONNECTED")),
-            "CONNECTED KK4XYZ W4ODA 2300"
-        );
-        let waited = pending.elapsed();
-        assert!(
-            waited + Duration::from_millis(100) >= PENDING_SETTLE
-                && waited < Duration::from_secs(4),
-            "{waited:?}"
-        );
+        assert!(said(&mut client).starts_with("VERSION"));
+        // told CANCELPENDING, it restarts its scan: the call is told again once it listens
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        let listening = Instant::now();
+        assert_eq!(said(&mut client), "PENDING");
+        assert!(listening.elapsed() + Duration::from_millis(50) >= LISTEN_ON_SETTLE);
+        assert_eq!(said(&mut client), "CONNECTED KK4XYZ W4ODA 2300");
         let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
         assert!(
-            notes
-                .iter()
-                .any(|n| n.contains("holds its scan for the PENDING")),
+            notes.iter().any(|n| n.contains("CANCELPENDING")),
             "{notes:?}"
         );
         drop(modem);

@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.14.2 |
+| **Version** | 1.14.3 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.167 |
 | **Licence** | CC BY 4.0 |
@@ -1263,7 +1263,8 @@ is listening, and transmits only where automatic control of data is allowed.
 RMS Trimode scans: every few seconds it stops listening for half a second, as it does with VARA.
 Aether tells it of a call only while it listens. A call answered in that half second is told once
 Trimode has been listening again for a moment: Trimode ignores a call it is told of the instant it
-starts listening.
+starts listening. If Trimode stops listening just as it is told of a call, Aether takes the news
+back and tells it again a second or two later, once it listens.
 
 RMS Trimode starts its modem itself, and closes what it started to restart it. When Trimode starts
 Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no longer closes
@@ -1685,3 +1686,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.14.0 | 2026-11-19 | [RMS Packet](#rms-packet): Winlink's VHF/UHF gateway works with Aether on the bench, through its *Vara FM* setting or its *KISS ACKMODE* packet channel, and waits for Aether FM for the air. |
 | 1.14.1 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): a call through a digipeater is refused; Aether had called the station directly. |
 | 1.14.2 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): a call answered while RMS Trimode is between scan steps is told to Trimode once it has been listening again for a moment, never the instant it starts listening, which it ignored. |
+| 1.14.3 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): if RMS Trimode stops listening just as it is told of a call, Aether takes the news back and tells it again once it listens; Trimode had ignored the call. |

@@ -370,7 +370,10 @@ class Host:
     and sends no ``LISTEN`` until ``CONNECTED`` or ``CANCELPENDING`` (KK4ODA-1, 2026-11-06,
     ADR-0100); a ``PENDING`` left without either for 20 s is a fault. A ``PENDING`` that lands in
     the last quarter of its window still meets the ``LISTEN OFF`` its scan had decided, as the
-    gateway's crossed it that night. Any program told ``CONNECTED`` for a call it heard the
+    gateway's crossed it that night; it then holds with ``LISTEN`` off, ignores a ``PENDING``, and
+    a ``CONNECTED`` is a fault ("Ignoring CONNECTED while LISTEN=FALSE", the Trimode bench,
+    2026-11-19), until ``CANCELPENDING`` restarts its scan, ``LISTEN ON`` 1.5 s later
+    (ADR-0100 §4). Any program told ``CONNECTED`` for a call it heard the
     ``PENDING`` of, with no ``PTT ON`` between them, is a fault: Trimode judges a link hung when it
     hears ``CONNECTED`` with no PTT for minutes, and the acceptance's keying had never been told
     (KK4ODA-1, 2026-11-07, ADR-0103). ``varac`` opens as VarAC 15.0.18 did on the bench (``CHAT ON``, its
@@ -402,6 +405,10 @@ class Host:
         # second after its LISTEN OFF, listening again after it even while a held scan keeps it
         # from saying LISTEN ON
         self.deaf = False
+        # holding its scan for a pending call with LISTEN off, its LISTEN OFF having crossed the
+        # PENDING: deaf until CANCELPENDING restarts its scan (`restart_at`, air time)
+        self.held_deaf = False
+        self.restart_at: float | None = None
         self.pending_at: float | None = None
         # when the PENDING arrived on the wall clock, which is the one the adapter judges the end
         # of a window by: it times the program's LISTEN lines on its own clock
@@ -507,7 +514,9 @@ class Host:
                 with self.lock:
                     self.lines.append(line)
                 if line == "PENDING":
-                    if self.pending_at is None:
+                    if self.held_deaf and self.kind == "trimode":
+                        pass  # "Ignore PENDING notification while LISTEN=OFF"
+                    elif self.pending_at is None:
                         self.pending_at = self.run.air_s()
                         self.pending_wall = time.monotonic()
                         self.keyed_since_pending = False
@@ -516,6 +525,9 @@ class Host:
                 elif line == "CANCELPENDING":
                     self.pending_at = None
                     self.pending_wall = None
+                    if self.held_deaf:
+                        # "Pending Vara connection cancelled. Restarting scanner"
+                        self.restart_at = self.run.air_s() + 1.5
                 elif line.startswith("BUFFER"):
                     with self.lock, contextlib.suppress(ValueError):
                         self.buffer_count = int(line.split()[1])
@@ -532,6 +544,11 @@ class Host:
                     if self.deaf and self.kind == "trimode":
                         self.problems.append(
                             f"{self.station.who}: CONNECTED while deaf at {self.run.air_s():.1f} s"
+                        )
+                    elif self.held_deaf and self.kind == "trimode":
+                        self.problems.append(
+                            f"{self.station.who}: CONNECTED at {self.run.air_s():.1f} s while it "
+                            "held its scan with LISTEN off"
                         )
                     if self.pending_at is not None and not self.keyed_since_pending:
                         self.problems.append(
@@ -617,6 +634,12 @@ class Host:
             began = self.run.air_s()
             began_wall = time.monotonic()
             while not self.closed and self.run.air_s() < began + dwell:
+                if self.restart_at is not None and self.run.air_s() >= self.restart_at:
+                    # its scan restarted after CANCELPENDING: listening, a fresh window
+                    self.restart_at = None
+                    self.held_deaf = False
+                    self.send("LISTEN ON")
+                    began, began_wall = self.run.air_s(), time.monotonic()
                 time.sleep(POLL_S)
             dwell = 3.0
             # the step was decided before a PENDING that came in the window's last quarter
@@ -637,6 +660,9 @@ class Host:
             self.deaf = False
             if not self.closed and not self._holding():
                 self.send("LISTEN ON")
+            elif crossed:
+                # held for the call with its LISTEN off: deaf until CANCELPENDING
+                self.held_deaf = True
 
     def heard(self, prefix: str) -> int:
         with self.lock:

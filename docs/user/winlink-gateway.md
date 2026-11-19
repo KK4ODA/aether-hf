@@ -227,7 +227,7 @@ cycling is Trimode scanning its one channel, and it is normal: Aether answers a 
 `LISTEN` is on, tells Trimode `PENDING` the moment it takes the call (Trimode then stops
 scanning, as it does for VARA), then `PTT ON` as it keys its answer, and `CONNECTED` after
 that — 1.5 s after the `PENDING` at the least if the call came at the end of a listening window,
-once Trimode's half second of deafness is over (ADR-0051, ADR-0096, ADR-0100, ADR-0103). A call taken in that half second is told once Trimode has been listening again 0.3 s: Trimode ignores a `PENDING` or `CONNECTED` it reads just after its own `LISTEN ON`. Turning Trimode's scanning off does not stop the cycling: it runs on one channel
+once Trimode's half second of deafness is over (ADR-0051, ADR-0096, ADR-0100, ADR-0103). A call taken in that half second is told once Trimode has been listening again 0.3 s: Trimode ignores a `PENDING` or `CONNECTED` it reads just after its own `LISTEN ON`. If Trimode's `LISTEN OFF` crosses the `PENDING`, Aether says `CANCELPENDING` (Trimode restarts its scan) and tells the call again a second or two later. Turning Trimode's scanning off does not stop the cycling: it runs on one channel
 too. The Log tab says *LISTEN turned on and off … the program scans* once
 a minute. The header's chip keeps reading *host program · listening* through that rhythm; it
 drops the word only when `LISTEN` has stayed off for ten seconds. `PUBLIC ON` is a VARA command about the
@@ -333,9 +333,9 @@ gateway being open to the public, nothing to do with the service code; Aether an
 **Retested on the bench on 2026-11-19** (Trimode 1.4.4.0 with RMS Relay in radio-only mode, two
 Aether stations over the simulated channel, Trimode keying the gateway): messages with attachments
 both ways at 2300 Hz (15 and 0 dB) and 500 Hz (15 and −3 dB), collecting with an empty outbox,
-probes, a call after 17 minutes with nothing keyed, and 37 calls in all. Two races in what Trimode
+probes, a call after 17 minutes with nothing keyed, and 37 calls in all. Three races in what Trimode
 is told of a call were found and fixed there (`PENDING` and `CONNECTED` too soon after its
-`LISTEN ON`). What the bench cannot show: the radio's own keying, a fading path and the CMS.
+`LISTEN ON`, and a `LISTEN OFF` crossing a `PENDING`). What the bench cannot show: the radio's own keying, a fading path and the CMS.
 
 The bench's notes on Trimode, and every command it and Winlink Express send, are in
 [host-interfaces.md §7](../spec/host-interfaces.md#7-verification-status); the headless Linux

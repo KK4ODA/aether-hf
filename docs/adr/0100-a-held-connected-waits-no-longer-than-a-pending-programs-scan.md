@@ -1,6 +1,6 @@
 # ADR-0100: A held CONNECTED waits no longer than a pending program's scan
 
-**Status:** accepted, 2026-11-06, a fix to ADR-0096 §2.1 and ADR-0051. Host adapter only
+**Status:** accepted, 2026-11-06, a fix to ADR-0096 §2.1 and ADR-0051; amended 2026-11-19 (§4). Host adapter only
 (`core/aetherd/src/host/server.rs`) and the harness's Trimode (`tools/session_matrix.py`): **no
 wire change, no model change, no configuration key.**
 
@@ -81,3 +81,39 @@ and released every held `CONNECTED`: the stand-in could not find this.
   already releases.
 * Documents: `host-interfaces.md` (`PENDING`), `winlink-gateway.md` (Trimode's cycling, the
   troubleshooting row).
+
+## 4. Amendment, 2026-11-19: the premise did not hold
+
+§3 named the place to look again: a Trimode that logs `Ignoring CONNECTED while LISTEN=FALSE` after
+a `PENDING`. The RMS Trimode bench (scratch Trimode 1.4.4.0, Aether keying the gateway, Pat as the
+client) did, at 19:59:06–08 UTC:
+
+| Time | What happened |
+|---|---|
+| 19:59:03.918 | Trimode: `LISTEN ON` |
+| 19:59:06.963 | The call is taken 3.05 s into the window (its last quarter): `PENDING` at once, the `CONNECTED` held. Trimode: `Connect pending received -- Holding scanner for 120 seconds` |
+| 19:59:07.236 | Trimode's `LISTEN OFF`, decided before the `PENDING`, reaches the adapter; then `Request LISTEN=False …` and `Request LISTEN=True while … Pending=True`, and no `LISTEN ON` is sent |
+| 19:59:08.494 | `PENDING_SETTLE` after the `PENDING`: `PENDING`, `CONNECTED`. Trimode: `Ignore PENDING notification while LISTEN=OFF`, `Ignoring CONNECTED while LISTEN=FALSE` |
+| 20:02:07.616 | Trimode's scan resumes with `LISTEN ON`; the session, up on the air all along, is never its own. The caller waited until its own timeout |
+
+So a Trimode holding its scan for a pending call does not take a `CONNECTED` "whatever it last
+said about `LISTEN`": its `LISTEN OFF` crossing the `PENDING` leaves it deaf until its hold ends
+(three minutes here), and 2026-11-06's night was this, not a wait for nothing. The same night's log
+shows the way out: told `CANCELPENDING`, Trimode logged *Pending Vara connection cancelled.
+Restarting scanner* and said `LISTEN ON` 1.5 s later.
+
+**Decision.** A `LISTEN OFF` after a `PENDING` the program heard, before its `CONNECTED`, draws
+`CANCELPENDING` at once. The call is then held as one taken while the program had `LISTEN` off:
+its `PENDING` once the program has listened again `LISTEN_ON_SETTLE` (0.3 s), then `CONNECTED`, with
+the acceptance's keying told in between if it was not. §2.1 stands for a program that holds its
+scan without that `LISTEN OFF`: the `CONNECTED` goes `PENDING_SETTLE` after the `PENDING`, as on the
+bench at 16:13:44 the same day.
+
+**Consequences.** A call whose `PENDING` meets a crossing `LISTEN OFF` is connected about two
+seconds later instead of never. The harness's Trimode now holds with `LISTEN` off after a crossed
+`LISTEN OFF`, ignores a `PENDING`, takes a `CONNECTED` then as a fault, and restarts its scan 1.5 s
+after `CANCELPENDING`. Test:
+`a_listen_off_crossing_the_pending_cancels_it_and_the_call_is_told_again` in place of
+`a_program_holding_its_scan_for_pending_hears_connected_without_listening_again`. Not taken:
+holding a call's `PENDING` until the next window when it is taken late in one. On a gateway that
+scans several channels, Trimode would be listening on the next channel by then.
