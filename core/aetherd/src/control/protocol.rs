@@ -331,7 +331,21 @@ impl ControlHandle {
     ///
     /// # Errors
     /// If the modem has stopped.
-    pub fn call(&self, mut request: Request) -> Result<Response, ApiError> {
+    pub fn call(&self, request: Request) -> Result<Response, ApiError> {
+        self.ask(request)?
+            .recv()
+            .map_err(|_| ApiError::new("modem_stopped", "The modem has stopped.", false))
+    }
+
+    /// Send a request and hand back where its reply will come, without waiting for it. For a
+    /// client whose thread must go on telling its program what the modem says while the answer
+    /// is on its way: the host adapter's `CQFRAME` is answered `OK` or `WRONG` as the modem
+    /// answers the beacon, and a `PTT ON` must not wait a slow pass behind it. The request is
+    /// stamped with this handle's connection, whatever it said.
+    ///
+    /// # Errors
+    /// If the modem has stopped.
+    pub fn ask(&self, mut request: Request) -> Result<mpsc::Receiver<Response>, ApiError> {
         request.connection = self.connection;
         let (reply, replies) = mpsc::channel();
         self.commands
@@ -341,9 +355,7 @@ impl ControlHandle {
                 closed: false,
             })
             .map_err(|_| ApiError::new("modem_stopped", "The modem has stopped.", false))?;
-        replies
-            .recv()
-            .map_err(|_| ApiError::new("modem_stopped", "The modem has stopped.", false))
+        Ok(replies)
     }
 
     /// Send a request without waiting for its reply, which goes nowhere. Requests from one

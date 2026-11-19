@@ -188,7 +188,13 @@ function onEvent(frame) {
       onReceivedData(data.data ?? "");
       break;
     case "log":
-      log(data.detail ?? "", data.name === "error", data.name ?? "modem");
+      log(data.detail ?? "", data.name === "error" ? "error" : data.level === "warn" ? "warn" : "info", data.name ?? "modem");
+      // the host adapter's warnings — a CQ the station refused, which the program heard only as
+      // WRONG — are also said in the programs chip's tooltip, where the operator looks first
+      if (data.name === "host" && data.level === "warn") {
+        hostWarning = { at: Date.now(), text: data.detail ?? "" };
+        refreshStatus();
+      }
       // the probe's answer, or its absence, where the button is
       if (data.name === "probe") noteProbe(data.detail ?? "");
       if (data.name === "test") noteTest(data.detail ?? "");
@@ -5084,6 +5090,12 @@ function showKissExposed() {
 const listenedAt = new Map();
 const LISTEN_HOLD_MS = 10_000;
 
+// The host adapter's last warning, from the `log` event named `host`: said in the programs
+// chip's tooltip for `HOST_WARNING_MS`. A program's CQ the station refused reaches the program
+// only as WRONG, and VarAC's operator had seen nothing of why (KK4ODA-1, 2026-11-19).
+let hostWarning = null;
+const HOST_WARNING_MS = 10 * 60_000;
+
 function applyKiss(kiss, host, datagrams) {
   const k = kiss ?? { enabled: false, listening: false, clients: [] };
   const clients = k.clients ?? [];
@@ -5157,6 +5169,9 @@ function applyKiss(kiss, host, datagrams) {
   const unanswered = first && lastStatus?.answering === false && lastStatus?.not_answering
     && claims.length === 0 && !host?.connected;
   if (unanswered) said.push(`Calls to ${first} are not answered: ${lastStatus.not_answering}`);
+  if (hostWarning && now - hostWarning.at < HOST_WARNING_MS) {
+    said.push(`Host port, ${clock(hostWarning.at)}: ${hostWarning.text.replace(/\.$/, "")}`);
+  }
 
   const chip = $("apps-chip");
   const parts = [...using].map(([name, listening]) => {
@@ -5978,7 +5993,7 @@ function renderRegDetail() {
   $("reg-detail-summary").textContent = regSummary(reg) || "The modem has not said yet.";
   $("reg-detail-text").textContent =
     reg?.policy === "none"
-      ? "The operator chose no regulatory profile: Aether makes no regulatory checks, and the control operator is responsible for every transmission."
+      ? (d?.detail || "The operator has chosen no regulatory profile: Aether makes no regulatory checks but one — an identifier carries only this station's callsigns (§97.119(a)) — and the control operator is responsible for every transmission.")
       : (d?.detail ?? "");
   const facts = $("reg-detail-facts");
   facts.replaceChildren();

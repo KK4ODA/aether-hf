@@ -9,7 +9,9 @@
 //! interval — a busy evening does not end in a burst of catching up. Each one goes through the
 //! same queue and regulatory gate as a single beacon.
 //!
-//! It needs a control operator: a station under automatic control may not start one. A
+//! It needs a control operator: a station under automatic control may not start one while a
+//! rules profile is in force (with the rules at *None*, or while the host program keys the
+//! radio, the control operator answers for it: ADR-0024 §4). A
 //! beacon (§97.3(a)(9)) may be automatically controlled only in the segments of §97.203(d) —
 //! 28.20–28.30 MHz, 50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so never for
 //! Aether's data), 144.275–144.300 MHz and a few above — and an unattended station has no
@@ -20,7 +22,6 @@ use serde_json::{Value, json};
 
 use super::{State, Station};
 use crate::ptt::Ptt;
-use crate::regulatory::ControlMode;
 
 /// The shortest interval a repeating beacon may have. A beacon is a transmission nobody asked
 /// for; ten minutes is the §97.119 identification interval, and more often than that a
@@ -79,7 +80,7 @@ impl<P: Ptt> Station<P> {
         if self.config.answer_only {
             return Err("this station is answer-only: it takes calls and sends no beacon".into());
         }
-        if self.config.regulatory.control == Some(ControlMode::Automatic) {
+        if self.beacons_barred() {
             return Err(
                 "a station under automatic control may not beacon on a timer: a beacon \
                         may be automatically controlled only on 28.20–28.30, 50.06–50.08, \
@@ -106,8 +107,7 @@ impl<P: Ptt> Station<P> {
             return;
         }
         // the rules may have changed under it: an answer-only or automatic station stops
-        if self.config.answer_only || self.config.regulatory.control == Some(ControlMode::Automatic)
-        {
+        if self.config.answer_only || self.beacons_barred() {
             self.beacons.every_s = None;
             self.note(
                 "beacon",

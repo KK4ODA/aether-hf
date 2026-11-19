@@ -204,7 +204,10 @@ fn aether_profile(daemon: &DaemonState, keying: Keying) -> Result<Made, ApiError
         (daemon.config.clone(), memories, String::new())
     };
     let host_keyed = matches!(config.ptt, PttConfig::Host { .. });
-    let changes = varac::aether_changes(keying, host_keyed);
+    // the settings it is made from may be a gateway's, under automatic control: not carried in
+    let automatic = crate::regulatory::ControlMode::parse(&config.regulatory.control)
+        == Some(crate::regulatory::ControlMode::Automatic);
+    let changes = varac::aether_changes(keying, host_keyed, automatic);
     let changed = config
         .merge(&changes)
         .map_err(|e| ApiError::new("refused", e.to_string(), false))?;
@@ -471,6 +474,27 @@ mod tests {
         assert_eq!(done["varac"]["aether_profile"]["active"], true);
         assert!(matches!(daemon.config.ptt, PttConfig::Host { .. }));
         assert!(daemon.config.kiss.enabled);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn varac_default_made_from_a_gateways_settings_is_under_local_control() {
+        // KK4ODA-1, 2026-11-19: the station a RadioPost gateway had set to Automatic gave its
+        // control to VarAC default, greyed under Host, and VarAC's CQs were refused
+        let mut station = station();
+        let (mut daemon, dir) = daemon("gateway");
+        daemon.config.regulatory.control = "automatic".to_owned();
+        ok(call(&mut station, &mut daemon, "varac.setup", json!({})));
+        let id = daemon.profiles.find(varac::AETHER_PROFILE).expect("made");
+        let profile = daemon.profiles.read(&id).expect("read");
+        let applied = profile.apply(&daemon.config, None).expect("apply");
+        assert_eq!(applied.config.regulatory.control, "local");
+        // the running settings — the gateway's — keep their own Automatic
+        assert_eq!(daemon.config.regulatory.control, "automatic");
+        // and a profile made before is offered the change
+        daemon.varac.remembered.template = 1;
+        let offered = ok(call(&mut station, &mut daemon, "varac.status", json!({})));
+        assert_eq!(offered["offer"], "template", "{offered}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

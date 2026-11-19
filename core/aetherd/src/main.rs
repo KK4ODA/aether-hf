@@ -637,15 +637,17 @@ fn station_config(
     }
 }
 
-/// The regulatory settings the station runs with (ADR-0018): the file's — except that a
-/// daemon on a simulated channel, which keys no transmitter, is not judged unless its file
-/// chooses a profile, so a bench pair needs no dial and no license class.
+/// The regulatory settings the station runs with (ADR-0018): the file's, as they act
+/// ([`Config::regulatory_in_force`]: none while the host program keys) — except that a daemon
+/// on a simulated channel, which keys no transmitter, is not judged unless its file chooses a
+/// profile, so a bench pair needs no dial and no license class.
 fn regulatory_settings(config: &Config, simulated: bool) -> aetherd::regulatory::Settings {
     let simulated = simulated || config.sim.listen.is_some() || config.sim.connect.is_some();
-    if simulated && config.regulatory.profile.is_empty() {
+    let host_keys = matches!(config.ptt, PttConfig::Host { .. });
+    if simulated && config.regulatory.profile.is_empty() && !host_keys {
         aetherd::regulatory::Settings::unchecked()
     } else {
-        config.regulatory.settings()
+        config.regulatory_in_force()
     }
 }
 
@@ -700,9 +702,15 @@ fn start_servers(
     Ok((control, host))
 }
 
-/// The host adapter's lines (ADR-0096): a program attaching, leaving or replaced, and a
-/// `CONNECTED` held for a scanning one.
-fn log_host_notes(station: &Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
+/// The host adapter's lines (ADR-0096): a program attaching, leaving or replaced, a
+/// `CONNECTED` held for a scanning one, and a CQ the station refused. The warnings go to the
+/// panel's Log too: the operator is looking at the program, which hears only `WRONG`, and a
+/// CQ refused had been said in the log file alone (KK4ODA-1's `VarAC`, 2026-11-19).
+fn log_host_notes(
+    station: &Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+) {
     let Some(host) = &daemon.host else { return };
     let notes = host
         .notes
@@ -716,6 +724,12 @@ fn log_host_notes(station: &Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
     for note in notes {
         let level = if note.warn { Level::Warn } else { Level::Info };
         daemon.log.record(level, "host", &note.text, &state);
+        if note.warn {
+            control.publish(&Event::new(
+                "log",
+                json!({ "name": "host", "detail": note.text, "level": "warn", "state": state }),
+            ));
+        }
     }
 }
 
@@ -1386,7 +1400,7 @@ fn serve(
         let pass_began = std::time::Instant::now();
         answer_commands(station, control, daemon, stopping, restarting);
         sync_kiss(station, daemon);
-        log_host_notes(station, daemon);
+        log_host_notes(station, control, daemon);
         // what the host program attached says about answering calls; one that has gone takes
         // its bandwidth with it (ADR-0026)
         station.set_host(host_presence(daemon));

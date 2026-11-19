@@ -1570,6 +1570,22 @@ fn beacon<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) 
             id,
             ApiError::new("bad_params", format!("Cannot beacon: {reason}."), false),
         ),
+        // the station's control setting decides it, whatever the rules profile, and what to
+        // change is said: a gateway's Automatic left in place refused VarAC's CQs at KK4ODA-1
+        // with an operator at the radio (2026-11-19)
+        Err(reason) if reason == crate::station::BEACON_UNDER_AUTOMATIC_CONTROL => {
+            Response::failed(
+                id,
+                ApiError::new(
+                    "refused",
+                    format!(
+                        "Cannot beacon: {reason}. Control is Automatic in Setup step 1; with \
+                         someone at the radio, set it to Local (or Remote) in the profile in use."
+                    ),
+                    false,
+                ),
+            )
+        }
         // the one pressed before goes as soon as the channel clears; a second would follow it
         Err(reason) if reason == crate::station::BEACON_ALREADY_WAITING => Response::failed(
             id,
@@ -3036,6 +3052,48 @@ mod tests {
             &request("beacon.every", json!({"minutes": 0})),
         );
         assert!(response.result.expect("stopped")["every_s"].is_null());
+    }
+
+    #[test]
+    fn a_beacon_under_automatic_control_is_refused_by_the_rules_alone_and_says_what_to_change() {
+        // KK4ODA-1, 2026-11-19: Control left at Automatic from a gateway's setup, and VarAC's
+        // CQs refused. Under the US rules the refusal stands (§97.203(d)) and says where the
+        // setting is; with no rules profile the operator answers for the beacon (ADR-0024 §4)
+        use crate::regulatory::{ControlMode, LicenseClass, Settings, Sideband};
+        let beacon = |station: &mut Station<NullPtt>| {
+            dispatch_with(
+                station,
+                None,
+                &Request {
+                    id: Some("1".into()),
+                    method: "beacon".to_owned(),
+                    params: json!({}),
+                    connection: None,
+                },
+            )
+        };
+        let mut us = station();
+        us.set_regulatory(Settings {
+            profile: "us-fcc-part97".to_owned(),
+            control: Some(ControlMode::Automatic),
+            license: Some(LicenseClass::General),
+            sideband: Some(Sideband::Usb),
+            dial_hz: Some(14_105_000),
+            ..Settings::unchecked()
+        });
+        let error = beacon(&mut us).error.expect("refused");
+        assert_eq!(error.code, "refused");
+        assert!(error.message.contains("§97.203(d)"), "{}", error.message);
+        assert!(error.message.contains("Setup step 1"), "{}", error.message);
+        assert!(error.message.contains("Local"), "{}", error.message);
+
+        let mut unruled = station();
+        unruled.set_regulatory(Settings {
+            control: Some(ControlMode::Automatic),
+            ..Settings::unchecked()
+        });
+        let response = beacon(&mut unruled);
+        assert!(response.ok, "{:?}", response.error);
     }
 
     #[test]

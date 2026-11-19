@@ -2277,7 +2277,10 @@ impl<P: Ptt> Station<P> {
         self.config.record_program_sessions = config.record.send_to_project;
         self.config.record_notes.clone_from(&config.record.notes);
         self.config.operator.clone_from(&config.operator);
-        self.set_regulatory(config.regulatory.settings());
+        // who keys first: while the host program does, none of the rules settings acts, and
+        // nothing is answered with none attached
+        self.config.keyed_by_host = matches!(config.ptt, crate::config::PttConfig::Host { .. });
+        self.set_regulatory(config.regulatory_in_force());
         // the identifier: on, off and its speed, from the next session on
         let tone_hz = self
             .config
@@ -2290,7 +2293,6 @@ impl<P: Ptt> Station<P> {
         });
         self.config.cw_id_wpm = config.radio.cw_id_wpm;
         self.config.identify_by = config.radio.identify_by.link();
-        self.config.keyed_by_host = matches!(config.ptt, crate::config::PttConfig::Host { .. });
         self.refresh_burst_cap(self.now());
         self.note_identifier_speed();
         self.refresh_identifier_length();
@@ -2430,6 +2432,16 @@ impl<P: Ptt> Station<P> {
         })
     }
 
+    /// Whether §97.203(d) bars this station's beacons: a rules profile is in force and the
+    /// station is under automatic control (ADR-0024). With the rules at *None*, and while the
+    /// host program keys the radio (no rules settings act then, `Config::regulatory_in_force`),
+    /// Aether refuses no beacon on that ground: the control operator answers for it (ADR-0024
+    /// §4, the author's decision of 2026-11-19).
+    pub(crate) fn beacons_barred(&self) -> bool {
+        !matches!(self.policy, Policy::NoProfile)
+            && self.config.regulatory.control == Some(crate::regulatory::ControlMode::Automatic)
+    }
+
     /// New regulatory settings, from the next transmission on: the policy is loaded again
     /// when the profile changed, and the ceiling on the link's rungs is worked out again.
     pub fn set_regulatory(&mut self, settings: crate::regulatory::Settings) {
@@ -2524,8 +2536,9 @@ impl<P: Ptt> Station<P> {
         // A beacon may be automatically controlled only in the segments of §97.203(d), and
         // of those only 28.20–28.30 MHz is anywhere Aether's data may go. The repeating
         // beacon was refused under automatic control already; a host program's beacon timer
-        // on an unattended station is the same thing by another road (ADR-0024).
-        if self.config.regulatory.control == Some(crate::regulatory::ControlMode::Automatic) {
+        // on an unattended station is the same thing by another road (ADR-0024). Under the
+        // rules only: with none, the control operator answers for it (ADR-0024 §4).
+        if self.beacons_barred() {
             return Err(BEACON_UNDER_AUTOMATIC_CONTROL);
         }
         if self.engine.state() != State::Idle {
@@ -10391,6 +10404,77 @@ mod tests {
         assert!(BEACON_UNDER_AUTOMATIC_CONTROL.contains("§97.203(d)"));
         let mut station = lone_station(under_us_rules(14_105_000, ControlMode::Local));
         station.beacon(None).expect("local control");
+    }
+
+    #[test]
+    fn with_no_rules_a_station_set_to_automatic_beacons() {
+        use crate::regulatory::{ControlMode, Settings};
+        // the author's decision, 2026-11-19 (ADR-0024 §4): with no rules profile the control
+        // operator answers for a beacon. KK4ODA-1, rules None and Control Automatic left from
+        // a gateway, had refused VarAC's CQs
+        let none = || Settings {
+            control: Some(ControlMode::Automatic),
+            ..Settings::unchecked()
+        };
+        let mut station = lone_station(none());
+        station.beacon(Some("W4ODA-9")).expect("no rules");
+        run_alone(&mut station, 2.0, Station::transmitting);
+        assert!(station.transmitting(), "the CQ is keyed");
+        let mut station = lone_station(none());
+        station.beacon_every(Some(900.0)).expect("no rules");
+        // ADR-0107 stays with no rules: it keeps a session from reaching nobody, and under
+        // automatic control only a program answers calls
+        assert!(!station.answering());
+        let why = station.not_answering_because().unwrap_or_default();
+        assert!(why.contains("automatic control"), "{why}");
+    }
+
+    #[test]
+    fn a_host_keyed_station_set_to_automatic_beacons_and_answers_as_its_program_says() {
+        // 2026-11-19, the author's decision: while the host program keys the radio none of the
+        // station's rules settings acts — Setup shows them as Host — and KK4ODA-1's Automatic,
+        // kept under Host from a RadioPost gateway, had refused VarAC's CQs
+        let config = crate::config::Config::parse(
+            "callsign = \"W4ODA\"\n[ptt]\nkind = \"host\"\n[regulatory]\n\
+             profile = \"us-fcc-part97\"\ncontrol = \"automatic\"\n\
+             license_class = \"general\"\ndial_hz = 14105000\n",
+        )
+        .expect("config");
+        assert_eq!(config.regulatory.control, "automatic", "the file keeps it");
+        let settings = config.regulatory_in_force();
+        assert_eq!(settings.profile, "none");
+        assert_eq!(settings.control, None);
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                keyed_by_host: true,
+                regulatory: settings,
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        // no host program attached: nothing would key the radio, so nothing is answered
+        assert!(!station.answering());
+        let why = station.not_answering_because().unwrap_or_default();
+        assert!(why.contains("host program"), "{why}");
+        // attached, it answers for what its MYCALL names while it listens — Automatic or not
+        station.set_host(HostPresence {
+            attached: true,
+            chat: false,
+            cw_id: false,
+        });
+        claim_for_host(&mut station, &["W4ODA"], false);
+        assert!(!station.answering());
+        station.listen_for(HOST_PROGRAM, true).expect("claimed");
+        assert!(station.answering(), "{:?}", station.not_answering_because());
+        // and VarAC's CQ goes
+        station
+            .beacon(Some("W4ODA-9"))
+            .expect("no rules setting acts");
+        run_alone(&mut station, 2.0, Station::transmitting);
+        assert!(station.transmitting(), "the CQ is keyed");
     }
 
     #[test]

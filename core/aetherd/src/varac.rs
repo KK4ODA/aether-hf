@@ -28,8 +28,8 @@ pub const SECTION: &str = "VARAHF_CONFIG";
 pub const RIG_SECTION: &str = "RIG_CONTROL";
 /// The settings the Aether profile takes ([`aether_changes`]), by number: a release that
 /// changes them raises it, and a station whose profile was made with a lower one is offered
-/// the change.
-pub const TEMPLATE: u32 = 1;
+/// the change. 2: the control is Local, never a gateway's Automatic (2026-11-19).
+pub const TEMPLATE: u32 = 2;
 /// The file beside the configuration that remembers what was set up.
 pub const STATE_FILE: &str = "varac.json";
 /// Files in `VarAC`'s folder named like a profile that are not one.
@@ -352,8 +352,14 @@ pub fn keying(ini: &Ini) -> Keying {
 /// the host program already — keying by the host program with no rules profile, as Setup does
 /// when a host program keys (Aether reads no dial then). A profile keyed by the host program
 /// already keeps its own lead and rules.
+///
+/// The control is never carried in as Automatic (`automatic`: the settings it is made from
+/// say so): `VarAC` is run by an operator at the radio, and KK4ODA-1's profile, made from a
+/// station a `RadioPost` gateway had set to Automatic, refused its CQs (2026-11-19). It
+/// becomes Local, which matters where the profile keeps Aether's rules; the gateway's own
+/// profile keeps its Automatic.
 #[must_use]
-pub fn aether_changes(keying: Keying, host_keyed: bool) -> serde_json::Value {
+pub fn aether_changes(keying: Keying, host_keyed: bool, automatic: bool) -> serde_json::Value {
     let mut changes = serde_json::json!({
         "host.enabled": true,
         "kiss.enabled": true,
@@ -361,6 +367,9 @@ pub fn aether_changes(keying: Keying, host_keyed: bool) -> serde_json::Value {
     if keying == Keying::Program && !host_keyed {
         changes["ptt.kind"] = serde_json::json!("host");
         changes["regulatory.profile"] = serde_json::json!("none");
+    }
+    if automatic {
+        changes["regulatory.control"] = serde_json::json!("local");
     }
     changes
 }
@@ -727,14 +736,24 @@ mod tests {
         let vox = Ini::new(b"[RIG_CONTROL]\nRigPTTControlType=VOX\n".to_vec());
         assert_eq!(keying(&vox), Keying::Modem);
         assert_eq!(keying(&Ini::new(Vec::new())), Keying::Unknown);
-        let program = aether_changes(Keying::Program, false);
+        let program = aether_changes(Keying::Program, false, false);
         assert_eq!(program["ptt.kind"], "host");
         assert_eq!(program["regulatory.profile"], "none");
-        let kept = aether_changes(Keying::Program, true);
+        assert!(program.get("regulatory.control").is_none(), "{program}");
+        let kept = aether_changes(Keying::Program, true, false);
         assert!(kept.get("ptt.kind").is_none(), "{kept}");
-        let modem = aether_changes(Keying::Modem, false);
+        let modem = aether_changes(Keying::Modem, false, false);
         assert!(modem.get("ptt.kind").is_none(), "{modem}");
         assert_eq!(modem["kiss.enabled"], true);
+        // a gateway's Automatic is not carried into the profile, whoever keys (2026-11-19)
+        for (keying, host_keyed) in [
+            (Keying::Program, false),
+            (Keying::Program, true),
+            (Keying::Modem, false),
+        ] {
+            let made = aether_changes(keying, host_keyed, true);
+            assert_eq!(made["regulatory.control"], "local", "{made}");
+        }
     }
 
     #[test]

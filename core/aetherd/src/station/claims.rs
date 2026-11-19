@@ -564,6 +564,13 @@ impl<P: Ptt> Station<P> {
         if self.host.stopping {
             return Err("the modem is stopping".to_owned());
         }
+        // The host program keys the radio and none is attached: an answer would reach no
+        // transmitter (ADR-0025), and the session nobody (ADR-0107's case). None of the rules
+        // settings acts while a host program keys — Automatic included — so this, not the
+        // control, is what keeps such a station from answering on its own (ADR-0107 §5).
+        if self.config.keyed_by_host && !self.host_attached() {
+            return Err("the host program keys the radio, and none is attached".to_owned());
+        }
         match self.claims.holder(call) {
             Some(claim) if !claim.listening => Err(claim.deaf_because()),
             Some(_) => Ok(()),
@@ -633,6 +640,11 @@ impl<P: Ptt> Station<P> {
     /// Aether answered KK4ODA's call to KK4ODA-1 itself (2026-11-12): the caller's opening
     /// crossed in five minutes and reached nobody, and the session ran on until the caller's
     /// operator aborted it. A probe is not a call: it is answered as [`Self::answers_for`] says.
+    ///
+    /// It holds with the rules at *None* — it keeps a session from reaching nobody, not a rule
+    /// of the band — and not while the host program keys the radio, when no rules setting
+    /// acts (`Config::regulatory_in_force`): there, no host attached answers nothing at all
+    /// ([`Self::answers_for`]), and an attached one answers for its own `MYCALL` (ADR-0107 §5).
     pub(super) fn answers_call_for(&self, call: &str) -> Result<(), String> {
         self.answers_for(call)?;
         if self.claims.holder(call).is_none()

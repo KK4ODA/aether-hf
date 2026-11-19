@@ -34,7 +34,8 @@ In **Aether**:
 1. Setup step 2, *Radio control*: **Host program** — VarAC or Winlink Express keys the radio on
    `PTT ON` and tunes it, and step 2's *Dial* reads **Host program**.
    The rules in step 1 change to **None** with it, and their fields read **Host**: Aether cannot
-   read the dial of a radio it does not control. The milliseconds beside it (150) are how long
+   read the dial of a radio it does not control. None of those settings acts while the program
+   keys, the **Control** included. The milliseconds beside it (150) are how long
    Aether waits after `PTT ON` before it starts the audio; VARA allows 100.
 2. Setup step 5: **Host programs** on (port 8300), and **KISS programs** on (port 8100) for
    VarAC's broadcasts. With Host programs on, Setup's *Callsign* and *Bandwidth* read **Host**:
@@ -70,6 +71,15 @@ on its slot (its beacon button then reads *BEACON PAUSED*). VarAC's relay notifi
 exception: the station holding a VMail tells the addressee about it, on hearing its beacon, with a
 frame on the KISS port. Turn on *KISS programs* at both stations, and VarAC's KISS interface, for
 those.
+
+**Call CQ and beacons** go out as Aether's beacon. With VarAC keying the radio, Aether applies
+none of its rules settings, and they go. With Aether keying the radio (VarAC on VOX) under the US
+rules, a station under *Automatic* control sends no beacon (§97.203(d)). If you set the station to
+*Automatic* for a gateway (RMS Trimode, RadioPost Gateway), set **Control** back to **Local** (or
+**Remote**) in Setup step 1, in the profile you run VarAC under. *VarAC default* never takes a
+gateway's *Automatic*: it is made under *Local* control. A refused CQ is answered `WRONG`, not
+`OK` (VarAC's *Log VARA commands* file shows which), and Aether's Log has a *host* line saying
+why. Hold the mouse over the program's name in Aether's header to read it there too.
 
 ## Aether owning the radio
 

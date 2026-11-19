@@ -4,7 +4,8 @@
 and KK4ODA-1 of 2026-11-12 00:50Z. It amends ADR-0106 §2.1 and §2.2. The daemon
 (`station/claims.rs`, `station/host.rs`, `Station::set_regulatory`), the control API
 (`status.not_answering`), the panel's apps chip and the Control setting's tooltip, and the manual.
-**No wire change, no model change, no configuration key.**
+**No wire change, no model change, no configuration key.** **Amended 2026-11-19 (§5):** it stands
+with the rules at *None*, and does not act while the host program keys the radio.
 
 ## 1. Context
 
@@ -111,3 +112,27 @@ program's own process) and nothing then reaches Aether.
 * **Abort when the owner goes:** it drops what the program had already queued. Disconnect sends
   it within the drain and ends the same way.
 * **Leaving it to the adapter** (RP-4 §1.1): the adapter can go with its program, as here.
+
+## 5. Amendment (2026-11-19): with no rules it stands, under host keying the program decides
+
+ADR-0024 §4 records the author's decision that under host keying none of the rules settings acts,
+control included. This ADR's rule reads the control too, so it has to say where it stands.
+
+* **With the rules at *None* it stands.** It is not a rule of the band. It stops the station's own
+  session from reaching nobody when nobody is at the radio. The case it was written for, KK4ODA-1
+  on 2026-11-12, was a station with the rules at *None* and Control *Automatic*. Lifting it there
+  would bring that case back.
+* **While the host program keys the radio, the control does not act, and neither does this
+  rule.** Something else covers its case: a station keyed by its host program, with no host
+  program attached, answers no call and no probe (`answers_for`). Nothing would key the radio, and
+  the session would reach nobody. With a program attached, its `MYCALL` and `LISTEN` decide, as
+  ADR-0106 has it. A host program attached holds a claim, so this rule never changed the outcome
+  there anyway: `answers_for` refuses a callsign no program holds.
+* **The other places automatic control acts** are the policy's: the §97.221 segments, and who
+  began the exchange (`standing_direction`). They act only under a rules profile. The log of an
+  automatic station's decisions (`log_permitted`) only logs. None of them acts under host keying.
+
+**Test:** `a_host_keyed_station_set_to_automatic_beacons_and_answers_as_its_program_says`. With no
+host attached nothing is answered. A program that claims but does not listen is not answered. Once
+it listens it is answered, Automatic in the file or not. `with_no_rules_a_station_set_to_automatic_beacons`
+checks that this rule still holds with no rules.

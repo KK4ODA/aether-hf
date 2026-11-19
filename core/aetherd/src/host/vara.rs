@@ -69,7 +69,8 @@ pub enum HostAction {
     TuneLevel,
     /// Send an unproto identification frame, under the name the host gave it: `VarAC`'s CQs
     /// and beacons are `CQFRAME KK4ODA-9 500` and the like, and the suffix means something
-    /// to the program at the other end (ADR-0024).
+    /// to the program at the other end (ADR-0024). The server says `OK` or `WRONG` as the
+    /// modem answers.
     CqFrame(Option<String>),
     /// Run this bandwidth (`BW<n>`), in hertz; the server says `OK` or `WRONG` once the modem
     /// has moved or said why it cannot (ADR-0026).
@@ -363,11 +364,14 @@ impl HostState {
         }
     }
 
-    /// `CQFRAME <source> <bandwidth>`: a beacon under the name the host gave it (ADR-0024).
+    /// `CQFRAME <source> <bandwidth>`: a beacon under the name the host gave it (ADR-0024). The
+    /// server says `OK` once the modem has taken it, or `WRONG` when it refused: a program told
+    /// `OK` for a CQ that never went shows it as sent.
     fn cq_frame(args: &[&str]) -> HostOutcome {
-        HostOutcome::acting(HostAction::CqFrame(
-            args.first().map(|source| (*source).to_owned()),
-        ))
+        HostOutcome {
+            replies: Vec::new(),
+            action: HostAction::CqFrame(args.first().map(|source| (*source).to_owned())),
+        }
     }
 
     /// `BW500`, `BW2300`, `BW2750`: the published commands set the modem's mode. The station
@@ -678,7 +682,8 @@ mod tests {
         // VarAC's CQs and beacons are `CQFRAME KK4ODA-9 500`, the suffix its own (ADR-0024)
         let mut host = state();
         let outcome = host.command("CQFRAME KK4ODA-9 500");
-        assert_eq!(outcome.replies, vec!["OK"]);
+        // the server answers once the modem has: OK only for a beacon it took
+        assert!(outcome.replies.is_empty(), "{:?}", outcome.replies);
         assert_eq!(
             outcome.action,
             HostAction::CqFrame(Some("KK4ODA-9".to_owned()))

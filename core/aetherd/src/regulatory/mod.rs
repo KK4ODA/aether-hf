@@ -407,14 +407,24 @@ pub struct SafeDial {
     pub dial_high_hz: f64,
 }
 
+/// What the rules say of a station with no profile. One check stays whatever the profile —
+/// an identifier names this station ([`Policy::wrong_identifier`], ADR-0127 §2.5) — and the
+/// sentence says so; the §97.203(d) refusal of beacons under automatic control does not apply
+/// with no profile (ADR-0024 §4, the author's decision of 2026-11-19).
+pub const NO_PROFILE_DETAIL: &str = "The operator has chosen no regulatory profile: Aether \
+    makes no regulatory checks but one — an identifier carries only this station's callsigns \
+    (§97.119(a)) — and the control operator is responsible for every transmission.";
+
 /// The policy in force: an administration's rules, or the operator's word that none apply,
 /// or — failing either — nothing is sent.
 #[derive(Debug, Clone)]
 pub enum Policy {
     /// No profile chosen yet: nothing is sent until one is.
     Unset,
-    /// The operator has said no profile applies (another administration's rules): Aether
-    /// checks nothing and the control operator everything.
+    /// The operator has said no profile applies (another administration's rules), or the host
+    /// program keys the radio (`Config::regulatory_in_force`): Aether checks nothing but that
+    /// an identifier names this station ([`Policy::wrong_identifier`]), and the control
+    /// operator everything.
     NoProfile,
     /// An administration's rules.
     Rules(Arc<Profile>),
@@ -538,8 +548,7 @@ impl Policy {
                 "no_rules",
                 "",
                 "No regulatory profile: you check every transmission",
-                "The operator has chosen no regulatory profile: Aether makes no regulatory \
-                 checks, and the control operator is responsible for every transmission.",
+                NO_PROFILE_DETAIL,
             ),
             Self::Rules(profile) => evaluate(profile, s, tx, draft),
         }

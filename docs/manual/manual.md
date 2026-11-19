@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.12.0 |
+| **Version** | 1.12.1 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.166 |
 | **Licence** | CC BY 4.0 |
@@ -443,11 +443,13 @@ settings.
   callsign in the program itself, not here.
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*. With
   **Radio control** set to *Host program* (step 2), the rules fields read **Host**: the host program
-  owns the radio's dial, which Aether cannot read, so you check every transmission yourself.
+  owns the radio's dial, which Aether cannot read, so you check every transmission yourself. None
+  of those settings acts then, **Control** included, whatever was set before.
 - **Control**: *Local* (you are at the radio), *Remote* (you are at the radio through a control
   link), or *Automatic* (nobody at the control point: an unattended mailbox or gateway). Aether
   never guesses this. Under *Automatic*, Aether answers calls only for a program that holds the
-  callsign called and is listening, such as RMS Trimode or a RadioPost gateway.
+  callsign called and is listening, such as RMS Trimode or a RadioPost gateway. With the US rules
+  it also sends no beacon; with the rules at *None* it does.
 - **Licence class**: decides which frequencies are yours.
 - **Sideband**: USB, the convention for data. On LSB the signal lands below the dial, mirrored.
 - **Field log**: your grid (six characters lets the log work out distances), rig, power in watts
@@ -1053,7 +1055,7 @@ hears you and how well, both ways. Probe before a long session on an unknown pat
 
 **A beacon** says your callsign to anyone listening, on the tone floor. Other stations list you in
 their Stations tab, with how well they heard you. Use the repeat while you are at the station; under
-automatic control Aether sends none.
+automatic control with the US rules Aether sends none.
 
 ### The Test session
 
@@ -1149,6 +1151,11 @@ in their places, and your own come back when the program leaves.
 - VarAC's **TUNE** button plays Aether's **Tuner tone**: ten seconds at most, and VarAC can stop it
   sooner. It plays at Aether's transmit level: the level VarAC sends with it, and VarAC's drive
   level, change nothing here. Set the drive with **Set drive**.
+- VarAC's **Call CQ** and beacons go out as Aether's beacon. With VarAC keying the radio, none of
+  Aether's rules settings acts, and they go. With Aether keying it under the US rules, a station
+  under *Automatic* control sends no beacon: set **Control** back to *Local* (or *Remote*) in Setup
+  step 1, in the profile you run VarAC under. A CQ Aether turns down is answered `WRONG`, and the
+  Log says why (a *host* line, also in the tooltip of the program's name in the header).
 - The first transmission after a program attaches is checked on its own: if the receive audio does
   not change while the radio is keyed, the Log says the radio may not be transmitting. A program set
   to key a port nothing is wired to is found at once.
@@ -1179,7 +1186,8 @@ stay as they are, and VARA HF stays one click away.
      **KISS programs** on. If your VarAC profile keys the radio itself (CAT, OmniRig, FLRig,
      Hamlib or DTR/RTS), the profile also sets **Radio control** to **Host program** and the rules
      to *None*, as Setup does for a host program. If VarAC uses VOX, Aether keeps its own radio
-     control.
+     control. **Control** is *Local* in it if yours was *Automatic*, as for a gateway: VarAC has an
+     operator at the radio.
 3. Press **Switch to VarAC default**, or pick it on the Profile bar.
 4. In VarAC, choose **Switch profile**, then **VarAC_Aether**. VarAC restarts and starts Aether.
    To go back to VARA, switch VarAC back to **VarAC** and Aether back to your usual profile.
@@ -1614,3 +1622,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.11.0 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): VarAC's **TUNE** button plays Aether's tuner tone, at Aether's transmit level. |
 | 1.11.1 | 2026-11-19 | [Full, Compact and Mini](#full-compact-and-mini) and [Arranging the windows](#arranging-the-windows): the window stays on its screen. Going from Compact or Mini to Full, it grows to the left or upwards where the screen's edge or the taskbar is in the way, and at start a window that would run off its screen moves back onto it. |
 | 1.12.0 | 2026-11-19 | **Tune** in Compact and Mini, beside the display: the Session tab's *Tuner tone*, stopped by a second press; a refusal shows in the display for a few seconds ([Full, Compact and Mini](#full-compact-and-mini)). |
+| 1.12.1 | 2026-11-19 | VarAC's **Call CQ** and beacons ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)): with the rules at *None*, or with a host program keying the radio, no beacon is refused for *Automatic* control, and none of the rules settings acts under **Host**; under the US rules it is, and a CQ Aether turns down is answered `WRONG`, with the reason in the Log's *host* line and the program's tooltip in the header. **VarAC default** is made under *Local* control ([VarAC in one step](#varac-in-one-step)). |

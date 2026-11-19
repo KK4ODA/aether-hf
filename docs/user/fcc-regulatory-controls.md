@@ -95,9 +95,11 @@ by how much: *TX BLOCKED: signal extends 260 Hz beyond the FCC data segment*, wi
 **The dial.** Keyed over CAT, `rigctld` or FLRig, Aether reads the dial from the radio before each
 transmission. Keyed over a serial line, a CM108 interface or VOX, the radio cannot say, so the
 Session tab asks you: *Dial is at …* — set it whenever you move the dial. With no dial known,
-nothing is transmitted. Keyed by a host program (VarAC's way, Setup step 2 *Host*), Aether
-can read no dial either: choosing it sets the rules to *None*, and if you choose a profile anyway,
-set *Dial is at …* as for any radio that cannot report its dial.
+nothing is transmitted. Keyed by a host program (VarAC's way, Setup step 2 *Host program*),
+Aether can read no dial either: choosing it sets the rules to *None*, and Setup shows the rules
+fields as **Host**. While a host program keys the radio, none of those settings acts — no rules
+profile and no control, whatever the configuration file says (ADR-0024 §4). The file keeps them
+for when you choose another radio control.
 
 ## The data segments and your privileges
 
@@ -174,7 +176,14 @@ locally controlled station's: somebody is at the radio when they are pressed.
   program asks for (VarAC's CQ, which reaches Aether as `CQFRAME`) — because §97.203(d) lets a beacon be automatically
   controlled only on 28.20–28.30 MHz, 50.06–50.08 MHz (inside 6 m's CW-only 50.0–50.1 MHz, so
   never for Aether's data) and a few segments above 6 m (ADR-0024). An answer-only station sends
-  no beacon at all.
+  no beacon at all. This is the rules' refusal: with the rules at *None*, or while a host program
+  keys the radio, Aether does not refuse a beacon for automatic control, and you answer for it as
+  for every transmission (ADR-0024 §4). Under the US rules, a station set to *Automatic* for a
+  gateway must be set to *Local* (or *Remote*) in Setup step 1, in the profile you run VarAC
+  under, before VarAC's **Call CQ** or its beacons go out. A host program whose CQ is refused is
+  told `WRONG`, and Aether's Log says why (a *host* line, also in the tooltip of the header's
+  programs chip). Aether's *VarAC default* profile never takes a gateway's *Automatic*: it is made
+  under *Local* control.
 * A beacon carries no Morse identifier. Its frame carries your callsign.
 
 ### The Morse identifier
@@ -301,7 +310,8 @@ station's **widest** transmission at the dial it is on now:
 * **Warning** — allowed, with something you should know: outside the band plan's digital areas,
   on a beacon frequency, a power limit, or the link held to its narrower rungs near an edge.
 * **TX blocked** — not allowed; nothing will be transmitted. The reason says what to change.
-* **No rules** — you chose no profile; Aether checks nothing.
+* **No rules** — you chose no profile, or a host program keys the radio; Aether checks nothing but
+  that an identifier carries only your station's callsigns.
 
 Click it for the reasoning: the RF range, the segment and its rule (linked to the e-CFR), your
 control and class, and the band-plan note. The Diagnostics tab's **Rules** card shows everything

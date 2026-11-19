@@ -28,7 +28,7 @@ use serde_json::json;
 use crate::{
     control::{
         methods::to_base64,
-        protocol::{ConnectionKind, ControlHandle, Request},
+        protocol::{ApiError, ConnectionKind, ControlHandle, Request, Response},
     },
     host::vara::{DEFAULT_COMMAND_PORT, HostAction, HostState, Notification},
     polled::{Closer, PolledStream},
@@ -791,10 +791,33 @@ fn serve_commands(
         return;
     }
 
+    // a CQ's beacon asked of the modem, its OK or WRONG still to say
+    let mut beacon: Option<BeaconAsk> = None;
+
     while running.load(Ordering::Relaxed) {
+        // ── the modem's answer to a CQ ────────────────────────────────
+        // Waited for here, at most a read's wait, and not on the command: what the modem says
+        // meanwhile still goes below, so a slow pass holds back no PTT ON (ADR-0106). No other
+        // command is read until the CQ is answered, so the replies keep the commands' order.
+        if let Some(asked) = beacon.take() {
+            match asked.answer(POLL, handle, notes) {
+                BeaconAnswer::Waiting(asked) => beacon = Some(asked),
+                BeaconAnswer::Said(reply) => {
+                    if !say(&mut writer, reply) {
+                        return;
+                    }
+                }
+            }
+        }
+
         // ── commands from the host ────────────────────────────────────
         let mut line = Vec::new();
-        match read_line(&mut reader, &mut line) {
+        let read = if beacon.is_some() {
+            LineResult::Idle
+        } else {
+            read_line(&mut reader, &mut line)
+        };
+        match read {
             LineResult::Closed => return,
             LineResult::Idle => {}
             LineResult::Line => {
@@ -836,6 +859,7 @@ fn serve_commands(
                     // before the answer to the command that caused it, and has been read by
                     // now: the daemon publishes what a request sets in motion before its reply
                     Applied::Calling => calling = true,
+                    Applied::Beacon(asked) => beacon = Some(asked),
                     Applied::Closed => return,
                 }
             }
@@ -1368,14 +1392,101 @@ fn report_state(
 }
 
 /// What carrying out a command came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum Applied {
     /// Done, with nothing to remember.
     Done,
     /// The modem took a call: how it ends — a session, or none — is the host's to hear.
     Calling,
+    /// A `CQFRAME`'s beacon is asked of the modem, and the program's reply waits for its answer.
+    Beacon(BeaconAsk),
     /// A line could not be written: the host has gone.
     Closed,
+}
+
+/// A `CQFRAME`'s beacon, asked of the modem and not answered yet. The program is told `OK` once
+/// the modem has taken it and `WRONG` when it refused, never `OK` for a CQ that does not go:
+/// `VarAC` at KK4ODA-1 showed two CQs as sent that a station under automatic control had
+/// refused (2026-11-19). No later command is read while the answer is awaited, so the replies
+/// keep the commands' order; what the modem says meanwhile is passed on as ever, so a slow pass
+/// holds back no `PTT ON` (ADR-0106).
+#[derive(Debug)]
+struct BeaconAsk {
+    /// Where the modem's answer comes.
+    reply: std::sync::mpsc::Receiver<Response>,
+    /// The beacon asked for is under the name the host gave it: refused as not this station's,
+    /// the plain beacon is asked for (ADR-0024).
+    named: bool,
+    /// The command as the program sent it, for the log.
+    command: String,
+}
+
+/// Where a `CQFRAME` stands.
+#[derive(Debug)]
+enum BeaconAnswer {
+    /// Still waiting for the modem: no answer yet, or the name was refused and the plain
+    /// beacon is asked for now.
+    Waiting(BeaconAsk),
+    /// The line to tell the program: `OK` or `WRONG`.
+    Said(&'static str),
+}
+
+impl BeaconAsk {
+    /// Ask for the beacon `params` describe; `None` when the modem has stopped.
+    fn new(handle: &ControlHandle, params: serde_json::Value, command: String) -> Option<Self> {
+        let named = params.get("callsign").is_some();
+        handle
+            .ask(request("beacon", params))
+            .ok()
+            .map(|reply| Self {
+                reply,
+                named,
+                command,
+            })
+    }
+
+    /// The modem's answer, waiting at most `wait` for it. A refusal is said in the log with the
+    /// modem's reason, which the panel shows: the operator is looking at the program, which
+    /// hears only `WRONG`.
+    fn answer(self, wait: Duration, handle: &ControlHandle, notes: &Notes) -> BeaconAnswer {
+        use std::sync::mpsc::RecvTimeoutError;
+        let response = match self.reply.recv_timeout(wait) {
+            Ok(response) => response,
+            Err(RecvTimeoutError::Timeout) => return BeaconAnswer::Waiting(self),
+            Err(RecvTimeoutError::Disconnected) => {
+                self.refused(notes, "the modem has stopped");
+                return BeaconAnswer::Said("WRONG");
+            }
+        };
+        if response.ok {
+            return BeaconAnswer::Said("OK");
+        }
+        let why = response
+            .error
+            .unwrap_or_else(|| ApiError::new("refused", "the modem gave no reason", false));
+        // a name that is not this station's leaves the plain beacon, which is what the published
+        // command asks for (ADR-0024)
+        if self.named && why.code == "bad_params" {
+            if let Some(plain) = Self::new(handle, json!({}), self.command.clone()) {
+                return BeaconAnswer::Waiting(plain);
+            }
+            self.refused(notes, "the modem has stopped");
+            return BeaconAnswer::Said("WRONG");
+        }
+        self.refused(notes, &why.message);
+        BeaconAnswer::Said("WRONG")
+    }
+
+    fn refused(&self, notes: &Notes, why: &str) {
+        note(
+            notes,
+            true,
+            format!(
+                "the program's CQ ({}) was not sent, and it was told WRONG: {why}",
+                self.command
+            ),
+        );
+    }
 }
 
 impl From<bool> for Applied {
@@ -1470,21 +1581,16 @@ fn apply(
         }
         HostAction::CqFrame(source) => {
             // the beacon goes under the name the host gave it when that is this station's
-            // (ADR-0024); a name the modem refuses as not its own leaves the plain beacon,
-            // which is what the published command asks for
-            let named = source
-                .as_ref()
-                .map_or_else(|| json!({}), |call| json!({ "callsign": call }));
-            let refused_name = handle.call(request("beacon", named)).is_ok_and(|reply| {
-                reply
-                    .error
-                    .as_ref()
-                    .is_some_and(|error| error.code == "bad_params")
-            });
-            if refused_name {
-                let _ = handle.call(request("beacon", json!({})));
+            // (ADR-0024); the program hears OK or WRONG once the modem has answered, the loop
+            // passing on what the modem says meanwhile (`BeaconAsk`)
+            let (params, command) = source.as_ref().map_or_else(
+                || (json!({}), "CQFRAME".to_owned()),
+                |call| (json!({ "callsign": call }), format!("CQFRAME {call}")),
+            );
+            match BeaconAsk::new(handle, params, command) {
+                Some(asked) => Applied::Beacon(asked),
+                None => say(writer, "WRONG").into(),
             }
-            Applied::Done
         }
         // VarAC's TUNE button: the tone for as long as the modem plays one, which `TUNE OFF`
         // cuts short. Its keying reaches the program as `PTT ON`/`PTT OFF`, as any other does,
@@ -2479,13 +2585,16 @@ mod tests {
                                     seen.push((method.clone(), command.request.params.clone()));
                                 }
                                 let result = answer(&method, &control);
-                                // a script refuses a request by answering {"error": <code>}
+                                // a script refuses a request by answering {"error": <code>},
+                                // and says why with "message" if it likes
                                 let reply = match result["error"].as_str() {
                                     Some(code) => Response::failed(
                                         command.request.id.clone(),
                                         crate::control::protocol::ApiError::new(
                                             code,
-                                            "refused by the script",
+                                            result["message"]
+                                                .as_str()
+                                                .unwrap_or("refused by the script"),
                                             false,
                                         ),
                                     ),
@@ -3017,6 +3126,94 @@ mod tests {
         assert_eq!(beacons.len(), 2, "{beacons:?}");
         assert_eq!(beacons[0]["callsign"], "K1ABC-9");
         assert!(beacons[1].get("callsign").is_none(), "{beacons:?}");
+    }
+
+    #[test]
+    fn a_cq_the_station_refuses_is_wrong_and_its_reason_is_logged() {
+        // KK4ODA-1, 2026-11-19: VarAC's Call CQ twice, a station left under automatic control,
+        // nothing on the air — and OK both times, so VarAC showed the CQs as sent. The program
+        // hears WRONG, and the station's reason goes to the log the panel shows
+        const WHY: &str = "Cannot beacon: a station under automatic control sends no beacon \
+                           (§97.203(d)). Control is Automatic in Setup step 1";
+        let (modem, server) = Modem::start(|method, _| {
+            if method == "beacon" {
+                json!({"error": "refused", "message": WHY})
+            } else {
+                json!({})
+            }
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("CQFRAME KK4ODA 500");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "WRONG");
+        // asked once: a refusal that is not of the name leaves no plain beacon to try
+        assert_eq!(params_of(&modem, "beacon").len(), 1);
+        // the next command is answered as ever
+        client.send("VERSION");
+        assert!(
+            client
+                .expect(|l| l.starts_with("VERSION"))
+                .contains("Aether")
+        );
+        let notes = server.take_notes();
+        let refused = notes
+            .iter()
+            .find(|note| note.text.contains("CQFRAME KK4ODA"))
+            .expect("the refusal is logged");
+        assert!(refused.warn, "{refused:?}");
+        assert!(refused.text.contains("WRONG"), "{refused:?}");
+        assert!(refused.text.contains(WHY), "{refused:?}");
+    }
+
+    #[test]
+    fn a_cq_the_station_takes_is_ok_and_keys_as_before() {
+        // a station under local control takes the CQ: OK, then its keying, which a program
+        // that keys the radio keys on
+        let (modem, server) = Modem::start(|method, control| {
+            if method == "beacon" {
+                control.publish(&Event::new("ptt", json!({"on": true, "host_keys": true})));
+            }
+            json!({})
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("CQFRAME KK4ODA-9 500");
+        let mut heard = Vec::new();
+        while heard.len() < 2 {
+            heard.push(client.expect(|l| l == "OK" || l == "WRONG" || l.starts_with("PTT")));
+        }
+        assert!(heard.contains(&"OK".to_owned()), "{heard:?}");
+        assert!(heard.contains(&"PTT ON".to_owned()), "{heard:?}");
+        assert_eq!(params_of(&modem, "beacon")[0]["callsign"], "KK4ODA-9");
+        assert!(server.take_notes().iter().all(|note| !note.warn));
+    }
+
+    #[test]
+    fn a_ptt_on_is_not_held_behind_a_cqs_answer() {
+        // The CQ's OK waits for the modem's answer, and a slow pass delays that answer. A
+        // program that keys the radio keys on PTT ON, which must not wait behind it (ADR-0106):
+        // here the station keys, then takes most of a second to answer the beacon
+        let (_modem, server) = Modem::start(|method, control| {
+            if method == "beacon" {
+                control.publish(&Event::new("ptt", json!({"on": true, "host_keys": true})));
+                std::thread::sleep(Duration::from_millis(800));
+            }
+            json!({})
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("CQFRAME KK4ODA 500");
+        let sent = Instant::now();
+        assert_eq!(
+            client.expect(|l| l == "OK" || l == "WRONG" || l.starts_with("PTT")),
+            "PTT ON"
+        );
+        assert!(
+            sent.elapsed() < Duration::from_millis(600),
+            "PTT ON after {:?}",
+            sent.elapsed()
+        );
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
     }
 
     #[test]

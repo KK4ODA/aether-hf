@@ -1571,6 +1571,27 @@ impl Config {
         })
     }
 
+    /// The regulatory settings the station acts on: Setup step 1's — except while the host
+    /// program keys the radio (`[ptt] kind = "host"`), when none of them acts: no rules profile
+    /// and no control, which is what Setup shows (*Host*) and what a station that cannot read
+    /// its dial can honour (ADR-0025). The author's decision, 2026-11-19: KK4ODA-1's Aether
+    /// profile for `VarAC` kept the Automatic its `RadioPost` gateway had set, greyed under
+    /// *Host*, and it refused `VarAC`'s CQs. The file keeps what it says, for another radio
+    /// control.
+    #[must_use]
+    pub fn regulatory_in_force(&self) -> crate::regulatory::Settings {
+        let settings = self.regulatory.settings();
+        if matches!(self.ptt, PttConfig::Host { .. }) {
+            crate::regulatory::Settings {
+                profile: "none".to_owned(),
+                control: None,
+                ..settings
+            }
+        } else {
+            settings
+        }
+    }
+
     /// Busy-detector settings in the form the detector wants.
     #[must_use]
     pub fn busy_config(&self) -> BusyConfig {
