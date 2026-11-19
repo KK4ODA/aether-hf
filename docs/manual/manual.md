@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.14.3 |
+| **Version** | 1.15.0 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.167 |
 | **Licence** | CC BY 4.0 |
@@ -1216,9 +1216,10 @@ levels in *VarAC default* are kept too.
 ### Finding Winlink's programs
 
 On Windows, Aether finds Winlink Express, RMS Trimode and RMS Packet and reads each one's radio and
-TNC settings into an Aether profile. It only reads the programs' files; it never changes them.
+TNC settings into an Aether profile. When a program must change to reach Aether, Aether can make
+that change in the program's own settings for you, with the program closed.
 
-![Setup step 5's Winlink programs: Find, Add folder, and a table of six setups in four installs: Winlink Express N1CALL and N2CALL in C:\RMS Express, both pointing at Aether on 127.0.0.1:8300, N1CALL in a test copy pointing at port 8310, the RMS Trimode gateway N1CALL-1 pointing at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10, which cannot be ticked; three rows ticked, Winlink Express keyed by the host program and by Aether, and the Trimode gateway; under it what each profile will set (callsign, Host programs on, bandwidth, for the gateway automatic control and wait for clear, keying, rules or CAT port and speed) and, in amber, what the program must say](screens/hostapps.png)
+![Setup step 5's Winlink programs: Find, Add folder, and a table of six setups in four installs: Winlink Express N1CALL and N2CALL in C:\RMS Express, both pointing at Aether on 127.0.0.1:8300, N1CALL in a test copy pointing at port 8310, the RMS Trimode gateway N1CALL-1 pointing at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10, which cannot be ticked; three rows ticked, Winlink Express keyed by the host program and by Aether, and the Trimode gateway; under it what each profile will set (callsign, Host programs on, bandwidth, for the gateway automatic control and wait for clear, keying, then the sideband and the dial for the rules check or the CAT port and speed), for the gateway a ticked Set it in RMS Trimode with the program path it will write, and, in amber, what the program must say](screens/hostapps.png)
 
 *Figure 34. Winlink's programs found, three setups ticked, and what each profile will set.*
 
@@ -1228,16 +1229,26 @@ TNC settings into an Aether profile. It only reads the programs' files; it never
    callsigns in one install, and each is a row. **Find** looks again. If a copy is missing, type its
    folder in **Add folder** and press **Add**: it is looked in every time after.
 2. Tick the rows you want. Under the list, each ticked row shows the profile's name and what it
-   will set (callsign, Host programs, bandwidth, keying, rules, port), and in amber what the program
-   must say for it to work. Hold the pointer on any of them to see why.
-3. **Keying** says who keys the radio:
+   will set (callsign, Host programs, bandwidth, keying, rules, port, the dial), and in amber what
+   the program must say for it to work. Hold the pointer on any of them to see why.
+3. **Set it in** *the program*: shown when the program's own settings need a change to reach
+   Aether. Winlink Express's VARA TNC on another computer, or its *Auto Launch Vara* left on, and
+   the program RMS Trimode starts as its VARA. Each change shows as it is and as it will be. Left
+   ticked, **Import** writes them into the program's settings file and keeps the file as it was
+   beside it (`RMS Express.ini.aether.bak`). Only those settings change. Close the program first:
+   it writes its settings back when it closes, so the box cannot be ticked while it runs. Nothing
+   that publishes a gateway's channels to Winlink is ever changed.
+4. **Keying** says who keys the radio:
    - **Host program** (the default when the program keys the radio itself): the program keeps its
      radio setup, keys on Aether's `PTT ON` and tunes the radio, as it did with VARA. Aether reads no
-     dial, so the rules are *None* and you check every transmission.
+     dial, so it takes the program's channel, less 1.5 kHz, as the dial (**Dial is at**), and the
+     rules check stays on. The dial is set when you use **Import and switch**. When you move the
+     program to another channel, change **Dial is at** on the Session tab too. A gateway that scans
+     several channels leaves the rules at *None*: Aether cannot tell which channel it is on.
    - **Aether**: Aether keys the radio the way the program did, and the rules check stays on. Set
      the program's radio to *Manual* and its PTT port to *None*.
    - **as it is**: the program keys by VOX or controls no radio, and Aether's keying is left alone.
-4. **Import** saves a profile for each ticked row, named for the program and the callsign
+5. **Import** saves a profile for each ticked row, named for the program and the callsign
    (*Winlink Express KK4ODA*). **Import and switch** saves one and switches to it. Importing again
    brings a profile up to date and keeps its sound card and levels.
 
@@ -1687,3 +1698,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.14.1 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): a call through a digipeater is refused; Aether had called the station directly. |
 | 1.14.2 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): a call answered while RMS Trimode is between scan steps is told to Trimode once it has been listening again for a moment, never the instant it starts listening, which it ignored. |
 | 1.14.3 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): if RMS Trimode stops listening just as it is told of a call, Aether takes the news back and tells it again once it listens; Trimode had ignored the call. |
+| 1.15.0 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): **Set it in** the program writes what Winlink Express or RMS Trimode must change to reach Aether into its own settings, with the program closed and the file kept as it was; a profile keyed by the program keeps the rules check, with the program's channel as the dial. |

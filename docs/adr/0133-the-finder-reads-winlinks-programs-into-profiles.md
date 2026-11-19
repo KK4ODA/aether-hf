@@ -1,8 +1,9 @@
 # ADR-0133: Aether finds Winlink's programs and reads their settings into profiles
 
 **Status:** accepted for building, 2026-11-19 (the author's brief for the host-program retest).
-The keying default (§2.4) and the port rule (§2.5) are this ADR's choices; §6 lists what is left
-for the author.
+The keying default (§2.4) and the port rule (§2.5) are this ADR's choices. The author answered §6
+the same day, yes to both: §7 is what they changed. The finder now writes what a program must
+change to reach Aether, when asked, and a profile keyed by the program keeps the rules check.
 
 ## 1. Context
 
@@ -171,3 +172,68 @@ helper to `crate::ini`, which both now use.
    program's settings (`RMS Express.ini.bak`) would be kept; the program must be closed first.
 2. Whether a profile made with the program keying should keep the rules check with a declared
    dial (the program's channel frequency, which the reader has) instead of *None*.
+
+The author's answers (2026-11-19): yes, and yes. §7.
+
+## 7. The author's decisions: the program set to reach Aether, and the rules kept
+
+### 7.1 Writing what the program must change (`hostapps/point.rs`)
+
+Each reader also says which of its program's settings it needs to reach Aether (`Reader::point`,
+pure, a list of `Edit`s), and only a VARA HF TNC's:
+
+* **Winlink Express**: `[Vara TNC] TNC Address` → `127.0.0.1` and `TCP Port` → Aether's host port
+  when it names another computer, and `Auto Launch Vara` → `False` (it ends the TNC it started when
+  it closes).
+* **RMS Trimode**: the same address and port, and `Vara Program File` → Aether's application
+  (`crate::varac::app_path`) — the gateway guide's first way (§3.2), which since ADR-0097 starts
+  Aether only if no modem runs. Never `Enabled`, a channel's `Mode` or anything else that
+  publishes the gateway's channels to Winlink.
+* **RMS Packet**: nothing; it waits for Aether FM.
+
+A program on another port of this computer still needs no change: the profile follows it (§2.5).
+`point::changes` compares the edits with the file and keeps those that differ, and
+`hostapps.find` gives each install's as `program_changes` (each `file`, `section`, `key`, `from`,
+`to`, `why`). `point::point` writes them only when the operator asks — `hostapps.point {folder}`,
+or `point: true` on an import, which writes first and plans from the file as it is then:
+
+* **never while the program runs**. Winlink's programs read their settings when they start and
+  write them back when they close, so a change made under a running one is lost. The processes
+  are asked again just before (`find::running_now`; a find may be minutes old), and a running
+  program is refused (`refused`, "close it first");
+* only the keys named, every other byte kept (`crate::ini::Ini`, line ends as found), the file as
+  it was kept beside it as `<name>.aether.bak`, the new one written whole or not at all;
+* the install read again afterwards (`find::reread`) and put in the last find's place, so the
+  panel and the next plan see the program as it is now; a `log` line named `hostapps` says what
+  was written and where the old file is.
+
+The panel shows the changes under a ticked row as **Set it in** *the program*, each as it is and
+as it will be, ticked unless the operator unticks it, and disabled with the reason while the
+program runs.
+
+### 7.2 The program keying keeps the rules check
+
+With `Keying::Program`, the plan no longer sets `regulatory.profile = "none"`. Aether still reads
+no dial, so the dial is declared, as the Session tab's *Dial is at* does for any radio that cannot
+report its own:
+
+* **one channel** (a Winlink Express callsign's last centre frequency, a Trimode gateway with one
+  VARA channel): the dial is that centre less 1.5 kHz, on the upper sideband (`regulatory.sideband
+  = "usb"` in the profile; every VARA program tunes the audio centre 1.5 kHz above the carrier —
+  Winlink Express's *USB Dial*). The plan carries it as `dial_hz`;
+* **no frequency** in the program: the rules stay on and the dial is left to declare;
+* **several channels** (a scanning Trimode, `ProgramSetup::channels_hz`): Aether cannot tell which
+  one a transmission goes out on, so the rules stay *None*, as before, and the plan says why.
+
+A dial is this computer's setting (`regulatory.dial_hz`, Machine scope), not a profile's, so it is
+declared at the switch: `hostapps.import {load}` sets it after the profile is loaded, and the
+panel's *Import and switch* does the same after its own switch. A profile switched to later from
+the Profile bar keeps whatever dial was declared last. The program can move to another channel
+without Aether knowing; the plan's note says to change *Dial is at* then. Setup shows the rules
+fields of a host-keyed station whenever the rules are on (they were greyed to *Host* always);
+choosing *Host program* keying in Setup still sets the rules to *None* (ADR-0025).
+
+### 7.3 What this changes in §2 and §5
+
+§2.4's cost (the rules off) holds only for a program that scans several channels. §5's first
+alternative is built, behind the operator's tick.

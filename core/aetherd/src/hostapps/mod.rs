@@ -4,9 +4,9 @@
 //! An operator moving from VARA has Winlink Express, RMS Trimode or RMS Packet set up already:
 //! a radio, its CAT port and keying, a TNC address and port. The finder looks for each install
 //! ([`find`]), reads its settings files with that program's [`Reader`] — a pure function over
-//! the files' bytes, one per program — and [`import`] makes a profile of what it read. Nothing
-//! is ever written to another program's files: what the program must change to reach Aether is
-//! said, not done.
+//! the files' bytes, one per program — and [`import`] makes a profile of what it read. What the
+//! program must change to reach Aether is written into its settings only when the operator
+//! asks ([`point`]), never while it runs, with the file kept as it was.
 //!
 //! A reader reads only the keys it needs. A program's files also hold the operator's address,
 //! telephone, position, e-mail and password; none of those keys is read, and a [`Reading`] and
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 pub mod find;
 pub mod import;
 pub mod packet;
+pub mod point;
 pub mod state;
 pub mod trimode;
 pub mod winlink_express;
@@ -80,6 +81,9 @@ pub struct Reader {
     pub files: &'static [&'static str],
     /// Read them. Pure: the same files always read the same.
     pub read: fn(&Files) -> Reading,
+    /// The settings it needs to reach Aether ([`point`]). Pure, and only a TNC's address, port
+    /// and launch: never an account, an address, a position or what a gateway publishes.
+    pub point: fn(&Files, &point::Target) -> Vec<point::Edit>,
 }
 
 /// What a reader made of an install's files.
@@ -108,6 +112,9 @@ pub struct ProgramSetup {
     pub bandwidth_hz: Option<u32>,
     /// The frequency it works on, when it has one: a gateway's channel, a client's last.
     pub frequency_hz: Option<u64>,
+    /// Every channel's centre, for a program that scans several (a gateway's); empty when
+    /// `frequency_hz` is the only one.
+    pub channels_hz: Vec<u64>,
     /// An automatic-control station (a gateway).
     pub gateway: bool,
     /// The radio as the program controls it; `None` when it controls none (Manual).

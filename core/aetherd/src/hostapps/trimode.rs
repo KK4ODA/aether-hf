@@ -42,6 +42,7 @@ pub static READER: Reader = Reader {
     names: &["RMS Trimode"],
     files: &[SETTINGS],
     read,
+    point,
 };
 
 /// A channel Trimode offers VARA HF on.
@@ -206,11 +207,59 @@ pub fn read(files: &Files) -> Reading {
         // the widest channel: Trimode says `BW` for each as it scans, and Aether follows it
         bandwidth_hz: channels.iter().map(|c| c.bandwidth_hz).max(),
         frequency_hz: first.map(|c| c.centre_hz),
+        channels_hz: channels.iter().map(|c| c.centre_hz).collect(),
         gateway: true,
         radio: radio(&ini),
         tncs: vec![tnc],
     });
     reading
+}
+
+/// The settings Trimode needs to reach Aether, of its VARA TNC only: this computer when it
+/// names another (a port of its own here is followed by the profile instead), and Aether's
+/// application as the program it starts and watches as its VARA — the gateway guide's first
+/// way (§3.2), which since ADR-0097 starts Aether only if no modem runs. Never `Enabled` or a
+/// channel's protocols: those publish the gateway's channels to Winlink.
+#[must_use]
+pub fn point(files: &Files, target: &super::point::Target) -> Vec<super::point::Edit> {
+    use super::point::Edit;
+    const S: &str = "Vara TNC";
+    let Some(bytes) = files.get(SETTINGS) else {
+        return Vec::new();
+    };
+    let ini = Ini::new(bytes.clone());
+    let mut edits = Vec::new();
+    if text(&ini, S, "TNC Address").is_some_and(|h| !super::is_local(&h)) {
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "TNC Address",
+            to: VARA_HOST.to_owned(),
+            why: "Aether runs on this computer",
+        });
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "TCP Port",
+            to: target.host_port.to_string(),
+            why: "Aether's host interface is on this port",
+        });
+    }
+    let program = text(&ini, S, "Vara Program File");
+    let is_aether = program.as_deref().is_some_and(super::import::is_aether_app);
+    if let Some(app) = &target.app
+        && !is_aether
+    {
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "Vara Program File",
+            to: app.clone(),
+            why: "Trimode starts and watches the program named here as its VARA: Aether's \
+                  application stands in, and starts Aether only if no modem runs",
+        });
+    }
+    edits
 }
 
 #[cfg(test)]
@@ -251,6 +300,39 @@ mod tests {
             text = text.replace(from, to);
         }
         read(&files(&text))
+    }
+
+    #[test]
+    fn pointing_names_aethers_application_and_never_what_publishes_channels() {
+        let target = crate::hostapps::point::Target {
+            host_port: 8300,
+            app: Some("C:\\Aether HF\\aether-hf.exe".into()),
+        };
+        // it runs Aether already, here: nothing to change
+        assert!(point(&files(INI), &target).is_empty());
+        // VARA's own program, on another computer, with the TNC turned off
+        let text = INI
+            .replace(
+                "C:\\Users\\op\\AppData\\Local\\Aether HF\\aether-hf.exe",
+                "C:\\VARA\\VARA.exe",
+            )
+            .replace("TNC Address=127.0.0.1", "TNC Address=192.168.1.9")
+            .replace("Enabled=True", "Enabled=False");
+        let edits = point(&files(&text), &target);
+        let keys: Vec<&str> = edits.iter().map(|e| e.key).collect();
+        assert_eq!(keys, ["TNC Address", "TCP Port", "Vara Program File"]);
+        assert_eq!(edits[2].to, "C:\\Aether HF\\aether-hf.exe");
+        assert!(edits.iter().all(|e| e.section == "Vara TNC"));
+        let changes = crate::hostapps::point::changes(Program::RmsTrimode, &files(&text), &target);
+        assert_eq!(changes.len(), 2, "the port is 8300 already: {changes:?}");
+        // with no application known, the program path is left
+        let none = crate::hostapps::point::Target {
+            app: None,
+            ..target
+        };
+        assert_eq!(point(&files(&text), &none).len(), 2);
+        // the channels the gateway offers are read whole
+        assert_eq!(read(&files(INI)).setups[0].channels_hz, [7_102_500]);
     }
 
     #[test]

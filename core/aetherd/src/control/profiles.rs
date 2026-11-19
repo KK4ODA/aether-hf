@@ -41,6 +41,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "profile.delete"
             | "profile.import"
             | "hostapps.import"
+            | "hostapps.point"
     )
 }
 

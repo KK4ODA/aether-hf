@@ -4699,7 +4699,8 @@ table.hostapps select {
 }
 
 .hostapps-sets,
-.hostapps-says {
+.hostapps-says,
+.hostapps-writes {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s1) var(--s2);
@@ -4714,6 +4715,16 @@ table.hostapps select {
 .hostapps-preview .setting[data-kind="program"] {
   border-color: var(--status-warning);
   color: var(--status-warning);
+}
+
+.hostapps-writes {
+  align-items: center;
+}
+
+.hostapps-writes label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .hostapps-preview .setting[data-kind="note"] {

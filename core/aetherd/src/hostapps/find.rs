@@ -245,6 +245,35 @@ pub fn installs(sources: &Sources) -> Vec<Install> {
     out
 }
 
+/// An install read again, as a find would report it now: after its program's settings were
+/// written, so that a plan sees them. `running` is what [`running_now`] said.
+#[must_use]
+pub fn reread(old: &Install, running: &[PathBuf]) -> Install {
+    let reader = old.program.reader();
+    let dir = PathBuf::from(&old.folder);
+    let reading = (reader.read)(&read_files(reader, &dir));
+    let version = reading.version.clone().or_else(|| old.version.clone());
+    let sources = Sources {
+        running: running.to_vec(),
+        ..Sources::default()
+    };
+    install(
+        old.program,
+        &dir,
+        old.found_by.clone(),
+        reading,
+        version,
+        &sources,
+    )
+}
+
+/// The executables of the programs running now: asked just before a program's settings are
+/// written, since a find's answer may be minutes old.
+#[must_use]
+pub fn running_now() -> Vec<PathBuf> {
+    system::running_executables()
+}
+
 /// An install as the finder reports it.
 fn install(
     program: Program,

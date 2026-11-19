@@ -229,10 +229,10 @@ const HOSTAPPS = (() => {
     const notes = port ? [advice(`Aether on port ${port}`, "where it points")] : [];
     return [
       {profile: `Winlink Express ${call}`, keying: "program", keyings: ["program", "aether"],
-       changes: {...base, "ptt.kind": "host", "regulatory.profile": "none"},
+       changes: {...base, "ptt.kind": "host", "regulatory.sideband": "usb"},
        program_must: [advice("Radio setup as it is", "it keys the radio on Aether's PTT ON")],
-       notes: [...notes, advice("Rules check off", "Aether reads no dial with the program keying")],
-       pointing: port ? "other_port" : "aether", refused: null},
+       notes: [...notes, advice("Rules check at 7.082 MHz", "the program's channel less 1.5 kHz")],
+       pointing: port ? "other_port" : "aether", dial_hz: 7082000, refused: null},
       {profile: `Winlink Express ${call}`, keying: "aether", keyings: ["program", "aether"],
        changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                  "ptt.baud": 38400},
@@ -251,19 +251,20 @@ const HOSTAPPS = (() => {
     const call = "N1CALL-1";
     const base = {callsign: call, "host.enabled": true, "radio.bandwidth": 2300,
                   "regulatory.control": "automatic", "radio.wait_for_clear": true};
-    const starts = advice("Starts its own TNC", "it starts C:\\VARA\\VARA.exe as its TNC: name "
-      + "Aether's application there, or turn its launch off and start Aether first");
+    // what Aether can write for it: the panel leaves it out while Set it in is ticked
+    const starts = {...advice("Starts its own TNC", "it starts C:\\VARA\\VARA.exe as its TNC: name "
+      + "Aether's application there, or turn its launch off and start Aether first"), settable: true};
     return {
       name: "N1CALL", callsigns: [call], session: "Vara HF", bandwidth_hz: 2300,
-      frequency_hz: 3591500, gateway: true, radio,
+      frequency_hz: 3591500, channels_hz: [3591500], gateway: true, radio,
       tncs: [{...vara(8300, "aether"), launches: true}],
       plans: [
         {profile: `RMS Trimode ${call}`, keying: "program", keyings: ["program", "aether"],
-         changes: {...base, "ptt.kind": "host", "regulatory.profile": "none"},
+         changes: {...base, "ptt.kind": "host", "regulatory.sideband": "usb"},
          program_must: [advice("Radio setup as it is", "it keys the radio on Aether's PTT ON")],
          notes: [starts,
-                 advice("Rules check off", "Aether reads no dial with the program keying")],
-         pointing: "aether", refused: null},
+                 advice("Rules check at 3.590 MHz", "the gateway's channel less 1.5 kHz")],
+         pointing: "aether", dial_hz: 3590000, refused: null},
         {profile: `RMS Trimode ${call}`, keying: "aether", keyings: ["program", "aether"],
          changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                    "ptt.baud": 38400},
@@ -295,9 +296,14 @@ const HOSTAPPS = (() => {
        version: "1.8.5.0", callsigns: ["N1CALL"], points_at_aether: false, notes: [],
        setups: [setup("N1CALL", "Vara HF P2P", 2300, 8310, "other_port")]},
       {program: "rms_trimode", program_name: "RMS Trimode", folder: "C:\\RMS\\RMS Trimode",
-       exe: "C:\\RMS\\RMS Trimode\\RMS Trimode.exe", found_by: ["usual", "shortcut", "running"],
-       running: true, version: "1.4.4.2", callsigns: ["N1CALL-1"], points_at_aether: true,
-       notes: [], setups: [gateway]},
+       exe: "C:\\RMS\\RMS Trimode\\RMS Trimode.exe", found_by: ["usual", "shortcut"],
+       running: false, version: "1.4.4.2", callsigns: ["N1CALL-1"], points_at_aether: true,
+       notes: [], setups: [gateway],
+       // the program Trimode starts as its VARA, written when the box is left ticked
+       program_changes: [{file: "RMS Trimode.ini", section: "Vara TNC", key: "Vara Program File",
+                          from: "C:\\VARA\\VARA.exe",
+                          to: "C:\\Users\\op\\AppData\\Local\\Aether HF\\aether-hf.exe",
+                          why: "Trimode starts and watches the program named here as its VARA"}]},
       {program: "rms_packet", program_name: "RMS Packet", folder: "C:\\RMS\\RMS Packet",
        exe: "C:\\RMS\\RMS Packet\\RMS Packet.exe", found_by: ["usual", "shortcut"],
        running: false, version: "2.2.4.0", callsigns: ["N1CALL-10"], points_at_aether: false,

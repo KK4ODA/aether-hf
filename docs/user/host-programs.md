@@ -43,16 +43,25 @@ A profile made this way sets:
   program answers calls then (ADR-0107);
 * who keys the radio. **Host program** is the default whenever the program keys the radio
   itself: the program's radio setup stays as it was with VARA — it keys on Aether's `PTT ON` and
-  keeps tuning the radio — and Aether's rules check is off, as with VARA. The other choice,
+  keeps tuning the radio. Aether cannot read the dial then, so it takes the program's channel,
+  less 1.5 kHz, as the dial (*Dial is at* on the Session tab, set by **Import and switch**), and
+  its rules check stays on. Move the program to another channel and change *Dial is at* too. A
+  gateway that scans several channels leaves the rules check off, as with VARA: Aether cannot
+  tell which channel it is on. The other choice,
   **Aether**, keys the radio the way the program did (CAT on its port, speed and make, or its
   RTS/DTR line) and keeps the rules check on; the program's radio must then be *Manual* and its
   PTT port *None*, because only one program can hold the CAT port. A program that keys by VOX,
   or controls no radio, leaves Aether's keying as it is.
 
-Aether only reads the programs' files; it never changes them. What the program must change, if
-anything, is shown in amber beside the profile (Winlink Express's *Auto Launch Vara* off, for
-one). A setup above 30 MHz, or one whose only TNC is VARA FM or AGW, waits for Aether FM and
-makes no profile.
+What the program must change to reach Aether, if anything, is shown under the profile as **Set
+it in** *the program*, each setting as it is and as it will be: Winlink Express's VARA TNC
+address when it names another computer, its *Auto Launch Vara* (off), and the program RMS Trimode
+starts as its VARA (Aether's application). Left ticked, **Import** writes those settings, and
+only those, into the program's own settings file, and keeps the file as it was beside it
+(`RMS Express.ini.aether.bak`). **Close the program first**: it writes its settings back when it
+closes, so Aether will not change them while it runs. Nothing that publishes a gateway's
+channels to Winlink is ever changed. A setup above 30 MHz, or one whose only TNC is VARA FM or
+AGW, waits for Aether FM and makes no profile.
 
 ## VarAC, the host program owning the radio
 

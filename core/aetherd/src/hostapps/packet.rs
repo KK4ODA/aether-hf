@@ -37,7 +37,15 @@ pub static READER: Reader = Reader {
     names: &["RMS Packet"],
     files: &[INI, KISS_EXAMPLES[0], KISS_EXAMPLES[1]],
     read,
+    point,
 };
+
+/// Nothing to write: RMS Packet works on VHF and UHF through VARA FM, AGW or a serial KISS TNC,
+/// all of which wait for Aether FM (ADR-0133 §4).
+#[must_use]
+pub fn point(_files: &Files, _target: &super::point::Target) -> Vec<super::point::Edit> {
+    Vec::new()
+}
 
 /// VARA FM's command port when the ini names none (the help: "defaults to 8300").
 const VARA_FM_PORT: u16 = 8300;
@@ -135,6 +143,7 @@ fn vara_fm(ini: &Ini, notes: &mut Vec<String>) -> Option<ProgramSetup> {
         radio: None,
         tncs: vec![tnc],
         frequency_hz: frequency(ini, S),
+        channels_hz: Vec::new(),
     })
 }
 
@@ -230,6 +239,7 @@ fn packet(ini: &Ini, files: &Files, notes: &mut Vec<String>) -> Vec<ProgramSetup
             radio: None,
             tncs: vec![tnc],
             frequency_hz: frequency(ini, &section),
+            channels_hz: Vec::new(),
         });
     }
     setups

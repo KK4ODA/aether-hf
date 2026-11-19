@@ -94,7 +94,10 @@ turns their own settings into Aether profiles:
    Trimode one per gateway, RMS Packet one per channel. Each row shows the version, whether the
    program is running, and the TNC port it points at (*Aether* when it is this Aether's).
 3. **Tick the ones you want.** Under the list, each ticked row shows the profile it will make
-   and, in amber, anything the program must change. Usually nothing does.
+   and, in amber, anything the program must change. Usually nothing does. When something does
+   (Winlink Express's *Auto Launch Vara*, the program RMS Trimode starts as its VARA), **Set it
+   in** *the program* writes it into the program's settings for you, with the program closed,
+   and keeps the old file beside it.
 4. **Import** saves one profile per row, named for the program and the callsign (*Winlink Express
    KK4ODA*). Each profile sets:
    - the program's callsign and bandwidth (VARA's 2750 runs as 2300);
@@ -106,10 +109,10 @@ turns their own settings into Aether profiles:
    levels are kept.
 
 **Who keys the radio.** By default the program keeps its radio setup and keys on Aether's
-`PTT ON`, as it did with VARA. Aether's rules check is off then, as it is with VARA. Or Aether
-keys the radio the way the program did (CAT, or an RTS/DTR line) and keeps its rules check on;
-the program's radio is then *Manual* with no PTT port, since only one program can hold the CAT
-port.
+`PTT ON`, as it did with VARA. Aether keeps its rules check on, taking the program's channel as
+the dial; only a gateway that scans several channels has it off, since Aether cannot tell which
+channel it is on. Or Aether keys the radio the way the program did (CAT, or an RTS/DTR line); the
+program's radio is then *Manual* with no PTT port, since only one program can hold the CAT port.
 
 Aether only reads the programs' files and never changes them. A setup above 30 MHz, or one whose
 only TNC is VARA FM or AGW, waits for Aether FM and cannot be ticked.

@@ -3612,6 +3612,7 @@ function wireDevices() {
     if ($("dev-ptt").value !== "host") return;
     select($("reg-profile"), "none");
     $("reg-profile").dispatchEvent(new Event("change", { bubbles: true }));
+    applyHostOwned();
   });
   $("ptt-lead").addEventListener("input", writeConfig);
   $("ptt-line").addEventListener("change", showKeyingFields);
@@ -3941,8 +3942,10 @@ function hostOwnsTheDial(status) {
 
 /// The settings a host program owns, greyed to "Host" in their places: with Host programs on,
 /// the program's MYCALL is the callsign and its BW command the bandwidth while it is attached;
-/// with the radio keyed by the host program, the rules are None and their fields unused. The
-/// fields keep their values underneath, saved as they were, for when the program is not there.
+/// with the radio keyed by the host program and the rules None, their fields are unused (a
+/// profile made from a program's setup keeps the rules on, at a declared dial, and shows
+/// them). The fields keep their values underneath, saved as they were, for when the program is
+/// not there.
 function applyHostOwned() {
   const programs = $("host-enabled").checked;
   const keyed = $("dev-ptt").value === "host";
@@ -3952,7 +3955,10 @@ function applyHostOwned() {
   };
   applyCallsignOwner();
   own("radio-bandwidth", programs);
-  for (const id of ["reg-profile", "reg-control", "reg-license", "reg-sideband"]) own(id, keyed);
+  // a profile made from a program's setup keeps the rules with the program keying, at its
+  // declared dial (ADR-0133 §7): the fields are shown whenever the rules are on
+  const rulesOff = $("reg-profile").value === "none";
+  for (const id of ["reg-profile", "reg-control", "reg-license", "reg-sideband"]) own(id, keyed && rulesOff);
   checkRulesStep();
 }
 
@@ -5545,9 +5551,11 @@ function wireVarac() {
 let hostapps = null;
 // the rows ticked, by folder and setup, with the keying chosen for each
 const hostappsTicked = new Map();
+// the installs whose settings are not to be written, by folder: unticked by the operator
+const hostappsLeave = new Set();
 
 const HOSTAPPS_KEYING = {
-  program: ["Host program", "The program keys the radio on Aether's PTT ON and tunes it, as it did with VARA: nothing in it changes. Aether reads no dial, so its rules check is off"],
+  program: ["Host program", "The program keys the radio on Aether's PTT ON and tunes it, as it did with VARA: nothing in it changes. Aether reads no dial, so its rules check judges at the program's channel, declared as the dial when you switch to the profile here"],
   aether: ["Aether", "Aether keys the radio as the program did, and its rules check stays on; the program's radio must be Manual and its PTT port None"],
 };
 
@@ -5569,6 +5577,7 @@ function hostappsSetting(key, value) {
     "regulatory.profile": ["Rules", value === "none" ? "None" : value, "Setup step 1: the rules check"],
     "regulatory.control": ["Control", String(value).charAt(0).toUpperCase() + String(value).slice(1), "Setup step 1: a gateway is under automatic control, so only its program answers calls"],
     "radio.wait_for_clear": ["Wait for clear", yes, "Setup step 4: nothing the station starts goes over another station"],
+    "regulatory.sideband": ["Sideband", String(value).toUpperCase(), "Setup step 1: the dial is the program's channel less 1.5 kHz, on the upper sideband"],
   }[key];
   return named ?? [key, String(value), key];
 }
@@ -5732,11 +5741,44 @@ function hostappsChosen() {
   return out;
 }
 
+// The program's own settings Aether would write for it to reach Aether: a box to tick (on
+// unless unticked) and each setting as it is and as it will be. A program that runs cannot be
+// written: it writes its settings back when it closes.
+function hostappsWrites(install, writes) {
+  const row = document.createElement("span");
+  row.className = "hostapps-writes";
+  const label = document.createElement("label");
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.disabled = Boolean(install.running);
+  box.checked = !install.running && !hostappsLeave.has(install.folder);
+  box.addEventListener("change", () => {
+    if (box.checked) hostappsLeave.delete(install.folder);
+    else hostappsLeave.add(install.folder);
+    // what the program must say comes back when it is left to be done by hand
+    renderHostappsPreview();
+  });
+  label.append(box, ` Set it in ${install.program_name}`);
+  label.title = install.running
+    ? `Close ${install.program_name} first: it reads its settings when it starts and writes them back when it closes, so Aether cannot change them while it runs`
+    : `Write these settings into ${install.program_name}'s own file when you import. Only these change; the file as it was is kept beside it as ${writes[0].file}.aether.bak`;
+  row.append(label);
+  for (const change of writes) {
+    const chip = document.createElement("span");
+    chip.className = "setting";
+    chip.dataset.kind = "program";
+    chip.textContent = `${change.key} ${change.from ?? "—"} → ${change.to}`;
+    chip.title = `${change.file}, [${change.section}]: ${change.why}`;
+    row.append(chip);
+  }
+  return row;
+}
+
 function renderHostappsPreview() {
   const list = $("hostapps-preview");
   list.replaceChildren();
   const chosen = hostappsChosen();
-  for (const { plan } of chosen) {
+  for (const { install, plan } of chosen) {
     const li = document.createElement("li");
     const name = document.createElement("strong");
     name.textContent = plan.profile;
@@ -5752,8 +5794,23 @@ function renderHostappsPreview() {
       chip.title = where;
       sets.append(chip);
     }
+    if (plan.dial_hz) {
+      const chip = document.createElement("span");
+      chip.className = "setting";
+      chip.textContent = `Dial is at ${(plan.dial_hz / 1e6).toFixed(4).replace(/0$/, "")} MHz`;
+      chip.title =
+        "Declared for the rules check when you switch to the profile here (Import and switch): " +
+        "the program's channel less 1.5 kHz. A dial is this computer's setting, not the profile's. " +
+        "Change it on the Session tab when you move the program to another channel";
+      sets.append(chip);
+    }
     li.append(sets);
-    const advice = [...(plan.program_must ?? []).map((a) => ["program", a]), ...(plan.notes ?? []).map((a) => ["note", a])];
+    const writes = install.program_changes ?? [];
+    if (writes.length) li.append(hostappsWrites(install, writes));
+    // what Aether writes into the program is not also said as the operator's to do
+    const writing = writes.length > 0 && !install.running && !hostappsLeave.has(install.folder);
+    const advice = [...(plan.program_must ?? []).map((a) => ["program", a]), ...(plan.notes ?? []).map((a) => ["note", a])]
+      .filter(([, item]) => !(writing && item.settable));
     if (advice.length) {
       const says = document.createElement("span");
       says.className = "hostapps-says";
@@ -5777,7 +5834,12 @@ function renderHostappsPreview() {
 async function importHostapps(andSwitch) {
   const chosen = hostappsChosen();
   if (!chosen.length) return;
-  const imports = chosen.map(({ install, setup, plan }) => ({ folder: install.folder, setup: setup.name, keying: plan.keying }));
+  const imports = chosen.map(({ install, setup, plan }) => ({
+    folder: install.folder,
+    setup: setup.name,
+    keying: plan.keying,
+    point: (install.program_changes ?? []).length > 0 && !install.running && !hostappsLeave.has(install.folder),
+  }));
   const buttons = [$("btn-hostapps-import"), $("btn-hostapps-import-load")];
   for (const button of buttons) button.disabled = true;
   const note = $("hostapps-note");
@@ -5791,13 +5853,35 @@ async function importHostapps(andSwitch) {
     note.title = refused.length
       ? `Not saved: ${refused.map((r) => `${r.setup} (${r.why})`).join("; ")}`
       : "What the last import did";
-    for (const m of made) log(`profile ${m.profile} ${m.created ? "made" : "updated"} from ${m.setup} in ${m.folder}`, false, "hostapps");
+    for (const m of made) {
+      log(`profile ${m.profile} ${m.created ? "made" : "updated"} from ${m.setup} in ${m.folder}`, false, "hostapps");
+      const wrote = m.pointed?.changes ?? [];
+      if (wrote.length) {
+        const kept = (m.pointed.written ?? []).map((w) => w.backup).join(", ");
+        log(`${m.folder}: ${wrote.map((c) => `${c.key} ${c.to}`).join(", ")} written; kept as it was in ${kept}`, false, "hostapps");
+      }
+    }
     for (const r of refused) log(`${r.setup} in ${r.folder} not imported: ${r.why}`, true, "hostapps");
     hostappsTicked.clear();
-    renderHostapps(hostapps);
+    // the programs' files were read again after any write: the next find shows them as they are
+    findHostapps();
     if (andSwitch && made.length === 1) {
-      const id = made[0].id;
-      withProfileSaved(`switching to ${made[0].profile}`, () => loadProfile(id));
+      const { id, dial_hz: dial } = made[0];
+      withProfileSaved(`switching to ${made[0].profile}`, async () => {
+        await loadProfile(id);
+        // a dial is this computer's setting, not the profile's: declared at the switch, as the
+        // Session tab's Dial is at does
+        if (dial && profiles.active === id) {
+          try {
+            await call("config.set", { "regulatory.dial_hz": dial });
+            if (liveConfig) liveConfig.regulatory = { ...(liveConfig.regulatory ?? {}), dial_hz: dial };
+            log(`the dial is declared at ${khz(dial)}: the program's channel`, false, "rules");
+            refreshStatus();
+          } catch (error) {
+            log(`the dial was not declared: ${error.message}`, true, "rules");
+          }
+        }
+      });
     }
   } catch (error) {
     note.textContent = error.message;

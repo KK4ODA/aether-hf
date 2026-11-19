@@ -9,7 +9,9 @@
 //!   itself): Aether's keying is *Host program*, as with `VarAC`. The program's radio setup is
 //!   left as it is — it keeps keying on Aether's `PTT ON` and tuning the radio (a client's
 //!   channel, a gateway's scan) — so nothing in the program changes. Aether reads no dial then,
-//!   so its rules check is off, as Setup sets it for a host-keyed station.
+//!   so its rules check judges at the program's own channel, declared as the dial when the
+//!   profile is switched to ([`Plan::dial_hz`]; the author's decision of 2026-11-19). A program
+//!   that scans several channels leaves the rules check off: Aether cannot tell which it is on.
 //! * **Aether keys** ([`Keying::Aether`]): Aether keys the radio the way the program did — by
 //!   CAT on the program's port and speed, or by the program's RTS/DTR line — and its rules
 //!   check stays on; the program's radio must be set to *Manual* and its PTT port to *None*,
@@ -138,9 +140,18 @@ pub struct Plan {
     pub notes: Vec<Advice>,
     /// Where the program's TNC points.
     pub pointing: Option<Pointing>,
+    /// The dial declared for the rules check when the station is switched to the profile: the
+    /// program's channel, for a program that keys the radio and tunes it to one. A dial is this
+    /// computer's setting, not a profile's, so it is set at the switch, not kept in the profile.
+    pub dial_hz: Option<u64>,
     /// Why no profile can be made from it, when none can.
     pub refused: Option<String>,
 }
+
+/// Where the dial sits for a channel's centre: the audio centre is 1.5 kHz above the
+/// suppressed carrier on the upper sideband, as every VARA program tunes (Winlink Express's
+/// *USB Dial* is its centre less 1.5 kHz).
+pub const CENTRE_ABOVE_DIAL_HZ: u64 = 1500;
 
 /// A thing to say to the operator: a few words for the screen (a value: `Radio Manual, PTT
 /// port None`), and why, for its tooltip.
@@ -150,6 +161,10 @@ pub struct Advice {
     pub what: String,
     /// Why.
     pub why: String,
+    /// What Aether can set in the program itself ([`super::point`]): the panel leaves it out
+    /// while the operator has it written.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub settable: bool,
 }
 
 /// Advice, from its two parts.
@@ -157,6 +172,23 @@ fn advice(what: impl Into<String>, why: impl Into<String>) -> Advice {
     Advice {
         what: what.into(),
         why: why.into(),
+        settable: false,
+    }
+}
+
+/// Whether a program a TNC starts is Aether's own application: a program that starts it needs
+/// nothing said.
+#[must_use]
+pub fn is_aether_app(program: &str) -> bool {
+    let name = program.rsplit(['\\', '/']).next().unwrap_or(program);
+    name.eq_ignore_ascii_case("aether-hf.exe")
+}
+
+/// Advice the program's reader can carry out itself.
+fn settable(what: impl Into<String>, why: impl Into<String>) -> Advice {
+    Advice {
+        settable: true,
+        ..advice(what, why)
     }
 }
 
@@ -219,6 +251,7 @@ pub fn plan(
         program_must: Vec::new(),
         notes: Vec::new(),
         pointing: None,
+        dial_hz: None,
         refused: None,
     };
     if setup.frequency_hz.is_some_and(|hz| hz > 30_000_000) {
@@ -287,13 +320,18 @@ pub fn plan(
                 tnc.port.unwrap_or_default()
             ),
         )),
-        Pointing::OtherHost => plan.program_must.push(advice(
-            format!("{what} 127.0.0.1:{}", aether.host_port()),
-            format!(
-                "it points at another computer, {}: Aether is on this one",
-                tnc.host.as_deref().unwrap_or_default()
-            ),
-        )),
+        Pointing::OtherHost => {
+            let mut said = advice(
+                format!("{what} 127.0.0.1:{}", aether.host_port()),
+                format!(
+                    "it points at another computer, {}: Aether is on this one",
+                    tnc.host.as_deref().unwrap_or_default()
+                ),
+            );
+            // a VARA HF TNC's address and port are what the readers write; a KISS one's are not
+            said.settable = tnc.kind == TncKind::VaraHf;
+            plan.program_must.push(said);
+        }
         Pointing::Serial => plan.program_must.push(advice(
             format!("{what} on TCP 127.0.0.1:{}", aether.kiss_port()),
             "it points at a serial port: Aether's KISS port is a TCP port",
@@ -301,13 +339,13 @@ pub fn plan(
     }
     if tnc.kind == TncKind::VaraHf && tnc.launches {
         if install.program == Program::WinlinkExpress {
-            plan.program_must.push(advice(
+            plan.program_must.push(settable(
                 "Auto Launch Vara off",
                 "Winlink Express ends the TNC it started when it closes: start Aether first, \
                  and leave the launch off",
             ));
-        } else if let Some(program) = &tnc.program {
-            plan.notes.push(advice(
+        } else if let Some(program) = tnc.program.as_ref().filter(|p| !is_aether_app(p)) {
+            plan.notes.push(settable(
                 "Starts its own TNC",
                 format!(
                     "it starts {program} as its TNC: name Aether's application there, or turn \
@@ -324,16 +362,11 @@ pub fn plan(
     match (keying, radio) {
         (Some(Keying::Program), _) => {
             changes.insert("ptt.kind".into(), json!("host"));
-            changes.insert("regulatory.profile".into(), json!("none"));
             plan.program_must.push(advice(
                 "Radio setup as it is",
                 "it keys the radio on Aether's PTT ON and tunes it, as it did with VARA",
             ));
-            plan.notes.push(advice(
-                "Rules check off",
-                "Aether reads no dial with the program keying, so its rules check is off: \
-                 check every transmission yourself, as with VARA",
-            ));
+            program_dial(&mut plan, &mut changes, setup, install.program);
         }
         (Some(Keying::Aether), Some(radio)) => {
             if let Ptt::Serial { port, rts, dtr } = &radio.ptt {
@@ -403,6 +436,73 @@ pub fn plan(
     plan
 }
 
+/// A frequency in megahertz as the panel writes one: at least three decimals, no trailing
+/// zeros past them (`3.5905`, `14.105`).
+#[must_use]
+pub fn mhz(hz: u64) -> String {
+    let mut text = format!("{}.{:06}", hz / 1_000_000, hz % 1_000_000);
+    while text.ends_with('0') && text.len() - text.find('.').unwrap_or(0) > 4 {
+        text.pop();
+    }
+    text
+}
+
+/// The rules check for a program that keys the radio and tunes it: kept, at the dial of the
+/// program's one channel; kept with the dial left to declare when the program names none; off
+/// when it scans several, since Aether cannot tell which it is on.
+fn program_dial(
+    plan: &mut Plan,
+    changes: &mut serde_json::Map<String, Value>,
+    setup: &ProgramSetup,
+    program: Program,
+) {
+    let mut centres: Vec<u64> = if setup.channels_hz.is_empty() {
+        setup.frequency_hz.into_iter().collect()
+    } else {
+        setup.channels_hz.clone()
+    };
+    centres.sort_unstable();
+    centres.dedup();
+    match centres.as_slice() {
+        [] => plan.notes.push(advice(
+            "Dial to declare",
+            "the program names no frequency, so Aether cannot place its signal yet: say where \
+             the dial is on the Session tab (Dial is at) before the first transmission. The \
+             rules check stays on",
+        )),
+        [centre] => {
+            let dial = centre.saturating_sub(CENTRE_ABOVE_DIAL_HZ);
+            plan.dial_hz = Some(dial);
+            changes.insert("regulatory.sideband".into(), json!("usb"));
+            plan.notes.push(advice(
+                format!("Rules check at {} MHz", mhz(dial)),
+                format!(
+                    "Aether reads no dial with the program keying, so it judges every \
+                     transmission with the dial at {} MHz: the program's channel, {} MHz, less \
+                     1.5 kHz, on the upper sideband. Set when you switch to the profile here. \
+                     When you move the program to another channel, change Dial is at on the \
+                     Session tab too",
+                    mhz(dial),
+                    mhz(*centre)
+                ),
+            ));
+        }
+        several => {
+            changes.insert("regulatory.profile".into(), json!("none"));
+            plan.notes.push(advice(
+                "Rules check off",
+                format!(
+                    "{} scans {} channels and Aether reads no dial, so it cannot tell which \
+                     one a transmission goes out on: its rules check is off, and you check \
+                     every channel yourself, as with VARA",
+                    program.name(),
+                    several.len()
+                ),
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,6 +522,7 @@ mod tests {
             session: Some("Vara HF P2P".into()),
             bandwidth_hz: Some(2750),
             frequency_hz: Some(7_083_500),
+            channels_hz: Vec::new(),
             gateway: false,
             radio: Some(Radio {
                 rig: Some("Icom IC-7300".into()),
@@ -462,10 +563,55 @@ mod tests {
             "host.enabled": true,
             "radio.bandwidth": 2300,
             "ptt.kind": "host",
-            "regulatory.profile": "none",
+            "regulatory.sideband": "usb",
         });
-        assert_eq!(plan.changes, expected);
+        assert_eq!(plan.changes, expected, "the rules check stays on");
+        assert_eq!(
+            plan.dial_hz,
+            Some(7_082_000),
+            "the channel's centre less 1.5 kHz"
+        );
+        assert!(
+            plan.notes
+                .iter()
+                .any(|n| n.what == "Rules check at 7.082 MHz"),
+            "{:?}",
+            plan.notes
+        );
         assert!(plan.refused.is_none());
+    }
+
+    #[test]
+    fn a_program_that_scans_leaves_the_rules_off_and_one_with_no_channel_declares_later() {
+        let mut gate = setup(Ptt::Cat, 8300);
+        gate.gateway = true;
+        gate.channels_hz = vec![3_592_000, 7_103_500, 3_592_000];
+        let p = plan(&install(&gate), &gate, None, &aether());
+        assert_eq!(p.changes["regulatory.profile"], "none");
+        assert_eq!(p.dial_hz, None);
+        assert!(
+            p.notes.iter().any(|n| n.why.contains("scans 2 channels")),
+            "{:?}",
+            p.notes
+        );
+        // one channel listed twice is one channel
+        gate.channels_hz = vec![3_592_000, 3_592_000];
+        let p = plan(&install(&gate), &gate, None, &aether());
+        assert_eq!(p.dial_hz, Some(3_590_500));
+        assert!(p.changes.get("regulatory.profile").is_none());
+        let mut nowhere = setup(Ptt::Cat, 8300);
+        nowhere.frequency_hz = None;
+        let p = plan(&install(&nowhere), &nowhere, None, &aether());
+        assert_eq!(p.dial_hz, None);
+        assert!(
+            p.changes.get("regulatory.profile").is_none(),
+            "{}",
+            p.changes
+        );
+        assert!(p.notes.iter().any(|n| n.what == "Dial to declare"));
+        assert_eq!(mhz(14_105_000), "14.105");
+        assert_eq!(mhz(3_590_500), "3.5905");
+        assert_eq!(mhz(7_101_250), "7.10125");
     }
 
     #[test]
@@ -611,10 +757,18 @@ mod tests {
         s.tncs[0].program = Some("C:\\VARA\\VARA.exe".into());
         let p = plan(&install(&s), &s, None, &aether());
         assert!(
-            p.program_must.iter().any(|m| m.what.contains("Launch")),
-            "{:?}",
+            p.program_must
+                .iter()
+                .any(|m| m.what.contains("Launch") && m.settable),
+            "what Aether can write for it: {:?}",
             p.program_must
         );
+        let radio = p.program_must.iter().find(|m| m.what.contains("Radio"));
+        assert!(radio.is_some_and(|m| !m.settable), "{:?}", p.program_must);
+        assert!(is_aether_app(
+            "C:\\Users\\op\\AppData\\Local\\Aether HF\\Aether-HF.exe"
+        ));
+        assert!(!is_aether_app("C:\\VARA\\VARA.exe"));
         assert_eq!(aether_bandwidth(Some(500)), Some(500));
         assert_eq!(aether_bandwidth(Some(0)), None);
     }

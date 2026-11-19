@@ -23,6 +23,7 @@ pub static READER: Reader = Reader {
     names: &["Winlink Express", "RMS Express"],
     files: &[SETTINGS],
     read,
+    point,
 };
 
 /// The settings file, beside the executable.
@@ -216,12 +217,59 @@ pub fn read(files: &Files) -> Reading {
             session: mode,
             bandwidth_hz,
             frequency_hz,
+            channels_hz: Vec::new(),
             gateway: false,
             radio: radio.clone(),
             tncs: tncs.clone(),
         });
     }
     reading
+}
+
+/// The settings Winlink Express needs to reach Aether, of its VARA HF TNC only: this computer
+/// when it names another (a port of its own here is followed by the profile instead, and needs
+/// no change), and its launch off — Winlink Express ends the TNC it started when it closes.
+/// Nothing when it has no VARA HF TNC yet.
+#[must_use]
+pub fn point(files: &Files, target: &super::point::Target) -> Vec<super::point::Edit> {
+    use super::point::Edit;
+    const S: &str = "Vara TNC";
+    let Some(bytes) = files.get(SETTINGS) else {
+        return Vec::new();
+    };
+    let ini = Ini::new(bytes.clone());
+    if !ini.has_section(S) {
+        return Vec::new();
+    }
+    let mut edits = Vec::new();
+    let host = something(ini.get(S, "TNC Address"));
+    if host.as_deref().is_some_and(|h| !super::is_local(h)) {
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "TNC Address",
+            to: "127.0.0.1".to_owned(),
+            why: "Aether runs on this computer",
+        });
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "TCP Port",
+            to: target.host_port.to_string(),
+            why: "Aether's host interface is on this port",
+        });
+    }
+    if yes(ini.get(S, "Auto Launch Vara").as_deref()) {
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "Auto Launch Vara",
+            to: "False".to_owned(),
+            why: "Winlink Express ends the TNC it started when it closes: Aether starts on its \
+                  own and stays",
+        });
+    }
+    edits
 }
 
 #[cfg(test)]

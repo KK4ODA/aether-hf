@@ -52,6 +52,9 @@ pub struct Finder {
     pub source: Source,
     /// Find on the caller's thread: a test's.
     pub inline: bool,
+    /// What runs now, asked before a program's settings are written: the system's, or a
+    /// test's.
+    pub running: fn() -> Vec<PathBuf>,
     /// The state file; `None` for a daemon without a configuration file.
     path: Option<PathBuf>,
     /// What it holds.
@@ -73,6 +76,7 @@ impl Finder {
             shared: Arc::default(),
             source: this_computer,
             inline: false,
+            running: super::find::running_now,
             path,
             remembered,
             told: 0,
@@ -102,6 +106,22 @@ impl Finder {
         };
         let json = serde_json::to_string_pretty(&self.remembered).unwrap_or_default();
         std::fs::write(path, json).map_err(|e| format!("cannot write {}: {e}", path.display()))
+    }
+
+    /// Put an install read again in the last find's place for it, and tell the clients: after
+    /// its program's settings were written.
+    pub fn replace(&self, install: Install) {
+        let Ok(mut shared) = self.shared.lock() else {
+            return;
+        };
+        if let Some(last) = shared.last.as_mut()
+            && let Some(old) = last
+                .iter_mut()
+                .find(|i| super::find::same_path(Path::new(&i.folder), Path::new(&install.folder)))
+        {
+            *old = install;
+            shared.finished += 1;
+        }
     }
 
     /// Begin a find, unless one is under way (it answers for this one too).
