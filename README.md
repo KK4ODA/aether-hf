@@ -444,6 +444,11 @@ cover everything else it does.
   with the program owning the radio or Aether owning it, is in
   [`docs/user/host-programs.md`](docs/user/host-programs.md); what each program sends and what
   has been verified is in [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md).
+* **Finding an Aether gateway:** Aether gateways are in Winlink's channel list under the service
+  code **`AETHER`**, never under `PUBLIC` (a VARA station could not connect to one). In Winlink
+  Express, set *Settings › Winlink Express Setup › Service Codes* to `AETHER` (or
+  `PUBLIC AETHER`), then *Channel Selection › Update Table Via Internet*; in Pat,
+  `"service_codes": ["AETHER"]` and `pat rmslist`.
 * **APRS and packet programs:** the KISS port ([`docs/user/kiss.md`](docs/user/kiss.md)).
 * **The rules:** nothing is transmitted until Setup step 1 says which rules the station runs
   under, how it is controlled and the licence class. The operator stays responsible.
@@ -451,8 +456,9 @@ cover everything else it does.
   calling frequency on every band from 80 m to 6 m; the panel offers them as dial memories.
 * **Gateway:** the `aetherd-…` archive and [`docs/user/gateway-kit.md`](docs/user/gateway-kit.md).
   A Winlink gateway on Windows — RMS Trimode at home, Winlink Express in the field — is set up
-  step by step in [`docs/user/winlink-gateway.md`](docs/user/winlink-gateway.md). An Aether
-  gateway must not be listed as a gateway for another modem: the signals are not compatible.
+  step by step in [`docs/user/winlink-gateway.md`](docs/user/winlink-gateway.md). Set Trimode's
+  service code to `AETHER` alone: an Aether gateway must not be listed as a gateway for another
+  modem, since the signals are not compatible.
 
 ## RadioPost
 

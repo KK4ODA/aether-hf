@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.10.0 |
-| **Updated** | 2026-11-18 |
+| **Version** | 1.10.1 |
+| **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.166 |
 | **Licence** | CC BY 4.0 |
 
@@ -1207,6 +1207,18 @@ Aether's window.
 [Winlink through an Aether gateway](../user/winlink-gateway.md) sets up both ends step by step, and
 [the gateway kit](../user/gateway-kit.md) runs the modem as a service with no window.
 
+### Finding an Aether gateway
+
+Winlink's channel list files every gateway under a **service code**. `PUBLIC` is the list every
+Winlink program shows. Aether gateways are under **`AETHER`** instead, and never under `PUBLIC`:
+Winlink lists them as VARA HF, and a VARA station could not connect to one.
+
+- **Winlink Express**: in *Settings › Winlink Express Setup*, set **Service Codes** to `AETHER`.
+  Then, in a *Vara HF Winlink* session, choose *Channel Selection › Update Table Via Internet*.
+  `PUBLIC AETHER` lists the VARA gateways as well, which Aether cannot reach.
+- **Pat**: add `"service_codes": ["AETHER"]` to its configuration, then run `pat rmslist`.
+- **Running a gateway**: set RMS Trimode's service code (*Site Setup*) to `AETHER` alone.
+
 ## 23. RadioPost
 
 RadioPost sends and receives ordinary email by radio, through Aether. RadioPost is the mail program;
@@ -1585,3 +1597,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.9.1 | 2026-11-18 | **Identify by**: a session or call a program made under a callsign of its own is identified as that callsign, also after the program has closed (report 19 §6). |
 | 1.9.2 | 2026-11-18 | **Debug mode**: with no internet, the sessions wait and go once there is a connection, tried every 10 minutes and kept through a restart. |
 | 1.10.0 | 2026-11-18 | Setup step 2's **Interface** is **Preset** and its **Keying** is **Radio control**, with *Host program* in place of *Host*, and a new **Dial** line says what reads the dial and tunes the radio: a host program that keys the radio tunes it too. |
+| 1.10.1 | 2026-11-19 | [Finding an Aether gateway](#finding-an-aether-gateway): Aether gateways are listed under Winlink's service code `AETHER`; how to see them in Winlink Express and Pat, and how a gateway publishes under it. |

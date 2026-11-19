@@ -102,8 +102,11 @@ PTT **off**.
 ## Winlink Express
 
 * A **Vara HF P2P** session, with another Aether station; or a **Vara HF Winlink** session to an
-  RMS gateway that runs Aether, its callsign and dial entered by hand. Aether cannot reach a
-  VARA RMS gateway — and an Aether gateway must never be listed as a VARA one.
+  RMS gateway that runs Aether. Aether cannot reach a VARA RMS gateway, so Aether gateways are
+  listed under the service code **`AETHER`**, never under `PUBLIC`. To find them, set
+  *Settings › Winlink Express Setup › Service Codes* to `AETHER` (or `PUBLIC AETHER` to keep the
+  VARA gateways listed too), then *Channel Selection › Update Table Via Internet*. A gateway's
+  callsign and dial can also be entered by hand.
 * **A plain registered callsign**: Winlink Express proposes nothing to an SSID.
 * *Vara HF* setup: the TNC path is Aether's application (above), host `127.0.0.1`, port
   `8300`. Leave its automatic launch off and start Aether yourself: Winlink Express ends the
@@ -130,6 +133,9 @@ PTT **off**.
 
 Aether runs the `bandwidth` Pat asks for (`"500"` or `"2300"`). Pat can tune through Hamlib's
 `rigctld`; with Aether keying the radio, leave Pat's own PTT control off.
+
+Aether gateways are listed under the service code `AETHER`. `"service_codes": ["AETHER"]` (or
+`["PUBLIC", "AETHER"]`) in Pat's configuration, then `pat rmslist`, lists them.
 
 ## Debug mode: your sessions help the project
 

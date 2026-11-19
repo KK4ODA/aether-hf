@@ -82,10 +82,13 @@ Aether. The full guide is [host-programs.md](host-programs.md); here is the shor
 **P2P with another tester:** open a *Vara HF P2P* session, enter the other station's callsign
 and the agreed frequency, and connect.
 
-**Through the Aether gateway:** open a *Vara HF Winlink* session, and enter the gateway's
-callsign and dial frequency **by hand** — KK4ODA sends them to testers directly. The Aether
-gateway is not in Winlink's public channel list on purpose: a VARA station that picked it could
-not connect, and would blame VARA. Send yourself a short message first, then check for it.
+**Through an Aether gateway:** Aether gateways are listed under Winlink's service code
+**`AETHER`**, not in the public list: a VARA station that picked one could not connect, and would
+blame VARA. In *Settings › Winlink Express Setup*, set **Service Codes** to `AETHER` (only the
+gateways Aether can reach) or `PUBLIC AETHER` (the VARA ones too). Then open a *Vara HF Winlink*
+session, choose *Channel Selection › Update Table Via Internet*, and pick an Aether gateway. Or
+type its callsign and dial frequency by hand. Send yourself a short message first, then check
+for it.
 
 ### VarAC
 
@@ -104,7 +107,8 @@ while the channel is busy, and for five minutes after a *Call CQ* (its beacon bu
 ### Pat
 
 `"varahf": { "addr": "localhost:8300", "bandwidth": 2300, "rig": "", "ptt_ctrl": false }` in
-Pat's configuration, with Aether keying the radio.
+Pat's configuration, with Aether keying the radio. To find the Aether gateways, add
+`"service_codes": ["AETHER"]` and run `pat rmslist`.
 
 ## 4. On the air
 

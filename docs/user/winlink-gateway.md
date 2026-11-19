@@ -16,8 +16,8 @@ yet; this is that test.
   already have a packet gateway there.
 * **Aether talks only to Aether.** The gateway's channel must never appear in Winlink's public
   channel list: a VARA station that picked it could not connect, and would blame VARA. It is
-  published under a **private service code** instead (§2.4), which only a client told the code
-  can see.
+  published under the service code **`AETHER`** instead (§2.4), which every Aether gateway uses
+  and only a client that has added it sees.
 * **Both stations run the same Aether release.** A release that changes the link protocol says
   *Update required* in its notes, and stations across one cannot connect. Check *Help › About*
   at both ends before the day.
@@ -99,11 +99,22 @@ runs.
 ### 2.4 The service code
 
 Trimode reports its channel to the CMS under its **service code**. `PUBLIC` is the public channel
-list, the one every Winlink Express shows by default. Give the gateway a **private code** — say
-`AETHER` — and that code only. A client that has the same code in its own settings sees the
-channel after *Update Table Via Internet*; nobody else does. Private codes are a Winlink feature
-for groups that keep their gateways to themselves; the Winlink team does not hand them out, a
-group makes its own up.
+list, the one every Winlink Express shows by default. Every Aether gateway uses the private code
+**`AETHER`**, and that code only: one code for all of them, so a client that adds it finds every
+Aether gateway. Trimode lists the channel as VARA HF (Winlink has no Aether mode), and the code is
+what keeps it out of a VARA station's list.
+
+A client sees the Aether gateways once it has the code:
+
+* **Winlink Express**: *Settings › Winlink Express Setup*, **Service Codes**: `AETHER` lists only
+  the gateways Aether can reach; `PUBLIC AETHER` keeps the VARA gateways in the list as well. Then
+  *Channel Selection › Update Table Via Internet*.
+* **Pat**: `"service_codes": ["AETHER"]` (or `["PUBLIC", "AETHER"]`) in its configuration, then
+  `pat rmslist`.
+
+Private codes are a Winlink feature for groups that keep their gateways to themselves; the
+Winlink team does not hand them out, a group makes its own up. The code is not a password: it
+only decides who sees the channel.
 
 If you would rather nothing reach the CMS at all, Trimode with RMS Relay in its radio-only mode
 and the Internet cable out is how the bench ran: the message then stops in Relay and is never
@@ -163,7 +174,7 @@ Install it from winlink.org (*Sysop software*). Its settings menus name what fol
 differ a little between versions.
 
 * **Site Setup.** The **base callsign** (`KK4ODA`) and its Winlink password, the grid square,
-  the sysop's details, and the **service code**: the private one alone (§2.4).
+  the sysop's details, and the **service code**: `AETHER` alone, not `PUBLIC` (§2.4).
 * **Modes.** VARA HF only. No Pactor, ARDOP, Robust Packet or VARA FM.
 * **VARA HF.** TCP host `127.0.0.1`, command port `8300` — the data port is the next number up,
   as with VARA. Channel bandwidth **2300 Hz**; leave *accept 500 Hz connections* off for this
@@ -235,7 +246,7 @@ gateway being open to the public, nothing to do with the service code; Aether an
 ### 4.2 Winlink Express
 
 * *Settings › Winlink Express Setup*: the callsign `KK4ODA` (plain), its password, the grid, and
-  under **Service Codes** the private code beside the public one: `PUBLIC AETHER`.
+  under **Service Codes** `AETHER` (or `PUBLIC AETHER` to keep the VARA gateways listed too).
 * Open a **Vara HF Winlink** session. In its window, *Settings › Vara TNC Setup*: host
   `127.0.0.1`, command port `8300`. The TNC path is Aether's `aether-hf.exe` with *auto-launch*
   off, Aether started first — the way that is known to work; never `VARA.exe`.
@@ -245,7 +256,7 @@ gateway being open to the public, nothing to do with the service code; Aether an
   modem's `PTT ON` — one keyer, never both. Only if Aether keys by a serial line or a CM108 pin
   may Winlink Express have the radio's CAT port for frequency control instead.
 * **Channel Selection › Update Table Via Internet** (a phone's hotspot does) lists the gateway
-  under the private code; pick it. Without Internet, type the gateway's callsign and dial
+  under `AETHER`; pick it. Without Internet, type the gateway's callsign and dial
   frequency into the session window by hand; Winlink Express works out the centre frequency
   (the dial plus 1.5 kHz). Bandwidth **2300**.
 * Winlink Express asks to update its propagation estimates at every HF session: *No – Wait till
@@ -287,7 +298,7 @@ gateway being open to the public, nothing to do with the service code; Aether an
 | *Connected*, then nothing, then the session times out | Trimode's log: `Ignoring CONNECTED while LISTEN=FALSE` or `… in scan state Deaf` is the race 0.2.0-beta.90 and 0.2.0-beta.125 closed (ADR-0051, ADR-0096); `Connect pending received` and nothing more until `Pending Vara connection cancelled` is the wait 0.2.0-beta.137 closed (ADR-0100) — update the gateway; otherwise the Log tab's *host* lines and the host trace (§3.1) say what Trimode was told and when |
 | *Connected*, and Trimode drops the session at once | Trimode's log: `No PTT from Vara. Connection appears to be hung` in the second of `CONNECTED` — it had not been told of the answer's keying, and the last keying it knew of was minutes old. 0.2.0-beta.141 tells it first (ADR-0103): update the gateway |
 | *Connected* and the session ends with nothing sent | An SSID in Winlink Express's callsign; the message not posted to the outbox |
-| The gateway is not in the client's channel list | The service code at both ends; *Update Table Via Internet* done; Trimode logged in to the CMS (its log) |
+| The gateway is not in the client's channel list | The service code at both ends (`AETHER` in Trimode, and in the client's codes); *Update Table Via Internet* done; Trimode logged in to the CMS (its log) |
 | Slow, or the transfer fails | The path, not the programs: the Status tab's SNR both ways; a Test session on the same path says more; try the other band |
 | The gateway's Busy lamp stays on with nothing to hear | Another signal in the channel, or the radio's gain moving (the Diagnostics tab's busy line says). The gateway still answers: its own answers never wait |
 
