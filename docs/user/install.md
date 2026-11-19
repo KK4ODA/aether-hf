@@ -44,6 +44,10 @@ reading is `aetherd.prev.log` — the one from the run that misbehaved. Every ru
 age), each named for when it began (in UTC, like `aetherd-20260927-011200.log`), so a problem
 from a few weeks ago can still be looked up.
 
+**VarAC.** If VarAC is on this computer, a banner offers to set it up for Aether: **Set up**
+writes a VarAC profile, *VarAC_Aether*, and an Aether profile, *VarAC default*. Do Setup first,
+then see the manual's [VarAC in one step](../manual/manual.md#varac-in-one-step).
+
 **A change in Setup takes effect when you save it.** Until then the modem runs on what it had,
 and the panel says so: the Setup tab carries an amber dot, the step you changed is marked, the
 save bar at the foot of the tab names what is not saved, and every other tab shows a banner with

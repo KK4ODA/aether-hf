@@ -13,12 +13,12 @@ rules before the radio keys, and the same modem runs as a desktop application on
 Linux and macOS or headless on a Raspberry Pi gateway.
 
 > **Status: beta, on the air.** Signed builds ship from
-> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.154` at the time of
+> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.166` at the time of
 > writing): a Windows installer, Linux `.deb` and AppImage packages, an unsigned macOS build for
 > Apple Silicon, and the standalone `aetherd` daemon for gateways, with in-place updates on a
 > beta channel. Aether has been on the air with other stations on 80 m and 40 m since
 > 2026-09-23: conversations, Test sessions, Winlink through an Aether gateway since
-> 2026-11-06, and RadioPost mail since 2026-11-12. Each problem the air turns up becomes a
+> 2026-11-06, RadioPost mail since 2026-11-12, and VarAC. Each problem the air turns up becomes a
 > scenario in the test harness before it becomes a fix ([`field/LOG.md`](field/LOG.md),
 > [`docs/research/link-architecture/`](docs/research/link-architecture/README.md)).
 >
@@ -52,6 +52,21 @@ enough for 16-QAM. The 2300 Hz signal spreads the same power wider and runs QPSK
 more.</sub></td>
 </tr>
 </table>
+
+### VarAC through Aether
+
+On 2026-11-19 two stations ran VarAC 16.1.8 through Aether on 7.082 MHz at 500 Hz: KK4ODA at
+home and WD5EMA in the mobile. VarAC ran on the *VarAC_Aether* profile that Aether set up for it
+([VarAC in one step](docs/manual/manual.md#varac-in-one-step)). The stations made four connected
+sessions and sent broadcasts both ways, and KK4ODA heard WD5EMA's beacon.
+
+![VarAC 16.1.8 on 7.082 MHz at 500 Hz with its profile VarAC_Aether: four broadcasts, two from WD5EMA heard at +8 and +7 dB and two of its own, and WD5EMA's beacon at +6 dB. Beside it Aether's main window in Compact, idle, a host program listening at 500 Hz, and Aether's signal window in Mini, its waterfall marked in red at the 500 Hz channel's edges](docs/images/air-40m-varac.png)
+
+<sub>KK4ODA's screen at 13:38Z. Left, VarAC: two broadcasts from WD5EMA, two of its own (one to
+*ALL*, one to WD5EMA), and WD5EMA's beacon. Right, Aether's window in Compact and its signal
+window in Mini. While VarAC is attached it sets the callsign and the bandwidth, and it keys the
+radio and sets its frequency, as it does with VARA. The GPS position in VarAC's status bar is
+covered; the grid square is left.</sub>
 
 ## Screenshots
 
@@ -137,8 +152,9 @@ cover everything else it does.
   [`04-formal-spec.md`](docs/research/link-architecture/04-formal-spec.md)).
 * **★ It gets through deep below the noise.** The slowest rungs are a constant-envelope tone
   floor that sends at the transmitter's full peak power: 36 bit/s at 10 % frame error from
-  −19 dB SNR on a steady channel and −11.7 to −14.5 dB on the ITU fading channels. Calls,
-  probes and beacons go there first, and a 2300 Hz session completes on the simulated fading
+  −19 dB SNR on a steady channel and −11.7 to −14.5 dB on the ITU fading channels. Probes and
+  beacons go there, and so does a call to a station heard weakly or not heard lately. A 2300 Hz
+  session completes on the simulated fading
   channels down to −14 dB on ITU Moderate and Poor and −10 dB on Good
   ([`bench/README.md`](bench/README.md#the-tone-floor-tone_floorcsv-link_tone_floorcsv-p9-8--adr-0013)).
 * **★ It chooses its speed by what actually arrives.** Each station picks the rung for its own
@@ -155,15 +171,13 @@ cover everything else it does.
   up ([ADR-0071](docs/adr/0071-the-keying-latency-counts-the-radio-and-the-render.md),
   [ADR-0079](docs/adr/0079-the-receiver-follows-a-session-station-off-frequency.md),
   [ADR-0078](docs/adr/0078-the-busy-detectors-floor-follows-the-radios-gain.md)).
-* **★ It says when the radio is in the way.** While it listens, Aether reads the radio's receive
-  filter from the band's noise. A banner on every view says when the filter cuts an edge of
-  Aether's signal 12 dB or more, and names the knob: the IF shift, the high or low cut, or the
-  width. Another says when the receive audio clips. Both receivers also read the noise across
-  the band, so a filter that does cut in costs far less: with a receiver's IF shift turned fully
-  left, 23 dB down across the top of a 2300 Hz signal, OFDM rungs 13 and 16 went from no frame
-  decoded to 30 of 30
-  ([ADR-0105](docs/adr/0105-the-receive-filter-is-read-at-the-signals-edges.md),
-  [ADR-0104](docs/adr/0104-the-receivers-read-the-noise-across-the-band.md),
+* **★ A radio filter that cuts in costs little.** Both receivers read the noise across the
+  band, so a receive filter that cuts into Aether's signal costs far less: with a receiver's IF
+  shift turned fully left, 23 dB down across the top of a 2300 Hz signal, OFDM rungs 13 and 16
+  went from no frame decoded to 30 of 30. The waterfall marks the signal's edges in red, so a
+  filter that cuts shows at a glance, and a banner says when the receive audio clips
+  ([ADR-0104](docs/adr/0104-the-receivers-read-the-noise-across-the-band.md),
+  [ADR-0132](docs/adr/0132-the-receive-filter-is-not-read.md),
   [`noise_shape_cuts.csv`](bench/baselines/noise_shape_cuts.csv)).
 * **★ Every contact can become a measurement.** A two-way probe says how each station hears
   the other without starting a session. A Test session measures a path end to end and records
@@ -238,8 +252,10 @@ cover everything else it does.
   measured and trying the next rung up with one frame at a time.
 * **Stuck frames re-encoded or split** into pieces a slower rung can carry.
 * **Compression** (deflate over the session), negotiated at connect, off by default.
-* **Calls** start on the tone floor, so a weak station is heard on the first try, and
-  alternate with the OFDM family.
+* **Calls** chosen by how well the station called was last heard: a weak station is called on the
+  tone floor, a strong one in OFDM first, and one not heard lately both ways back to back. Setup
+  step 4's *Call tries* sets how long a call lasts: two tries by default, up to 15
+  ([ADR-0126](docs/adr/0126-the-capped-call.md)).
 * A **link probe**: one frame and one answer, no session, giving the SNR each way; answered
   across bandwidths, and tried once more if the first goes unanswered.
 * **Beacons**: the station's callsign on the tone floor, once or every 10–60 minutes while
@@ -247,9 +263,11 @@ cover everything else it does.
 * **Datagrams** outside sessions, for KISS programs, at a rung both bandwidths hear.
 * An orderly **disconnect** that delivers what is queued for a minute at most, then closes;
   **Abort** to leave at once, with the other station told.
-* **Closing Morse identification** handled for you: each station's identifier is the last
-  thing it sends for a session, after the other's goodbye, never over it; a US callsign always
-  identifies (§97.119), without its SSID and within the 20 wpm cap on an automatic identifier.
+* **Closing identification** handled for you: each station's identifier is the last thing it
+  sends for a session, after the other's goodbye, never over it; a US callsign always identifies
+  (§97.119), without its SSID. It goes in Morse, within the 20 wpm cap on an automatic
+  identifier, or in Aether's own signal if Setup step 4 says so
+  ([ADR-0127](docs/adr/0127-identify-in-the-data-signal.md)).
 * **Several callsigns**: a station answers to its own, and each program attached answers for
   the callsigns it claims (a host program's `MYCALL`), with SSIDs and `/` suffixes.
 
@@ -282,6 +300,10 @@ cover everything else it does.
   frequency); answers inside a session never wait.
 * The receiver **follows a station off frequency** during a session and returns to the dial
   after.
+* **Scanning** for a program that asks (RadioPost Gateway does): up to four dials, 4 to 5 s on a
+  quiet one and about 19 s where a call is heard under way. The radio never moves during a
+  contact, and the knob or the panel's Stop ends the scan
+  ([ADR-0129](docs/adr/0129-the-station-scans-for-a-program.md)).
 * The first transmission after a host program attaches is checked: if the receive audio does
   not fall while keyed, the log says the radio may not be transmitting. The check listens in
   1–2.5 kHz, clear of any interface's hum.
@@ -308,6 +330,10 @@ cover everything else it does.
 * The **published TNC host interface** (command port 8300, data port 8301) that Winlink Express,
   Pat, VarAC and RMS Trimode already use: Winlink P2P and gateway sessions, VarAC chat, pings,
   files and CQs, and Trimode gateways that scan.
+* **VarAC in one step** (Windows): Aether finds VarAC and offers to set it up. It writes a VarAC
+  profile, *VarAC_Aether*, a copy of yours with only the modem settings changed, and an Aether
+  profile, *VarAC default*. Switch VarAC's profile to run it on Aether, and back to run it on
+  VARA. After an update that changes what VarAC needs, Aether offers to bring both up to date.
 * Either side can own the radio: **Aether keys** (CAT, rigctld, FLRig, serial, CM108, VOX), or
   the **host program keys** and tunes it on Aether's `PTT ON`/`PTT OFF`.
 * **One place for each setting**: while a program is attached, its callsign and its `BW500`
@@ -444,6 +470,12 @@ cover everything else it does.
   with the program owning the radio or Aether owning it, is in
   [`docs/user/host-programs.md`](docs/user/host-programs.md); what each program sends and what
   has been verified is in [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md).
+* **VarAC, on Windows:** do Setup steps 1 to 3 (callsign, sound card, receive level). When the
+  banner says VarAC is on this computer, press **Set up**, then **Switch to VarAC default**. In
+  VarAC, choose *Switch profile*, then *VarAC_Aether*: VarAC restarts and starts Aether. Close
+  VARA HF first. Switching VarAC back to its usual profile runs it on VARA again. Setup step 5's
+  **VarAC** row does the same when VarAC is not in `C:\VarAC`. The manual's
+  [VarAC in one step](docs/manual/manual.md#varac-in-one-step) has the details.
 * **Finding an Aether gateway:** Aether gateways are in Winlink's channel list under the service
   code **`AETHER`**, never under `PUBLIC` (a VARA station could not connect to one). In Winlink
   Express, set *Settings › Winlink Express Setup › Service Codes* to `AETHER` (or
@@ -503,7 +535,7 @@ distilled from how the community has received other open HF modems are in
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, host interface, gateway kit | done; Winlink Express, Pat, VarAC and RMS Trimode pass the bench |
 | 4 — Desktop application | station panel, Tauri shell, setup, diagnostics, accessibility | done; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.154` |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.166` |
 | 6 — Field validation | recordings, replay, simulated channel, field protocol, the air, on-air crowdsourcing (the Test session) | **in progress**: on the air with other stations since 2026-09-23, Winlink through an Aether gateway since 2026-11-06, RadioPost mail since 2026-11-12; granted slots (link protocol 8 onwards), the scenario harness and the rate controller's reviews came from those sessions |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth peer-to-peer contacts use, the bandwidth in the handshake, answer-only, a two-way probe | done |
 | 9 — The modem's second rung | a faster start, the tone floor and the middle tone kinds, fading and NVIS receivers, an A/B bench against another modem, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: the tone floor, fast tones and four-tone kinds, fast-fading and echo-aware receivers, stuck frames in pieces done; the A/B runs and P9-3 open; time diversity paused |

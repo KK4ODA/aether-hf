@@ -96,10 +96,11 @@ On Windows, the quickest way: when the banner says VarAC is on this computer, pr
 then **Switch to VarAC default**, and in VarAC choose *Switch profile → VarAC_Aether*. Switching
 VarAC back to *VarAC* returns to VARA. By hand:
 
-VarAC usually keys the radio itself (Setup step 2: **Host**), as it does with VARA:
-VarAC's *Vara* tab with host `127.0.0.1`, main port `8300`, KISS port `8100`; its *RIG* tab with
-PTT and frequency control on CAT. Ping, chat, files, CQ, beacons, broadcasts and relayed VMail
-with its notification all work; the notification and the broadcasts need *KISS programs* on. Use
+VarAC usually keys the radio itself (Setup step 2, *Radio control*: **Host program**), as it
+does with VARA: VarAC's *Vara* tab with host `127.0.0.1`, main port `8300`, KISS port `8100`;
+its *RIG* tab with PTT and frequency control on CAT. Ping, chat, files, CQ, beacons, broadcasts
+and relayed VMail with its notification all work on the bench; the notification and the
+broadcasts need *KISS programs* on. Use
 plain callsigns (no SSID), and set VarAC's callsign before the first run. VarAC holds its beacon
 while the channel is busy, and for five minutes after a *Call CQ* (its beacon button reads
 *BEACON PAUSED*): that is VarAC waiting, not Aether failing.
@@ -176,7 +177,9 @@ in your recordings folder.
 
 * Every program on the air is what you are testing. Winlink Express and VarAC have passed on
   the bench at both bandwidths and Pat at 2300 Hz, with two stations connected through a
-  simulated channel; Pat at 500 Hz has not been run even on the bench.
+  simulated channel; Pat at 500 Hz has not been run even on the bench. On the air, Winlink
+  Express has run through an Aether gateway since 2026-11-06, and VarAC between two stations at
+  500 Hz on 40 m on 2026-11-19: four sessions, broadcasts both ways, and beacons.
 * A **SSID** in Winlink Express's callsign stops messages (§3).
 * The installer is not yet code-signed (§1); macOS builds are untested with a radio.
 * Aether's own sessions with a host program attached are not the program's: the program keys

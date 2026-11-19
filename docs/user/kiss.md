@@ -227,9 +227,10 @@ parameters are told apart from VARA's frame types by their length:
 * **One port.** A frame for KISS port 1–15 is refused.
 * **A one-byte type-2 frame** is read as the P parameter — the price of serving VARA's frame types
   and standard KISS on one port.
-* **Not verified on the air yet.** On the bench: VarAC's broadcasts (2026-10-07), the test
-  suite's own clients and `kiss_test_client.py` between two daemons; not yet Winlink Express
-  Packet or the APRS programs.
+* **On the air: VarAC's broadcasts only** (2026-11-19). On the bench: VarAC's broadcasts
+  (2026-10-07) and relay notifications (2026-11-18), the test suite's own clients and
+  `kiss_test_client.py` between two daemons; not yet Winlink Express Packet or the APRS
+  programs.
 
 ## Status
 
@@ -239,6 +240,7 @@ parameters are told apart from VARA's frame types by their length:
 | `tools/kiss_test_client.py`, two daemons over `[sim]` | passing (2026-09-25) |
 | VarAC 15.0.18 broadcasts, two scratch copies over two daemons on the simulated channel at 500 Hz (to *ALL* both ways, a reply to a callsign with the automatic SNR report back, *Re-Broadcast*, a frame held through a session, VarAC's own channel sensing with *Ignore DCD* clear and ticked) | passing (2026-10-07/08) |
 | VarAC 15.0.18 relay notifications, the same bench (a VMail parked at a relay, the addressee's beacon heard, the `<SMP>` notification over KISS, the VMail collected) | passing (2026-11-18) |
+| VarAC 16.1.8 broadcasts on the air between two stations, 7.082 MHz at 500 Hz (to *ALL* and to a callsign, both ways) | passing (2026-11-19) |
 | Winlink Express Packet, QtTermTCP, APRSIS32, YAAC, PinPoint APRS, APRSdroid, Xastir | not yet tried |
 
 Reports are welcome — what the program sent, what it expected, and a log with `trace = true`.
