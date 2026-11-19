@@ -246,7 +246,7 @@ def fig_station() -> Plate:
     f.text(
         38,
         340,
-        "Aether's Setup: the sound card and the keying (step 2), the receive level "
+        "Aether's Setup: the sound card and the radio control (step 2), the receive level "
         "(step 3). The Session tab: the drive.",
         size=12.5,
         color=MUTED,
@@ -342,7 +342,7 @@ def fig_header() -> Plate:
 
 
 # ------------------------------------------------------------------------------------------------
-# Six ways to key the radio
+# Six ways to control the radio
 # ------------------------------------------------------------------------------------------------
 
 
@@ -364,7 +364,7 @@ def mini_chain(f: Plate, x: float, y: float, parts: list[tuple[str, str, str]]) 
 
 @figure("keying")
 def fig_keying() -> Plate:
-    f = Plate(1000, 476, "The six ways Aether can key the radio, and whether each reads the dial")
+    f = Plate(1000, 476, "The six ways to control the radio, and what each does with the dial")
     cards = [
         (
             "CAT command",
@@ -405,8 +405,12 @@ def fig_keying() -> Plate:
         (
             "Host program",
             [("Aether", "aether", "local"), ("VarAC", "program", "key"), ("Radio", "neutral", "")],
-            ["The program owns the radio and", "keys it when Aether says PTT ON."],
-            ("You check the rules", "caution"),
+            [
+                "The program keys the radio when",
+                "Aether says PTT ON, and tunes it.",
+                "You check the rules.",
+            ],
+            ("The program tunes it", "caution"),
         ),
         (
             "VOX (a SignaLink)",

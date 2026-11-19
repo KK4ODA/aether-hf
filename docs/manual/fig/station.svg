@@ -52,6 +52,6 @@
 <text xml:space="preserve" x="940" y="48" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#475569" text-anchor="start">antenna</text>
 <rect x="24" y="296" width="952" height="82" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.2"/>
 <text xml:space="preserve" x="38" y="320" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" font-weight="700" fill="#475569" text-anchor="start">What you set where</text>
-<text xml:space="preserve" x="38" y="340" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Aether's Setup: the sound card and the keying (step 2), the receive level (step 3). The Session tab: the drive.</text>
+<text xml:space="preserve" x="38" y="340" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">Aether's Setup: the sound card and the radio control (step 2), the receive level (step 3). The Session tab: the drive.</text>
 <text xml:space="preserve" x="38" y="362" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="400" fill="#475569" text-anchor="start">The radio: USB or DATA mode, a filter at least as wide as the signal, and its data input and output levels.</text>
 </svg>

@@ -12,7 +12,7 @@ is one click.
 | | The host program owns the radio | Aether owns the radio |
 |---|---|---|
 | Like | VarAC with VARA: VarAC tunes the radio and keys it | VARA keying the radio itself |
-| Aether's keying (Setup step 2) | **Host** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
+| Aether's radio control (Setup step 2) | **Host program** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
 | The host program's rig control | PTT and frequency on CAT | none when Aether keys by CAT (only one program can open the CAT port); frequency control only, when Aether keys by a serial line or a CM108 pin |
 | Aether's rules check (step 1) | **None** — you check every transmission, as with VARA | on: every transmission judged at the dial |
 | Tuning | the host program (VarAC's Auto-QSY, CQ slots) | Aether's dial list (Session tab), or by hand |
@@ -31,7 +31,8 @@ what it does, for doing it by hand.
 
 In **Aether**:
 
-1. Setup step 2, *Keying*: **Host** — VarAC or Winlink Express keys the radio on `PTT ON`.
+1. Setup step 2, *Radio control*: **Host program** — VarAC or Winlink Express keys the radio on
+   `PTT ON` and tunes it, and step 2's *Dial* reads **Host program**.
    The rules in step 1 change to **None** with it, and their fields read **Host**: Aether cannot
    read the dial of a radio it does not control. The milliseconds beside it (150) are how long
    Aether waits after `PTT ON` before it starts the audio; VARA allows 100.
@@ -85,7 +86,7 @@ program is seen before the next transmission.
 
 1. Start `rigctld` for your radio (`rigctld -m <model> -r <CAT port> -s <baud>`); it listens on
    `127.0.0.1:4532`.
-2. In **Aether**, Setup step 2, *Keying*: **rigctld**, address `127.0.0.1:4532`; step 1 has your
+2. In **Aether**, Setup step 2, *Radio control*: **rigctld**, address `127.0.0.1:4532`; step 1 has your
    rules, control and licence class.
 3. In the **host program**, rig control through Hamlib's network `rigctld` at the same address, with
    its own PTT **off** — Aether keys the radio when it transmits.
@@ -94,7 +95,7 @@ program is seen before the next transmission.
 CAT connection cannot share it this way; for it, choose one of the two ways above.
 
 **With FLRig** instead: FLRig holds the radio's CAT port and serves fldigi, WSJT-X and VarAC at
-once. In Aether, Setup step 2, *Keying*: **FLRig**, address `127.0.0.1:12345` (FLRig's XML-RPC
+once. In Aether, Setup step 2, *Radio control*: **FLRig**, address `127.0.0.1:12345` (FLRig's XML-RPC
 server, *Config › Setup › Server*); in the host program, rig control through FLRig with its own
 PTT **off**.
 
@@ -113,8 +114,8 @@ PTT **off**.
   last heard running 500 Hz. If four tries at 2300 Hz get no answer, Aether tries the rest at
   500 Hz, and the session runs at 500 Hz if it is answered there.
 * Winlink Express keys the radio itself only when its *Radio Setup* names a PTT port: it then
-  keys on the modem's `PTT ON`/`PTT OFF`, as VarAC does, and Aether's keying must be *host
-  program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
+  keys on the modem's `PTT ON`/`PTT OFF`, as VarAC does, and Aether's *Radio control* must be
+  *Host program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
   modem: keep **Aether keying the radio** (the second way above). One keyer, never both. If
   Aether keys on a serial line or a CM108 pin, Winlink Express can still do its own frequency
   control on the radio's CAT port.
@@ -143,8 +144,8 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
 ## How Aether follows the program
 
 * **One place for each setting.** With Setup step 5's *Host programs* on, the callsign (step 1)
-  and the bandwidth (step 4) read **Host**: the program sets them. With *Keying* **Host**
-  (step 2), the rules' fields read **Host** too. What is underneath is kept for when no program
+  and the bandwidth (step 4) read **Host**: the program sets them. With *Radio control* **Host
+  program** (step 2), the rules' fields read **Host** too. What is underneath is kept for when no program
   is attached.
 * **The callsign.** The program's `MYCALL` names the callsigns it answers to and identifies as
   while it is attached, and Aether answers no other callsign of its own meanwhile: the program

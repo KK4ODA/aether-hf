@@ -1694,7 +1694,7 @@ function updateDialList() {
   const select = $("memory");
   select.disabled = memories.length === 0 || (canTune && (!idle || dialHeld));
   select.title = !canTune
-    ? "Remembered dial frequencies. Tuning the radio from here needs CAT, rigctld or FLRig keying (Setup step 2); until then the list is a list"
+    ? "Remembered dial frequencies. Tuning the radio from here needs radio control by CAT, rigctld or FLRig (Setup step 2); until then the list is a list"
     : select.disabled && memories.length > 0
       ? "Remembered dial frequencies: the radio is not retuned while a session, a call, a probe, a Test or a transmission is under way"
       : "Remembered dial frequencies: picking one tunes the radio there (CAT, rigctld or FLRig); Add your own";
@@ -1763,9 +1763,9 @@ function applyDial(status) {
     hero.textContent = "—";
     source("no reading", "No reading from the radio yet");
   } else {
-    reading.textContent = "tuning needs CAT, rigctld or FLRig keying (Setup step 2)";
+    reading.textContent = "tuning needs radio control by CAT, rigctld or FLRig (Setup step 2)";
     hero.textContent = "—";
-    source("", "Reading the dial needs CAT, rigctld or FLRig keying (Setup step 2)");
+    source("", "Reading the dial needs radio control by CAT, rigctld or FLRig (Setup step 2)");
   }
   applyScan(status.scan ?? null);
   dialHeld =
@@ -3546,7 +3546,7 @@ function fillDevices(devices) {
     [
       // VARA's way with VarAC and Winlink Express: the host program owns the radio and keys
       // it on PTT ON (ADR-0025)
-      { name: "host", label: "Host" },
+      { name: "host", label: "Host program" },
       ...devicesSeen.serial_ports.map((p) => ({
         name: p.name,
         label: p.description ? `${p.name} — ${p.description}` : p.name,
@@ -3747,7 +3747,7 @@ const SETTING_NAMES = {
   "regulatory.license_class": "license class",
   "audio.input": "capture device",
   "audio.output": "playback device",
-  "panel.interface": "interface",
+  "panel.interface": "preset",
   "radio.max_mode": "fastest mode",
   "radio.compress": "compression",
   "radio.call_tries": "call tries",
@@ -3776,7 +3776,7 @@ const SETTING_NAMES = {
 };
 
 function settingName(key) {
-  if (key.startsWith("ptt.")) return "keying";
+  if (key.startsWith("ptt.")) return "radio control";
   return SETTING_NAMES[key] ?? key.replace(/^.*\./, "").replaceAll("_", " ");
 }
 
@@ -3998,6 +3998,33 @@ function showKeyingFields() {
   const cat = onPort && $("ptt-line").value === "cat";
   $("cat-row").hidden = !cat;
   $("civ-fields").hidden = !cat || $("ptt-protocol").value !== "icom";
+  showDialSource(chosen, cat);
+}
+
+/// Setup step 2's Dial line: what reads the radio's dial and tunes it with the radio control
+/// chosen. Keying by the host program hands the dial to the program as well, which the word
+/// "keying" never said (the author, 2026-11-18, setting VarAC up to tune the radio).
+function showDialSource(chosen, cat) {
+  const [text, title] =
+    chosen === "host"
+      ? [
+          "Host program",
+          "The host program tunes the radio and Aether cannot read its dial: choose the frequency in the program, and check every transmission yourself",
+        ]
+      : cat
+        ? ["Aether, over CAT", "Aether reads the dial over CAT, and tunes the radio from the Session tab's dial list"]
+        : chosen === "rigctld" || chosen === "flrig"
+          ? [
+              `Aether, through ${chosen === "flrig" ? "FLRig" : "rigctld"}`,
+              `Aether reads the dial through ${chosen === "flrig" ? "FLRig" : "rigctld"} and tunes the radio from the Session tab's dial list; another program can tune it there too`,
+            ]
+          : [
+              "Typed by hand",
+              "Aether cannot read this radio's dial: say where it is with Dial is at on the Session tab before transmitting, and again after every change of frequency",
+            ];
+  const reading = $("setup-dial");
+  reading.textContent = text;
+  reading.title = title;
 }
 
 /// The keying settings as the file takes them: one kind, and only that kind's fields.
@@ -4493,8 +4520,8 @@ async function afterProfileLoad(answer, lead, before) {
 const MISSING_WORDS = {
   "audio.input": "capture device",
   "audio.output": "playback device",
-  "ptt.port": "keying port",
-  "ptt.device": "keying interface",
+  "ptt.port": "radio control port",
+  "ptt.device": "CM108 interface",
 };
 
 function describeMissing(missing) {
@@ -4507,7 +4534,7 @@ function describeMissing(missing) {
 }
 
 /// The changes a profile load made that matter on the air, said with their values: the
-/// transmit level (in dB), the keying, the bandwidth, the devices, the callsign and the rules.
+/// transmit level (in dB), the radio control, the bandwidth, the devices, the callsign and the rules.
 function profileChanges(before, after, changed) {
   if (!before || !after) return "";
   const get = (config, key) => key.split(".").reduce((node, part) => node?.[part], config);
@@ -4528,7 +4555,7 @@ function profileChanges(before, after, changed) {
   const said = [];
   const level = [get(before, "audio.tx_level"), get(after, "audio.tx_level")];
   if (level[0] !== level[1]) said.push(`transmit level ${db(level[0])} → ${db(level[1])}`);
-  if (changed.some((key) => key.startsWith("ptt."))) said.push(`keying ${keying(before)} → ${keying(after)}`);
+  if (changed.some((key) => key.startsWith("ptt."))) said.push(`radio control ${keying(before)} → ${keying(after)}`);
   for (const [key, name] of [
     ["radio.bandwidth", "bandwidth"],
     ["audio.input", "capture"],
@@ -4774,7 +4801,7 @@ const PROFILES = [
     match: null,
     ptt: null,
     line: null,
-    note: "The fields below are what the modem uses. Pick a known interface above to have them filled in for it — you can change any of them afterwards.",
+    note: "The fields below are what the modem uses. Pick a preset above to have them filled in for a known interface — you can change any of them afterwards.",
   },
 ];
 
@@ -4824,7 +4851,7 @@ function interfaceMatches(profile) {
 /// What picking an interface fills in, or what this machine seems to have: the list's tooltip.
 function interfaceNote(note) {
   const base =
-    "Fill in the devices and keying below for a known interface: picking one fills them in once, and you can change any of them afterwards";
+    "Fill in the devices and radio control below for a known interface: picking one fills them in once, and you can change any of them afterwards";
   $("wz-profile").title = note ? `${note}. ${base}` : base;
 }
 
@@ -5582,7 +5609,7 @@ async function finishSetupSave(answer) {
     // the profile wants a keying line and none was chosen: the station is saved
     // receive-only, which is safe, but the operator should know why the radio
     // will not key
-    note += " No keying port is chosen, so the radio will not key: pick the interface's serial port under Keying below and save again.";
+    note += " No keying port is chosen, so the radio will not key: pick the interface's serial port under Radio control below and save again.";
   }
   $("wz-save-note").textContent = note;
   markStep(6, true);

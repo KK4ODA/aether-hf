@@ -1017,6 +1017,8 @@ const SCENES = {
   // the profile list open: each name with its ×, the one in use ticked
   profiles: {timeline: "ended", after: [tab("setup"), "hideEndedBanner()",
     `document.getElementById("profile-picker").open = true`], clip: ["#profile-list"]},
+  "setup-radio": {timeline: "ended", after: [tab("setup"), "hideEndedBanner()",
+    `document.querySelector('.step[data-step="2"]').scrollIntoView({block: "start"})`]},
   "setup-modem": {timeline: "ended", after: [tab("setup"), "hideEndedBanner()",
     `document.querySelector('.step[data-step="4"]').scrollIntoView({block: "start"})`]},
   "session-test": {timeline: "test", after: [tab("session")]},

@@ -35,9 +35,9 @@ it is done. Nothing changes until you press **Save** at the bottom.
    97*), how the station is controlled (**local**: you are at the radio), your licence class and
    your sideband (USB). Aether checks every transmission against these before it keys the radio,
    and transmits nothing until they are set.
-2. **Radio interface.** Pick your interface from the list (an Icom with USB audio, a Yaesu, a
-   SignaLink, a DRA or URI board) and the sound card's input and output. *Keying* is how Aether
-   keys the radio — see §3 for which to choose.
+2. **Radio interface.** Pick your interface from the *Preset* list (an Icom with USB audio, a
+   Yaesu, a Digirig, a SignaLink, a DRA or URI board) and the sound card's input and output.
+   *Radio control* is what keys the radio and tunes it — see §3 for which to choose.
 3. **Receive level.** With the radio on a quiet frequency, set the radio's or sound card's
    receive level so the meter reads *Good*.
 4. **Modem settings.** *Bandwidth*: **500 Hz** for VarAC and P2P on the calling frequencies,

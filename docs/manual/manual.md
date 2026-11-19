@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.9.2 |
+| **Version** | 1.10.0 |
 | **Updated** | 2026-11-18 |
 | **Describes** | Aether HF 0.2.0-beta.165 |
 | **Licence** | CC BY 4.0 |
@@ -433,8 +433,8 @@ settings.
   Either way your own callsign is kept, and comes back when the program leaves. Set a program's
   callsign in the program itself, not here.
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*. With
-  **Keying** set to *Host* (step 2), the rules fields read **Host**: the host program owns the
-  radio's dial, which Aether cannot read, so you check every transmission yourself.
+  **Radio control** set to *Host program* (step 2), the rules fields read **Host**: the host program
+  owns the radio's dial, which Aether cannot read, so you check every transmission yourself.
 - **Control**: *Local* (you are at the radio), *Remote* (you are at the radio through a control
   link), or *Automatic* (nobody at the control point: an unattended mailbox or gateway). Aether
   never guesses this. Under *Automatic*, Aether answers calls only for a program that holds the
@@ -450,29 +450,36 @@ refuse, but you remain the control operator.
 
 ### Step 2. Radio interface
 
-- **Interface**: picking a known interface (an Icom with USB audio, a Yaesu, a SignaLink, a DRA
-  or URI board) fills in the fields below, once. The fields are what the modem uses, and you can
-  change any of them afterwards. Changing one by hand shows *Manual*.
+![Setup step 2: the preset, the sound card and its transmit level, the radio controlled by CAT command on a Yaesu's Enhanced COM port at 38400 baud, and the Dial line reading Aether, over CAT](screens/setup-radio.png)
+
+*Figure 13. Setup step 2, with a Yaesu keyed and tuned over CAT.*
+
+- **Preset**: picking a known interface (an Icom with USB audio, a Yaesu, a Digirig, a SignaLink,
+  a DRA or URI board) fills in the fields below, once. It is not a setting itself: the fields are
+  what the modem uses, and you can change any of them afterwards. Changing one by hand shows
+  *Manual*.
 - **Modem devices**: the sound card's **Capture** (the radio's receive audio) and **Playback**
   (the radio's transmit audio). The transmit level is shown here too; you set it on the Session
   tab.
-- **Keying**: how the radio is keyed. There are six ways.
+- **Radio control**: what keys the radio, and what reads and tunes its dial. There are six ways.
 
-![Six ways to key the radio, each with a small wiring sketch and whether it reads the dial: CAT command, serial line, rigctld or FLRig, CM108 interface, host program, VOX](fig/keying.svg)
+![Six ways to control the radio, each with a small wiring sketch and what it does with the dial: CAT command, serial line, rigctld or FLRig, CM108 interface, host program, VOX](fig/keying.svg)
 
-*Figure 13. The six ways Aether can key the radio.*
+*Figure 14. The six ways to control the radio, and what each does with the dial.*
 
-1. **CAT command**: the radio's own command on its CAT port. It needs no second port and also
-   reads the dial, which the rules need. Choose the radio's dialect (Yaesu, Kenwood, Icom CI-V)
-   and its rate. An Icom also needs its CI-V address: IC-7300 94, IC-705 A4, IC-9700 A2. Yaesu
-   radios keyed over CAT transmit from the DATA input.
+1. **CAT command**: the radio's own command on its CAT port. It needs no second port, reads the
+   dial, which the rules need, and tunes the radio from the Session tab's dial list. Choose the
+   radio's dialect (Yaesu, Kenwood, Icom CI-V) and its rate. An Icom also needs its CI-V address:
+   IC-7300 94, IC-705 A4, IC-9700 A2. Yaesu radios keyed over CAT transmit from the DATA input.
 2. **Serial line**: the RTS or DTR line of a serial port keys the radio, through the interface.
-3. **rigctld (Hamlib) or FLRig**: keys the radio and reads its dial, and another program can tune
-   the radio through it at the same time.
+3. **rigctld (Hamlib) or FLRig**: keys the radio, reads its dial and tunes it, and another program
+   can tune the radio through it at the same time.
 4. **CM108**: a DRA or URI interface keys through its sound card's own pin, pin 3 on those boards.
-5. **Host**: VarAC or Winlink Express owns the radio and keys it when Aether says PTT ON, as with
-   VARA. Aether then cannot read the dial, so the rules in step 1 are set to None and you check
-   every transmission. Keep this way of working in a profile of its own.
+5. **Host program**: VarAC or Winlink Express owns the radio. It keys the radio when Aether says
+   PTT ON, as with VARA, and it tunes it: set the program's own frequency control (VarAC's RIG tab,
+   *Frequency Control* on CAT). Aether opens no port on the radio and cannot read the dial, so the
+   rules in step 1 are set to None and you check every transmission. Keep this way of working in a
+   profile of its own.
 6. **None**: a VOX interface such as a SignaLink, or listening only. Set **Turnaround** in step 4.
 
 > **Note.** A radio's USB connection often shows two serial ports. On a Yaesu the *Enhanced* port
@@ -480,14 +487,16 @@ refuse, but you remain the control operator.
 > program can hold a port: close a logger that holds it, or share the radio through rigctld or
 > FLRig.
 
-Without CAT, rigctld or FLRig the radio cannot report its dial. Tell Aether where it is with
-**Dial is at** on the Session tab before you transmit, and again after every change of frequency.
+- **Dial**: what reads the dial and tunes the radio with the radio control chosen: *Aether, over
+  CAT*, *Aether, through rigctld* or *through FLRig*, *Host program*, or *Typed by hand*. Typed by
+  hand means the radio cannot report its dial: tell Aether where it is with **Dial is at** on the
+  Session tab before you transmit, and again after every change of frequency.
 
 ### Step 3. Receive level
 
 ![Two panels: the receive level meter with its zones (very quiet, good, almost clipping), and the radio's power out against the transmit level, flat once the ALC acts](fig/levels.svg)
 
-*Figure 14. The two levels: what Aether hears, and what it sends.*
+*Figure 15. The two levels: what Aether hears, and what it sends.*
 
 With the radio on a quiet frequency, turn the radio's audio output (or the sound card's input in
 the computer's sound settings) until the meter says **Good**. Clipping is never acceptable. Too
@@ -497,7 +506,7 @@ quiet leaves the signal inside the sound card's own noise.
 
 ![Setup scrolled to step 4: bandwidth, answer only, fastest mode, compress, call tries, busy channel, turnaround, answer gap, longest key, identify by and band edges](screens/setup-modem.png)
 
-*Figure 15. Setup step 4: the modem's settings.*
+*Figure 16. Setup step 4: the modem's settings.*
 
 - **Bandwidth**: *2300 Hz* for Winlink, Pat and the most data; *500 Hz* for contacts between two
   stations and VarAC. Both stations of a session use the same. A change takes effect once the
@@ -586,7 +595,7 @@ quiet leaves the signal inside the sound card's own noise.
 ### Step 6. Save
 
 **Save these settings** writes them to the modem. Most take effect at once. A new sound card, any
-keying setting, Host programs, compression, the update channel or the callsign restarts the
+radio control setting, Host programs, compression, the update channel or the callsign restarts the
 modem, which takes a few seconds; the window comes back by itself.
 
 - **Copy as TOML** copies the settings in the shape of the configuration file.
@@ -623,7 +632,7 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
 
 ![The Radio dial box while RadioPost Gateway scans three dials: the radio on the second](screens/scanning.png)
 
-*Figure 16. The Radio dial box while a program scans: the dial the radio is on, its place in the list, and Stop.*
+*Figure 17. The Radio dial box while a program scans: the dial the radio is on, its place in the list, and Stop.*
 
 Every dial in a scan has to suit your antenna without a tuning cycle: a resonant antenna for each
 band, or a tuner that remembers each band. A station calling one that scans needs more tries than
@@ -669,7 +678,7 @@ Click the box's heading to open it.
 
 ![The Keying and drive box open: Key 1 s, Tuner tone, Set drive, the transmit level slider and the last transmit peak](screens/drive.png)
 
-*Figure 17. Keying and drive, open.*
+*Figure 18. Keying and drive, open.*
 
 - **Key 1 s**: keys the radio for one second with no audio, to check the keying. The Log then says
   whether the radio's receive audio changed while it was keyed. A radio that transmits goes quiet
@@ -679,7 +688,7 @@ Click the box's heading to open it.
 - **Transmit level**: the slider, in dB below full scale. **Last transmit peak** is the modem's
   own headroom.
 
-**How to set the drive** ([Figure 14](#step-3-receive-level), right):
+**How to set the drive** ([Figure 15](#step-3-receive-level), right):
 
 1. Press **Set drive** and watch the radio's ALC meter.
 2. Raise the transmit level until the ALC just begins to move.
@@ -728,7 +737,7 @@ the air should carry ([Reporting a problem](#29-reporting-a-problem)).
 
 ![The Status tab during a session: Link and Channel readings, the History chart with the speed, the Channel and activity chart, and the counters](screens/status.png)
 
-*Figure 18. The Status tab during a session.*
+*Figure 19. The Status tab during a session.*
 
 - **Link**: the rung, the SNR, the throughput and the session (who, and for how long).
 - **Channel**: signal above noise, tuning offset, receive level and bytes still queued.
@@ -756,7 +765,7 @@ What each reading means is in [What the readings mean](#27-what-the-readings-mea
 
 ![The Stations tab: the stations heard, with their bandwidth, and the sessions with each](screens/stations.png)
 
-*Figure 19. The stations heard, and the sessions.*
+*Figure 20. The stations heard, and the sessions.*
 
 - **Stations heard**: every station whose frame carried a callsign (a beacon, a call, a probe, an
   answer, a KISS frame, or the other end of a session), one line per callsign, the 200 most recent.
@@ -775,7 +784,7 @@ touched.
 
 ![The Diagnostics tab: the constellation, the spectrum with two red lines at the signal's edges, the waterfall, the receiver's readings and the frames table](screens/diagnostics.png)
 
-*Figure 20. Diagnostics: the signal as the receiver sees it.*
+*Figure 21. Diagnostics: the signal as the receiver sees it.*
 
 - **Signal analysis**: the constellation, the spectrum and the waterfall.
   - The **constellation** shows the last OFDM frame's points. A tone frame has none.
@@ -807,7 +816,7 @@ touched.
 
 ![The undocked signal window: constellation, spectrum and waterfall, with a Busy lamp and a Tune button](screens/signal.png)
 
-*Figure 21. The signal window, undocked.*
+*Figure 22. The signal window, undocked.*
 
 - It has its own **Full** (the whole card), **Compact** (the spectrum and the waterfall) and
   **Mini** (the waterfall alone, with a frequency scale, for a corner of the screen while another
@@ -821,7 +830,7 @@ touched.
 
 ![The Log tab: one entry a line, with tags and filters](screens/log.png)
 
-*Figure 22. The Log tab.*
+*Figure 23. The Log tab.*
 
 The **Log** is everything the modem and the window reported since the window opened, newest last,
 one entry a line. Hold the mouse over a line for the whole of it. Filters: *All*, *Problems*,
@@ -845,7 +854,7 @@ nothing you typed in Send or Received is included.
 
 ![The Send files form, set to send my files to the Aether project: which station, how far back, and whether to include the audio](screens/share.png)
 
-*Figure 23. Send files: one zip of your logs and recordings.*
+*Figure 24. Send files: one zip of your logs and recordings.*
 
 Choose what to do:
 
@@ -866,7 +875,7 @@ that offer them: RadioPost and RadioPost Gateway do (`radiopost.log`, `gateway.l
 
 ![The Help tab: About with the version and folders, and short guides](screens/help.png)
 
-*Figure 24. The Help tab.*
+*Figure 25. The Help tab.*
 
 - **About** shows the version, the modem, the update channel and the latest release, and where
   this station keeps its settings, logs and recordings.
@@ -920,7 +929,7 @@ You do not need this to operate, but it explains what you see on the lamps and i
 
 ![Two lanes over time: N1CALL calls on the tone floor, N2CALL accepts; N1CALL sends a header and data, N2CALL answers in its slot; at the end each says goodbye and the Morse IDs come last](fig/session.svg)
 
-*Figure 25. A session, transmission by transmission.*
+*Figure 26. A session, transmission by transmission.*
 
 - **The call** goes on the tone floor, which gets through the weakest paths. If it is not
   answered, Aether calls again. The called station accepts it.
@@ -942,7 +951,7 @@ the fast ones need a clean path.
 
 ![A chart of data rate against the signal each rung needs, for both bandwidths: the tone rungs on the left under the noise, the OFDM rungs climbing to the right](fig/ladder.svg)
 
-*Figure 26. Every rung's data rate against the signal it needs.*
+*Figure 27. Every rung's data rate against the signal it needs.*
 
 - The **SNR it needs** is where nine frames in ten get through on a steady path, in a 3 kHz noise
   bandwidth. A fading path needs several decibels more.
@@ -1010,7 +1019,7 @@ The tables below are made from the modem's own figures every time the manual is 
 
 ![Two strips over the radio's audio from 0 to 3500 Hz: the 2300 Hz signal fills most of a 2.4 kHz SSB filter, the 500 Hz signal sits in its middle](fig/bandwidth.svg)
 
-*Figure 27. Where Aether's two signals sit in the radio's audio.*
+*Figure 28. Where Aether's two signals sit in the radio's audio.*
 
 - **2300 Hz** carries the most data: use it for Winlink and Pat, and whenever both stations can.
   It needs a receive filter 2.4 kHz or wider, centred.
@@ -1043,7 +1052,7 @@ press **Test session**. The other station only has to be listening.
 
 ![Six steps in a row: probe, call, message, file, ladder, disconnect, over a time bar of about five minutes](fig/test.svg)
 
-*Figure 28. The six steps of a Test session.*
+*Figure 29. The six steps of a Test session.*
 
 1. **Probe.** If you probed the same station on the same dial in the last minute and were answered,
    that probe counts and no new one goes.
@@ -1058,7 +1067,7 @@ press **Test session**. The other station only has to be listening.
 
 ![The Session tab during a Test session: the progress bar, the step, and the rung under test](screens/session-test.png)
 
-*Figure 29. A Test session in progress.*
+*Figure 30. A Test session in progress.*
 
 The message and file go first, so the speeds the Test reports are the speeds you would get. It
 takes about five minutes and stops itself at ten. If you wait for a clear channel, the probe and the
@@ -1071,7 +1080,7 @@ bandwidths: the Test then runs at 500 Hz. The result is saved as two files endin
 
 ![A transmission goes to the rules check (licence class, band segment, both edges of the signal, control, its width); legal, the radio is keyed; not allowed, nothing goes out and the badge says why](fig/rules.svg)
 
-*Figure 30. Every transmission is judged against the rules before the radio is keyed.*
+*Figure 31. Every transmission is judged against the rules before the radio is keyed.*
 
 With *United States — FCC Part 97* chosen in Setup step 1, Aether judges every transmission before
 it keys the radio: your licence class, the band segment at the dial, both edges of the signal, the
@@ -1100,7 +1109,7 @@ Programs reach Aether through ports on the same computer. Each kind has its own.
 
 ![Aether's window and RadioPost on the control port 8515; Winlink Express, Pat, VarAC and RMS Trimode on the host port 8300 and 8301; packet programs on the KISS port 8100; all into the modem, then the radio](fig/programs.svg)
 
-*Figure 31. The programs that use Aether and the ports they connect to.*
+*Figure 32. The programs that use Aether and the ports they connect to.*
 
 | Port | What it is | Who uses it |
 |---|---|---|
@@ -1118,8 +1127,8 @@ Turn on **Host programs** in Setup step 5, then point the program's VARA HF sett
 
 - **Aether keys the radio** (CAT, rigctld, FLRig, serial, CM108 or VOX). This is the usual way for
   Winlink Express and Pat.
-- **The program keys the radio** (Setup step 2, *Host*). This is VarAC's way, with its RIG tab's
-  PTT and frequency control on CAT, as with VARA. Keep it in a profile of its own.
+- **The program keys and tunes the radio** (Setup step 2, *Radio control*: *Host program*). This
+  is VarAC's way, with its RIG tab's PTT and frequency control on CAT, as with VARA. Keep it in a profile of its own.
 
 While **Host programs** is on, the program sets the callsign and the bandwidth: Setup shows **Host**
 in their places, and your own come back when the program leaves.
@@ -1144,7 +1153,7 @@ stay as they are, and VARA HF stays one click away.
 
 ![Setup with the offer under the header, VarAC is on this computer, with Set up and Not now; step 5 ends with the VarAC row (its folder, the profile to copy and Set up) and the VarAC profile row, not set up](screens/varac.png)
 
-*Figure 32. The offer to set VarAC up, and Setup step 5's VarAC rows.*
+*Figure 33. The offer to set VarAC up, and Setup step 5's VarAC rows.*
 
 1. Install Aether and do Setup steps 1 to 3 as usual: callsign, sound card, receive level.
 2. A banner says VarAC is on this computer. Press **Set up** (or use Setup step 5, **VarAC**).
@@ -1155,8 +1164,9 @@ stay as they are, and VARA HF stays one click away.
      ports, with the KISS port on and no VARA monitor.
    - It saves the Aether profile **VarAC default**: your settings with **Host programs** and
      **KISS programs** on. If your VarAC profile keys the radio itself (CAT, OmniRig, FLRig,
-     Hamlib or DTR/RTS), the profile also sets keying to **Host** and the rules to *None*, as
-     Setup does for Host. If VarAC uses VOX, Aether keeps its own keying.
+     Hamlib or DTR/RTS), the profile also sets **Radio control** to **Host program** and the rules
+     to *None*, as Setup does for a host program. If VarAC uses VOX, Aether keeps its own radio
+     control.
 3. Press **Switch to VarAC default**, or pick it on the Profile bar.
 4. In VarAC, choose **Switch profile**, then **VarAC_Aether**. VarAC restarts and starts Aether.
    To go back to VARA, switch VarAC back to **VarAC** and Aether back to your usual profile.
@@ -1183,7 +1193,7 @@ screen by screen.
 
 ![Two rows. Winlink: your station with Winlink Express and Aether, by radio to a gateway with RMS Trimode and Aether, then the Internet to Winlink's servers. RadioPost: your station with RadioPost and Aether, by radio to RadioPost Gateway and Aether, then the Internet to your post office](fig/mail.svg)
 
-*Figure 33. Mail by radio, through a gateway: Winlink above, RadioPost below.*
+*Figure 34. Mail by radio, through a gateway: Winlink above, RadioPost below.*
 
 An Aether gateway runs RMS Trimode beside Aether; a station in the field runs Winlink Express with
 Aether. Set the gateway's Aether to *Automatic* control (Setup step 1) when nobody is at its radio.
@@ -1213,7 +1223,7 @@ Aether is the modem. Each is set up in its own window, and each has its own manu
 | Sending your logs to the project | Aether | [Sending files](#sending-files) |
 
 > **Note.** RadioPost needs Aether to key the radio **itself**. In Setup step 2 choose CAT, serial,
-> rigctld, FLRig, CM108 or VOX, not *Host*. Keyed by a host program, Aether transmits only for that
+> rigctld, FLRig, CM108 or VOX, not *Host program*. Keyed by a host program, Aether transmits only for that
 > program, and RadioPost's calls never reach the air.
 
 - **RadioPost connects to the control port, 8515**, not to the host programs port. Leave both
@@ -1269,7 +1279,7 @@ Trimode and `N1CALL-10` for RadioPost.
 - The station runs one session at a time.
 - Two programs cannot hold the same callsign: the first to claim it keeps it, and the Log says which
   program was refused it (*claims:* lines).
-- RadioPost needs Aether to key the radio itself, so the station runs with Aether keying, not *Host*.
+- RadioPost needs Aether to key the radio itself, so the station runs with Aether keying, not *Host program*.
 
 **A program that leaves takes its session with it.** When the program that owns a session or a call
 disconnects from Aether (it closed, crashed or lost its connection), Aether ends that session as
@@ -1295,7 +1305,7 @@ is to carry RadioPost's email over FM, simplex and through repeaters.
 
 ![Aether FM as planned: simplex between two FM radios through the voice path or a 9600 data port; the far station measuring your level and telling you; through a repeater, off by default; and packet radio](fig/fm.svg)
 
-*Figure 34. Aether FM as planned.*
+*Figure 35. Aether FM as planned.*
 
 What has been decided:
 
@@ -1348,7 +1358,7 @@ segment edge; the radio cannot report its dial and **Dial is at** is not set; or
 automatic control outside the automatic segments.
 
 **The radio does not key.** Press **Key 1 s** on the Session tab. If the radio's transmit light stays
-off, check Setup step 2: the port, the line (RTS, DTR or CAT), and for CAT the dialect, the rate and
+off, check Setup step 2's **Radio control**: the port, the line (RTS, DTR or CAT), and for CAT the dialect, the rate and
 an Icom's CI-V address. On a Yaesu, CAT is on the *Enhanced* port and RTS on the *Standard* port.
 
 **The radio keys but no signal goes out.** Check the playback device in step 2. A Yaesu keyed over CAT
@@ -1356,7 +1366,7 @@ transmits from the DATA input: check the radio's data-input settings.
 
 **The Log says the radio's receive audio did not change while it was keyed.** Aether keyed the radio,
 but the audio it heard stayed the same as the band, so the radio probably did not transmit. Check the
-keying in step 2, and the radio's own setting for it (on many radios RTS or DTR keying works only on one
+radio control in step 2, and the radio's own setting for it (on many radios RTS or DTR keying works only on one
 of its two USB ports, or after a menu setting). Then press **Key 1 s** and watch the radio and the Log.
 
 **The ALC moves even at a low transmit level.** Turn down the radio's USB (rear) data input gain and
@@ -1394,7 +1404,7 @@ frames at a good SNR, check the receive level, the drive and the receive filter.
 
 ![Three panels: the radio's filter passing all of Aether's signal; a filter moved down that cuts the top; a filter moved up that cuts the bottom, with the knob to turn for each](fig/filter.svg)
 
-*Figure 35. When the radio's receive filter cuts the signal.*
+*Figure 36. When the radio's receive filter cuts the signal.*
 
 **Checking the radio's receive filter.** Open the Diagnostics tab and look at the waterfall. The red lines
 are the edges of Aether's signal, and the band's noise should look even between them. Aether does not
@@ -1438,7 +1448,7 @@ turn off USB power saving.
 sending. The cures are the ones above.
 
 **A host program says nothing is connected, or VARA is missing.** Check **Host programs** is on in step 5
-and the program points at `127.0.0.1` and the right port. With *Host* keying, the program must be attached
+and the program points at `127.0.0.1` and the right port. With *Host program* radio control, the program must be attached
 before the window can transmit.
 
 **The Modem lamp is red.** The modem has stopped or is restarting. Wait a few seconds after a save. If it
@@ -1491,7 +1501,7 @@ a program, which you can turn off in Setup step 5.
 |---|---|
 | First start | Setup, steps 1 to 6, then **Save these settings** |
 | Callsign, rules, control, licence class | Setup step 1 |
-| Sound card and keying | Setup step 2 |
+| Sound card and radio control | Setup step 2 |
 | Receive level | Setup step 3: aim for *Good* |
 | Bandwidth, identify by, turnaround | Setup step 4 |
 | Host programs, KISS, updates, debug mode | Setup step 5 |
@@ -1574,3 +1584,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.9.0 | 2026-11-18 | [Profiles](#profiles): the **×** beside each profile in the list deletes it, once you confirm; **More** no longer has Delete. |
 | 1.9.1 | 2026-11-18 | **Identify by**: a session or call a program made under a callsign of its own is identified as that callsign, also after the program has closed (report 19 §6). |
 | 1.9.2 | 2026-11-18 | **Debug mode**: with no internet, the sessions wait and go once there is a connection, tried every 10 minutes and kept through a restart. |
+| 1.10.0 | 2026-11-18 | Setup step 2's **Interface** is **Preset** and its **Keying** is **Radio control**, with *Host program* in place of *Host*, and a new **Dial** line says what reads the dial and tunes the radio: a host program that keys the radio tunes it too. |

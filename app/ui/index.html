@@ -713,7 +713,7 @@
             <p class="sub" id="profile-note" title="What the last profile action did" role="status" aria-live="polite"></p>
             <nav class="stepper" id="setup-stepper" aria-label="Setup steps" title="The six steps: a tick means nothing in the step is wrong; click one to go to it">
               <button class="step-link" data-step="1" title="Step 1: your callsign, the rules the station operates under, and the field log"><span class="step-link-n">1</span>Callsign and rules</button>
-              <button class="step-link" data-step="2" title="Step 2: the sound card and how the radio is keyed"><span class="step-link-n">2</span>Radio interface</button>
+              <button class="step-link" data-step="2" title="Step 2: the sound card, and how the radio is keyed and tuned"><span class="step-link-n">2</span>Radio interface</button>
               <button class="step-link" data-step="3" title="Step 3: the receive level from the sound card"><span class="step-link-n">3</span>Receive level</button>
               <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the identifier and band edges"><span class="step-link-n">4</span>Modem</button>
               <button class="step-link" data-step="5" title="Step 5: updates, recording, host programs and the KISS port"><span class="step-link-n">5</span>Application</button>
@@ -739,7 +739,7 @@
                   <option value="us-fcc-part97">United States — FCC Part 97</option>
                   <option value="none">None — I check every transmission myself</option>
                 </select>
-                <span class="host-owned as-select" id="reg-profile-host" title="None: the host program keys the radio and owns its dial, which Aether cannot read; you check every transmission, as with VARA. Choose another keying in step 2 to set the rules" hidden>Host</span>
+                <span class="host-owned as-select" id="reg-profile-host" title="None: the host program keys the radio and owns its dial, which Aether cannot read; you check every transmission, as with VARA. Choose another radio control in step 2 to set the rules" hidden>Host</span>
               </div>
               <div class="row">
                 <label for="reg-control" title="How the station is controlled (§97.109)">Control</label>
@@ -749,7 +749,7 @@
                   <option value="remote">Remote — I am at the radio through a control link</option>
                   <option value="automatic">Automatic — it runs with nobody at the control point</option>
                 </select>
-                <span class="host-owned as-select" id="reg-control-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another keying in step 2 to set it" hidden>Host</span>
+                <span class="host-owned as-select" id="reg-control-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>Host</span>
               </div>
               <div class="row">
                 <label for="reg-license" title="The control operator's license class (§97.301)">License class</label>
@@ -761,13 +761,13 @@
                   <option value="extra">Amateur Extra</option>
                   <option value="novice">Novice</option>
                 </select>
-                <span class="host-owned" id="reg-license-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another keying in step 2 to set it" hidden>Host</span>
+                <span class="host-owned" id="reg-license-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>Host</span>
                 <label for="reg-sideband" class="label-inline" title="The sideband the radio transmits the modem's audio on">Sideband</label>
                 <select id="reg-sideband" class="narrow" title="The sideband the radio transmits the modem's audio on; data is sent on USB by convention, and on LSB the signal lands below the dial, mirrored">
                   <option value="usb">USB</option>
                   <option value="lsb">LSB</option>
                 </select>
-                <span class="host-owned" id="reg-sideband-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another keying in step 2 to set it" hidden>Host</span>
+                <span class="host-owned" id="reg-sideband-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>Host</span>
               </div>
               <div class="field-group" role="group" aria-labelledby="field-log-title">
                 <h4 class="sub-heading" id="field-log-title" title="Details that go into every recording, so a report needs no follow-up">Field log</h4>
@@ -794,11 +794,11 @@
             <!-- 2 -->
             <li class="step card console-card" data-step="2">
               <div class="card-head step-head">
-                <h3 class="card-title step-title" title="The sound card and how the radio is keyed. A serial port keys the radio through its RTS or DTR line, or by the radio's own CAT command on the CAT port, which needs no second port and also reads the dial frequency the rules need. The rate is the one in the radio's menu; an Icom also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios keyed over CAT transmit from the DATA input. rigctld and FLRig are the other ways to both, and a host program can tune through either at the same time. A radio's USB connection often shows two ports: Yaesu's Enhanced port carries CAT and its Standard port the RTS line; Icom's single port carries both. A DRA, URI or other CM108-class interface keys through its codec's own GPIO pin (3 on those boards). Host: the host program (VarAC, Winlink Express) owns the radio and keys it on PTT ON, as with VARA; Aether opens no port on the radio and the rules in step 1 are None. None: a VOX interface such as a SignaLink, or listening only. Without CAT, rigctld or FLRig the radio cannot report its dial: say where it is on the Session tab before transmitting."><span class="step-num">2</span>Radio interface</h3>
+                <h3 class="card-title step-title" title="The sound card, and how the radio is keyed and tuned. A serial port keys the radio through its RTS or DTR line, or by the radio's own CAT command on the CAT port, which needs no second port and also reads the dial frequency the rules need. The rate is the one in the radio's menu; an Icom also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios keyed over CAT transmit from the DATA input. rigctld and FLRig are the other ways to both, and a host program can tune through either at the same time. A radio's USB connection often shows two ports: Yaesu's Enhanced port carries CAT and its Standard port the RTS line; Icom's single port carries both. A DRA, URI or other CM108-class interface keys through its codec's own GPIO pin (3 on those boards). Host program: the host program (VarAC, Winlink Express) owns the radio, keys it on PTT ON and tunes it, as with VARA; Aether opens no port on the radio and the rules in step 1 are None. None: a VOX interface such as a SignaLink, or listening only. Without CAT, rigctld or FLRig the radio cannot report its dial: say where it is on the Session tab before transmitting."><span class="step-num">2</span>Radio interface</h3>
               </div>
               <div class="row">
-                <label for="wz-profile" title="A known interface">Interface</label>
-                <select id="wz-profile" title="Fill in the devices and keying below for a known interface: picking one fills them in once, and you can change any of them afterwards; the fields below are what the modem uses, and changing them by hand shows Manual here"></select>
+                <label for="wz-profile" title="Known interfaces: picking one fills in the fields below, once">Preset</label>
+                <select id="wz-profile" title="Fill in the devices and radio control below for a known interface: picking one fills them in once, and you can change any of them afterwards; the fields below are what the modem uses, and changing them by hand shows Manual here"></select>
               </div>
               <div class="field-group" role="group" aria-labelledby="modem-devices-title">
                 <h4 class="sub-heading" id="modem-devices-title" title="The sound card's input and output, and the level the modem plays at">Modem devices</h4>
@@ -817,8 +817,8 @@
                 </div>
               </div>
               <div class="row">
-                <label for="dev-ptt" title="How the radio is keyed">Keying</label>
-                <select id="dev-ptt" title="What keys the radio: Host (the host program keys it on PTT ON), a serial port, a CM108 interface, rigctld or FLRig; none for VOX or listening only"></select>
+                <label for="dev-ptt" title="What keys the radio, and what reads and tunes its dial">Radio control</label>
+                <select id="dev-ptt" title="What keys the radio and tunes it: Host program (the host program keys it on PTT ON and tunes it), a serial port (by the radio's CAT command, which also reads the dial and tunes it, or by its RTS or DTR line), a CM108 interface, rigctld or FLRig; None for VOX or listening only"></select>
                 <select id="ptt-line" class="narrow" title="How the port keys the radio: a serial line, or the radio's own CAT command" aria-label="How the port keys the radio">
                   <option value="rts">RTS line</option>
                   <option value="dtr">DTR line</option>
@@ -854,6 +854,10 @@
                   <span class="sub" title="The Icom's CI-V address, in hex">CI-V</span>
                   <input id="ptt-civ" title="The Icom's CI-V address in hex, from its menu: IC-7300 94, IC-705 A4, IC-9700 A2" type="text" class="port" value="94" aria-label="CI-V address in hex" />
                 </span>
+              </div>
+              <div class="row" id="dial-source-row">
+                <span class="label-like" title="What reads the radio's dial and tunes it, with this radio control">Dial</span>
+                <span id="setup-dial" title="What reads the radio's dial and tunes it" role="status" aria-live="polite">—</span>
               </div>
               <p class="note warn" id="rate-note" title="Something to check about the CAT rate" role="alert" hidden></p>
               <p class="note warn" id="hardware-note" title="A device the configuration names that this computer does not have" role="alert" hidden></p>
@@ -1153,7 +1157,7 @@
           </div>
           <dl class="kv about-paths">
             <dt>Callsign</dt><dd class="numerals" id="help-callsign" title="The callsign the station is using now">—</dd>
-            <dt>Keying</dt><dd id="help-ptt" title="How the radio is keyed">—</dd>
+            <dt>Radio control</dt><dd id="help-ptt" title="What keys the radio, and what reads and tunes its dial">—</dd>
             <dt>Configuration</dt><dd class="numerals" id="help-config" title="Where the configuration file is">—</dd>
             <dt>Log and recordings</dt><dd class="numerals" id="help-dir" title="Where the log and recordings are">—</dd>
           </dl>
