@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.14.0 |
+| **Version** | 1.14.1 |
 | **Updated** | 2026-11-19 |
 | **Describes** | Aether HF 0.2.0-beta.167 |
 | **Licence** | CC BY 4.0 |
@@ -1165,6 +1165,8 @@ in their places, and your own come back when the program leaves.
   to key a port nothing is wired to is found at once.
 - The program sees only its own sessions. A session you start from the window is not reported to
   it, though its BUSY reads ON while it runs.
+- A call through a digipeater (a path with *Via* in Winlink Express or Pat) is refused: Aether
+  relays nothing. Call the station directly.
 - One program at a time uses the host port. A program that connects again replaces the old
   connection, and the Log says so (*host:* lines).
 - Winlink Express closes the modem it started: turn off its automatic launch and start Aether
@@ -1676,3 +1678,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.13.1 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): a gateway's profile sets **Control** *Automatic* and **Wait for clear**. |
 | 1.13.2 | 2026-11-19 | [KISS programs](#24-kiss-programs): a new rung, *Wait for a clear channel* or client limit no longer closes the KISS port; the programs connected stay connected. |
 | 1.14.0 | 2026-11-19 | [RMS Packet](#rms-packet): Winlink's VHF/UHF gateway works with Aether on the bench, through its *Vara FM* setting or its *KISS ACKMODE* packet channel, and waits for Aether FM for the air. |
+| 1.14.1 | 2026-11-19 | [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac): a call through a digipeater is refused; Aether had called the station directly. |

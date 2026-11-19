@@ -83,9 +83,26 @@ What each program said, all of it answered `OK` (nothing `WRONG`):
   identifier, ADR-0075). A scratch copy whose Vara FM TNC was never set up launches the real
   `C:\VARA FM\VaraFM.exe` (its default, auto-launch on) when the session window opens.
 
-VARA FM's published command list (EA5HVK, *VARA Protocol Native TNC Commands*) could not be read in
-this session (its copy is on mega.nz, and the browser prompt went unanswered). Comparing it with the
-adapter, as ADR-0124 §2.2 asks, is still owed: until then this note rests on what the programs sent.
+**Against the published list.** EA5HVK's *VARA Protocol Native TNC Commands* (13 February 2022)
+covers VARA HF, FM and SAT on one page each way. What it says of VARA FM, against Aether's adapter
+today and what Aether FM's must do (ADR-0124 §2.2):
+
+| Published, for VARA FM | Aether's adapter today | Aether FM |
+|---|---|---|
+| `CONNECT Source Destination via Digi1 Digi2` | **Refused** (`WRONG`) since 2026-11-19: it had taken the first two words and called the destination direct | Refused until relaying exists (decision 5) |
+| `CONNECTED Source Destination via Digi1 Digi2 BW`; the page's example ends `WIDE` | `CONNECTED <caller> <called> 2300`; RMS Packet, Pat and Winlink Express took it in their FM modes | Say the FM mode: `NARROW` or `WIDE` |
+| `BW500`, `BW2300`, `BW2750` are marked *VARA HF*; no FM form (RMS Packet stopped sending `FM1200`/`FM9600`) | Acted on | `WRONG`: the mode is the modem's setting (the profile) |
+| `CQFRAME Source Digi1 Digi2`, both ways | `CQFRAME <source> <bandwidth>` | Read and say the FM form; refuse digipeaters |
+| `WINLINK SESSION`, `P2P SESSION`: *VARA HF and VARA SAT only* | Recorded | No FM program sent them; recorded is harmless |
+| `SN` "sent only if the CHAT ON command is active" | Sent for every decoded frame (VarAC builds its reports from it); RMS Packet, Pat and Winlink Express ignore it | The same, or held to `CHAT ON` if an FM program objects |
+| `IAMALIVE` every 60 s | Every 10 s | Keep: RMS Packet restarts itself when it stops |
+| `MYCALL`: at most five callsigns, 3–7 characters and `-1`…`-15`, `-T`, `-R` | Any number, up to nine characters with `/` | The same |
+| `LISTEN ON`/`OFF` (off by default) "will cause a disconnection if it is received in the middle of a VARA connection" | Acted on; the disconnection not copied (ADR-0026) | The same |
+| `LINK REGISTERED` / `LINK UNREGISTERED` | Always `LINK REGISTERED` | The same |
+
+Everything else on the list (`DISCONNECT`, `ABORT`, `COMPRESSION`, `CHAT`, `PENDING`,
+`CANCELPENDING`, `BUSY`, `BUFFER`, `PTT`, `REGISTERED`, `MISSING SOUNDCARD`, `OK`, `WRONG`) is the
+same for VARA FM as for HF, and the adapter already answers it as `host-interfaces.md` §3–§4 say.
 
 ### 3.2 The KISS door
 

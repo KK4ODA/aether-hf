@@ -271,6 +271,9 @@ it starts with debug mode on; a gateway without a panel says it in its log at ev
   `KK4ODA-1-T` is ten characters with two suffixes — longer than Aether's frames carry, and not a
   callsign VARA's own rules allow either (three to seven characters, then an optional `-1` to
   `-15`, `-T` or `-R`). Plain callsigns work.
+* A call through a digipeater — `CONNECT <me> <them> via <digi>`, VARA FM's form in its published
+  command list, which Pat and Winlink Express send when the path names one — is refused (`WRONG`):
+  Aether relays nothing, and calling the station directly instead is not what was asked.
 * VarAC's *Remember VARA audio level per band* is ignored: set the level with Aether's *Set
   drive* (Session tab, Keying and drive).
 * The rules check needs Aether to know the dial; with the host program owning the radio it is

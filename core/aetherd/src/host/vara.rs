@@ -269,6 +269,10 @@ impl HostState {
 
         match (verb, rest.as_slice()) {
             ("MYCALL", calls) if !calls.is_empty() => self.set_callsigns(calls),
+            // VARA FM's relayed call, `CONNECT <me> <them> via <digi1> <digi2>` in the published
+            // command list: this modem relays nothing, and calling the last station direct is
+            // not what the program asked, so it is refused rather than half done
+            ("CONNECT", [_, _, via, ..]) if *via == "VIA" => HostOutcome::wrong(),
             ("CONNECT", [from, to, ..]) => {
                 if !plausible_callsign(from) || !plausible_callsign(to) {
                     return HostOutcome::wrong();
@@ -587,6 +591,24 @@ mod tests {
                 to: "KK4XYZ".into()
             }
         );
+    }
+
+    #[test]
+    fn a_relayed_call_is_refused_not_placed_direct() {
+        // VARA FM's published `CONNECT Source Destination via Digi1 Digi2`; Pat and Winlink
+        // Express send it when a path names digipeaters. Aether relays nothing.
+        let mut host = state();
+        for line in [
+            "CONNECT N0CALL N0CALL-10 VIA N0CALL-1",
+            "connect n0call n0call-10 via n0call-1 n0call-2",
+        ] {
+            let outcome = host.command(line);
+            assert_eq!(outcome.replies, vec!["WRONG"], "{line}");
+            assert_eq!(outcome.action, HostAction::None, "{line}");
+        }
+        // a plain call still goes
+        let outcome = host.command("CONNECT N0CALL N0CALL-10");
+        assert_eq!(outcome.replies, vec!["OK"]);
     }
 
     #[test]
