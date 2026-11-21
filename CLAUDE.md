@@ -3185,8 +3185,8 @@ PC of the author's (user folder `C:\Users\User`)** is not the one above: `C:\Dev
 has `varac-a`/`varac-b` (VarAC's program files copied from `C:\VarAC`, never its INI or DB),
 `aetherd-161\` (the release's Windows daemon zip), `varac-500-here\a|b\station.toml` (the
 `[sim]` pair, host 8300/8310, KISS 8100/8101) and `stub-modem\vara_standin.py` (answers like
-Aether's adapter, logs every byte, takes injected lines). There is no Rust toolchain or MSVC on
-that PC. Its `C:\VARA` is a real VARA install, so a scratch VarAC's INI is written **before its
+Aether's adapter, logs every byte, takes injected lines). Since 2026-11-21 that PC has a Rust
+toolchain (cargo 1.100) that builds and tests the daemon; it had none before. Its `C:\VARA` is a real VARA install, so a scratch VarAC's INI is written **before its
 first start**, with `VarahfLaunchOnModemConnect=OFF` and `VarahfMainPath` in a stub folder (VarAC
 edits the `VARA.ini` beside that path). The INI also needs PSK Reporter upload and self-report
 OFF, `CheckForUpdates=OFF` and CAT on a port that does not exist. The relay bench kept both
@@ -3360,8 +3360,13 @@ and gap fixes held on the air. Found, each the author's call:
   linger, and the only cap is the longest call plus a dwell (`cap_s`, about 205 s). From 15:26 to
   15:56Z the house sat on 14.107 MHz eight times for 184–214 s. Since 13:46Z the next visit to
   3.590 MHz was more than the published 54 s away 8.9 % of the time. Session 1's call was found at
-  its fourth and last try, after 37 s on 20 m. The scan logs nothing about why it stays: an
-  instrument comes first.
+  its fourth and last try, after 37 s on 20 m. **The instrument, built the same day (the
+  author's go; ADR-0129 §16, rule 13):** a visit kept more than `STAY_SAID_S` (1 s) past its
+  dwell writes one `scan: stayed …` line when the scan leaves it — how long, whether it left at
+  the cap, the frames noticed and not decoded (announced on the floor or ordinary, reported by
+  rung or kind, their confidences, first and last), datagram pieces, probes, a contact, other
+  holds (`Stay`, `say_stay`; `scan_arriving` takes the arrival's `floor`). How a linger should
+  end waits on what those lines show.
 - **The client called with the gateway's old 49 s and two channels** (RadioPost's).
 - **Two waits in every exchange from the programs' timing.** The gateway's reply came 0.23–0.32 s
   after delivery, after the slave's answer was already decided (render-ahead), and cost an

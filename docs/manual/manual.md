@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.15.2 |
+| **Version** | 1.15.3 |
 | **Updated** | 2026-11-21 |
 | **Describes** | Aether HF 0.2.0-beta.168 |
 | **Licence** | CC BY 4.0 |
@@ -651,7 +651,9 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
   dial, such as a RadioPost alert, keeps it there about 19 s as well. A broadcast of this
   station's waiting to go out, such as the answer to that alert, holds the dial until it has
   gone, so the answer goes where the alert came from. An answer sent later, once the scan has
-  moved on, takes the scan back to that dial next. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
+  moved on, takes the scan back to that dial next. Calls or frames heard again and again keep it
+  longer, up to about 3½ minutes; when it stays past its listen, the Log says how long and what
+  kept it there. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
   is; so does turning the radio's knob, or tuning from anywhere else. The program is told, and
   does not start the scan again by itself. The dial list is held while a scan runs.
 
@@ -1711,3 +1713,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.15.0 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): **Set it in** the program writes what Winlink Express or RMS Trimode must change to reach Aether into its own settings, with the program closed and the file kept as it was; a profile keyed by the program keeps the rules check, with the program's channel as the dial. |
 | 1.15.1 | 2026-11-21 | [Radio dial](#radio-dial): a scan stays about 19 s on a dial where it hears a broadcast, such as a RadioPost alert, and a broadcast of the station's own waiting to go out holds the dial, so an answer goes where the alert came from; an answer sent later takes the scan back to that dial (ADR-0129 §14, §15). |
 | 1.15.2 | 2026-11-21 | [Step 2. Radio interface](#step-2-radio-interface): a Kenwood keyed by CAT command is asked what it is, and a TS-480, TS-590S, TS-590SG, TS-890S or TS-990S transmits its data input (DATA SEND); before, plain TX keyed its microphone and the tuner tone put nothing out. **Radio control** on the Help tab names the radio and the command. CAT keeps RTS and DTR off. |
+| 1.15.3 | 2026-11-21 | [Radio dial](#radio-dial): a scan kept on a dial past its listen says in the Log how long it stayed and what kept it there; things heard again and again keep it up to about 3½ minutes (ADR-0129 §16). |

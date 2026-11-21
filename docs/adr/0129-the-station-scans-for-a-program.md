@@ -577,3 +577,43 @@ hold the dial the radio is on, the scan goes to its dial next (not to the next i
 goes out there; one naming a dial the scan has not goes where the radio is. Each fails with its part
 taken out (fed anywhere, the dial left out of the heard datagram, the scan going round its list).
 `control/methods.rs` tests `dial_hz`'s refusals.
+
+## 16. Amended: a visit kept past its dwell says why (2026-11-21)
+
+**What happened.** Report 20 (`docs/research/link-architecture/20-radiopost-scan-80m-40m-beta168.md`
+§3) counted the house's 12 205 dial moves of 2026-11-21. From 15:26 to 15:56Z the scan went to
+14.107 MHz eight times and stayed 184–214 s each time, the cap (`cap_s`: the longest call and a
+dwell), with one 4–5 s look at the other two dials between. Since 13:46Z the next visit to
+3.590 MHz was more than the published 54 s away 8.9 % of the time. A linger is extended by anything
+at `NOTICE_CONFIDENCE` (1.1) that does not decode, and nothing in the log said what that was: frames of
+which family, at what confidence, how often. The author chose an instrument first (2026-11-21),
+before deciding how a linger should end.
+
+**What changes** (rule 13; `station/scan.rs`, `Stay`, `say_stay`): each visit keeps a record of what
+kept the radio there — frames announced at the notice confidence or more (on the floor or ordinary,
+from the arrival's `floor`), frames reported and not decoded at it (by what the receiver read them
+as: `data at rung N`, `control`, …), their least and most confidence, the first and the last (seconds
+after the move), datagram pieces, probes to this station, a contact, and any other reason the dial
+was held past the dwell. When the scan leaves a dial it stayed on more than `STAY_SAID_S` (1 s) past
+its dwell, the log gets one `scan` line, for example:
+
+```
+scan: stayed 208.6 s on 14.1070 MHz, 203.9 s past its dwell, and left at the most a visit lasts
+(205 s): frames at confidence 1.1 or more, 41 announced (30 on the floor, 11 ordinary) and 12
+reported and not decoded (data at rung 2 ×8, control ×4), at 1.12–1.63, the first 2.1 s in and
+the last 204.8 s in
+```
+
+The line goes to the recording too, as every note does. A quiet visit writes nothing.
+
+**What it costs:** one line a visit kept past its dwell; on the house's 2026-11-21 log, 171 visits of
+3 159 since 13:46Z lasted over 6 s, about one line every two minutes.
+
+**What it removes:** nothing, and it changes nothing the scan does: no wire change, setting or
+schema. `scan_arriving` takes the arrival's `floor`.
+
+**How it is tested:** a station test in `station/scan.rs`
+(`a_visit_kept_past_its_dwell_says_why_once_the_scan_leaves`): a quiet visit writes nothing; a visit
+kept by a floor arrival and two frames that came to nothing writes one line naming them, their
+confidences and the dial, and not the noise candidate under the gate; and a visit cut at its cap
+says so.

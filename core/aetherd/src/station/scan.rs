@@ -47,6 +47,12 @@
 //!     answer to a broadcast heard on that dial waits for the scan to get there, and the scan
 //!     goes there next once its visit is over, not round the list. A dial the scan has not, or
 //!     no scan, and it goes where the radio is.
+//! 13. **A visit kept past its dwell says why** (§16), once, when the scan leaves the dial: how
+//!     long it stayed, whether it left at the most a visit lasts, and what kept it — the frames
+//!     it noticed and did not decode (announced on the floor or ordinary, reported by what the
+//!     receiver read them as, their confidences, the first and the last), datagram pieces, a
+//!     probe to this station, a contact, and anything else that held the dial. On a busy band a
+//!     dial was kept 184–214 s at a time, and the log could not say on what (report 20 §3).
 //!
 //! [`GrantedEngine::call_gaps`]: aether_link::GrantedEngine::call_gaps
 //! [`GrantedEngine::call_deferral_s`]: aether_link::GrantedEngine::call_deferral_s
@@ -98,6 +104,13 @@ pub const REPORT_AFTER_END_S: f64 = 1.0;
 /// (report 18 §3). The moves are a dwell apart at least: three in a row is a radio that does not
 /// go there, or does not answer at all.
 pub const UNANSWERED_TO_DROP: u32 = 3;
+/// How long past its dwell a visit must last for the log to say what kept the radio there
+/// (rule 13): a frame arriving under [`NOTICE_CONFIDENCE`] holds the dial until it is reported,
+/// a second or so, and that is not worth a line.
+pub const STAY_SAID_S: f64 = 1.0;
+/// How many of the things that held a dial a stay's line names, and how many of the receiver's
+/// readings of the frames it did not decode.
+const STAY_NAMES: usize = 4;
 /// How far a dial read back may differ from the dial asked for before it is taken for the knob:
 /// a radio that rounds its dial to its tuning step.
 const KNOB_TOLERANCE_HZ: u64 = 50;
@@ -251,7 +264,140 @@ pub(super) struct Scan {
     /// The dial the last move asked for, by its place in `dials`, when the radio did not answer
     /// it: the radio may be there rather than on `dials[at]` until a reading says (§13).
     or_at: Option<usize>,
+    /// What has kept the radio on this visit's dial, for the line the log gets when it leaves
+    /// (rule 13).
+    stay: Stay,
     since_ms: u64,
+}
+
+/// What kept the radio on one visit's dial (rule 13).
+#[derive(Debug, Clone, Default)]
+struct Stay {
+    /// When the visit's dwell, drawn at the move, ended, on the station's clock.
+    dwell_end: f64,
+    /// Frames announced at [`NOTICE_CONFIDENCE`] or more: on the floor, and ordinary.
+    announced_floor: u32,
+    announced_ordinary: u32,
+    /// Frames reported and not decoded at [`NOTICE_CONFIDENCE`] or more, by what the receiver
+    /// read them as, in the order first met.
+    undecoded: Vec<(String, u32)>,
+    /// The least and the most confidence among the frames announced or reported.
+    confidence: Option<(f64, f64)>,
+    /// When the first and the last of them came, in seconds after the move.
+    first_s: f64,
+    last_s: f64,
+    /// Pieces of a datagram decoded (rule 11).
+    datagram_pieces: u32,
+    /// Probes to this station decoded.
+    probes: u32,
+    /// A session, a call, a probe or a Test held the dial.
+    contact: bool,
+    /// Anything else that held the dial, each once.
+    held: Vec<String>,
+}
+
+impl Stay {
+    fn starting(dwell_end: f64) -> Self {
+        Self {
+            dwell_end,
+            ..Self::default()
+        }
+    }
+
+    /// A frame noticed `at` seconds into the visit, at `confidence`.
+    fn noticed(&mut self, at: f64, confidence: f64) {
+        self.confidence = Some(
+            self.confidence
+                .map_or((confidence, confidence), |(lo, hi)| {
+                    (lo.min(confidence), hi.max(confidence))
+                }),
+        );
+        if self.announced_floor + self.announced_ordinary == 0 && self.undecoded.is_empty() {
+            self.first_s = at;
+        }
+        self.last_s = self.last_s.max(at);
+    }
+
+    fn undecoded(&mut self, read_as: String, at: f64, confidence: f64) {
+        self.noticed(at, confidence);
+        match self.undecoded.iter_mut().find(|(what, _)| *what == read_as) {
+            Some((_, n)) => *n += 1,
+            None => self.undecoded.push((read_as, 1)),
+        }
+    }
+
+    fn held_by(&mut self, why: String) {
+        if self.held.len() < STAY_NAMES && !self.held.contains(&why) {
+            self.held.push(why);
+        }
+    }
+
+    /// The log's line for a visit of `visit_s` on `dial` that lasted `past_s` past its dwell, or
+    /// `None` when that is under [`STAY_SAID_S`]. `capped`: it left with a linger running, at
+    /// the most a visit lasts, that many seconds.
+    fn said(&self, dial: u64, visit_s: f64, past_s: f64, capped: Option<f64>) -> Option<String> {
+        if past_s < STAY_SAID_S {
+            return None;
+        }
+        let left = capped.map_or_else(String::new, |cap_s| {
+            format!(", and left at the most a visit lasts ({cap_s:.0} s)")
+        });
+        let mut line = format!(
+            "stayed {visit_s:.1} s on {}, {past_s:.1} s past its dwell{left}",
+            mhz(dial)
+        );
+        let mut why = Vec::new();
+        let announced = self.announced_floor + self.announced_ordinary;
+        let reported: u32 = self.undecoded.iter().map(|(_, n)| n).sum();
+        if announced + reported > 0 {
+            let mut parts = Vec::new();
+            if announced > 0 {
+                parts.push(format!(
+                    "{announced} announced ({} on the floor, {} ordinary)",
+                    self.announced_floor, self.announced_ordinary
+                ));
+            }
+            if reported > 0 {
+                let mut read: Vec<_> = self.undecoded.iter().collect();
+                read.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+                let read: Vec<String> = read
+                    .iter()
+                    .take(STAY_NAMES)
+                    .map(|(what, n)| format!("{what} ×{n}"))
+                    .collect();
+                parts.push(format!(
+                    "{reported} reported and not decoded ({})",
+                    read.join(", ")
+                ));
+            }
+            let (lo, hi) = self.confidence.unwrap_or_default();
+            why.push(format!(
+                "frames at confidence {NOTICE_CONFIDENCE} or more, {}, at {lo:.2}–{hi:.2}, \
+                 the first {:.1} s in and the last {:.1} s in",
+                parts.join(" and "),
+                self.first_s,
+                self.last_s
+            ));
+        }
+        if self.datagram_pieces > 0 {
+            why.push(format!("{} datagram pieces", self.datagram_pieces));
+        }
+        if self.probes > 0 {
+            why.push(format!("{} probes to this station", self.probes));
+        }
+        if self.contact {
+            why.push("a session, a call or a probe on this dial".to_owned());
+        }
+        if !self.held.is_empty() {
+            why.push(format!("held: {}", self.held.join("; ")));
+        }
+        if why.is_empty() {
+            why.push("nothing it noted".to_owned());
+        }
+        line.push_str(": ");
+        line.push_str(&why.join("; "));
+        Some(line)
+    }
 }
 
 /// The station's scan, the radio's way home after one, and how the last one ended.
@@ -359,6 +505,7 @@ impl<P: Ptt> Station<P> {
             dropped: Vec::new(),
             unanswered: vec![0; dials.len()],
             or_at: None,
+            stay: Stay::starting(now + if on.is_some() { dwell_s } else { 0.0 }),
             since_ms: super::beacons::unix_ms(),
         });
         self.scanner.home = None;
@@ -478,12 +625,20 @@ impl<P: Ptt> Station<P> {
     /// heard from its start or partway through it, and the scan lingers for the caller's next
     /// (rule 5). Under it the announcement only holds: a tone arrival is heeded whatever its
     /// confidence, and the harness's first grid found one on noise, at 1.01.
-    pub(super) fn scan_arriving(&mut self, end_s: f64, confidence: f64, now: f64) {
+    /// `floor`: announced in the air's robust family, as the log's line for a long visit says
+    /// (rule 13).
+    pub(super) fn scan_arriving(&mut self, end_s: f64, confidence: f64, floor: bool, now: f64) {
         if let Some(scan) = &mut self.scanner.scan {
             scan.arriving_until = scan.arriving_until.max(end_s + REPORT_AFTER_END_S);
             if confidence >= NOTICE_CONFIDENCE && now >= scan.hear_from {
                 let until = now + scan.linger_s;
                 scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
+                scan.stay.noticed(now - scan.moved_at, confidence);
+                if floor {
+                    scan.stay.announced_floor += 1;
+                } else {
+                    scan.stay.announced_ordinary += 1;
+                }
             }
         }
     }
@@ -516,11 +671,26 @@ impl<P: Ptt> Station<P> {
                 _ => idle,
             };
         let weak_caller = !report.decoded && report.detect_confidence >= NOTICE_CONFIDENCE;
+        let probe = report.decoded && report.kind == "probe" && ours;
         if anothers {
             scan.linger_until = None;
-        } else if weak_caller || datagram || (report.decoded && report.kind == "probe" && ours) {
+        } else if weak_caller || datagram || probe {
             let until = now + scan.linger_s;
             scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
+        }
+        // what the log's line for a long visit names (rule 13)
+        let at = now - scan.moved_at;
+        if weak_caller {
+            let read_as = if report.kind == "data" {
+                format!("data at rung {}", report.mode)
+            } else {
+                report.kind.to_owned()
+            };
+            scan.stay.undecoded(read_as, at, report.detect_confidence);
+        } else if datagram {
+            scan.stay.datagram_pieces += 1;
+        } else if probe {
+            scan.stay.probes += 1;
         }
     }
 
@@ -542,14 +712,20 @@ impl<P: Ptt> Station<P> {
         let Some(scan) = self.scanner.scan.as_mut() else {
             return;
         };
-        if held.is_some() {
+        if let Some(why) = held {
             scan.held_by_contact |= contact;
             scan.leave_at = scan.leave_at.max(now);
+            if contact {
+                scan.stay.contact = true;
+            } else if now > scan.stay.dwell_end {
+                scan.stay.held_by(why);
+            }
             return;
         }
         if scan.held_by_contact {
             // a session, a call or a probe has ended here: its station may call again
             scan.held_by_contact = false;
+            scan.stay.contact = true;
             scan.linger_until = Some(now + scan.linger_s);
             scan.leave_at = scan.leave_at.max(now);
             return;
@@ -645,8 +821,32 @@ impl<P: Ptt> Station<P> {
         self.engine.state() != State::Idle || self.probing() || self.test_running()
     }
 
+    /// The scan leaves the dial it is on: when the visit lasted past its dwell, the log says what
+    /// kept it (rule 13). Once a visit: the record starts again at the next move.
+    fn say_stay(&mut self, now: f64) {
+        let Some(scan) = self.scanner.scan.as_mut() else {
+            return;
+        };
+        let stay = std::mem::replace(&mut scan.stay, Stay::starting(f64::INFINITY));
+        if !scan.placed {
+            return;
+        }
+        let Some(&dial) = scan.dials.get(scan.at) else {
+            return;
+        };
+        // a linger still running when the visit ends is one the cap cut short
+        let capped = scan
+            .linger_until
+            .is_some_and(|until| now < until)
+            .then_some(scan.cap_s);
+        if let Some(line) = stay.said(dial, now - scan.moved_at, now - stay.dwell_end, capped) {
+            self.note("scan", &line);
+        }
+    }
+
     /// Put the radio on the scan's dial `index` (rules 2 and 8).
     fn move_scan(&mut self, index: usize, now: f64) {
+        self.say_stay(now);
         let Some(scan) = self.scanner.scan.as_ref() else {
             return;
         };
@@ -677,6 +877,7 @@ impl<P: Ptt> Station<P> {
         scan.hear_from = now + deaf;
         scan.restart_at = Some(now + deaf);
         scan.leave_at = now + scan.dwell_s + DWELL_JITTER_S * next_unit(&mut scan.jitter);
+        scan.stay = Stay::starting(scan.leave_at);
         scan.linger_until = None;
         scan.arriving_until = f64::NEG_INFINITY;
         scan.hops += 1;
@@ -772,6 +973,7 @@ impl<P: Ptt> Station<P> {
         scan.hear_from = now + deaf;
         scan.restart_at = Some(now + deaf);
         scan.leave_at = now + scan.dwell_s + DWELL_JITTER_S * next_unit(&mut scan.jitter);
+        scan.stay = Stay::starting(scan.leave_at);
         scan.linger_until = None;
         scan.arriving_until = f64::NEG_INFINITY;
         self.record_event("hop", &format!("dial {dial} deaf {deaf:.3} unanswered"));
@@ -1273,7 +1475,7 @@ mod tests {
         // confidence a try under way reaches it starts no linger
         let now = station.now();
         let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
-        station.scan_arriving(now + dwell + 2.0, NOTICE_CONFIDENCE - 0.05, now);
+        station.scan_arriving(now + dwell + 2.0, NOTICE_CONFIDENCE - 0.05, false, now);
         listen(&mut station, dwell + 2.0);
         assert_eq!(
             rig.lock().expect("rig").dial,
@@ -1602,7 +1804,7 @@ mod tests {
         listen(&mut station, dwell - 1.5);
         let now = station.now();
         // the stream takes the block it heard for a frame's start: it ends a tone frame later
-        station.scan_arriving(now + 5.4, 1.6, now);
+        station.scan_arriving(now + 5.4, 1.6, true, now);
         listen(&mut station, linger - 1.0);
         assert_eq!(
             rig.lock().expect("rig").dial,
@@ -1615,6 +1817,83 @@ mod tests {
             rig.lock().expect("rig").dial,
             DIALS[1],
             "stayed past the linger"
+        );
+    }
+
+    /// The log's lines for visits that stayed past their dwell.
+    fn stays(station: &mut Station<ScanRadio>) -> Vec<String> {
+        station
+            .take_events()
+            .into_iter()
+            .filter(|e| e.starts_with("scan:stayed"))
+            .collect()
+    }
+
+    #[test]
+    fn a_visit_kept_past_its_dwell_says_why_once_the_scan_leaves() {
+        // report 20 §3: a busy dial kept the scan 184–214 s at a time, and the log could not say
+        // on what
+        let (mut station, rig) = scanning_station();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, 0.2);
+        let dwell = dwell(&station);
+        let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
+        let on = |dial: u64| {
+            let rig = Arc::clone(&rig);
+            move |_: &Station<ScanRadio>| rig.lock().expect("rig").dial == dial
+        };
+        // a quiet visit says nothing when the scan leaves it
+        stays(&mut station);
+        until(&mut station, dwell + DWELL_JITTER_S + 1.0, on(DIALS[1]));
+        assert!(
+            stays(&mut station).is_empty(),
+            "a quiet visit said why it stayed"
+        );
+        // a try noticed on the floor, two frames that came to nothing, and a noise candidate
+        // under the gate, which keeps nothing and is not named
+        listen(&mut station, move_deaf_s() + 0.1);
+        let now = station.now();
+        station.scan_arriving(now + 1.0, 1.4, true, now);
+        listen(&mut station, 3.0);
+        let now = station.now();
+        station.scan_heard(&report(false, 1.3), now);
+        station.scan_heard(&report(false, 1.25), now);
+        station.scan_heard(&report(false, NOTICE_CONFIDENCE - 0.05), now);
+        until(
+            &mut station,
+            linger + dwell + DWELL_JITTER_S + 2.0,
+            on(DIALS[2]),
+        );
+        let said = stays(&mut station);
+        assert_eq!(said.len(), 1, "{said:?}");
+        let line = &said[0];
+        for part in [
+            "on 7.1010 MHz",
+            "1 announced (1 on the floor, 0 ordinary)",
+            "2 reported and not decoded (data at rung 5 ×2)",
+            "at 1.25–1.40",
+        ] {
+            assert!(line.contains(part), "{part:?} not in {line:?}");
+        }
+        assert!(!line.contains("the most a visit lasts"), "{line}");
+        // frames that keep coming keep the radio until the most a visit lasts, and the line
+        // says so
+        let cap = dwell + 4.0;
+        if let Some(scan) = station.scanner.scan.as_mut() {
+            scan.cap_s = cap;
+        }
+        listen(&mut station, move_deaf_s() + 0.1);
+        for _ in 0..4 {
+            let now = station.now();
+            station.scan_heard(&report(false, 1.2), now);
+            listen(&mut station, 1.5);
+        }
+        until(&mut station, cap + 2.0, on(DIALS[0]));
+        let said = stays(&mut station);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("on 10.1450 MHz") && said[0].contains("the most a visit lasts"),
+            "{said:?}"
         );
     }
 
