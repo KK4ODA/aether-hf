@@ -617,3 +617,79 @@ schema. `scan_arriving` takes the arrival's `floor`.
 kept by a floor arrival and two frames that came to nothing writes one line naming them, their
 confidences and the dial, and not the noise candidate under the gate; and a visit cut at its cap
 says so.
+
+## 17. Amended: what the scan does not read keeps it two lingers at most (2026-11-21)
+
+**What happened.** The author saw the gateway's scan stop when the mini PC's monitor went into
+power saving, then saw that it was the scan staying on 40 m, a dial with many signals: the Busy
+lamp went on and off and the radio stayed. A High performance power plan changed nothing. This is
+report 20's lingers on a busy band (§16 above), seen from the radio. The gateway's log
+(`aether-KK4ODA-1-20261121-185709-debug.zip`, beta.168, 00:56–18:57Z) shows no scan
+ended but the operator's restart at 13:40, every one of 12,205 moves answered by the FTDX10, no gap
+of a sleeping PC, and RadioPost Gateway's connection held from 13:46 to the end. What it does show
+is long visits with no session:
+
+| UTC | dial | share of the time on it |
+|---|---|---|
+| 09:44–09:56 | 7.101 MHz | 90 % (visits of 157–198 s) |
+| 12:55–13:14 | 7.101 MHz | 92 % (visits of 88–205 s) |
+| 15:26–15:56 | 14.107 MHz | 93 % (eight visits of 184–214 s in a row) |
+
+Over the day 7.101 MHz had 302 visits longer than the dwell of 5,470, 21 of them over a minute, and
+spent 16 % of its time in visits over 25 s; 14.107 MHz 30 %; 3.590 MHz 3 %. Every long visit is
+rule 5 as built: a frame announced, or reported undecoded at `NOTICE_CONFIDENCE` or more, starts a
+linger, and each one after it starts it again, up to `cap_s`, the longest call (205 s with three
+dials). The Busy lamp plays no part. Other modes' traffic (the busy lines show a peaked passband and
+the radio's AGC cutting 6–14 dB) crosses the notice's confidence often enough to keep a linger going
+for the whole cap. §11 measured the notice against twenty minutes of noise, never against a busy
+band. Meanwhile the other dials got 4–5 s every 3.5 minutes, and a call of `scan_s` (54 s) on one
+of them was mostly not heard: the promise `scan_s` makes, a round of the dials and two lingers,
+assumed what §11 wrote, that a try noticed is followed by two the scan stays for.
+
+§16's line names what kept a visit; this decides how a linger ends, the first of report 20's three
+choices (capping a visit's lingers at `scan_s`'s two; the others were letting only call-shaped frames
+extend one, and fewer dials).
+
+**What changes** (rule 5; `station/scan.rs`, the author's go of 2026-11-21):
+
+* **A frame heard and not read keeps the radio two lingers at most**, counted from the visit's first
+  such frame (`Scan::guessed_from`, `unread_until`): an announcement's hold (rule 4) and a notice's
+  linger both end by then, however many come after it. With three dials that is about 39 s after the
+  first, a visit of about 44 s at most, and a round with one such dial in it is within `scan_s`.
+* **What it reads keeps it as before**: a datagram's piece (§14), a probe to this station, a contact
+  and the linger after it, up to `cap_s`. A contact starts the count again, as a move does.
+* **§16's line says so** when the bound ended a visit: `…, and left two lingers after the first
+  frame it did not read (39 s)`, beside `…, and left at the most a visit lasts`.
+
+**What it costs:** a weak caller whose tries the scan notices and cannot read for two lingers is left
+for a round of the other dials, about 10 s with three, and noticed again when the scan comes back.
+A frame announced after the two lingers is not waited for: if it was a try, the next is heard on
+the next visit. With two busy dials of three, a round can be 92 s and a call of `scan_s` on the
+third is heard about two times in three; a budget per round instead of per visit would hold that
+too, and is left until the air shows two busy dials at once.
+
+**What it removes:** the longest call as the limit of a stay on what was not read. No wire,
+setting, constant or `scan_s` changes.
+
+**How it is tested:** the station test `a_dial_busy_with_signals_never_read_keeps_the_radio_two_lingers`
+(a frame announced and reported undecoded every 6 s): without the change the radio was still on the
+dial after 58 s, the test's limit; with it, it leaves after two lingers, §16's line says so, the next
+dial counts from its own first, and datagram pieces still keep a dial past two lingers.
+
+**On the harness.** None of its other signals (the VARA-class ARQ, PACTOR, RTTY, FT8, a carrier)
+crossed the notice's confidence: put on one of a scanning gateway's dials for 240 s (a `dial_hz`
+key on `[[qrm]]`, tried and not kept), they never kept it past its dwell on the build before. What
+the band does to the field's receiver, they do not do to the model's. Two stations the gateway hears at −20 dB, calling stations that are not there,
+do: their tries are noticed and rarely read. `40m-scanning-gateway-unread-dial-2300` puts them on
+7.101 MHz while a client on 10.145 MHz calls for `scan_s` (the runner's new step `call WHO REMOTE`,
+a call that is not waited for). Ten draws on each build:
+
+| build | client's call heard | the gateway's longest stay on 7.101 MHz |
+|---|---|---|
+| before (`09a52d0`) | 7 of 10 | 17–139 s, three over 110 s, the three calls lost |
+| §17 | 10 of 10 | 17–43 s |
+
+S4 (§6, `make_grid.py --s4 -16 -16`, three passes of its twenty draws on each build): 54 of 60 before,
+53 of 60 with §17, every cell 8 of 10 or better, the calls lost spread over draws on both builds.
+The weak caller is not worse off. `40m-scanning-gateway-2300` and
+`40m-scanning-operator-wins-2300` pass three draws each.

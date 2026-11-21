@@ -1,0 +1,46 @@
+name = "40m-scanning-gateway-unread-dial-2300"
+description = "A gateway scans three dials; on 7.101 MHz two stations it hears too weakly to read call others who are not there, so it notices frame after frame and reads none (ADR-0129 §17, the gateway of 2026-11-21 on a busy 40 m). A client on 10.145 MHz calls for as long as the scan says and must be heard: what the scan does not read keeps it on a dial two lingers at most, where it had kept it up to the longest call."
+tags = ["scan"]
+bandwidth = 2300
+seconds = 420
+seed = 8
+connect_within_s = 75
+
+[stations.a]
+callsign = "W4ODA"
+dial_hz = 10_145_000
+[stations.b]
+callsign = "KK4XYZ-10"
+dial_hz = 3_590_000
+[stations.c]
+callsign = "N4XYZ"
+dial_hz = 7_101_000
+[stations.d]
+callsign = "K4ABC"
+dial_hz = 7_101_000
+
+[path]
+profile = "awgn"
+snr_db = 10.0
+[path.c_to_b]
+snr_db = -20.0
+[path.d_to_b]
+snr_db = -20.0
+
+[script]
+steps = [
+  "scan b 3590000,7101000,10145000",
+  "call c N0NE call_s=150",
+  "wait 5",
+  "call d N0XX call_s=150",
+  "wait 30",
+  "connect call_s=scan",
+  "message 1000",
+]
+
+# the call heard and its message carried; the weak callers go on calling past the script's end
+# (moved to 500 Hz after four tries, ADR-0058) and their tries overlap on 7.101 MHz, which is not
+# what is judged
+[expect]
+connected = true
+delivered = true

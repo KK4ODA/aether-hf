@@ -3169,6 +3169,12 @@ came from; `frequency.set` still takes a waiting datagram along.
 **§15 (2026-11-21):** the `datagram` event carries `dial_hz` (where it was heard whole) and
 `datagram.send` takes `dial_hz`: a scan that has the dial sends it there, going there next once its visit
 is over (`scan_goes_elsewhere_for`, `datagram_dial_index`); otherwise it goes where the radio is.
+**§17 (2026-11-21, the author's "scan stops when the monitor sleeps", which was the scan staying on a
+busy 40 m; §16 is report 20's instrument):** what the scan hears and does not read (an announcement's hold, a notice's linger) keeps
+it two lingers at most from the visit's first such frame (`Scan::guessed_from`, `unread_until`);
+what it reads keeps `cap_s`. Other modes' traffic had renewed the linger to `cap_s` (205 s) a visit.
+The harness's QRM kinds never cross the notice's confidence; two weak stations calling someone absent
+do (`40m-scanning-gateway-unread-dial-2300`, the runner's `call WHO REMOTE` step).
 
 **VarAC's beacons work through Aether (2026-11-17; the organisers of VarAC Wednesday asked).**
 No change to Aether. VarAC 15.0.18's *Send beacons* is `CQFRAME <call>-9 500` on the command
@@ -3369,8 +3375,8 @@ and gap fixes held on the air. Found, each the author's call:
   dwell writes one `scan: stayed …` line when the scan leaves it — how long, whether it left at
   the cap, the frames noticed and not decoded (announced on the floor or ordinary, reported by
   rung or kind, their confidences, first and last), datagram pieces, probes, a contact, other
-  holds (`Stay`, `say_stay`; `scan_arriving` takes the arrival's `floor`). How a linger should
-  end waits on what those lines show.
+  holds (`Stay`, `say_stay`; `scan_arriving` takes the arrival's `floor`). How a linger ends was
+  decided the same day (ADR-0129 §17): what the scan does not read keeps it two lingers at most.
 - **The client called with the gateway's old 49 s and two channels** (RadioPost's).
 - **Two waits in every exchange from the programs' timing.** The gateway's reply came 0.23–0.32 s
   after delivery, after the slave's answer was already decided (render-ahead), and cost an

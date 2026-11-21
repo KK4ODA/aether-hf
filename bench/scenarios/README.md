@@ -108,7 +108,9 @@ moment), `abort` (`abort a`: waits for the caller alone; `abort b`: the called s
 session, and the caller closes it). For what goes wrong mid-session: `send N` (queued, not waited for; `send b N` at the called station),
 `message? N` (a message that may fail — reported, not judged), `outage S` (from now neither
 station hears the other for S seconds: a station switched off, a band gone), `wait_idle S`
-(both back to idle by themselves within S seconds of air). `at T` waits until second T of
+(both back to idle by themselves within S seconds of air), `call WHO REMOTE [call_s=N]` (that
+station calls one that is not there and the script goes on: tries a scanning station may notice
+and not read, ADR-0129 §17). `at T` waits until second T of
 air (to line a script up with a signal's `windows`); `clear WHO S` passes when that station's
 channel reads clear, and stays clear for 2 s, within S seconds of air, and `busy WHO S` when it
 reads busy (the time each took is in `transfers`). `stall WHO S` (that station's

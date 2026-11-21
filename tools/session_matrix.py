@@ -849,6 +849,17 @@ def step(run: Run, text: str) -> bool:
         who, _, hz = arg.partition(" ")
         call(run.stations[who].control, "frequency.set", {"hz": int(hz)})
         return True
+    if word == "call":
+        # `call c N0NE call_s=200`: station c calls one that is not there and the script goes
+        # on: tries another station hears and may not read, on its dial (ADR-0129 §17)
+        who, remote, *options = arg.split()
+        params = {"remote": remote}
+        for option in options:
+            key, _, value = option.partition("=")
+            if key == "call_s":
+                params["call_s"] = float(value)
+        call(run.stations[who].control, "connect", params)
+        return True
     if word == "connect":
         began = run.air_s()
         params: dict = {"remote": b.callsign}

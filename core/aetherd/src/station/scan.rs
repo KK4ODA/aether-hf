@@ -26,9 +26,13 @@
 //!    identifiers hold it as they always have.
 //! 5. **It lingers** after a frame announced or reported, not decoded, at [`NOTICE_CONFIDENCE`]
 //!    or more, and after a probe it answered: a try under way, or a caller too weak to read this
-//!    time, tries again. At most the longest call in all; a frame decoded as another station's
-//!    ends it. Under that confidence an announcement only holds the dial (rule 4): noise reached
-//!    1.07, and a tone arrival on noise at 1.01 had once held a dial nobody used.
+//!    time, tries again. A frame decoded as another station's ends it. Under that confidence an
+//!    announcement only holds the dial (rule 4): noise reached 1.07, and a tone arrival on noise
+//!    at 1.01 had once held a dial nobody used. **What it does not read keeps it two lingers at
+//!    most** (§17), counted from the first such frame of the visit: other modes' traffic looks
+//!    like a try often enough to have held a busy dial the longest call each visit, and a caller
+//!    on another dial went unheard. What it reads (a broadcast's piece, a probe to it, a
+//!    contact) keeps it up to the longest call.
 //! 6. After a session, a call or a probe it goes on from the same dial, with a linger.
 //! 7. The list is judged once, at the start, as this station's answer would be.
 //! 8. A dial the radio refuses is dropped, and one it has not answered for
@@ -238,7 +242,8 @@ pub(super) struct Scan {
     /// The draws that lengthen each dwell by up to [`DWELL_JITTER_S`] (`SplitMix64`, seeded from
     /// the scan's owner and dials, so a replay of the same scan draws the same).
     jitter: u64,
-    /// The longest a visit lasts however much it lingers: the longest call (fifteen tries).
+    /// The longest a visit lasts however much what it reads keeps it: the longest call (fifteen
+    /// tries).
     cap_s: f64,
     /// How long a call's tries must keep starting to be read: a round of the dials, and two
     /// lingers, so a try noticed is followed by two the scan stays for.
@@ -254,6 +259,10 @@ pub(super) struct Scan {
     linger_until: Option<f64>,
     /// Until when a frame announced may still be decoded or refused.
     arriving_until: f64,
+    /// The visit's first frame announced, or reported undecoded at [`NOTICE_CONFIDENCE`] or
+    /// more, since the move or the last contact: what it does not read keeps the radio two
+    /// lingers from here at most (§17).
+    guessed_from: Option<f64>,
     /// What held it at the last pass was a contact: a session, a call, a probe or a Test.
     held_by_contact: bool,
     hops: u64,
@@ -268,6 +277,14 @@ pub(super) struct Scan {
     /// (rule 13).
     stay: Stay,
     since_ms: u64,
+}
+
+/// What cut a linger short when the scan left a dial: the most a visit lasts (`cap_s`), or two
+/// lingers after the visit's first frame it did not read (§17), in seconds.
+#[derive(Debug, Clone, Copy)]
+enum Ended {
+    Cap(f64),
+    Unread(f64),
 }
 
 /// What kept the radio on one visit's dial (rule 13).
@@ -333,15 +350,21 @@ impl Stay {
     }
 
     /// The log's line for a visit of `visit_s` on `dial` that lasted `past_s` past its dwell, or
-    /// `None` when that is under [`STAY_SAID_S`]. `capped`: it left with a linger running, at
-    /// the most a visit lasts, that many seconds.
-    fn said(&self, dial: u64, visit_s: f64, past_s: f64, capped: Option<f64>) -> Option<String> {
+    /// `None` when that is under [`STAY_SAID_S`]. `ended`: what cut a linger short when it left,
+    /// the most a visit lasts or two lingers of frames it did not read (§17).
+    fn said(&self, dial: u64, visit_s: f64, past_s: f64, ended: Option<Ended>) -> Option<String> {
         if past_s < STAY_SAID_S {
             return None;
         }
-        let left = capped.map_or_else(String::new, |cap_s| {
-            format!(", and left at the most a visit lasts ({cap_s:.0} s)")
-        });
+        let left = match ended {
+            None => String::new(),
+            Some(Ended::Cap(cap_s)) => {
+                format!(", and left at the most a visit lasts ({cap_s:.0} s)")
+            }
+            Some(Ended::Unread(bound_s)) => format!(
+                ", and left two lingers after the first frame it did not read ({bound_s:.0} s)"
+            ),
+        };
         let mut line = format!(
             "stayed {visit_s:.1} s on {}, {past_s:.1} s past its dwell{left}",
             mhz(dial)
@@ -397,6 +420,15 @@ impl Stay {
         line.push_str(": ");
         line.push_str(&why.join("; "));
         Some(line)
+    }
+}
+
+impl Scan {
+    /// The most of `until` that a frame heard and not read may keep the radio (§17): two lingers
+    /// from the visit's first such frame, which this one is when none came before.
+    fn unread_until(&mut self, now: f64, until: f64) -> f64 {
+        let first = *self.guessed_from.get_or_insert(now);
+        until.min(first + 2.0 * self.linger_s)
     }
 }
 
@@ -500,6 +532,7 @@ impl<P: Ptt> Station<P> {
             leave_at: now + if on.is_some() { dwell_s } else { 0.0 },
             linger_until: None,
             arriving_until: f64::NEG_INFINITY,
+            guessed_from: None,
             held_by_contact: false,
             hops: 0,
             dropped: Vec::new(),
@@ -624,14 +657,19 @@ impl<P: Ptt> Station<P> {
     /// can have been decoded or refused. At [`NOTICE_CONFIDENCE`] or more it is a try under way,
     /// heard from its start or partway through it, and the scan lingers for the caller's next
     /// (rule 5). Under it the announcement only holds: a tone arrival is heeded whatever its
-    /// confidence, and the harness's first grid found one on noise, at 1.01.
-    /// `floor`: announced in the air's robust family, as the log's line for a long visit says
-    /// (rule 13).
+    /// confidence, and the harness's first grid found one on noise, at 1.01. Either way it is a
+    /// frame not read yet, which keeps the radio two lingers from the visit's first at most
+    /// (§17): a busy band's other modes announce one after another. `floor`: announced in the
+    /// air's robust family, as the log's line for a long visit says (rule 13).
     pub(super) fn scan_arriving(&mut self, end_s: f64, confidence: f64, floor: bool, now: f64) {
         if let Some(scan) = &mut self.scanner.scan {
-            scan.arriving_until = scan.arriving_until.max(end_s + REPORT_AFTER_END_S);
+            let mut held = end_s + REPORT_AFTER_END_S;
+            if now >= scan.hear_from {
+                held = scan.unread_until(now, held);
+            }
+            scan.arriving_until = scan.arriving_until.max(held);
             if confidence >= NOTICE_CONFIDENCE && now >= scan.hear_from {
-                let until = now + scan.linger_s;
+                let until = scan.unread_until(now, now + scan.linger_s);
                 scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
                 scan.stay.noticed(now - scan.moved_at, confidence);
                 if floor {
@@ -644,9 +682,10 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A frame reported (rule 5): one that came to nothing at [`NOTICE_CONFIDENCE`] or more, a
-    /// probe this station answers, or a piece of a datagram (rule 11) keeps it a linger longer;
-    /// one decoded as another station's ends the linger. The noise candidates a quiet band brings
-    /// fall under the gate.
+    /// probe this station answers, or a piece of a datagram (rule 11) keeps it a linger longer
+    /// (the first within two lingers of the visit's first frame not read, §17); one decoded as
+    /// another station's ends the linger. The noise candidates a quiet band brings fall under
+    /// the gate.
     pub(super) fn scan_heard(&mut self, report: &FrameReport, now: f64) {
         let ours = report
             .to
@@ -675,7 +714,11 @@ impl<P: Ptt> Station<P> {
         if anothers {
             scan.linger_until = None;
         } else if weak_caller || datagram || probe {
-            let until = now + scan.linger_s;
+            let mut until = now + scan.linger_s;
+            if weak_caller {
+                // heard and not read: two lingers from the visit's first such frame at most (§17)
+                until = scan.unread_until(now, until);
+            }
             scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
         }
         // what the log's line for a long visit names (rule 13)
@@ -727,6 +770,7 @@ impl<P: Ptt> Station<P> {
             scan.held_by_contact = false;
             scan.stay.contact = true;
             scan.linger_until = Some(now + scan.linger_s);
+            scan.guessed_from = None;
             scan.leave_at = scan.leave_at.max(now);
             return;
         }
@@ -834,12 +878,21 @@ impl<P: Ptt> Station<P> {
         let Some(&dial) = scan.dials.get(scan.at) else {
             return;
         };
-        // a linger still running when the visit ends is one the cap cut short
-        let capped = scan
-            .linger_until
-            .is_some_and(|until| now < until)
-            .then_some(scan.cap_s);
-        if let Some(line) = stay.said(dial, now - scan.moved_at, now - stay.dwell_end, capped) {
+        // a linger still running when the visit ends is one the cap cut short; one that ran to
+        // two lingers after the first frame not read, because a later one asked for more, is one
+        // §17's bound cut short
+        let bound = scan.guessed_from.map(|first| first + 2.0 * scan.linger_s);
+        let ended = if scan.linger_until.is_some_and(|until| now < until) {
+            Some(Ended::Cap(scan.cap_s))
+        } else {
+            bound
+                .filter(|&b| {
+                    scan.linger_until
+                        .is_some_and(|until| (until - b).abs() < 1e-6)
+                })
+                .map(|_| Ended::Unread(2.0 * scan.linger_s))
+        };
+        if let Some(line) = stay.said(dial, now - scan.moved_at, now - stay.dwell_end, ended) {
             self.note("scan", &line);
         }
     }
@@ -880,6 +933,7 @@ impl<P: Ptt> Station<P> {
         scan.stay = Stay::starting(scan.leave_at);
         scan.linger_until = None;
         scan.arriving_until = f64::NEG_INFINITY;
+        scan.guessed_from = None;
         scan.hops += 1;
         self.record_event("hop", &format!("dial {dial} deaf {deaf:.3}"));
     }
@@ -976,6 +1030,7 @@ impl<P: Ptt> Station<P> {
         scan.stay = Stay::starting(scan.leave_at);
         scan.linger_until = None;
         scan.arriving_until = f64::NEG_INFINITY;
+        scan.guessed_from = None;
         self.record_event("hop", &format!("dial {dial} deaf {deaf:.3} unanswered"));
     }
 
@@ -2052,6 +2107,80 @@ mod tests {
             rig.lock().expect("rig").dial,
             DIALS[1],
             "stayed past the linger"
+        );
+    }
+
+    /// A dial busy with signals the receiver notices and never reads keeps the radio at most two
+    /// lingers from the first (§17). On 2026-11-21 the gateway's 40 m and 20 m dials held it up
+    /// to 205 s a visit, the longest call, each new look-alike starting the linger again, and a
+    /// caller on another dial went unheard. What it reads keeps it as before.
+    #[test]
+    fn a_dial_busy_with_signals_never_read_keeps_the_radio_two_lingers() {
+        let (mut station, rig) = scanning_station();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, move_deaf_s() + 0.1);
+        let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
+        stays(&mut station);
+        // another mode's traffic: frames announced and reported undecoded, over the notice's
+        // confidence, every few seconds, each held until it can have been decoded
+        let first = station.now();
+        let mut next = first;
+        while station.scanner.scan.as_ref().expect("a scan").at == 0 {
+            let now = station.now();
+            assert!(
+                now - first < 3.0 * linger,
+                "still on the busy dial after {:.1} s",
+                now - first
+            );
+            if now >= next {
+                station.scan_arriving(now + 3.0, NOTICE_CONFIDENCE + 0.2, false, now);
+                station.scan_heard(&report(false, NOTICE_CONFIDENCE + 0.2), now);
+                next = now + 6.0;
+            }
+            listen(&mut station, 0.1);
+        }
+        let stayed = station.now() - first;
+        assert!(
+            (2.0 * linger - 0.5..=2.0 * linger + 0.5).contains(&stayed),
+            "left after {stayed:.1} s, not two lingers ({:.1} s)",
+            2.0 * linger
+        );
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
+        // and the log's line for the visit says what ended it (rule 13)
+        let said = stays(&mut station);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("left two lingers after the first frame it did not read"),
+            "{said:?}"
+        );
+        // the next dial's guesses count from its own first
+        listen(&mut station, move_deaf_s() + 0.1);
+        let first = station.now();
+        station.scan_heard(&report(false, NOTICE_CONFIDENCE + 0.2), first);
+        listen(&mut station, linger - 1.0);
+        let now = station.now();
+        station.scan_heard(&report(false, NOTICE_CONFIDENCE + 0.2), now);
+        listen(&mut station, linger - 2.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[1],
+            "the last dial's guesses counted here"
+        );
+        until(&mut station, 3.0, |s| s.scan_status()["at_hz"] == DIALS[2]);
+        // what was read keeps the radio past two lingers: the copies of a broadcast
+        listen(&mut station, move_deaf_s() + 0.1);
+        let first = station.now();
+        for _ in 0..3 {
+            let now = station.now();
+            station.scan_heard(&report(false, NOTICE_CONFIDENCE + 0.2), now);
+            station.scan_heard(&a_datagram_piece(), now);
+            listen(&mut station, linger - 1.0);
+        }
+        assert!(station.now() - first > 2.0 * linger);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[2],
+            "left a dial a broadcast was being read on"
         );
     }
 

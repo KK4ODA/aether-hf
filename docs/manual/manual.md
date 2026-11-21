@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.15.4 |
+| **Version** | 1.15.5 |
 | **Updated** | 2026-11-21 |
 | **Describes** | Aether HF 0.2.0-beta.168 |
 | **Licence** | CC BY 4.0 |
@@ -646,13 +646,15 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
 - **Scanning**: shown while a program, such as RadioPost Gateway, has Aether scan its channels.
   It names the dial the radio is on, its place in the program's list, and the program. Up to
   four dials. Aether listens 4 to 5 s on a dial and moves on if it hears nothing. When it hears
-  a call under way, even one too weak to read, it stays about 19 s for the caller's next try. It
+  a call under way, even one too weak to read, it stays about 19 s for the caller's next try.
+  What it hears but cannot read keeps it there about 40 s at most on each visit: on a busy band,
+  other modes' signals can look like a call. The **Busy** lamp does not hold the scan. It
   never moves while a frame is arriving, while a call or a session is up, or while your
   identifier is still to go out there, and it stays after a contact too. A broadcast heard on a
   dial, such as a RadioPost alert, keeps it there about 19 s as well. A broadcast of this
   station's waiting to go out, such as the answer to that alert, holds the dial until it has
   gone, so the answer goes where the alert came from. An answer sent later, once the scan has
-  moved on, takes the scan back to that dial next. Calls or frames heard again and again keep it
+  moved on, takes the scan back to that dial next. Broadcasts heard again and again keep it
   longer, up to about 3½ minutes; when it stays past its listen, the Log says how long and what
   kept it there. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
   is; so does turning the radio's knob, or tuning from anywhere else. The program is told, and
@@ -1720,3 +1722,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.15.2 | 2026-11-21 | [Step 2. Radio interface](#step-2-radio-interface): a Kenwood keyed by CAT command is asked what it is, and a TS-480, TS-590S, TS-590SG, TS-890S or TS-990S transmits its data input (DATA SEND); before, plain TX keyed its microphone and the tuner tone put nothing out. **Radio control** on the Help tab names the radio and the command. CAT keeps RTS and DTR off. |
 | 1.15.3 | 2026-11-21 | [Radio dial](#radio-dial): a scan kept on a dial past its listen says in the Log how long it stayed and what kept it there; things heard again and again keep it up to about 3½ minutes (ADR-0129 §16). |
 | 1.15.4 | 2026-11-21 | [Keying and drive level](#keying-and-drive-level): a **Tuner tone** or **Set drive** refused for a busy channel says why, in the **Busy** lamp's words, or says that a session between other stations heard moments before holds the channel, which the lamp does not show; in a narrow Compact or Mini window the refusal hides the lamps while it shows. |
+| 1.15.5 | 2026-11-21 | [Radio dial](#radio-dial): signals a scan hears but cannot read keep it on a dial about 40 s at most a visit, where they had kept it up to 3½ minutes on a busy band, and the Log says when that ended a visit; the **Busy** lamp does not hold the scan (ADR-0129 §17). |
