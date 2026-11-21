@@ -12861,6 +12861,7 @@ mod tests {
             wait_for_clear: false,
             persistence: 1.0,
             slot_s: 0.1,
+            dial_hz: None,
         }
     }
 
@@ -12984,6 +12985,7 @@ mod tests {
                 frame,
                 snr_db: 3.5,
                 rung: 1,
+                dial_hz: None,
             }]
         );
     }

@@ -534,3 +534,46 @@ dwell); a datagram that never goes holds the dial past the dwell and a linger, n
 not hold a tune, and lets the scan move once `cap_s` has passed since the move. No harness scenario
 yet: the harness's stations send no datagrams while scanning; RadioPost's sending side is what
 will exercise it.
+
+## 15. Amended: an answer goes back to the dial it answers (2026-11-21)
+
+**What happened.** §14 keeps the scan on a dial while a datagram waits there, which covers the
+answer a program sends at once: RadioPost's automatic *heard*. Its other answers come later. The
+operator acknowledges the alarm (*seen*) or types a reply minutes after the alert, and by then the
+scan has moved on: the answer went out on whatever dial the scan was on, while the sender stayed on
+the one it alerted on. The author chose (2026-11-21) to send them on the alert's dial. A program
+cannot know that dial unless the station says it, and cannot send there while a scan it does not own
+runs.
+
+**What changes** (rule 12; `station/scan.rs`, `station/datagrams.rs`, the control API):
+
+* **A datagram heard says its dial.** The `datagram` event carries `dial_hz`, the radio's dial when
+  the datagram was heard whole (`ReceivedDatagram::dial_hz`, from the station's last dial
+  reading); null when the station cannot read the dial.
+* **A datagram may name its dial.** `datagram.send` takes `dial_hz` (`DatagramRequest::dial_hz`,
+  kept on the queued datagram). It is a whole number of hertz above 0; anything else is refused
+  `bad_params`.
+* **A scan sends it there.** While a scan runs and the dial is one of its own (within the knob's
+  50 Hz), the datagram is not fed until the radio is on that dial (`scan_goes_elsewhere_for`), it
+  does not hold the dial the radio is on (§14's hold is for a datagram that belongs here), and when
+  the visit ends the scan goes to that dial next instead of round its list (`datagram_dial_index`).
+  There §14's hold keeps it until the datagram has gone, and the scan goes on from there. The queue
+  goes in order, so a datagram behind it waits too: a few seconds.
+* **Otherwise it goes where the radio is**: no scan, a dial the scan has not (or dropped), or a
+  radio that cannot report its dial. The station never tunes for a datagram: with no scan the
+  operator, or the program that owns the radio, decides where the radio is.
+
+**What it costs:** the answer waits for the current visit to end, 4–5 s on a quiet dial and up to
+`cap_s` where the scan lingers for a call, and then for the move's deafness. A KISS program's
+frame queued behind it waits as long.
+
+**What it removes:** nothing. No wire change, setting or constant; `scan_s` is the same. A
+program that never says `dial_hz` sees no change, and one that says it to an older station is not
+refused: the member is ignored and the datagram goes where the radio is.
+
+**How it is tested:** station tests in `station/scan.rs`: a datagram heard whole during a scan
+says the scan's dial; a datagram that names another of the scan's dials is not sent and does not
+hold the dial the radio is on, the scan goes to its dial next (not to the next in order), and it
+goes out there; one naming a dial the scan has not goes where the radio is. Each fails with its part
+taken out (fed anywhere, the dial left out of the heard datagram, the scan going round its list).
+`control/methods.rs` tests `dial_hz`'s refusals.

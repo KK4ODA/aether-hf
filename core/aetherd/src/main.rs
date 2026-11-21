@@ -1759,6 +1759,7 @@ fn publish_datagrams(
                 "bytes": heard.frame.len(),
                 "snr_db": heard.snr_db,
                 "rung": heard.rung,
+                "dial_hz": heard.dial_hz,
             }),
         ));
     }

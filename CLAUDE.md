@@ -3162,6 +3162,9 @@ time at 2/3/4 dials; a linger covering a call's pause would raise that and lengt
 starts a linger (it had ended one), and a datagram waiting to go out holds the dial for up to `cap_s`
 from the move (`datagram_waiting`), so a broadcast's copies are heard whole and its answer goes where it
 came from; `frequency.set` still takes a waiting datagram along.
+**§15 (2026-11-21):** the `datagram` event carries `dial_hz` (where it was heard whole) and
+`datagram.send` takes `dial_hz`: a scan that has the dial sends it there, going there next once its visit
+is over (`scan_goes_elsewhere_for`, `datagram_dial_index`); otherwise it goes where the radio is.
 
 **VarAC's beacons work through Aether (2026-11-17; the organisers of VarAC Wednesday asked).**
 No change to Aether. VarAC 15.0.18's *Send beacons* is `CQFRAME <call>-9 500` on the command
