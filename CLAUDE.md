@@ -3349,6 +3349,32 @@ Packet rewrites its ini when it closes**: edit the scratch ini with it stopped. 
 Express's first *Vara FM* session launches the real `C:\VARA FM\VaraFM.exe`** (its default path,
 auto-launch on) and hangs on it: set the Vara FM TNC path to a stub before opening one.
 
+**Three mail checks to the three-dial scan (2026-11-21, `docs/research/link-architecture/
+20-radiopost-scan-80m-40m-beta168.md`).** The mobile (`KK4ODA-2`, RadioPost client as `WD5EMA`,
+RTS keying, band changed by hand) to RadioPost Gateway at `KK4ODA-1`, scanning 7.101, 3.590 and
+14.107 MHz; beta.168 at both ends; 80 m, 40 m, 80 m at 2300 Hz. Both sides of the first two with
+audio; the mobile's side of the third was not uploaded. Clean: no overlap (0.564 s), answers
+71–92 ms into their slots, every data frame decoded at its first copy, and report 19's identifier
+and gap fixes held on the air. Found, each the author's call:
+- **The scan lingers on a busy band.** Anything at confidence 1.1 that does not decode extends a
+  linger, and the only cap is the longest call plus a dwell (`cap_s`, about 205 s). From 15:26 to
+  15:56Z the house sat on 14.107 MHz eight times for 184–214 s. Since 13:46Z the next visit to
+  3.590 MHz was more than the published 54 s away 8.9 % of the time. Session 1's call was found at
+  its fourth and last try, after 37 s on 20 m. The scan logs nothing about why it stays: an
+  instrument comes first.
+- **The client called with the gateway's old 49 s and two channels** (RadioPost's).
+- **Two waits in every exchange from the programs' timing.** The gateway's reply came 0.23–0.32 s
+  after delivery, after the slave's answer was already decided (render-ahead), and cost an
+  exchange (~2.2 s). A `disconnect` asked after the master's idle open window waits it out
+  (5.6 s); RadioPost can ask it with its last `send`.
+- **The Kenwood CAT attempt** (§7). The dial was set and read back through Kenwood CAT at
+  38 400 Bd, and every Tune keyed with no error. Aether keys a Kenwood with a plain `TX;`, which on
+  Kenwoods that tell mic from data keys the microphone input.
+Tools: `air_account.py` labels an open window the slave left empty a "forfeit";
+`rung_reading.py --replay` refuses protocol 12 and later by design (use `c1_replay.py`). The only
+`aetherd.exe` on this PC is beta.161 (`C:\Dev\AetherBench\aetherd-161\`), enough for
+`floor_trace.py --daemon` while the busy detector is unchanged.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
