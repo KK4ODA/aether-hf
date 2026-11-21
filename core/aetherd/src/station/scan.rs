@@ -39,6 +39,10 @@
 //! 9. **The operator wins**: another tune, or the knob, ends the scan, and its owner is told.
 //! 10. **A scan belongs to its connection**: when the connection closes, the scan ends and the
 //!     radio goes to the home dial once nothing holds it where it is.
+//! 11. **A broadcast keeps the radio where it was heard** (§14): a piece of a datagram decoded
+//!     starts a linger, so the copies a sender sends to outlast the scan are heard whole; and a
+//!     datagram waiting to go out holds the dial, so a program's answer to one goes where it
+//!     came from, for as long as a visit may last.
 //!
 //! [`GrantedEngine::call_gaps`]: aether_link::GrantedEngine::call_gaps
 //! [`GrantedEngine::call_deferral_s`]: aether_link::GrantedEngine::call_deferral_s
@@ -480,9 +484,10 @@ impl<P: Ptt> Station<P> {
         }
     }
 
-    /// A frame reported (rule 5): one that came to nothing at [`NOTICE_CONFIDENCE`] or more, or
-    /// a probe this station answers, keeps it a linger longer; one decoded as another station's
-    /// ends the linger. The noise candidates a quiet band brings fall under the gate.
+    /// A frame reported (rule 5): one that came to nothing at [`NOTICE_CONFIDENCE`] or more, a
+    /// probe this station answers, or a piece of a datagram (rule 11) keeps it a linger longer;
+    /// one decoded as another station's ends the linger. The noise candidates a quiet band brings
+    /// fall under the gate.
     pub(super) fn scan_heard(&mut self, report: &FrameReport, now: f64) {
         let ours = report
             .to
@@ -495,17 +500,21 @@ impl<P: Ptt> Station<P> {
             return;
         }
         let idle = self.engine.state() == State::Idle;
+        // a piece of a broadcast: the rest of it, and the copies its sender sends to outlast a
+        // scan, come on this dial, and the program's answer goes out here (rule 11)
+        let datagram = report.decoded && report.kind == "datagram";
         let anothers = report.decoded
             && match report.kind {
                 "beacon" => true,
                 "connect" | "probe" => !ours,
+                "datagram" => false,
                 // another session's frames, heard by a station in none
                 _ => idle,
             };
         let weak_caller = !report.decoded && report.detect_confidence >= NOTICE_CONFIDENCE;
         if anothers {
             scan.linger_until = None;
-        } else if weak_caller || (report.decoded && report.kind == "probe" && ours) {
+        } else if weak_caller || datagram || (report.decoded && report.kind == "probe" && ours) {
             let until = now + scan.linger_s;
             scan.linger_until = Some(scan.linger_until.map_or(until, |t| t.max(until)));
         }
@@ -559,7 +568,7 @@ impl<P: Ptt> Station<P> {
         self.move_scan(next, now);
     }
 
-    /// What keeps the radio on its dial now, in a sentence, or `None` (rules 1 and 4).
+    /// What keeps the radio on its dial now, in a sentence, or `None` (rules 1, 4 and 11).
     fn scan_held(&self, now: f64) -> Option<String> {
         if let Err(why) = self.dial_movable() {
             return Some(why);
@@ -571,7 +580,21 @@ impl<P: Ptt> Station<P> {
         if self.identifier.setup_at.is_some() || self.closing_identifier_pending() {
             return Some("the identifier is owed on this dial".to_owned());
         }
+        // a program's datagram may answer one heard here: it goes out here, for as long as a
+        // visit may last; past that it goes with the radio, as a tune would take it (rule 11)
+        if self.datagram_waiting() && now - scan.moved_at < scan.cap_s {
+            return Some("a datagram is waiting to go out on this dial".to_owned());
+        }
         None
+    }
+
+    /// Whether a datagram is waiting to go out: in its queue, or handed to the transmitter's.
+    fn datagram_waiting(&self) -> bool {
+        self.datagrams.waiting() > 0
+            || self
+                .pending
+                .iter()
+                .any(|out| matches!(out, super::Outgoing::Datagram { .. }))
     }
 
     /// Whether what holds the dial is a contact this station may hear from again.
@@ -1659,5 +1682,102 @@ mod tests {
             Some(DIALS[1]),
             "took a stale reading"
         );
+    }
+
+    /// A piece of a datagram decoded, as a broadcast's.
+    fn a_datagram_piece() -> FrameReport {
+        FrameReport {
+            kind: "datagram",
+            mode: 1,
+            from: Some("KK4XYZ".to_owned()),
+            ..report(true, 2.0)
+        }
+    }
+
+    /// A broadcast heard keeps the radio where it came from for a linger (rule 11): a sender
+    /// outlasting the scan sends copies back to back, and the gap between two of them, or a
+    /// copy heard partway through, must not move it on. Decoded as another station's frame, it
+    /// had ended the linger.
+    #[test]
+    fn a_piece_of_a_datagram_keeps_the_radio_for_a_linger() {
+        let (mut station, rig) = scanning_station();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, move_deaf_s() + 0.1);
+        let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
+        let now = station.now();
+        station.scan_heard(&a_datagram_piece(), now);
+        assert!(
+            !station.scan_status()["lingering_until_ms"].is_null(),
+            "a datagram's piece started no linger"
+        );
+        listen(&mut station, linger - 1.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[0],
+            "left a dial a broadcast was heard on"
+        );
+        // the next copy's piece keeps it again
+        let now = station.now();
+        station.scan_heard(&a_datagram_piece(), now);
+        listen(&mut station, linger - 1.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[0],
+            "left between copies"
+        );
+        listen(&mut station, 2.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[1],
+            "stayed past the linger"
+        );
+    }
+
+    /// A datagram waiting to go out holds the dial (rule 11): a program's answer to a broadcast
+    /// heard here goes out here, not on the dial the scan moves to next — for as long as a visit
+    /// may last, then it goes with the radio. A tune still takes it, as before.
+    #[test]
+    fn a_datagram_waiting_holds_the_dial_as_long_as_a_visit_may_last() {
+        let (mut station, rig) = scanning_station();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, 0.2);
+        let dwell = dwell(&station);
+        let linger = station.scan_status()["linger_s"].as_f64().expect("linger");
+        let cap = station.scanner.scan.as_ref().expect("a scan").cap_s;
+        assert!(cap > 2.0 * linger, "a visit's most is {cap} s");
+        // a channel never clear enough for it, as p-persistence 0 has it: it waits
+        let moved_at = station.scanner.scan.as_ref().expect("a scan").moved_at;
+        station
+            .send_datagram(crate::station::DatagramRequest {
+                frame_type: 2,
+                frame: vec![0x42; 60],
+                reference: Some("heard".to_owned()),
+                rung: Some(1),
+                wait_for_clear: true,
+                persistence: 0.0,
+                slot_s: 0.1,
+            })
+            .expect("queued");
+        listen(&mut station, dwell + linger + 2.0);
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[0],
+            "left a datagram behind"
+        );
+        assert_eq!(
+            station.scan_status()["held"],
+            "a datagram is waiting to go out on this dial"
+        );
+        assert!(
+            station.dial_movable().is_ok(),
+            "a datagram waiting held a tune too"
+        );
+        until(&mut station, cap, |s| s.scan_status()["at_hz"] != DIALS[0]);
+        let left = station.now() - moved_at;
+        assert!(
+            left >= cap - 0.2,
+            "left after {left:.1} s, before a visit's most, {cap:.1} s"
+        );
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
     }
 }

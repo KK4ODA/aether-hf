@@ -3158,6 +3158,10 @@ verdict), and RadioPost's side is on its `main` (RP-4 and RP-5 1.1.0, its
 `docs/design/03-scanning.md`, W50). Open for the author (ADR-0129 §12): a call that does not last
 `scan_s` (the VARA port's hosts, the panel's Connect) reaches a scanning gateway 72/55/43 % of the
 time at 2/3/4 dials; a linger covering a call's pause would raise that and lengthen `scan_s`.
+**§14 (2026-11-21, for RadioPost's alerts to a scanning gateway's station):** a decoded datagram piece
+starts a linger (it had ended one), and a datagram waiting to go out holds the dial for up to `cap_s`
+from the move (`datagram_waiting`), so a broadcast's copies are heard whole and its answer goes where it
+came from; `frequency.set` still takes a waiting datagram along.
 
 **VarAC's beacons work through Aether (2026-11-17; the organisers of VarAC Wednesday asked).**
 No change to Aether. VarAC 15.0.18's *Send beacons* is `CQFRAME <call>-9 500` on the command

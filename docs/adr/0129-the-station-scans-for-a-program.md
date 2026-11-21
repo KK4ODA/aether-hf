@@ -483,3 +483,54 @@ backend's answers: the read-back, the Icom's FB, NG, silence and echo, `rigctld`
 `-1` and `-5` and no `rigctld` at all, `FLRig`'s fault and HTTP error, and the keying thread. No
 harness scenario: the channel server's radio always answers, and teaching it to miss a read-back
 is more than the fix.
+
+## 14. Amended: a broadcast keeps the radio where it was heard (2026-11-21)
+
+**What happened.** The author asked how a RadioPost alert (RadioPost's RP-8, wish W52) reaches a
+station whose RadioPost Gateway has Aether scan, with the RadioPost client listening beside it on
+the same radio. An alert is a broadcast: an Aether datagram of three tone frames, about 16 s at
+rung 1, and each answer two, about 11 s. Read against the scan as built, two things lose it:
+
+* **The copies are lost between dials.** A decoded datagram piece counted as another station's
+  frame (rule 5's `_ => idle`) and ended any linger. A sender that sends its alert several times
+  to outlast the scan (below) leaves a gap between copies, and the scan moved in it. A station
+  that heard a copy partway through could not join it (a datagram needs all its pieces), and
+  left before the next.
+* **The answer goes out on the wrong dial.** A datagram waiting for a clear channel goes with the
+  radio when it moves (`holds_the_dial`: right for a beacon or a KISS frame the operator moves off a
+  busy dial). The scan used the same test, so the client's automatic *heard*, queued a moment after
+  the alert ended, went out on the next dial the scan reached, where the sender was not. That is
+  §6's S1 (no frame keyed on a dial other than the one the frame it answers was heard on): Aether
+  cannot see that a datagram answers one, so the scan has to keep the dial for any.
+
+**What RadioPost does** (its side, the author's decisions of 2026-11-21): an alert to a station that
+runs a listed gateway goes on one of that gateway's channels, and its copies keep coming for the
+gateway's published `scan_s`; an alert to the whole circle on a watch dial a listed gateway scans
+does the same; the station alerted answers the copies of one sending once.
+
+**What changes** (rule 11; `station/scan.rs`):
+
+* **A piece of a datagram decoded starts a linger**, as a try noticed does (`scan_heard`): about
+  19 s, renewed by each piece, so the next copy, and the rest of one heard partway through, are
+  heard where they come. It no longer ends one. The visit's most (`cap_s`, the longest call and a
+  dwell) still bounds it: a dial busy with KISS programs' datagrams cannot keep the scan for
+  longer than a call could.
+* **A datagram waiting to go out holds the dial** (`scan_held`, `datagram_waiting`): in the
+  station's datagram queue or handed to the transmitter's. `status.scan.held` says *a datagram is
+  waiting to go out on this dial*. The hold too lasts at most `cap_s` from the move to the dial: a
+  datagram that a busy channel keeps back past it goes with the radio, as before. `frequency.set`
+  and the panel's dial list are unchanged: a tune still takes a waiting datagram to the new dial.
+
+**What it costs:** a scan stays about 19 s, where it stayed 4–5 s, on a dial where any datagram is
+heard, and longer while one of its own waits. A gateway whose channels carry other programs'
+broadcasts (VarAC's over KISS) is held on them more, up to `cap_s` a visit.
+
+**What it removes:** nothing. No wire, setting or constant changes, and `scan_s` is the same: a
+sender outlasting the scan sends for as long as a caller's tries must keep starting.
+
+**How it is tested:** station tests in `station/scan.rs`: a datagram piece decoded starts a linger
+and a second renews it, and the scan moves once it runs out (without the change it moved after the
+dwell); a datagram that never goes holds the dial past the dwell and a linger, names the hold, does
+not hold a tune, and lets the scan move once `cap_s` has passed since the move. No harness scenario
+yet: the harness's stations send no datagrams while scanning; RadioPost's sending side is what
+will exercise it.
