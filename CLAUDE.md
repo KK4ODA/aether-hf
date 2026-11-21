@@ -223,7 +223,7 @@ other stations on the air (W4TGA, ND1J, KE4QCM from 2026-09-23) are what drives 
   desktop shell's native Help *menu* keeps updates and the version restore. The author's
   wording rule: plain names ("Modem devices", "Counters"), never "the three devices the
   modem uses". Keying is a serial line (RTS/DTR/both), **CAT on the radio's own port**
-  (`[ptt] kind = "cat"`: Yaesu `TX1;`/`TX0;` — `TX2` is a status the rig reports, not a command, and an FTDX10 ignores it — Kenwood `TX;`/`RX;`, Icom CI-V `1C 00` at
+  (`[ptt] kind = "cat"`: Yaesu `TX1;`/`TX0;` — `TX2` is a status the rig reports, not a command, and an FTDX10 ignores it — Kenwood `RX;` and, asked `ID;` at open, `TX1;` (DATA SEND, the data input) on a TS-480/590S/590SG/890S/990S or `TX;` on anything else — `TX;` is SEND, the microphone, and a TS-2000's `TX1;` is its sub band (2026-11-21: a TS-480 on a Digirig keyed silent); CAT puts RTS and DTR down at open —, Icom CI-V `1C 00` at
   the rig's address; `CatProtocol` in `ptt.rs` is pure and tested), or `rigctld`; CAT and
   rigctld also put the dial frequency into recordings. Phase 8 (`docs/ROADMAP.md`) is
   Aether on a phone: a Pi-sized box the phone drives over Bluetooth/Wi-Fi first, then the
