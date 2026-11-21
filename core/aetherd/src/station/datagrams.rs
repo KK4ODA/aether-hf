@@ -47,6 +47,10 @@ pub struct DatagramRequest {
     pub persistence: f64,
     /// The slot, seconds.
     pub slot_s: f64,
+    /// The dial it belongs on: an answer to a broadcast heard there. A scan that has the dial
+    /// goes there to send it (ADR-0129 §15); with no scan, or a dial the scan has not, it goes
+    /// where the radio is.
+    pub dial_hz: Option<u64>,
 }
 
 /// What the station made of a request.
@@ -88,6 +92,9 @@ pub struct ReceivedDatagram {
     pub snr_db: f64,
     /// The rung it came at.
     pub rung: usize,
+    /// The radio's dial when it was heard whole, when the station knows the dial: where an
+    /// answer to it belongs (ADR-0129 §15).
+    pub dial_hz: Option<u64>,
 }
 
 /// What became of a datagram sent with a reference.
@@ -109,6 +116,7 @@ pub(super) struct QueuedDatagram {
     pub(super) wait_for_clear: bool,
     pub(super) persistence: f64,
     pub(super) slot_s: f64,
+    pub(super) dial_hz: Option<u64>,
 }
 
 /// A datagram's last burst, on the air: what to report when it has left.
@@ -274,6 +282,7 @@ impl<P: Ptt> Station<P> {
             wait_for_clear: request.wait_for_clear,
             persistence: request.persistence.clamp(0.05, 1.0),
             slot_s: request.slot_s.clamp(0.02, 2.0),
+            dial_hz: request.dial_hz,
         });
         Ok(queued)
     }
@@ -296,6 +305,10 @@ impl<P: Ptt> Station<P> {
         let Some(front) = self.datagrams.queue.front() else {
             return;
         };
+        // one that belongs on another of the scan's dials waits for the scan to get there
+        if self.scan_goes_elsewhere_for(front.dial_hz) {
+            return;
+        }
         if front.wait_for_clear && (!self.air.sense().settled() || self.air.sense().busy(now)) {
             return;
         }
@@ -387,6 +400,7 @@ impl<P: Ptt> Station<P> {
                 frame,
                 snr_db,
                 rung,
+                dial_hz: self.frequency.value,
             });
         }
         named.filter(|call| !call.is_empty())

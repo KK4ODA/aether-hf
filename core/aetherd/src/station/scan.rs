@@ -43,6 +43,10 @@
 //!     starts a linger, so the copies a sender sends to outlast the scan are heard whole; and a
 //!     datagram waiting to go out holds the dial, so a program's answer to one goes where it
 //!     came from, for as long as a visit may last.
+//! 12. **A datagram that names one of its dials goes out there** (§15): a program's later
+//!     answer to a broadcast heard on that dial waits for the scan to get there, and the scan
+//!     goes there next once its visit is over, not round the list. A dial the scan has not, or
+//!     no scan, and it goes where the radio is.
 //!
 //! [`GrantedEngine::call_gaps`]: aether_link::GrantedEngine::call_gaps
 //! [`GrantedEngine::call_deferral_s`]: aether_link::GrantedEngine::call_deferral_s
@@ -534,6 +538,7 @@ impl<P: Ptt> Station<P> {
         }
         let held = self.scan_held(now);
         let contact = self.held_by_contact();
+        let wanted = self.datagram_dial_index();
         let Some(scan) = self.scanner.scan.as_mut() else {
             return;
         };
@@ -564,7 +569,8 @@ impl<P: Ptt> Station<P> {
         if lingering || now < scan.leave_at {
             return;
         }
-        let next = (scan.at + 1) % scan.dials.len();
+        // a datagram that belongs on another dial takes the scan there next (rule 12)
+        let next = wanted.unwrap_or((scan.at + 1) % scan.dials.len());
         self.move_scan(next, now);
     }
 
@@ -588,13 +594,50 @@ impl<P: Ptt> Station<P> {
         None
     }
 
-    /// Whether a datagram is waiting to go out: in its queue, or handed to the transmitter's.
+    /// Whether a datagram is waiting to go out on the dial the radio is on: handed to the
+    /// transmitter's queue, or first in its own and not waiting for another of the scan's dials
+    /// (the queue goes in order, so nothing behind that one can go first).
     fn datagram_waiting(&self) -> bool {
-        self.datagrams.waiting() > 0
+        self.pending
+            .iter()
+            .any(|out| matches!(out, super::Outgoing::Datagram { .. }))
             || self
-                .pending
-                .iter()
-                .any(|out| matches!(out, super::Outgoing::Datagram { .. }))
+                .datagrams
+                .queue
+                .front()
+                .is_some_and(|front| !self.scan_goes_elsewhere_for(front.dial_hz))
+    }
+
+    /// Whether a datagram that belongs on `dial` must wait for the scan to get there: a scan
+    /// runs, the dial is one of its own, and the radio is not on it (rule 12).
+    pub(super) fn scan_goes_elsewhere_for(&self, dial: Option<u64>) -> bool {
+        let (Some(scan), Some(dial)) = (self.scanner.scan.as_ref(), dial) else {
+            return false;
+        };
+        let Some(index) = scan
+            .dials
+            .iter()
+            .position(|&d| d.abs_diff(dial) <= KNOB_TOLERANCE_HZ)
+        else {
+            return false;
+        };
+        !(scan.placed && scan.at == index)
+    }
+
+    /// The scan's dial the first datagram waiting belongs on, when it is another than the one
+    /// the radio is on: where the scan goes next (rule 12).
+    fn datagram_dial_index(&self) -> Option<usize> {
+        let front = self.datagrams.queue.front()?;
+        if !self.scan_goes_elsewhere_for(front.dial_hz) {
+            return None;
+        }
+        let dial = front.dial_hz?;
+        self.scanner
+            .scan
+            .as_ref()?
+            .dials
+            .iter()
+            .position(|&d| d.abs_diff(dial) <= KNOB_TOLERANCE_HZ)
     }
 
     /// Whether what holds the dial is a contact this station may hear from again.
@@ -1756,6 +1799,7 @@ mod tests {
                 wait_for_clear: true,
                 persistence: 0.0,
                 slot_s: 0.1,
+                dial_hz: None,
             })
             .expect("queued");
         listen(&mut station, dwell + linger + 2.0);
@@ -1779,5 +1823,124 @@ mod tests {
             "left after {left:.1} s, before a visit's most, {cap:.1} s"
         );
         assert_eq!(rig.lock().expect("rig").dial, DIALS[1]);
+    }
+
+    /// A scanning station whose transmissions the rules do not judge: a datagram it queues goes
+    /// out when the station lets it.
+    fn scanning_station_unchecked() -> (Station<ScanRadio>, Arc<Mutex<Rig>>) {
+        let radio = ScanRadio::default();
+        radio.rig.lock().expect("rig").dial = 14_105_000;
+        let rig = Arc::clone(&radio.rig);
+        let station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                regulatory: crate::regulatory::Settings::unchecked(),
+                ..StationConfig::default()
+            },
+            radio,
+            1,
+        );
+        (station, rig)
+    }
+
+    /// A datagram to go at once, belonging on `dial`.
+    fn an_answer_for(dial: Option<u64>) -> crate::station::DatagramRequest {
+        crate::station::DatagramRequest {
+            frame_type: 2,
+            frame: vec![0x42; 30],
+            reference: Some("seen".to_owned()),
+            rung: Some(1),
+            wait_for_clear: false,
+            persistence: 1.0,
+            slot_s: 0.1,
+            dial_hz: dial,
+        }
+    }
+
+    /// Play and listen a tenth of a second at a time, as the run loop does, until `done`, at
+    /// most `seconds`: what is queued is fed and keyed only from the playback side.
+    fn running_until(
+        station: &mut Station<ScanRadio>,
+        seconds: f64,
+        mut done: impl FnMut(&Station<ScanRadio>) -> bool,
+    ) {
+        let tenth = station.config.params.audio_rate / 10;
+        let mut out = vec![0.0f32; tenth];
+        let heard = vec![0.0f32; tenth];
+        let limit = station.now() + seconds;
+        while !done(station) {
+            assert!(station.now() < limit, "not within {seconds} s");
+            station.playback(&mut out).expect("playback");
+            station.capture(&heard).expect("capture");
+        }
+    }
+
+    fn queued(station: &Station<ScanRadio>) -> u64 {
+        station.datagram_status()["queued"]
+            .as_u64()
+            .expect("queued")
+    }
+
+    /// A datagram heard whole says the dial it was heard on (§15): where its answer belongs.
+    #[test]
+    fn a_datagram_heard_whole_says_the_dial_it_was_heard_on() {
+        let (mut station, _rig) = scanning_station();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, move_deaf_s() + 0.1);
+        let carried = aether_link::datagram::body("KK4XYZ", 2, &[0x5A; 50]).expect("body");
+        for piece in aether_link::datagram::fragments(&carried, 7, 36).expect("fits") {
+            let now = station.now();
+            station.heard_datagram_piece(&piece, 3.5, 1, now);
+        }
+        let heard = station.take_received_datagrams();
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0].dial_hz, Some(DIALS[0]));
+    }
+
+    /// A datagram that names another of the scan's dials waits for the scan to get there, and
+    /// the scan goes there next, not round its list (rule 12): an alert's *seen*, pressed a
+    /// minute after the alert was heard. One that names a dial the scan has not goes where the
+    /// radio is.
+    #[test]
+    fn a_datagram_for_another_of_the_dials_goes_out_there_and_the_scan_goes_there_next() {
+        let (mut station, rig) = scanning_station_unchecked();
+        station.scan_start(gateway(), &DIALS).expect("a scan");
+        listen(&mut station, 0.2);
+        let dwell = dwell(&station);
+        until(&mut station, dwell + 2.0, |s| {
+            s.scan_status()["at_hz"] == DIALS[1]
+        });
+        station
+            .send_datagram(an_answer_for(Some(DIALS[0])))
+            .expect("queued");
+        let a_second_on = station.now() + 1.0;
+        running_until(&mut station, 2.0, |s| s.now() >= a_second_on);
+        assert_eq!(queued(&station), 1, "went out on the wrong dial");
+        assert!(
+            station.scan_status()["held"].is_null(),
+            "held the wrong dial for it"
+        );
+        // the visit ends, and the scan goes to the datagram's dial, not to the next in order
+        running_until(&mut station, dwell + 2.0, |s| {
+            s.scan_status()["at_hz"] != DIALS[1]
+        });
+        assert_eq!(
+            rig.lock().expect("rig").dial,
+            DIALS[0],
+            "went round instead"
+        );
+        running_until(&mut station, 2.0, |s| queued(s) == 0);
+        assert_eq!(rig.lock().expect("rig").dial, DIALS[0]);
+        // a dial the scan has not: it goes where the radio is
+        running_until(&mut station, 60.0, |s| {
+            !s.transmitting && s.pending.is_empty() && s.scan_status()["held"].is_null()
+        });
+        let here = rig.lock().expect("rig").dial;
+        station
+            .send_datagram(an_answer_for(Some(14_105_000)))
+            .expect("queued");
+        running_until(&mut station, 1.0, |s| queued(s) == 0);
+        assert_eq!(rig.lock().expect("rig").dial, here);
     }
 }

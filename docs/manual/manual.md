@@ -643,7 +643,8 @@ The Session tab is where you operate ([Figure 5](#6-the-window-at-a-glance)). It
   identifier is still to go out there, and it stays after a contact too. A broadcast heard on a
   dial, such as a RadioPost alert, keeps it there about 19 s as well. A broadcast of this
   station's waiting to go out, such as the answer to that alert, holds the dial until it has
-  gone, so the answer goes where the alert came from. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
+  gone, so the answer goes where the alert came from. An answer sent later, once the scan has
+  moved on, takes the scan back to that dial next. Answering stays on all the while. **Stop** ends the scan and leaves the radio where it
   is; so does turning the radio's knob, or tuning from anywhere else. The program is told, and
   does not start the scan again by itself. The dial list is held while a scan runs.
 
@@ -1701,4 +1702,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.14.2 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): a call answered while RMS Trimode is between scan steps is told to Trimode once it has been listening again for a moment, never the instant it starts listening, which it ignored. |
 | 1.14.3 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): if RMS Trimode stops listening just as it is told of a call, Aether takes the news back and tells it again once it listens; Trimode had ignored the call. |
 | 1.15.0 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): **Set it in** the program writes what Winlink Express or RMS Trimode must change to reach Aether into its own settings, with the program closed and the file kept as it was; a profile keyed by the program keeps the rules check, with the program's channel as the dial. |
-| 1.15.1 | 2026-11-21 | [Radio dial](#radio-dial): a scan stays about 19 s on a dial where it hears a broadcast, such as a RadioPost alert, and a broadcast of the station's own waiting to go out holds the dial, so an answer goes where the alert came from (ADR-0129 §14). |
+| 1.15.1 | 2026-11-21 | [Radio dial](#radio-dial): a scan stays about 19 s on a dial where it hears a broadcast, such as a RadioPost alert, and a broadcast of the station's own waiting to go out holds the dial, so an answer goes where the alert came from; an answer sent later takes the scan back to that dial (ADR-0129 §14, §15). |

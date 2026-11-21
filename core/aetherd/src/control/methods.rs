@@ -2002,6 +2002,23 @@ fn datagram_send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<St
         );
     };
     let number = |key: &str| params.get(key).and_then(Value::as_f64);
+    // the dial an answer belongs on (ADR-0129 §15): a positive whole number of hertz, or none
+    let dial_hz = match params.get("dial_hz") {
+        None | Some(Value::Null) => None,
+        Some(v) => match v.as_u64().filter(|&hz| hz > 0) {
+            Some(hz) => Some(hz),
+            None => {
+                return Response::failed(
+                    id,
+                    ApiError::new(
+                        "bad_params",
+                        "dial_hz is the dial in hertz, a whole number above 0.",
+                        false,
+                    ),
+                );
+            }
+        },
+    };
     let request = DatagramRequest {
         frame_type: params
             .get("frame_type")
@@ -2020,6 +2037,7 @@ fn datagram_send<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<St
             .unwrap_or(true),
         persistence: number("persistence").unwrap_or(crate::kiss::DEFAULT_PERSISTENCE),
         slot_s: number("slot_s").unwrap_or(crate::kiss::DEFAULT_SLOT_S),
+        dial_hz,
     };
     match station.send_datagram(request) {
         Ok(queued) => Response::ok(
@@ -2876,6 +2894,30 @@ mod tests {
             json!({ "data": to_base64(b"x") }),
         );
         assert!(one.ok, "{:?}", one.error);
+    }
+
+    #[test]
+    fn a_datagram_may_name_the_dial_it_belongs_on() {
+        // ADR-0129 §15: an answer to a broadcast names the dial it was heard on
+        let mut station = station();
+        for dial in [json!(0), json!(-7_101_000), json!(7.1), json!("7101000")] {
+            let response = call(
+                &mut station,
+                "datagram.send",
+                json!({ "data": to_base64(b"x"), "dial_hz": dial }),
+            );
+            let error = response.error.expect("refused");
+            assert_eq!(error.code, "bad_params", "{dial}: {error:?}");
+            assert!(error.message.contains("dial_hz"), "{}", error.message);
+        }
+        for dial in [json!(7_101_000), json!(null)] {
+            let response = call(
+                &mut station,
+                "datagram.send",
+                json!({ "data": to_base64(b"x"), "dial_hz": dial }),
+            );
+            assert!(response.ok, "{dial}: {:?}", response.error);
+        }
     }
 
     #[test]
