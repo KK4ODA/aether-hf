@@ -64,7 +64,8 @@ pub enum PttConfig {
         /// 0xA2 for an IC-9700 — the rig's menu shows it).
         #[serde(default)]
         civ_address: Option<u8>,
-        /// Accepted and ignored — see [`CatSource`]. The radio's mode chooses the input.
+        /// A Kenwood's input: the data input (the default) or the microphone — see
+        /// [`CatSource`]. A Yaesu's and an Icom's mode chooses, and they ignore it.
         #[serde(default)]
         source: CatSource,
     },
@@ -121,7 +122,9 @@ fn default_cat_baud() -> u32 {
 pub enum CatProtocol {
     /// Yaesu's ASCII CAT (FT-991A, FTDX10, FT-710, FTDX101 and the like): `TX1;` / `TX0;`.
     Yaesu,
-    /// Kenwood's, which Elecraft also speaks: `TX;` / `RX;`.
+    /// Kenwood's, which Elecraft also speaks: `RX;` releases, and the radio is asked what it
+    /// is (`ID;`) — a TS-480, TS-590S/SG, TS-890S or TS-990S is keyed with `TX1;` (DATA
+    /// SEND, its data input) or `TX0;` (`source = "mic"`), anything else with `TX;`.
     Kenwood,
     /// Icom's CI-V binary frames: command `1C 00`.
     Icom,
@@ -150,13 +153,17 @@ impl IdentifyBy {
     }
 }
 
-/// Which input a Yaesu radio transmits from when keyed over CAT.
-/// Which input a Yaesu was once told to transmit from. **It does nothing**, and is kept
-/// only so a configuration that names it still loads: the belief that `TX2;` keys the
-/// data input and `TX1;` the microphone was wrong — `TX1;` is the keying command and
-/// `TX2` is a status the radio reports when something other than CAT keyed it. Which
-/// input transmits is decided by the radio's mode (DATA-U transmits the DATA/USB input).
-/// Found on an FTDX10 that tuned over CAT and would not key (beta.33).
+/// Which input a Kenwood keyed over CAT transmits: DATA SEND (`TX1;`) or SEND (`TX0;`), on
+/// the radios whose references give `TX1;` that meaning (`ptt::kenwood_keying`). A Kenwood
+/// that does not say what it is, a TS-2000 and an Elecraft are keyed with the plain `TX;`
+/// whatever this says.
+///
+/// A Yaesu and an Icom ignore it: their mode decides the input (DATA-U transmits the
+/// DATA/USB input). It was once meant for a Yaesu, on the belief that `TX2;` keys the data
+/// input and `TX1;` the microphone, which was wrong — `TX1;` is the keying command and `TX2`
+/// a status the radio reports when something other than CAT keyed it (an FTDX10 that tuned
+/// over CAT and would not key, beta.33). A Kenwood behind a Digirig keyed with `TX;` put out
+/// nothing for the same reason in reverse: its `TX;` is SEND, the microphone (2026-11-21).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatSource {
@@ -1865,7 +1872,7 @@ tx_level = 0.25
 # protocol = "yaesu"                  # yaesu | kenwood | icom
 # baud = 38400                        # the rate set in the radio's menu
 # civ_address = 148                   # icom only: the CI-V address (0x94 = 148)
-# source = "data"                     # ignored: a Yaesu's mode chooses the input, not CAT
+# source = "data"                     # kenwood only: data (TX1;) or mic (TX0;)
 # kind = "cm108"                      # a DRA, URI or other CM108-class interface's GPIO pin
 # device = "..."                      # which one, when there are several: its path or name
 # gpio = 3                            # the pin wired to PTT (3 on the DRA and URI boards)

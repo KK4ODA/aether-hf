@@ -305,7 +305,9 @@ enum Reply {
 /// a key never waits behind a reading still queued, only behind one already on the wire (one
 /// CAT round trip). None is taken while the radio is keyed. The run loop never waits for one.
 pub struct ThreadedPtt {
-    describe: String,
+    /// What the interface says it is, kept current by the keying thread: a Kenwood says which
+    /// radio and command once it has answered.
+    describe: std::sync::Arc<std::sync::Mutex<String>>,
     can_tune: bool,
     reads_meter: bool,
     requests: std::sync::mpsc::Sender<Request>,
@@ -338,7 +340,8 @@ impl ThreadedPtt {
     pub fn spawn<P: Ptt + 'static>(mut inner: P) -> Self {
         use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
 
-        let describe = inner.describe();
+        let describe = std::sync::Arc::new(std::sync::Mutex::new(inner.describe()));
+        let said = std::sync::Arc::clone(&describe);
         let can_tune = inner.can_tune();
         let reads_meter = inner.reads_meter();
         let (requests, work) = std::sync::mpsc::channel::<Request>();
@@ -363,6 +366,7 @@ impl ThreadedPtt {
                                 } else {
                                     Readings::take(&mut inner, question)
                                 };
+                                Self::tell(&said, &inner);
                                 if answered.send(readings).is_err() {
                                     break;
                                 }
@@ -390,6 +394,7 @@ impl ThreadedPtt {
                         Request::Read => Reply::Read(inner.frequency_hz()),
                         Request::Tune(hz) => Reply::Done(inner.set_frequency_hz(hz)),
                     };
+                    Self::tell(&said, &inner);
                     if answer.send(reply).is_err() {
                         break;
                     }
@@ -410,6 +415,17 @@ impl ThreadedPtt {
             questions,
             answers,
             asking: false,
+        }
+    }
+
+    /// Keep `said` to what `inner` says it is now.
+    fn tell<P: Ptt>(said: &std::sync::Mutex<String>, inner: &P) {
+        let now = inner.describe();
+        let mut shown = said
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *shown != now {
+            *shown = now;
         }
     }
 
@@ -461,7 +477,7 @@ impl ThreadedPtt {
             let Ok(reply) = self.replies.recv_timeout(left) else {
                 self.stuck = Some(format!(
                     "{} has not answered for {:.1} s",
-                    self.describe,
+                    self.describe(),
                     bound.as_secs_f64()
                 ));
                 return None;
@@ -502,7 +518,10 @@ impl Ptt for ThreadedPtt {
     }
 
     fn describe(&self) -> String {
-        self.describe.clone()
+        self.describe
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn frequency_hz(&mut self) -> Option<u64> {
@@ -1250,6 +1269,113 @@ mod tests {
     }
 
     #[test]
+    fn a_kenwood_is_keyed_to_transmit_its_data_input_where_its_reference_says_how() {
+        // Kenwood's references: TX0 is SEND (the microphone), TX1 DATA SEND (ACC2, the DATA
+        // connector or USB), a plain TX is TX0 — on the TS-480 (ID 020), TS-590S (021),
+        // TS-990S (022), TS-590SG (023) and TS-890S (024). A TS-480 behind a Digirig keyed
+        // with TX; transmitted its silent microphone and tuned nothing (2026-11-21)
+        for id in [20, 21, 22, 23, 24] {
+            assert_eq!(kenwood_keying(Some(id), CatInput::Data), b"TX1;", "ID {id}");
+            assert_eq!(kenwood_keying(Some(id), CatInput::Mic), b"TX0;", "ID {id}");
+        }
+        assert_eq!(kenwood_radio(20), Some("TS-480"));
+        assert_eq!(kenwood_radio(23), Some("TS-590SG"));
+        // a TS-2000's TX1 transmits on the sub-receiver's band, an Elecraft's TX takes no
+        // parameter (it answers ID017), and a radio that has not said what it is may be either
+        for id in [Some(17), Some(19), Some(42), None] {
+            for input in [CatInput::Data, CatInput::Mic] {
+                assert_eq!(kenwood_keying(id, input), b"TX;", "{id:?} {input:?}");
+            }
+        }
+        assert_eq!(kenwood_radio(19), Some("TS-2000"));
+        assert_eq!(kenwood_radio(17), Some("Elecraft"));
+        assert_eq!(kenwood_radio(42), None);
+        // the release is the same on every one of them
+        assert_eq!(CatProtocol::Kenwood.keying(false), b"RX;");
+    }
+
+    #[test]
+    fn a_kenwood_is_asked_what_it_is() {
+        let kenwood = CatProtocol::Kenwood;
+        assert_eq!(kenwood.identity_query().as_deref(), Some(&b"ID;"[..]));
+        assert_eq!(kenwood.parse_identity(b"ID020;"), Some(20));
+        assert_eq!(kenwood.parse_identity(b"ID017;"), Some(17));
+        // a radio in auto-information mode may say something else first
+        assert_eq!(kenwood.parse_identity(b"FA00007101000;ID023;"), Some(23));
+        assert!(kenwood.reply_complete(b"ID;", b"ID020;"));
+        assert!(!kenwood.reply_complete(b"ID;", b"ID02"), "still arriving");
+        assert_eq!(kenwood.parse_identity(b"?;"), None);
+        assert_eq!(kenwood.parse_identity(b"ID02"), None, "no terminator yet");
+        assert_eq!(kenwood.parse_identity(b"IDxyz;"), None);
+        // what keys a Yaesu or an Icom does not depend on the model
+        assert_eq!(CatProtocol::Yaesu.identity_query(), None);
+        assert_eq!(CatProtocol::Icom { address: 0x94 }.identity_query(), None);
+        assert_eq!(CatProtocol::Yaesu.parse_identity(b"ID0761;"), None);
+    }
+
+    #[test]
+    fn a_kenwood_says_what_keys_it() {
+        let said = |identity, input| describe_kenwood(identity, input);
+        assert_eq!(
+            said(Identity::Known(20), CatInput::Data),
+            "TS-480, keyed with TX1; (DATA SEND: the data input)"
+        );
+        assert_eq!(
+            said(Identity::Known(24), CatInput::Mic),
+            "TS-890S, keyed with TX0; (SEND: the microphone)"
+        );
+        assert_eq!(
+            said(Identity::Known(19), CatInput::Data),
+            "TS-2000, keyed with TX;"
+        );
+        assert_eq!(
+            said(Identity::Known(42), CatInput::Data),
+            "radio ID 042, keyed with TX;"
+        );
+        assert_eq!(
+            said(Identity::Silent(1), CatInput::Data),
+            "no answer from the radio, keyed with TX; (SEND: the microphone, on most Kenwoods)"
+        );
+        assert_eq!(
+            said(Identity::Unsaid, CatInput::Data),
+            "the radio does not say what it is, keyed with TX;"
+        );
+    }
+
+    #[test]
+    fn a_kenwood_error_ends_the_wait_for_its_answer() {
+        // Kenwood's references: `?;` a command it could not read, `E;` a garbled one, `O;` one
+        // it could not finish. Each is the whole answer: waiting on costs the port a second
+        let kenwood = CatProtocol::Kenwood;
+        for error in [&b"?;"[..], b"E;", b"O;"] {
+            assert!(kenwood.reply_complete(b"FA;", error), "{error:?}");
+        }
+        assert!(kenwood.reply_complete(b"FA;", b"IF00007101000;E;"));
+        // a letter that ends an answer is not an error, nor is one still arriving
+        assert!(!kenwood.reply_complete(b"ID;", b"XE;"));
+        assert!(!kenwood.reply_complete(b"ID;", b"E"));
+        // a Yaesu's only error is `?;`
+        let yaesu = CatProtocol::Yaesu;
+        assert!(yaesu.reply_complete(b"FA;", b"?;"));
+        assert!(!yaesu.reply_complete(b"FA;", b"E;"));
+    }
+
+    #[test]
+    fn a_kenwood_at_4800_baud_takes_two_stop_bits() {
+        // the TS-480's reference: "4800 bps must be configured as 2 stop bits"
+        use serialport::StopBits;
+        assert_eq!(CatProtocol::Kenwood.stop_bits(4800), StopBits::Two);
+        for baud in [9600, 19_200, 38_400, 57_600, 115_200] {
+            assert_eq!(CatProtocol::Kenwood.stop_bits(baud), StopBits::One);
+        }
+        assert_eq!(CatProtocol::Yaesu.stop_bits(4800), StopBits::One);
+        assert_eq!(
+            CatProtocol::Icom { address: 0x94 }.stop_bits(4800),
+            StopBits::One
+        );
+    }
+
+    #[test]
     fn the_tuning_command_is_the_published_one_in_each_dialect() {
         let yaesu = CatProtocol::Yaesu;
         assert_eq!(yaesu.frequency_set(14_107_000), b"FA014107000;");
@@ -1869,6 +1995,47 @@ mod tests {
         assert_eq!(CatProtocol::Kenwood.parse_setting("agc", b"GT05;"), None);
     }
 
+    /// A radio that says something new each time its dial is read, as a Kenwood switched on
+    /// after the modem started says what it is at its first reading.
+    struct Waking {
+        reads: u32,
+    }
+
+    impl Ptt for Waking {
+        fn key(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn unkey(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn describe(&self) -> String {
+            format!("read {} times", self.reads)
+        }
+        fn frequency_hz(&mut self) -> Option<u64> {
+            self.reads += 1;
+            Some(7_101_000)
+        }
+    }
+
+    #[test]
+    fn the_keying_thread_keeps_what_the_interface_says_it_is_current() {
+        // the panel's footer, Help and the diagnostic bundle read it: a radio identified after
+        // start would otherwise be shown as not answering for the life of the daemon
+        let mut ptt = ThreadedPtt::spawn(Waking { reads: 0 });
+        assert_eq!(ptt.describe(), "read 0 times");
+        assert_eq!(ptt.frequency_hz(), Some(7_101_000));
+        assert_eq!(ptt.describe(), "read 1 times");
+        ptt.request_readings(Asked {
+            dial: true,
+            ..Asked::default()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ptt.take_readings().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(ptt.describe(), "read 2 times", "a background reading too");
+    }
+
     /// A radio whose S-meter takes `meter` to answer, counting the times it is read.
     struct Metered {
         meter: std::time::Duration,
@@ -2074,6 +2241,16 @@ pub enum SerialLine {
 /// flrig's `FTdx10::set_PTT_control` both send `TX1;` for every kind of keying and never
 /// `TX2;`. Which input the radio transmits is its mode's business (DATA-U transmits the
 /// DATA/USB input), not the keying command's, so there is nothing to choose here.
+///
+/// On a Kenwood it is the keying command's business. Kenwood's PC control command references
+/// for the TS-480, TS-590S/SG, TS-890S and TS-990S agree: `TX0;` is SEND, which transmits the
+/// **microphone** input, `TX1;` is DATA SEND, which transmits the data input (ACC2, the DATA
+/// connector or USB, as the radio's menu sets), and a plain `TX;` is `TX0;`. A modem's audio
+/// arrives on the data input, so `TX;` keyed a TS-480 behind a Digirig with a silent
+/// microphone: the radio went to transmit and put out nothing, and the tuner tone tuned
+/// nothing (KK4ODA-2, 2026-11-21). `TX1;` is not universal, though: on a TS-2000 it transmits
+/// on the sub-receiver's band, and an Elecraft's `TX` takes no parameter. So a Kenwood is
+/// asked what it is (`ID;`) and keyed by [`kenwood_keying`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatProtocol {
     /// Yaesu ASCII CAT.
@@ -2090,8 +2267,64 @@ pub enum CatProtocol {
 /// The controller's own CI-V address; `E0` is what every rig-control program uses.
 const CIV_CONTROLLER: u8 = 0xE0;
 
+/// Which input a radio keyed over CAT transmits, where its keying command chooses: a Kenwood's
+/// DATA SEND (`TX1;`) or SEND (`TX0;`). `[ptt] source`; a Yaesu's and an Icom's mode chooses
+/// instead, and they ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CatInput {
+    /// The data input: ACC2, the DATA connector or USB, as the radio's menu sets. Where a
+    /// modem's audio arrives.
+    #[default]
+    Data,
+    /// The microphone.
+    Mic,
+}
+
+/// The radios that speak Kenwood's commands, by the number each answers to `ID;`, with its name
+/// and whether its `TX1;` is DATA SEND, all as their makers publish them: Kenwood's PC control
+/// command references for the TS-480 (020), TS-590S (021), TS-990S (022), TS-590SG (023) and
+/// TS-890S (024), whose `TX1;` transmits the data input; the TS-2000's (019), whose `TX1;`
+/// transmits on the sub-receiver's band; and Elecraft's programmer's references for the K3,
+/// KX3, KX2 and K4, which answer `ID017;` and whose `TX;` takes no parameter.
+const KENWOOD_RADIOS: [(u16, &str, bool); 7] = [
+    (17, "Elecraft", false),
+    (19, "TS-2000", false),
+    (20, "TS-480", true),
+    (21, "TS-590S", true),
+    (22, "TS-990S", true),
+    (23, "TS-590SG", true),
+    (24, "TS-890S", true),
+];
+
+/// The name of the radio that answered `ID;` with `id`, when its maker publishes it.
+#[must_use]
+pub fn kenwood_radio(id: u16) -> Option<&'static str> {
+    KENWOOD_RADIOS
+        .iter()
+        .find(|(n, _, _)| *n == id)
+        .map(|&(_, name, _)| name)
+}
+
+/// The command that keys a radio speaking Kenwood's commands, from its answer to `ID;` (`None`
+/// when it has not answered) and the input asked for.
+///
+/// `TX1;` (DATA SEND) or `TX0;` (SEND) only where the radio's reference says `TX1;` is DATA
+/// SEND; everywhere else the plain `TX;`, as every radio on this protocol was keyed before:
+/// one that has not said what it is might be a TS-2000, whose `TX1;` would transmit on
+/// another band.
+#[must_use]
+pub fn kenwood_keying(id: Option<u16>, input: CatInput) -> &'static [u8] {
+    let data_send = id.is_some_and(|id| KENWOOD_RADIOS.iter().any(|&(n, _, data)| n == id && data));
+    match (data_send, input) {
+        (true, CatInput::Data) => b"TX1;",
+        (true, CatInput::Mic) => b"TX0;",
+        (false, _) => b"TX;",
+    }
+}
+
 impl CatProtocol {
-    /// The bytes that put the radio into transmit, or take it out.
+    /// The bytes that put the radio into transmit, or take it out. A Kenwood's are the plain
+    /// `TX;` and `RX;` here: what keys one that has said what it is, is [`kenwood_keying`]'s.
     #[must_use]
     pub fn keying(self, keyed: bool) -> Vec<u8> {
         match self {
@@ -2128,6 +2361,41 @@ impl CatProtocol {
         match self {
             Self::Yaesu | Self::Kenwood => b"FA;".to_vec(),
             Self::Icom { address } => vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x03, 0xFD],
+        }
+    }
+
+    /// The bytes that ask the radio what it is: Kenwood's `ID;`, which Elecraft answers too.
+    /// None for the others: what keys them does not depend on the model.
+    #[must_use]
+    pub fn identity_query(self) -> Option<Vec<u8>> {
+        (self == Self::Kenwood).then(|| b"ID;".to_vec())
+    }
+
+    /// The number in a Kenwood's answer to `ID;`: `ID020;` is 20. Nothing for `?;` or for
+    /// what a radio in auto-information mode said on its own.
+    #[must_use]
+    pub fn parse_identity(self, reply: &[u8]) -> Option<u16> {
+        if self != Self::Kenwood {
+            return None;
+        }
+        let text = std::str::from_utf8(reply).ok()?;
+        let rest = &text[text.find("ID")? + 2..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if digits.is_empty() || !rest[digits.len()..].starts_with(';') {
+            return None;
+        }
+        digits.parse().ok()
+    }
+
+    /// The stop bits the radio's port runs with at `baud`: two at 4800 on a Kenwood, one
+    /// otherwise. The TS-480's reference: "4800 bps must be configured as 2 stop bits"; the
+    /// TS-890S's allows two only at 4800. A radio expecting one takes two as a longer pause.
+    #[must_use]
+    pub fn stop_bits(self, baud: u32) -> serialport::StopBits {
+        if self == Self::Kenwood && baud == 4800 {
+            serialport::StopBits::Two
+        } else {
+            serialport::StopBits::One
         }
     }
 
@@ -2210,8 +2478,9 @@ impl CatProtocol {
     /// IC-7300's default — announces every turn of its dial and change of mode to address
     /// 00, between our exchanges or in the middle of one. Its answer is the frame addressed
     /// to this controller from the radio. A Yaesu or Kenwood answers with the query's own
-    /// two letters, or `?;` for a command it refused; a radio left in auto-information mode
-    /// by another program reports on its own in between.
+    /// two letters, or `?;` for a command it refused; a Kenwood also `E;` for a garbled one and
+    /// `O;` for one it could not finish (its references' error messages); a radio left in
+    /// auto-information mode by another program reports on its own in between.
     #[must_use]
     pub fn reply_complete(self, query: &[u8], got: &[u8]) -> bool {
         match self {
@@ -2224,10 +2493,18 @@ impl CatProtocol {
             }
             Self::Yaesu | Self::Kenwood => {
                 let name = &query[..query.len().min(2)];
-                got.windows(2)
+                let answered = got
+                    .windows(2)
                     .enumerate()
-                    .any(|(at, w)| w == name && got[at..].contains(&b';'))
-                    || got.windows(2).any(|w| w == b"?;")
+                    .any(|(at, w)| w == name && got[at..].contains(&b';'));
+                // `E` and `O` are letters an answer can end in, so only a whole message counts:
+                // the pieces between terminators, the last of which is still arriving
+                let pieces: Vec<&[u8]> = got.split(|&b| b == b';').collect();
+                let kenwood_error = self == Self::Kenwood
+                    && pieces[..pieces.len() - 1]
+                        .iter()
+                        .any(|&piece| piece == b"E" || piece == b"O");
+                answered || got.windows(2).any(|w| w == b"?;") || kenwood_error
             }
         }
     }
@@ -2457,11 +2734,62 @@ fn read_back(path: &str, asked: u64, read: Option<u64>) -> Result<(), PttError> 
     }
 }
 
+/// What a radio speaking Kenwood's commands has said of itself, in answer to `ID;`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Identity {
+    /// No answer, after this many questions. Asked again when the radio next answers a
+    /// reading — one switched on after the modem started — up to [`ID_TRIES`] times.
+    Silent(u8),
+    /// Its number.
+    Known(u16),
+    /// `?;`: a radio that does not say. Not asked again.
+    Unsaid,
+}
+
+impl Identity {
+    fn id(self) -> Option<u16> {
+        match self {
+            Self::Known(id) => Some(id),
+            Self::Silent(_) | Self::Unsaid => None,
+        }
+    }
+}
+
+/// How many times a Kenwood that answers other questions is asked what it is.
+const ID_TRIES: u8 = 3;
+
+/// What keys a radio speaking Kenwood's commands, and why, for the operator: the radio it says
+/// it is, the command, and the input that command transmits.
+fn describe_kenwood(identity: Identity, input: CatInput) -> String {
+    let radio = match identity {
+        Identity::Known(id) => {
+            kenwood_radio(id).map_or_else(|| format!("radio ID {id:03}"), str::to_owned)
+        }
+        Identity::Silent(_) => "no answer from the radio".to_owned(),
+        Identity::Unsaid => "the radio does not say what it is".to_owned(),
+    };
+    let command = kenwood_keying(identity.id(), input);
+    let what = match (command, identity) {
+        (b"TX1;", _) => " (DATA SEND: the data input)",
+        (b"TX0;", _) => " (SEND: the microphone)",
+        (_, Identity::Silent(_)) => " (SEND: the microphone, on most Kenwoods)",
+        _ => "",
+    };
+    format!(
+        "{radio}, keyed with {}{what}",
+        String::from_utf8_lossy(command)
+    )
+}
+
 /// Keying a radio with its own commands over its CAT port.
 pub struct CatPtt {
     path: String,
     protocol: CatProtocol,
     port: Box<dyn serialport::SerialPort>,
+    /// The input a Kenwood is keyed to transmit.
+    input: CatInput,
+    /// What a Kenwood said it is.
+    identity: Identity,
 }
 
 impl std::fmt::Debug for CatPtt {
@@ -2469,17 +2797,25 @@ impl std::fmt::Debug for CatPtt {
         f.debug_struct("CatPtt")
             .field("path", &self.path)
             .field("protocol", &self.protocol)
+            .field("identity", &self.identity)
             .finish_non_exhaustive()
     }
 }
 
 impl CatPtt {
-    /// Open the port at the radio's CAT rate and make sure the radio is receiving.
+    /// Open the port at the radio's CAT rate, make sure the radio is receiving, and ask a
+    /// Kenwood what it is. `input` is the input a Kenwood is keyed to transmit.
     ///
     /// # Errors
     /// If the port cannot be opened, or the radio refuses the first command.
-    pub fn open(path: &str, baud: u32, protocol: CatProtocol) -> Result<Self, PttError> {
-        let port = serialport::new(path, baud)
+    pub fn open(
+        path: &str,
+        baud: u32,
+        protocol: CatProtocol,
+        input: CatInput,
+    ) -> Result<Self, PttError> {
+        let mut port = serialport::new(path, baud)
+            .stop_bits(protocol.stop_bits(baud))
             .timeout(std::time::Duration::from_millis(300))
             .open()
             .map_err(|e| {
@@ -2489,19 +2825,61 @@ impl CatPtt {
                      program, such as a rig-control or logging one"
                 ))
             })?;
+        // RTS and DTR down, as SerialPtt leaves its lines: an interface such as a Digirig keys
+        // the radio from one of them on the very port that carries CAT, and Linux and macOS
+        // raise both when a port opens — the radio would sit keyed while the modem believed it
+        // released, and no watchdog would see it. Windows opens the port with both down
+        // already. Best effort: a virtual port may have no lines to set.
+        let _ = port.write_request_to_send(false);
+        let _ = port.write_data_terminal_ready(false);
         let mut ptt = Self {
             path: path.to_owned(),
             protocol,
             port,
+            input,
+            identity: Identity::Silent(0),
         };
         ptt.set(false)?;
+        ptt.identify();
         Ok(ptt)
+    }
+
+    /// Ask a Kenwood what it is, which decides how it is keyed: at open, and again after it
+    /// answers a reading if it had not answered this.
+    fn identify(&mut self) {
+        let Some(query) = self.protocol.identity_query() else {
+            return;
+        };
+        let Identity::Silent(asked) = self.identity else {
+            return;
+        };
+        if asked >= ID_TRIES {
+            return;
+        }
+        let reply = self.ask(&query).unwrap_or_default();
+        self.identity = match self.protocol.parse_identity(&reply) {
+            Some(id) => Identity::Known(id),
+            None if reply.windows(2).any(|w| w == b"?;") => Identity::Unsaid,
+            None => Identity::Silent(asked + 1),
+        };
+    }
+
+    /// The command that keys the radio: a Kenwood's by what it said it is.
+    fn key_command(&self) -> Vec<u8> {
+        match self.protocol {
+            CatProtocol::Kenwood => kenwood_keying(self.identity.id(), self.input).to_vec(),
+            protocol => protocol.keying(true),
+        }
     }
 
     fn set(&mut self, keyed: bool) -> Result<(), PttError> {
         use std::io::{Read as _, Write as _};
 
-        let command = self.protocol.keying(keyed);
+        let command = if keyed {
+            self.key_command()
+        } else {
+            self.protocol.keying(false)
+        };
         // what the radio said on its own since the last exchange is not this answer: read
         // first, a transceive broadcast from a turn of the dial was taken for it, the key
         // was reported refused and the burst dropped
@@ -2560,18 +2938,26 @@ impl Ptt for CatPtt {
     }
 
     fn describe(&self) -> String {
-        let which = match self.protocol {
-            CatProtocol::Yaesu => "Yaesu CAT",
-            CatProtocol::Kenwood => "Kenwood CAT",
-            CatProtocol::Icom { .. } => "Icom CI-V",
-        };
-        format!("{which} on {}", self.path)
+        match self.protocol {
+            CatProtocol::Yaesu => format!("Yaesu CAT on {}", self.path),
+            CatProtocol::Kenwood => format!(
+                "Kenwood CAT on {}, {}",
+                self.path,
+                describe_kenwood(self.identity, self.input)
+            ),
+            CatProtocol::Icom { .. } => format!("Icom CI-V on {}", self.path),
+        }
     }
 
     fn frequency_hz(&mut self) -> Option<u64> {
         let query = self.protocol.frequency_query();
         let reply = self.ask(&query)?;
-        self.protocol.parse_frequency(&reply)
+        let hz = self.protocol.parse_frequency(&reply);
+        if hz.is_some() {
+            // it answers now: one switched on after the modem started says what it is here
+            self.identify();
+        }
+        hz
     }
 
     fn can_tune(&self) -> bool {

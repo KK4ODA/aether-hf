@@ -149,7 +149,7 @@ pub const RULES: &[Rule] = &[
     },
     Rule {
         options: &["data", "mic"],
-        why: "it is accepted and ignored, but it has to be one of the two it once meant",
+        why: "a Kenwood keyed over CAT transmits its data input or its microphone",
         ..rule("ptt.source")
     },
     Rule {

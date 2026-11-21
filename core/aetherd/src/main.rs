@@ -2321,10 +2321,14 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
             protocol,
             baud,
             civ_address,
-            // `source` is accepted so a saved configuration still loads, and ignored: a
-            // Yaesu's keying command does not choose the input (see `ptt::CatProtocol`)
-            source: _,
+            // a Kenwood's keying command chooses the input it transmits; a Yaesu's and an
+            // Icom's mode does, and they ignore it (see `ptt::CatProtocol`)
+            source,
         } => {
+            let input = match source {
+                aetherd::config::CatSource::Data => aetherd::ptt::CatInput::Data,
+                aetherd::config::CatSource::Mic => aetherd::ptt::CatInput::Mic,
+            };
             let protocol = match protocol {
                 aetherd::config::CatProtocol::Yaesu => aetherd::ptt::CatProtocol::Yaesu,
                 aetherd::config::CatProtocol::Kenwood => aetherd::ptt::CatProtocol::Kenwood,
@@ -2336,7 +2340,7 @@ fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {
             // on a thread of its own: a USB serial port that stops answering under RFI must
             // not stop the modem (2026-10-10)
             Box::new(aetherd::ptt::ThreadedPtt::spawn(
-                aetherd::ptt::CatPtt::open(port, *baud, protocol)?,
+                aetherd::ptt::CatPtt::open(port, *baud, protocol, input)?,
             ))
         }
         PttConfig::Cm108 { device, gpio } => {

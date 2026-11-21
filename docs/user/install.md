@@ -70,7 +70,14 @@ the rig's COM port, *CAT command* and *Icom CI-V*, and in the rig's menu (*MENU 
 Connectors › CI-V*) set *CI-V USB Port* to *Unlink from [REMOTE]* and *CI-V USB Baud Rate* to
 the rate in Aether (19200 unless you already use another, such as 38400); the CI-V address is the rig's (IC-7300 94, IC-7610 98, IC-9700
 A2, IC-705 A4). Only one program can hold the port: close a logger or rig-control program
-that has it, or share the radio through `rigctld`. When CAT works, the dial appears in the
+that has it, or share the radio through `rigctld`. A **Kenwood** on *CAT command* is asked what
+it is: a TS-480, TS-590S, TS-590SG, TS-890S or TS-990S is keyed with DATA SEND (`TX1;`) and
+transmits its data input, ACC2, the DATA connector or USB, as its menu sets; any other radio
+(an Elecraft, a TS-2000, one that has not answered) with plain `TX;`, which on most Kenwoods
+transmits the microphone. Help › About's *Radio control* says which radio answered and the
+command; `source = "mic"` under `[ptt]` keys a Kenwood's microphone instead. With CAT, the
+port's RTS and DTR lines stay off, so an interface that keys from one of them on the same port
+(a Digirig) does not key the radio. When CAT works, the dial appears in the
 header; when it does not, a banner names the port and what the radio answered.
 
 **Closing the window stops the modem.** When that would interrupt something — a session,

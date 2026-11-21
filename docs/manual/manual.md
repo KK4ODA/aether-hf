@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.15.1 |
+| **Version** | 1.15.2 |
 | **Updated** | 2026-11-21 |
 | **Describes** | Aether HF 0.2.0-beta.168 |
 | **Licence** | CC BY 4.0 |
@@ -482,6 +482,12 @@ refuse, but you remain the control operator.
    dial, which the rules need, and tunes the radio from the Session tab's dial list. Choose the
    radio's dialect (Yaesu, Kenwood, Icom CI-V) and its rate. An Icom also needs its CI-V address:
    IC-7300 94, IC-705 A4, IC-9700 A2. Yaesu radios keyed over CAT transmit from the DATA input.
+   Aether asks a Kenwood what it is. A TS-480, TS-590S, TS-590SG, TS-890S or TS-990S is keyed
+   with DATA SEND and transmits its data input: ACC2, the DATA connector or USB, as its menu
+   sets. Any other radio is keyed with plain TX: an Elecraft, a TS-2000 (whose TX1 transmits
+   on the sub band) and a radio that has not answered. Plain TX transmits the microphone on most
+   Kenwoods. **Radio control** on the Help tab says which radio answered and how it is keyed. To key a Kenwood's microphone instead, put `source = "mic"` under `[ptt]` in
+   the configuration file. At 4800 baud a Kenwood gets two stop bits, as its manual asks.
 2. **Serial line**: the RTS or DTR line of a serial port keys the radio, through the interface.
 3. **rigctld (Hamlib) or FLRig**: keys the radio, reads its dial and tunes it, and another program
    can tune the radio through it at the same time.
@@ -496,7 +502,8 @@ refuse, but you remain the control operator.
 > **Note.** A radio's USB connection often shows two serial ports. On a Yaesu the *Enhanced* port
 > carries CAT and the *Standard* port the RTS line. An Icom's single port carries both. Only one
 > program can hold a port: close a logger that holds it, or share the radio through rigctld or
-> FLRig.
+> FLRig. With CAT command, Aether keeps the port's RTS and DTR lines off, so an interface that
+> keys the radio from one of them on the same port, such as a Digirig, does not key it.
 
 - **Dial**: what reads the dial and tunes the radio with the radio control chosen: *Aether, over
   CAT*, *Aether, through rigctld* or *through FLRig*, *Host program*, or *Typed by hand*. Typed by
@@ -1703,3 +1710,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.14.3 | 2026-11-19 | [A Winlink gateway](#22-a-winlink-gateway): if RMS Trimode stops listening just as it is told of a call, Aether takes the news back and tells it again once it listens; Trimode had ignored the call. |
 | 1.15.0 | 2026-11-19 | [Finding Winlink's programs](#finding-winlinks-programs): **Set it in** the program writes what Winlink Express or RMS Trimode must change to reach Aether into its own settings, with the program closed and the file kept as it was; a profile keyed by the program keeps the rules check, with the program's channel as the dial. |
 | 1.15.1 | 2026-11-21 | [Radio dial](#radio-dial): a scan stays about 19 s on a dial where it hears a broadcast, such as a RadioPost alert, and a broadcast of the station's own waiting to go out holds the dial, so an answer goes where the alert came from; an answer sent later takes the scan back to that dial (ADR-0129 §14, §15). |
+| 1.15.2 | 2026-11-21 | [Step 2. Radio interface](#step-2-radio-interface): a Kenwood keyed by CAT command is asked what it is, and a TS-480, TS-590S, TS-590SG, TS-890S or TS-990S transmits its data input (DATA SEND); before, plain TX keyed its microphone and the tuner tone put nothing out. **Radio control** on the Help tab names the radio and the command. CAT keeps RTS and DTR off. |
