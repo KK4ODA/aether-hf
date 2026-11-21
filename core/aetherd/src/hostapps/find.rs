@@ -6,9 +6,14 @@
 //! uninstall entries in the registry, the shortcuts in the Start menu and on the desktops, the
 //! programs running now, and any folder the operator added. What the system says is gathered
 //! once ([`Sources::gather`]); what is made of it ([`installs`]) is a function of that and of the
-//! files in each folder, so a test hands the sources over.
+//! files in each folder, so a test hands the sources over. The paths the system gives are
+//! Windows', and they are taken apart by Windows' rules wherever the finder is built (`parent`,
+//! `file_name`, `join`), so a test's sources mean the same on every system.
 
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -119,12 +124,68 @@ pub fn path_in(text: &str) -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
+/// Windows' separators: either slash.
+const SEPARATORS: [char; 2] = ['\\', '/'];
+
+/// A path's text when it is a Windows path, one that names a drive (`C:\RMS Express`) or a
+/// share (`\\server\share`). The registry, the shortcuts and the processes give such paths, and
+/// `std::path` splits them only on Windows; a folder the operator added on another system is
+/// that system's, and is left to it.
+fn windows_text(path: &Path) -> Option<&str> {
+    let text = path.to_str()?;
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    (drive || text.starts_with("\\\\")).then_some(text)
+}
+
+/// The folder a file is in. A drive's root keeps its separator: `C:` alone is the drive's
+/// current folder, not its root.
+fn parent(path: &Path) -> Option<PathBuf> {
+    let Some(text) = windows_text(path) else {
+        return path.parent().map(Path::to_path_buf);
+    };
+    let text = text.trim_end_matches(SEPARATORS);
+    let folder = text[..text.rfind(SEPARATORS)?].trim_end_matches(SEPARATORS);
+    let folder = if folder.ends_with(':') {
+        &text[..=folder.len()]
+    } else {
+        folder
+    };
+    (!folder.is_empty()).then(|| PathBuf::from(folder))
+}
+
+/// A path's last part: a file's name.
+fn file_name(path: &Path) -> Option<Cow<'_, str>> {
+    let Some(text) = windows_text(path) else {
+        return path.file_name().map(|n| n.to_string_lossy());
+    };
+    let name = text
+        .trim_end_matches(SEPARATORS)
+        .rsplit(SEPARATORS)
+        .next()?;
+    (!name.is_empty() && !name.ends_with(':')).then_some(Cow::Borrowed(name))
+}
+
+/// A file or folder in a folder: after a backslash, unless the folder ends in a separator or is
+/// a drive alone (`C:` + `x` is `C:x`), as Windows joins them.
+fn join(dir: &Path, name: &str) -> PathBuf {
+    let Some(text) = windows_text(dir) else {
+        return dir.join(name);
+    };
+    let glue = if text.ends_with(SEPARATORS) || text.len() == 2 {
+        ""
+    } else {
+        "\\"
+    };
+    PathBuf::from(format!("{text}{glue}{name}"))
+}
+
 /// The folders a source names for a program: each is checked for the executable afterwards.
 fn named_folders(reader: &Reader, sources: &Sources) -> Vec<(PathBuf, FoundBy)> {
     let mut out = Vec::new();
     for root in &sources.roots {
         for usual in reader.usual {
-            out.push((root.join(usual), FoundBy::Usual));
+            out.push((join(root, usual), FoundBy::Usual));
         }
     }
     let ours = |name: &str| {
@@ -144,10 +205,7 @@ fn named_folders(reader: &Reader, sources: &Sources) -> Vec<(PathBuf, FoundBy)> 
             }
         }
     }
-    let is_exe = |path: &Path| {
-        path.file_name()
-            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(reader.exe))
-    };
+    let is_exe = |path: &Path| file_name(path).is_some_and(|n| n.eq_ignore_ascii_case(reader.exe));
     for target in sources.shortcuts.iter().filter(|t| is_exe(t)) {
         if let Some(dir) = parent(target) {
             out.push((dir, FoundBy::Shortcut));
@@ -164,10 +222,6 @@ fn named_folders(reader: &Reader, sources: &Sources) -> Vec<(PathBuf, FoundBy)> 
     out
 }
 
-fn parent(path: &Path) -> Option<PathBuf> {
-    path.parent().map(Path::to_path_buf)
-}
-
 /// The installs of one program the sources show: each folder that holds its executable, once,
 /// with every way it was found. `exists` says whether a file is there (the file system, or a
 /// test's).
@@ -179,7 +233,7 @@ pub fn folders_of(
 ) -> Vec<(PathBuf, Vec<FoundBy>)> {
     let mut out: Vec<(PathBuf, Vec<FoundBy>)> = Vec::new();
     for (dir, by) in named_folders(reader, sources) {
-        if !exists(&dir.join(reader.exe)) {
+        if !exists(&join(&dir, reader.exe)) {
             continue;
         }
         if let Some((_, found)) = out.iter_mut().find(|(d, _)| same_path(d, &dir)) {
@@ -219,7 +273,7 @@ pub fn exe_version(bytes: &[u8]) -> Option<String> {
 fn read_files(reader: &Reader, dir: &Path) -> Files {
     let mut files = Files::new();
     for name in reader.files {
-        if let Ok(bytes) = std::fs::read(dir.join(name)) {
+        if let Ok(bytes) = std::fs::read(join(dir, name)) {
             files.insert((*name).to_owned(), bytes);
         }
     }
@@ -233,7 +287,7 @@ pub fn installs(sources: &Sources) -> Vec<Install> {
     for program in Program::ALL {
         let reader = program.reader();
         for (dir, found_by) in folders_of(reader, sources, &|p| p.is_file()) {
-            let exe = dir.join(reader.exe);
+            let exe = join(&dir, reader.exe);
             let reading = (reader.read)(&read_files(reader, &dir));
             let version = reading
                 .version
@@ -284,7 +338,7 @@ fn install(
     sources: &Sources,
 ) -> Install {
     let reader = program.reader();
-    let exe = dir.join(reader.exe);
+    let exe = join(dir, reader.exe);
     let running = sources.running.iter().any(|r| same_path(r, &exe));
     let mut callsigns: Vec<String> = Vec::new();
     for call in reading.setups.iter().flat_map(|s| &s.callsigns) {
@@ -383,11 +437,13 @@ pub fn shortcut_target(bytes: &[u8]) -> Option<PathBuf> {
     let _name = read(flags & HAS_NAME != 0)?;
     let relative = read(flags & HAS_RELATIVE_PATH != 0)?;
     let working = read(flags & HAS_WORKING_DIR != 0)?;
+    // a shortcut's relative path is Windows' whatever its form, so it is split by hand
     let file = relative
         .as_deref()
-        .and_then(|r| Path::new(r).file_name()?.to_str().map(str::to_owned));
+        .and_then(|r| r.rsplit(SEPARATORS).next())
+        .filter(|f| !f.is_empty());
     match (working, file) {
-        (Some(dir), Some(file)) if !dir.is_empty() => Some(Path::new(&dir).join(file)),
+        (Some(dir), Some(file)) if !dir.is_empty() => Some(join(Path::new(&dir), file)),
         _ => None,
     }
 }
@@ -678,6 +734,62 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_path_is_taken_apart_alike_on_every_system() {
+        let p = PathBuf::from;
+        let exe = p("C:\\RMS Express\\RMS Express.exe");
+        assert_eq!(parent(&exe), Some(p("C:\\RMS Express")));
+        assert_eq!(
+            parent(&p("c:/rms express/rms express.exe")),
+            Some(p("c:/rms express"))
+        );
+        assert_eq!(parent(&p("C:\\RMS Express.exe")), Some(p("C:\\")));
+        assert_eq!(parent(&p("C:\\\\RMS Express.exe")), Some(p("C:\\")));
+        let shared = p("\\\\radio\\share\\RMS Express.exe");
+        assert_eq!(parent(&shared), Some(p("\\\\radio\\share")));
+        assert_eq!(parent(&p("C:\\")), None);
+        assert_eq!(file_name(&exe).as_deref(), Some("RMS Express.exe"));
+        assert_eq!(file_name(&shared).as_deref(), Some("RMS Express.exe"));
+        assert_eq!(file_name(&p("C:\\")), None);
+        assert_eq!(join(&p("C:\\"), "RMS Express"), p("C:\\RMS Express"));
+        assert_eq!(
+            join(&p("C:\\Program Files"), "RMS\\RMS Trimode"),
+            p("C:\\Program Files\\RMS\\RMS Trimode")
+        );
+        assert_eq!(join(&p("C:\\RMS\\"), "x"), p("C:\\RMS\\x"));
+        assert_eq!(join(&p("C:"), "x"), p("C:x"));
+        // a folder the operator added on another system is that system's
+        let wine = Path::new("/home/op/.wine/drive_c/RMS Express");
+        assert_eq!(join(wine, "RMS Express.exe"), wine.join("RMS Express.exe"));
+        assert_eq!(parent(&wine.join("x")), Some(wine.to_path_buf()));
+        // and on Windows, the same as the system's own
+        if cfg!(windows) {
+            for path in [
+                "C:\\RMS Express\\RMS Express.exe",
+                "C:/RMS Express/RMS Express.exe",
+                "C:\\RMS Express.exe",
+                "D:\\Radio\\Express 2\\RMS Express.exe",
+                "\\\\?\\C:\\RMS Express\\RMS Express.exe",
+            ] {
+                let path = Path::new(path);
+                assert_eq!(parent(path).as_deref(), path.parent(), "{path:?}");
+                let name = path.file_name().map(|n| n.to_string_lossy());
+                assert_eq!(file_name(path), name, "{path:?}");
+            }
+            for dir in [
+                "C:\\",
+                "C:\\Program Files",
+                "C:\\RMS\\",
+                "C:/RMS",
+                "C:",
+                "\\\\radio\\share",
+            ] {
+                let dir = Path::new(dir);
+                assert_eq!(join(dir, "RMS Express"), dir.join("RMS Express"), "{dir:?}");
+            }
+        }
+    }
+
+    #[test]
     fn an_executables_version_is_read_from_its_version_resource() {
         let mut bytes = vec![0u8; 40];
         bytes.extend_from_slice(&[0xBD, 0x04, 0xEF, 0xFE, 0, 0, 1, 0]);
@@ -689,9 +801,17 @@ mod tests {
     }
 
     /// A shortcut as Windows writes one: the header, no item list, link information with a
-    /// local path, and the working folder.
-    fn shortcut(local: &str, unicode_info: bool, working: Option<&str>) -> Vec<u8> {
+    /// local path, and the relative path and working folder.
+    fn shortcut(
+        local: &str,
+        unicode_info: bool,
+        relative: Option<&str>,
+        working: Option<&str>,
+    ) -> Vec<u8> {
         let mut flags: u32 = 0x2 | 0x80;
+        if relative.is_some() {
+            flags |= 0x8;
+        }
         if working.is_some() {
             flags |= 0x10;
         }
@@ -729,8 +849,8 @@ mod tests {
             info[24..28].copy_from_slice(&suffix32.to_le_bytes());
         }
         bytes.extend_from_slice(&info);
-        if let Some(dir) = working {
-            let units: Vec<u16> = dir.encode_utf16().collect();
+        for text in [relative, working].into_iter().flatten() {
+            let units: Vec<u16> = text.encode_utf16().collect();
             bytes.extend_from_slice(&u16::try_from(units.len()).expect("len").to_le_bytes());
             for unit in units {
                 bytes.extend_from_slice(&unit.to_le_bytes());
@@ -742,11 +862,16 @@ mod tests {
     #[test]
     fn a_shortcuts_target_is_read() {
         let path = "C:\\RMS\\RMS Trimode\\RMS Trimode.exe";
-        let narrow = shortcut(path, false, Some("C:\\RMS\\RMS Trimode"));
+        let narrow = shortcut(path, false, None, Some("C:\\RMS\\RMS Trimode"));
         assert_eq!(shortcut_target(&narrow), Some(PathBuf::from(path)));
-        let wide = shortcut("D:\\Ünïcode\\RMS Express.exe", true, None);
+        let wide = shortcut("D:\\Ünïcode\\RMS Express.exe", true, None, None);
         let expected = PathBuf::from("D:\\Ünïcode\\RMS Express.exe");
         assert_eq!(shortcut_target(&wide), Some(expected));
+        // no local path: the relative path's file in the working folder
+        let relative = "..\\..\\..\\RMS Express\\RMS Express.exe";
+        let bare = shortcut("", false, Some(relative), Some("C:\\RMS Express"));
+        let expected = PathBuf::from("C:\\RMS Express\\RMS Express.exe");
+        assert_eq!(shortcut_target(&bare), Some(expected));
         assert_eq!(shortcut_target(b"not a shortcut"), None);
         assert_eq!(shortcut_target(&[]), None);
     }
