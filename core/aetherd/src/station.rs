@@ -2743,21 +2743,17 @@ impl<P: Ptt> Station<P> {
     ///
     /// # Errors
     /// If a session is running, the channel is not known to be clear, or the duration is
-    /// outside what is sensible.
-    pub fn tune(&mut self, seconds: f64) -> Result<(), &'static str> {
+    /// outside what is sensible: in words for the operator, saying why
+    /// ([`Self::why_not_clear`]).
+    pub fn tune(&mut self, seconds: f64) -> Result<(), String> {
         if self.engine.state() != State::Idle {
-            return Err("a session is running");
+            return Err("a session is running".to_owned());
         }
         if !(0.5..=10.0).contains(&seconds) {
-            return Err("a tune tone lasts between 0.5 and 10 seconds");
+            return Err("a tune tone lasts between 0.5 and 10 seconds".to_owned());
         }
-        if self.config.wait_for_clear && !self.air.sense().settled() {
-            return Err(
-                "the busy detector is still learning the noise floor; try again in a few seconds",
-            );
-        }
-        if self.config.wait_for_clear && !self.channel_clear(self.now()) {
-            return Err("the channel is busy");
+        if let Some(why) = self.why_not_clear(self.now()) {
+            return Err(why);
         }
         let rate = self.air.info().audio_rate as f64;
         let tone = crate::cwid::CwId {
@@ -2799,28 +2795,24 @@ impl<P: Ptt> Station<P> {
     ///
     /// # Errors
     /// If a session is running, the channel is not known to be clear, the count is outside
-    /// what is sensible, or this build has no waveform for the configured bandwidth.
-    pub fn set_drive(&mut self, bursts: usize) -> Result<(), &'static str> {
+    /// what is sensible, or this build has no waveform for the configured bandwidth: in words
+    /// for the operator, saying why ([`Self::why_not_clear`]).
+    pub fn set_drive(&mut self, bursts: usize) -> Result<(), String> {
         if self.engine.state() != State::Idle {
-            return Err("a session is running");
+            return Err("a session is running".to_owned());
         }
         if !(1..=10).contains(&bursts) {
-            return Err("a drive check is between 1 and 10 bursts");
+            return Err("a drive check is between 1 and 10 bursts".to_owned());
         }
-        if self.config.wait_for_clear && !self.air.sense().settled() {
-            return Err(
-                "the busy detector is still learning the noise floor; try again in a few seconds",
-            );
-        }
-        if self.config.wait_for_clear && !self.channel_clear(self.now()) {
-            return Err("the channel is busy");
+        if let Some(why) = self.why_not_clear(self.now()) {
+            return Err(why);
         }
         let ladder = self.air.ladder();
         let index = self.config.link.max_mode.min(self.air.info().rungs - 1);
         let rung = &ladder[index];
         let bytes = rung.payload_bytes;
         if bytes == 0 {
-            return Err("this mode carries no payload to send");
+            return Err("this mode carries no payload to send".to_owned());
         }
         // not all-zero: the codec refuses that block (ADR-0009)
         let payload = vec![0x5a_u8; bytes];
@@ -6114,9 +6106,43 @@ impl<P: Ptt> Station<P> {
         if self.engine.state() != State::Idle && self.engine.state() != State::Connecting {
             return true;
         }
-        // a session this station heard holds the channel through the quiet between its
-        // transmissions, which the busy detector does not bridge (10-step-3.md §3.2)
-        self.air.sense().settled() && !self.air.sense().busy(now) && !self.reservation.holds(now)
+        self.air.sense().settled() && self.channel_held(now).is_none()
+    }
+
+    /// What holds the channel at `now` for what this station starts: the busy detector, which
+    /// the Busy lamp shows, or a session between other stations heard moments before, which it
+    /// does not — that session holds the channel through the quiet between its transmissions,
+    /// which the detector does not bridge (10-step-3.md §3.2).
+    fn channel_held(&self, now: f64) -> Option<Held> {
+        if self.air.sense().busy(now) {
+            Some(Held::Busy(self.air.sense().reason()))
+        } else if self.reservation.holds(now) {
+            Some(Held::Session)
+        } else {
+            None
+        }
+    }
+
+    /// Why a tuner tone or a drive check cannot go at `now`, in the operator's words, or `None`
+    /// when it can (or the station does not wait for a clear channel).
+    ///
+    /// The busy detector's reason is the Busy lamp's, so the refusal and the lamp say one thing;
+    /// a session heard says the lamp does not show it. A bare "the channel is busy" had the
+    /// mobile's operator, Tune refused six times in twenty minutes while the detector held the
+    /// channel by its level and by a narrowband signal, looking for a lamp to explain it
+    /// (2026-11-21).
+    fn why_not_clear(&self, now: f64) -> Option<String> {
+        if !self.config.wait_for_clear {
+            return None;
+        }
+        if !self.air.sense().settled() {
+            return Some(
+                "the busy detector is still learning the noise floor; try again in a few seconds"
+                    .to_owned(),
+            );
+        }
+        let held = self.channel_held(now)?;
+        Some(held_words(held, self.reservation.left_s(now)))
     }
 
     /// A decoded frame of a session not this station's holds the channel ([`Self::other_session`]).
@@ -6159,6 +6185,39 @@ impl<P: Ptt> Station<P> {
             }
             _ => None,
         }
+    }
+}
+
+/// What holds the channel for something this station starts ([`Station::channel_held`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Held {
+    /// The busy detector, for the reason it last marked the channel: the Busy lamp is lit.
+    Busy(Option<crate::busy::BusyReason>),
+    /// A session between other stations, heard moments before: the lamp is not lit.
+    Session,
+}
+
+/// What holds the channel, in the operator's words: the busy detector's reason as the Busy
+/// lamp names it, or a session heard, `left_s` more, which the lamp does not show.
+fn held_words(held: Held, left_s: f64) -> String {
+    use crate::busy::BusyReason;
+    match held {
+        Held::Busy(Some(BusyReason::Level { level_db, floor_db })) => format!(
+            "the channel is busy (the level rose {:.0} dB over the noise floor)",
+            level_db - floor_db
+        ),
+        Held::Busy(Some(BusyReason::Shape { .. })) => {
+            "the channel is busy (a narrowband signal is in the passband)".to_owned()
+        }
+        Held::Busy(Some(BusyReason::Frame { .. })) => {
+            "the channel is busy (a frame decoded)".to_owned()
+        }
+        Held::Busy(None) => "the channel is busy".to_owned(),
+        Held::Session => format!(
+            "a session between other stations was heard here, and the channel is kept for it \
+             {:.0} s more (the Busy lamp does not show this)",
+            left_s.ceil()
+        ),
     }
 }
 
@@ -12493,6 +12552,100 @@ mod tests {
             station.capture(&vec![0.0f32; 4096]).expect("capture");
         }
         assert_eq!(station.stats.transmissions, 0);
+    }
+
+    #[test]
+    fn a_refused_tune_says_what_holds_the_channel() {
+        // the mobile, 2026-11-21: Tune refused six times "the channel is busy", and the
+        // operator saw no Busy lamp to say why. The refusal now names the lamp's reason, or
+        // says the lamp does not show what holds the channel.
+        use super::reserve::Heard;
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                ..StationConfig::default()
+            },
+            NullPtt::default(),
+            1,
+        );
+        assert!(
+            station.config.wait_for_clear,
+            "the default waits for a clear channel"
+        );
+        for i in 0..120 {
+            station.capture(&quiet_block(i)).expect("capture");
+        }
+        assert!(station.channel_sense().settled());
+        assert!(!station.channel_busy());
+
+        // the noise 32 dB up: the lamp lights, and the refusal says the level, with the number
+        for i in 0..6 {
+            let loud: Vec<f32> = quiet_block(500 + i).iter().map(|x| x * 40.0).collect();
+            station.capture(&loud).expect("capture");
+        }
+        assert!(station.channel_busy(), "the Busy lamp is lit");
+        let refused = station.tune(10.0).expect_err("refused on a busy channel");
+        assert!(
+            refused.starts_with("the channel is busy (the level rose ")
+                && refused.ends_with(" dB over the noise floor)"),
+            "{refused}"
+        );
+        let refused = station.set_drive(1).expect_err("refused on a busy channel");
+        assert!(
+            refused.starts_with("the channel is busy (the level rose "),
+            "{refused}"
+        );
+
+        // quiet again: the lamp goes out and the tone is let through
+        for i in 0..40 {
+            station.capture(&quiet_block(900 + i)).expect("capture");
+        }
+        assert!(!station.channel_busy());
+        station.tune(1.0).expect("a clear channel");
+        assert!(station.tune_stop());
+
+        // a session between two other stations heard: the lamp is out, and the refusal says so
+        let now = station.now();
+        station.reservation.heard(now, Heard::Session);
+        assert!(!station.channel_busy(), "the Busy lamp stays out");
+        let refused = station
+            .tune(10.0)
+            .expect_err("refused while the session holds");
+        assert_eq!(
+            refused,
+            "a session between other stations was heard here, and the channel is kept for it \
+             4 s more (the Busy lamp does not show this)"
+        );
+    }
+
+    #[test]
+    fn every_reason_the_channel_is_held_has_the_busy_lamps_words() {
+        use crate::busy::BusyReason;
+        // the panel's lamp: "Channel busy: the level crossed the threshold", "… a narrowband
+        // signal is in the passband", "… a frame decoded"
+        let level = BusyReason::Level {
+            level_db: -13.9,
+            floor_db: -35.0,
+        };
+        assert_eq!(
+            held_words(Held::Busy(Some(level)), 0.0),
+            "the channel is busy (the level rose 21 dB over the noise floor)"
+        );
+        assert_eq!(
+            held_words(Held::Busy(Some(BusyReason::Shape { peak_db: 14.9 })), 0.0),
+            "the channel is busy (a narrowband signal is in the passband)"
+        );
+        assert_eq!(
+            held_words(
+                Held::Busy(Some(BusyReason::Frame {
+                    detect_confidence: 2.4
+                })),
+                0.0
+            ),
+            "the channel is busy (a frame decoded)"
+        );
+        assert_eq!(held_words(Held::Busy(None), 0.0), "the channel is busy");
+        assert!(held_words(Held::Session, 6.2).contains("kept for it 7 s more"));
     }
 
     #[test]

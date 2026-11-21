@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.15.3 |
+| **Version** | 1.15.4 |
 | **Updated** | 2026-11-21 |
 | **Describes** | Aether HF 0.2.0-beta.168 |
 | **Licence** | CC BY 4.0 |
@@ -314,7 +314,8 @@ corner of the screen.
 - **Tune**, beside the display in Compact and Mini, is the Session tab's *Tuner tone*: a steady
   tone for ten seconds, for an antenna tuner. While the tone plays it reads **Stop**; press it to
   stop. If the modem refuses the tone (a session, a busy channel, the rules), the display says why
-  for a few seconds, in place of the state.
+  for a few seconds, in place of the state. In a window under about 470 px wide it takes the
+  lamps' place too, so the **Busy** lamp is hidden while it shows.
 - The plots in Compact take whatever height the window has: make the window taller for taller
   plots. When a banner comes up, the plots get shorter for as long as it shows.
 - Compact has no **Axes** button, but the chart keeps its two level sliders and **Auto**. Change
@@ -731,7 +732,11 @@ power control, not the slider.
 > on a tone runs into the ALC on real traffic. Always set drive with **Set drive**.
 
 All three buttons are refused during a session. Tuner tone and Set drive are also refused while
-the channel is busy. The rules judge each one first.
+the channel is busy, and the refusal says what the **Busy** lamp shows: the level rose so many dB
+over the noise floor, a narrowband signal is in the passband, or a frame decoded. For a few
+seconds after Aether hears a session between other stations they are refused too, though the
+lamp is out, and the refusal says so and how long. Wait for the lamp to go out and try again.
+The rules judge each one first.
 
 ### Send and Received
 
@@ -1714,3 +1719,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.15.1 | 2026-11-21 | [Radio dial](#radio-dial): a scan stays about 19 s on a dial where it hears a broadcast, such as a RadioPost alert, and a broadcast of the station's own waiting to go out holds the dial, so an answer goes where the alert came from; an answer sent later takes the scan back to that dial (ADR-0129 §14, §15). |
 | 1.15.2 | 2026-11-21 | [Step 2. Radio interface](#step-2-radio-interface): a Kenwood keyed by CAT command is asked what it is, and a TS-480, TS-590S, TS-590SG, TS-890S or TS-990S transmits its data input (DATA SEND); before, plain TX keyed its microphone and the tuner tone put nothing out. **Radio control** on the Help tab names the radio and the command. CAT keeps RTS and DTR off. |
 | 1.15.3 | 2026-11-21 | [Radio dial](#radio-dial): a scan kept on a dial past its listen says in the Log how long it stayed and what kept it there; things heard again and again keep it up to about 3½ minutes (ADR-0129 §16). |
+| 1.15.4 | 2026-11-21 | [Keying and drive level](#keying-and-drive-level): a **Tuner tone** or **Set drive** refused for a busy channel says why, in the **Busy** lamp's words, or says that a session between other stations heard moments before holds the channel, which the lamp does not show; in a narrow Compact or Mini window the refusal hides the lamps while it shows. |

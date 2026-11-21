@@ -195,7 +195,11 @@ operator watching a PTT light cannot be told "accepted" and kept waiting. `tune`
 transmissions: refused during a session, by the rules (`regulatory`), and — with
 `[radio] wait_for_clear`, the default — while the channel is busy or the busy detector is still
 learning the noise floor (refused, not deferred, because a transmission that starts on its own
-a minute later would surprise the person holding the drive control). Neither can measure whether the *radio* keyed — only the operator can see
+a minute later would surprise the person holding the drive control). The refusal's message says
+what holds the channel: the busy detector's reason in the words of `metrics.busy_reason`'s lamp
+(`the channel is busy (the level rose 21 dB over the noise floor)`, `(a narrowband signal is in
+the passband)`, `(a frame decoded)`), or a session between other stations heard moments before,
+which holds the channel a few seconds with `channel_busy` false, and for how long. Neither can measure whether the *radio* keyed — only the operator can see
 that — which is why they exist: to let the operator look. `audio.level` is always on; it
 reports `settled: false` and "Still listening." until it has heard enough to mean anything,
 rather than a number that does not. `devices.list` also reports the sample rates each device

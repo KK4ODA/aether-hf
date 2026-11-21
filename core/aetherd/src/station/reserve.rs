@@ -110,6 +110,13 @@ impl Reservation {
     pub fn holds(&self, now: f64) -> bool {
         now < self.until
     }
+
+    /// How much longer the hold lasts at `now` as it stands, seconds: 0 when there is none. A
+    /// frame of the session heard meanwhile lengthens it.
+    #[must_use]
+    pub fn left_s(&self, now: f64) -> f64 {
+        (self.until - now).max(0.0)
+    }
 }
 
 #[cfg(test)]
