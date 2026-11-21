@@ -55,7 +55,8 @@ house a longer gap.
    the 17–18 s from acceptance to DISC.
 4. **Kenwood CAT keyed with no error and the radio did not tune** (§7). The dial was set and read
    back through Kenwood CAT, so the link worked. Every Tune press was `ok` and `ptt: keyed`
-   within 2–5 ms. Aether keys a Kenwood with a plain `TX;`. The other session is reviewing it.
+   within 2–5 ms. Aether keyed a Kenwood with a plain `TX;`, which on the TS-480 transmits from
+   the microphone input. Fixed on `master` the same day: `TX1;`, the data input (c1ac008e).
 5. **Small things** (§8): the mobile's rules check judged 80 m while it ran on 40 m (the
    declared dial, as in reports 18 and 19); Tune was refused for a busy channel six times at the
    mobile; `air_account.py` calls an open window the slave rightly left empty a "forfeit"; the
@@ -311,14 +312,16 @@ What the logs say:
 * **Nothing in Aether's log can say whether the TS-480 transmitted, or from which audio input.**
   The daemon reads no S-meter or power outside a recording.
 
-For the review, not checked here: Aether keys a Kenwood with a plain `TX;`
-(`CatProtocol::Kenwood.keying`, `core/aetherd/src/ptt.rs`). Kenwood radios whose CAT tells the
-microphone from the data input (`TX0;`/`TX1;` on the TS-590 and its kin) key from the
-microphone on a plain `TX;`. The DigiRig's audio goes to the TS-480's data input, so a radio
-keyed that way would send no tone for the tuner. That fits "would not tune", and RTS, the data
-port's own PTT, tuned at 18:38:05. Whether the TS-480 takes `TX1;` is for its CAT manual. Also
-from these logs: the first CAT save carried the Yaesu protocol, for a station whose operator
-section names a TS-480; the author changed it to Kenwood 17 s later.
+**The cause, confirmed by the Kenwood review the same day** (c1ac008e, on `master`, not yet
+released). Aether keyed a Kenwood with a plain `TX;`. Kenwood's PC control command reference
+for the TS-480 gives `TX` P1 = 0 as a normal (SEND) transmission from the microphone input and
+P1 = 1 as a transmission from the ANI (data) input, and says a `TX` with no parameter is P1 = 0.
+The TS-590S/SG, TS-890S and TS-990S references say the same. The DigiRig's audio goes to the
+TS-480's data input, so the radio went to transmit with its microphone input and sent no tone for
+the tuner. RTS, the data port's own PTT, tuned at 18:38:05. Aether now asks the radio's `ID;` and
+keys a TS-480, TS-590S/SG, TS-890S or TS-990S with `TX1;`, any other Kenwood with `TX;`. Also from
+these logs: the first CAT save carried the Yaesu protocol, for a station whose operator section
+names a TS-480; the author changed it to Kenwood 17 s later.
 
 ## 8. The stations
 
@@ -365,7 +368,7 @@ section names a TS-480; the author changed it to Kenwood 17 s later.
 | 2 | The client refreshes a gateway's channels and call time before calling | RadioPost | the author's |
 | 3 | The client asks `disconnect` with its last `send` | RadioPost | the author's |
 | 4 | A slave that has just delivered data to a program decides its answer at the last moment, and the gateway replies within ~0.2 s; both, or neither | Aether, the engine (model first, ADR-0069); RadioPost | the author's |
-| 5 | Kenwood keying: `TX1;` (the data input) where the radio has it | Aether, `ptt.rs` | the Kenwood review, in hand |
+| 5 | Kenwood keying: `TX1;` (the data input) where the radio has it | Aether, `ptt.rs` | **done** (c1ac008e, §7; not yet released) |
 | 6 | `air_account.py` names an open window left empty as such, not a forfeit; the `keying` late line skips starts inside an open window | Aether, tools and `station.rs` | the author's; small |
 | 7 | The mobile's side of session 3 | the mobile | the author: upload asked for |
 

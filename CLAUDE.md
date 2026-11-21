@@ -3368,8 +3368,8 @@ and gap fixes held on the air. Found, each the author's call:
   exchange (~2.2 s). A `disconnect` asked after the master's idle open window waits it out
   (5.6 s); RadioPost can ask it with its last `send`.
 - **The Kenwood CAT attempt** (§7). The dial was set and read back through Kenwood CAT at
-  38 400 Bd, and every Tune keyed with no error. Aether keys a Kenwood with a plain `TX;`, which on
-  Kenwoods that tell mic from data keys the microphone input.
+  38 400 Bd, and every Tune keyed with no error. Aether keyed with a plain `TX;`, the TS-480's
+  microphone input. Fixed the same day (c1ac008e): `TX1;`, the data input.
 Tools: `air_account.py` labels an open window the slave left empty a "forfeit";
 `rung_reading.py --replay` refuses protocol 12 and later by design (use `c1_replay.py`). The only
 `aetherd.exe` on this PC is beta.161 (`C:\Dev\AetherBench\aetherd-161\`), enough for
