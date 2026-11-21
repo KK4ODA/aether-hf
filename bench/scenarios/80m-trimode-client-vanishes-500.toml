@@ -7,6 +7,9 @@ tags = ["80m", "host", "gateway", "robustness"]
 bandwidth = 500
 seconds = 1800
 seed = 46
+# a Trimode stand-in scans in air time and the host port's short waits are wall-clock:
+# held to three times real time, a listening window stays a second of wall clock
+max_speed = 3
 transfer_s = 400
 
 [stations.a]

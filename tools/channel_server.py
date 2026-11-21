@@ -16,7 +16,11 @@ heard. A tick waits for both stations to ask for it, so the session runs as fast
 daemons can process audio and its clock is the audio's, as a station's is. With ``realtime =
 true`` in the scenario it never runs ahead of the wall clock: a host program's timers and the host
 port's own run on the wall clock (Pat's minute without ``BUFFER``, ADR-0109), and at several times
-real time no wait of theirs could ever run out.
+real time no wait of theirs could ever run out. ``max_speed = N`` holds it to N seconds of air a
+second: the host port's short waits (``LISTEN_ON_SETTLE``, 0.3 s; ``PENDING_SETTLE``, 1.5 s) are
+wall-clock, and a Trimode stand-in scans in air time, so at ten times real time its 3 s listening
+window was 0.3 s of wall clock and the ``PENDING`` of a call it was listening for never went
+(``40m-trimode-gateway-2300``, CI and local, 2026-11-21).
 
 The radios are modelled at both ends, from what the field recordings showed (ADR-0036…0040):
 
@@ -1126,6 +1130,8 @@ def main() -> int:
     server = Server(scenario, on_air)
     limit = args.max_seconds or float(scenario.get("seconds", 3600))
     realtime = bool(scenario.get("realtime", False))
+    # seconds of air a second of wall clock may carry; 0 is as fast as the daemons go
+    max_speed = 1.0 if realtime else float(scenario.get("max_speed", 0) or 0)
     began = time.monotonic()
     commands_done = 0
     threading.Thread(target=watchdog, args=(server,), daemon=True).start()
@@ -1137,8 +1143,8 @@ def main() -> int:
     try:
         while server.t / AUDIO_RATE < limit:
             server.tick()
-            if realtime:
-                ahead = server.t / AUDIO_RATE - (time.monotonic() - began)
+            if max_speed > 0:
+                ahead = server.t / AUDIO_RATE / max_speed - (time.monotonic() - began)
                 if ahead > 0:
                     time.sleep(ahead)
             if args.progress_file and server.t % PROGRESS_EVERY < TICK:

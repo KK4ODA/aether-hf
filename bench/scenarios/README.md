@@ -14,6 +14,9 @@ seconds = 900               # the most air time the session may take
 seed = 1
 realtime = false            # true: the air never runs ahead of the wall clock, for a host
                             # program's own timers (Pat's minute); a run takes its air time
+max_speed = 3               # at most this many seconds of air a second (0, the default: as
+                            # fast as the daemons go): the host port's short waits are
+                            # wall-clock, and a Trimode stand-in scans in air time
 
 [stations.a]                # the caller
 callsign = "W4ODA"

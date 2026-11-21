@@ -2924,7 +2924,11 @@ session a count above zero is now said again after 50 s unsaid (`BUFFER_REPEAT`,
 The scenario harness's `host a pat` stand-in waits as Pat does, on the wall clock; `realtime = true`
 holds a scenario's channel to the wall clock, since at several times real time no wall-clock
 wait can run out. `80m-pat-fade-500` (a 40 s fade as Pat writes) passes, and fails without the
-repeat.
+repeat. `max_speed = N` holds a scenario to N times real time: the six scenarios with a Trimode
+stand-in run at 3, because the stand-in scans in air time and the host port's `LISTEN_ON_SETTLE`
+(0.3 s) is wall-clock — at ten times real time a 3 s listening window was under 0.3 s, the held
+call's `PENDING` never went, and `40m-trimode-gateway-2300` failed CI on whichever runner was
+fast, whatever the commit (2026-11-21).
 
 **Fuzzing (2026-11-13, the author's go).** `core/fuzz/` holds cargo-fuzz targets for the parsers
 that take outside bytes: `air_frames` (every link decoder on one payload), `datagrams` (fragments

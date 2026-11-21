@@ -8,6 +8,9 @@ tags = ["40m", "host", "gateway", "multi"]
 bandwidth = 2300
 seconds = 1800
 seed = 61
+# a Trimode stand-in scans in air time and the host port's short waits are wall-clock:
+# held to three times real time, a listening window stays a second of wall clock
+max_speed = 3
 
 [stations.a]
 callsign = "KE4QCM"
