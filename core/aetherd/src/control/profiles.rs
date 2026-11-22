@@ -40,8 +40,9 @@ pub fn is_mutating(method: &str) -> bool {
             | "profile.duplicate"
             | "profile.delete"
             | "profile.import"
-            | "hostapps.import"
-            | "hostapps.point"
+            | "hostapps.setup"
+            | "hostapps.restore"
+            | "hostapps.copy"
     )
 }
 

@@ -133,20 +133,23 @@ after it.
 
 ### 3.1 Aether
 
-**With Trimode already set up for VARA**, let Aether read it: Setup step 5, **Winlink programs**
+**With Trimode already set up for VARA**, let Aether set it up: Setup step 5, **Winlink programs**
 ([the manual](../manual/manual.md#finding-winlinks-programs)). Each Trimode install is one row,
 named for its first channel's callsign; a second gateway on the same computer (another base
-callsign, another folder) is a row of its own. Tick it and **Import**: the profile *RMS Trimode
-KK4ODA-1* takes the first VARA channel's callsign, the widest VARA channel's bandwidth (500 or
-2300 Hz; Trimode's 2750 runs as 2300), Control **Automatic** (only Trimode answers calls), *Wait
-for a clear channel*, and **Host programs** on the port Trimode's VARA TNC points at, so Trimode
-needs no change. **Keying**: *Host program* when Trimode keys the radio itself (*Use CAT PTT* or a
-serial PTT port), as it does for VARA — the rules are then *None* and you check the dial; or
-*Aether*, which keys the radio the way Trimode did (CAT on its port and speed, or RTS/DTR) and keeps
-the rules check, with Trimode's radio set to *None*. The row's notes say what to change in Trimode:
-a channel not under the service code `AETHER` (§2.4), the VARA TNC turned off, no channel on VARA.
-Then check the steps below; the import does not set the rules' licence class, the levels or the
-sound card.
+callsign, another folder) is a row of its own. Choose **Keying**, close Trimode, and tick the row.
+The window says what will change; **Set up** makes the profile *RMS Trimode KK4ODA-1* — the first
+VARA channel's callsign, the widest VARA channel's bandwidth (500 or 2300 Hz; Trimode's 2750 runs
+as 2300), Control **Automatic** (only Trimode answers calls), *Wait for a clear channel*, and
+**Host programs** on the port Trimode's VARA TNC points at — and names Aether's application as
+the program Trimode starts as its VARA. **Keying**: *RMS Trimode* when Trimode keys the radio
+itself (*Use CAT PTT* or a serial PTT port), as it does for VARA — a gateway scanning several
+channels then has the rules at *None* and you check the dial; or *Aether*, which keys the radio
+the way Trimode did (CAT on its port and speed, or RTS/DTR) and keeps the rules check: Aether turns
+Trimode's PTT off and, when Trimode's radio control is on the same port, sets its radio to *None*,
+so Trimode no longer tunes or scans. The row's notes say what to change in Trimode yourself: a
+channel not under the service code `AETHER` (§2.4), the VARA TNC turned off, no channel on VARA.
+Untick the row to go back to VARA. Then check the steps below; setting up does not set the rules'
+licence class, the levels or the sound card.
 
 Otherwise work through Setup by hand, then save it as a profile — *Gateway* — so that it is one
 click to come back to.

@@ -4,9 +4,10 @@
 //! An operator moving from VARA has Winlink Express, RMS Trimode or RMS Packet set up already:
 //! a radio, its CAT port and keying, a TNC address and port. The finder looks for each install
 //! ([`find`]), reads its settings files with that program's [`Reader`] — a pure function over
-//! the files' bytes, one per program — and [`import`] makes a profile of what it read. What the
-//! program must change to reach Aether is written into its settings only when the operator
-//! asks ([`point`]), never while it runs, with the file kept as it was.
+//! the files' bytes, one per program — and [`import`] makes a profile of what it read. Setting
+//! a setup up writes what the program must change to reach Aether into its settings
+//! ([`point`]), never while it runs, with the file kept as it was; going back to VARA puts
+//! those settings back.
 //!
 //! A reader reads only the keys it needs. A program's files also hold the operator's address,
 //! telephone, position, e-mail and password; none of those keys is read, and a [`Reading`] and
@@ -82,7 +83,8 @@ pub struct Reader {
     /// Read them. Pure: the same files always read the same.
     pub read: fn(&Files) -> Reading,
     /// The settings it needs to reach Aether ([`point`]). Pure, and only a TNC's address, port
-    /// and launch: never an account, an address, a position or what a gateway publishes.
+    /// and launch, and the radio's keying and control when Aether keys it: never an account,
+    /// an address, a position or what a gateway publishes.
     pub point: fn(&Files, &point::Target) -> Vec<point::Edit>,
 }
 

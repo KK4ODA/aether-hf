@@ -16,7 +16,7 @@ is one click.
 | The host program's rig control | PTT and frequency on CAT | none when Aether keys by CAT (only one program can open the CAT port); frequency control only, when Aether keys by a serial line or a CM108 pin |
 | Aether's rules check (step 1) | **None** — you check every transmission, as with VARA | on: every transmission judged at the dial |
 | Tuning | the host program (VarAC's Auto-QSY, CQ slots) | Aether's dial list (Session tab), or by hand |
-| Best for | VarAC; Winlink Express or RMS Trimode already keying the radio for VARA (what *Winlink programs* imports by default) | Pat, operators who want the safety net |
+| Best for | VarAC; Winlink Express or RMS Trimode already keying the radio for VARA (what *Winlink programs* sets up by default) | Pat, operators who want the safety net |
 
 ## Finding your programs: Winlink Express, RMS Trimode, RMS Packet
 
@@ -28,10 +28,25 @@ there. Each install shows its folder, version, whether it is running and the TNC
 at (*Aether* when it is this Aether's). Winlink Express keeps several callsigns in one install:
 each is a row of its own.
 
-Tick the rows you want and Aether shows, before it saves anything, what each profile will set
-and what the program must say. **Import** saves one profile per row, named for the program and
-the callsign (*Winlink Express KK4ODA*); **Import and switch** saves one and switches to it.
-Importing again brings the profile up to date and keeps its sound card and levels.
+**Tick a row and it is set up for Aether in one step.** A window first says what will change:
+each of the program's settings Aether will change, as it is and as it will be; what the Aether
+profile will hold; and, in amber, anything Aether cannot change for you. **Set up** then changes
+the program's settings so it reaches Aether, makes the profile, named for the program and the
+callsign (*Winlink Express KK4ODA*), and with **Switch to it now** (ticked) switches the station
+to it. **Close the program first**: it writes its settings back when it closes, so a change made
+while it runs would be lost. The settings file as it was is kept beside it
+(`RMS Express.ini.aether.bak`). Setting a row up again brings the profile up to date and keeps
+its sound card and levels.
+
+**To keep a copy that works with VARA**, press **Make a copy first** (Winlink Express only):
+Aether copies the whole folder, mail included, to a new folder beside it (`C:\RMS Express
+Aether`) and sets up the copy. Start Winlink Express from the new folder to use Aether. Each copy
+has its own mail from then on.
+
+**To go back to VARA**, untick the row and press **Go back to VARA**. Aether puts back each
+setting it changed, unless you changed it since, and keeps the file as it was as
+`RMS Express.ini.aether-undo.bak`. The profile stays. While another callsign of the same Winlink
+Express is still set up for Aether, its settings (shared by every callsign) stay as they are.
 
 A profile made this way sets:
 
@@ -41,27 +56,24 @@ A profile made this way sets:
   there while the profile is in use, so the program needs no change;
 * for a gateway (RMS Trimode), automatic control and waiting for a clear channel: only the
   program answers calls then (ADR-0107);
-* who keys the radio. **Host program** is the default whenever the program keys the radio
-  itself: the program's radio setup stays as it was with VARA — it keys on Aether's `PTT ON` and
-  keeps tuning the radio. Aether cannot read the dial then, so it takes the program's channel,
-  less 1.5 kHz, as the dial (*Dial is at* on the Session tab, set by **Import and switch**), and
-  its rules check stays on. Move the program to another channel and change *Dial is at* too. A
-  gateway that scans several channels leaves the rules check off, as with VARA: Aether cannot
-  tell which channel it is on. The other choice,
-  **Aether**, keys the radio the way the program did (CAT on its port, speed and make, or its
-  RTS/DTR line) and keeps the rules check on; the program's radio must then be *Manual* and its
-  PTT port *None*, because only one program can hold the CAT port. A program that keys by VOX,
-  or controls no radio, leaves Aether's keying as it is.
+* who keys the radio, chosen in **Keying** before you tick. **The program** (named in the list)
+  is the default whenever it keys the radio itself: its radio setup stays as it was with VARA —
+  it keys on Aether's `PTT ON` and keeps tuning the radio. Aether cannot read the dial then, so it
+  takes the program's channel, less 1.5 kHz, as the dial, set when the window's **Switch to it
+  now and set the dial to …** is ticked, and its rules check stays on. Switch to the profile later
+  from the Profile bar, or move the program to another channel, and set *Dial is at* on the
+  Session tab. A gateway that scans several channels leaves the rules check off, as with VARA:
+  Aether cannot tell which channel it is on. The other choice, **Aether**, keys the radio the way
+  the program did (CAT on its port, speed and make, or its RTS/DTR line) and keeps the rules
+  check on; Aether sets the program's PTT port to *None* and, when the program's radio control is
+  on the same port, its radio to *Manual*, because only one program can hold a port. A program
+  that keys by VOX, or controls no radio, leaves Aether's keying as it is.
 
-What the program must change to reach Aether, if anything, is shown under the profile as **Set
-it in** *the program*, each setting as it is and as it will be: Winlink Express's VARA TNC
-address when it names another computer, its *Auto Launch Vara* (off), and the program RMS Trimode
-starts as its VARA (Aether's application). Left ticked, **Import** writes those settings, and
-only those, into the program's own settings file, and keeps the file as it was beside it
-(`RMS Express.ini.aether.bak`). **Close the program first**: it writes its settings back when it
-closes, so Aether will not change them while it runs. Nothing that publishes a gateway's
-channels to Winlink is ever changed. A setup above 30 MHz, or one whose only TNC is VARA FM or
-AGW, waits for Aether FM and makes no profile.
+What Aether changes in a program: Winlink Express's VARA TNC address when it names another
+computer and its *Auto Launch Vara* (off); the program RMS Trimode starts as its VARA (Aether's
+application); and, with Aether keying, the program's keying and radio control. Nothing that
+publishes a gateway's channels to Winlink is ever changed. A setup above 30 MHz, or one whose
+only TNC is VARA FM or AGW, waits for Aether FM and cannot be ticked.
 
 ## VarAC, the host program owning the radio
 

@@ -1,13 +1,15 @@
-//! The `hostapps.*` methods: Winlink's programs found on this computer and a setup of one made
-//! into an Aether profile ([`crate::hostapps`], ADR-0133).
+//! The `hostapps.*` methods: Winlink's programs found on this computer, and a setup of one set
+//! up for Aether or put back to VARA ([`crate::hostapps`], ADR-0133).
 //!
 //! `hostapps.find` answers with the last find and begins another off the run loop (a
 //! `hostapps` event carries it when it finishes); it also adds or forgets a folder to look in.
-//! `hostapps.import` makes a profile of each setup asked for, or brings one made before up to
-//! date, and with `load` switches the station to it, declaring the program's dial for the rules
-//! check when the program keys the radio. `hostapps.point` (or `point` on an import) writes
-//! into a program's settings what it needs to reach Aether — never while it runs, the file kept
-//! as it was beside it (ADR-0133 §7).
+//! `hostapps.setup` sets a setup up in one step (ADR-0133 §8): the program's settings written so
+//! it reaches Aether — never while it runs, the file kept as it was beside it — the profile made
+//! or brought up to date, and with `switch` the station switched to it, the program's dial
+//! declared for the rules check. `hostapps.restore` goes back to VARA: the settings Aether wrote
+//! are put back once no other setup of the install uses Aether, and the profile stays.
+//! `hostapps.copy` copies a Winlink Express install first, off the loop, so the one that works
+//! with VARA stays as it is.
 
 use std::path::{Path, PathBuf};
 
@@ -24,6 +26,7 @@ use crate::{
         find::{self as finding, Install, same_path},
         import::{self, Aether, Keying, Plan},
         point,
+        state::{self, Finder, SetUp},
     },
     log::Level,
     profile::{Inventory, Profile},
@@ -57,8 +60,9 @@ pub fn dispatch<P: Ptt>(
     };
     let result = match method {
         "hostapps.find" => find(daemon, params),
-        "hostapps.import" => import(station, daemon, params),
-        "hostapps.point" => point_method(station, daemon, params),
+        "hostapps.setup" => setup(station, daemon, params),
+        "hostapps.restore" => restore(station, daemon, params),
+        "hostapps.copy" => copy(station, daemon, params),
         other => Err(ApiError::new(
             "unknown_method",
             format!("This version does not have a method called {other:?}."),
@@ -79,21 +83,14 @@ fn aether(daemon: &DaemonState) -> Aether {
     }
 }
 
-/// Aether as a program should reach it: the host port, and the application for a program
-/// that starts its TNC itself.
-fn target(daemon: &DaemonState) -> point::Target {
+/// Aether as a program should reach it: the host port, the application for a program that
+/// starts its TNC itself, and whether Aether keys the radio.
+fn target(daemon: &DaemonState, keying: Option<Keying>) -> point::Target {
     point::Target {
         host_port: aether(daemon).host_port(),
         app: crate::varac::app_path().map(|p| p.display().to_string()),
+        aether_keys: keying == Some(Keying::Aether),
     }
-}
-
-/// What writing an install's settings would change, read from its files now; nothing when
-/// they cannot be read.
-fn program_changes(install: &Install, target: &point::Target) -> Vec<point::Change> {
-    point::files_of(install)
-        .map(|files| point::changes(install.program, &files, target))
-        .unwrap_or_default()
 }
 
 /// Every plan a setup allows: one per keying, the default first, or the one plan when the
@@ -109,25 +106,45 @@ fn plans(install: &Install, setup: &ProgramSetup, aether: &Aether) -> Vec<Plan> 
         .collect()
 }
 
-/// An install as the clients are given it: each setup with its plans, and each TNC with where
-/// it points.
-fn install_json(install: &Install, aether: &Aether, target: &point::Target) -> Value {
+/// An install as the clients are given it: each setup with its plans (each with what setting
+/// it up would write into the program) and whether it is set up, each TNC with where it
+/// points, what going back to VARA would put back, and where a copy would go.
+fn install_json(install: &Install, daemon: &DaemonState) -> Value {
+    let aether = aether(daemon);
+    let finder: &Finder = &daemon.hostapps;
+    let files = point::files_of(install).unwrap_or_default();
     let mut value = json!(install);
-    value["program_changes"] = json!(program_changes(install, target));
     let mut points_at_aether = false;
     if let Some(setups) = value["setups"].as_array_mut() {
         for (json, setup) in setups.iter_mut().zip(&install.setups) {
             if let Some(tncs) = json["tncs"].as_array_mut() {
                 for (t, tnc) in tncs.iter_mut().zip(&setup.tncs) {
-                    let pointing = import::pointing(tnc, aether);
+                    let pointing = import::pointing(tnc, &aether);
                     points_at_aether |= pointing == import::Pointing::Aether;
                     t["pointing"] = json!(pointing);
                 }
             }
-            json["plans"] = json!(plans(install, setup, aether));
+            let plans: Vec<Value> = plans(install, setup, &aether)
+                .iter()
+                .map(|plan| {
+                    let mut p = json!(plan);
+                    let wanted = target(daemon, plan.keying);
+                    p["program_changes"] = json!(point::changes(install.program, &files, &wanted));
+                    p
+                })
+                .collect();
+            json["plans"] = json!(plans);
+            json["set_up"] = json!(finder.set_up_of(&install.folder, &setup.name));
         }
     }
     value["points_at_aether"] = json!(points_at_aether);
+    let (put_back, left) = point::going_back(&files, &finder.originals(&install.folder));
+    value["going_back"] = json!({ "put_back": put_back, "left": left });
+    value["copy_to"] = if install.program == Program::WinlinkExpress {
+        json!(state::copy_destination(Path::new(&install.folder)).map(|p| p.display().to_string()))
+    } else {
+        Value::Null
+    };
     value
 }
 
@@ -136,11 +153,10 @@ fn install_json(install: &Install, aether: &Aether, target: &point::Target) -> V
 pub fn answer(daemon: &DaemonState) -> Value {
     let (last, finding) = daemon.hostapps.last();
     let aether = aether(daemon);
-    let target = target(daemon);
     let installs: Vec<Value> = last
         .iter()
         .flatten()
-        .map(|i| install_json(i, &aether, &target))
+        .map(|i| install_json(i, daemon))
         .collect();
     json!({
         "supported": cfg!(windows),
@@ -148,6 +164,7 @@ pub fn answer(daemon: &DaemonState) -> Value {
         "found": last.is_some(),
         "installs": installs,
         "added": daemon.hostapps.remembered.folders,
+        "copy": daemon.hostapps.last_copy(),
         "took_ms": daemon.hostapps.took_ms().into_iter().map(|(stage, ms)| (stage.to_owned(), json!(ms))).collect::<serde_json::Map<String, Value>>(),
         "aether": {
             "host_port": aether.host_port(),
@@ -164,6 +181,18 @@ fn text_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
+fn bad(what: &str) -> ApiError {
+    ApiError::new("invalid_params", what.to_owned(), false)
+}
+
+fn refused(why: impl Into<String>) -> ApiError {
+    ApiError::new("refused", why.into(), false)
+}
+
+fn not_found(why: impl Into<String>) -> ApiError {
+    ApiError::new("not_found", why.into(), false)
+}
+
 /// Whether a folder holds one of the programs the finder knows.
 fn holds_a_program(folder: &Path) -> bool {
     Program::ALL
@@ -177,11 +206,11 @@ fn find(daemon: &mut DaemonState, params: &Value) -> Result<Value, ApiError> {
         let folder = PathBuf::from(folder);
         if !holds_a_program(&folder) {
             let names: Vec<&str> = Program::ALL.iter().map(|p| p.reader().exe).collect();
-            return Err(ApiError::new(
-                "not_found",
-                format!("{} holds none of {}.", folder.display(), names.join(", ")),
-                false,
-            ));
+            return Err(not_found(format!(
+                "{} holds none of {}.",
+                folder.display(),
+                names.join(", ")
+            )));
         }
         daemon
             .hostapps
@@ -206,21 +235,48 @@ fn install_in(daemon: &DaemonState, folder: &str) -> Option<Install> {
         .find(|i| same_path(Path::new(&i.folder), Path::new(folder)))
 }
 
-/// Write into an install's settings what its program needs to reach Aether, if anything, asking
-/// the system first whether it runs; then read it again and put it in the last find's place,
-/// so that a plan made next sees the program as it is now.
-fn point_install(
-    station_state: &str,
-    daemon: &mut DaemonState,
-    install: &Install,
-) -> Result<(point::Pointed, Install), String> {
+/// The install and setup a request names, from the last find.
+fn named(daemon: &DaemonState, params: &Value) -> Result<(Install, String), ApiError> {
+    let folder =
+        text_param(params, "folder").ok_or_else(|| bad("the install's folder is needed"))?;
+    let setup = text_param(params, "setup").ok_or_else(|| bad("the setup's name is needed"))?;
+    let install = install_in(daemon, folder).ok_or_else(|| {
+        not_found(format!(
+            "No program found in {folder}: find the programs again."
+        ))
+    })?;
+    if !install.setups.iter().any(|s| s.name == setup) {
+        return Err(not_found(format!(
+            "{} in {folder} has no {setup}: find the programs again.",
+            install.program_name
+        )));
+    }
+    Ok((install, setup.to_owned()))
+}
+
+/// Whether an install's program runs now: the system asked again, since a find may be minutes
+/// old. Also what runs, for reading the install again.
+fn runs(daemon: &DaemonState, install: &Install) -> (bool, Vec<PathBuf>) {
     let running = (daemon.hostapps.running)();
     let runs = running
         .iter()
         .any(|r| same_path(r, Path::new(&install.exe)));
-    let pointed = point::point(install, &target(daemon), runs)?;
-    let fresh = finding::reread(install, &running);
-    daemon.hostapps.replace(fresh.clone());
+    (runs, running)
+}
+
+/// Write into an install's settings what its program needs to reach Aether, if anything; then
+/// read it again and put it in the last find's place, so that the clients see it as it is now.
+fn point_install(
+    station_state: &str,
+    daemon: &mut DaemonState,
+    install: &Install,
+    target: &point::Target,
+) -> Result<point::Pointed, String> {
+    let (runs, running) = runs(daemon, install);
+    let pointed = point::point(install, target, runs)?;
+    if !pointed.written.is_empty() {
+        daemon.hostapps.replace(finding::reread(install, &running));
+    }
     let detail = if pointed.changes.is_empty() {
         format!(
             "{} in {} reaches Aether already",
@@ -244,35 +300,7 @@ fn point_install(
     daemon
         .log
         .record(Level::Info, "hostapps", &detail, station_state);
-    Ok((pointed, fresh))
-}
-
-/// `hostapps.point`: write into the program in `folder` what it needs to reach Aether.
-fn point_method<P: Ptt>(
-    station: &mut Station<P>,
-    daemon: &mut DaemonState,
-    params: &Value,
-) -> Result<Value, ApiError> {
-    let Some(folder) = text_param(params, "folder") else {
-        return Err(ApiError::new(
-            "invalid_params",
-            "hostapps.point needs the install's folder",
-            false,
-        ));
-    };
-    let Some(install) = install_in(daemon, folder) else {
-        return Err(ApiError::new(
-            "not_found",
-            format!("No program found in {folder}: find the programs again."),
-            false,
-        ));
-    };
-    let state = format!("{:?}", station.state());
-    let (pointed, fresh) = point_install(&state, daemon, &install)
-        .map_err(|why| ApiError::new("refused", why, false))?;
-    let mut result = json!(pointed);
-    result["install"] = install_json(&fresh, &aether(daemon), &target(daemon));
-    Ok(result)
+    Ok(pointed)
 }
 
 /// Declare the dial for the rules check, as the Session tab's *Dial is at* does: a dial is this
@@ -285,50 +313,13 @@ fn declare_dial<P: Ptt>(
     let mut candidate = daemon.config.clone();
     candidate
         .merge(&json!({ "regulatory.dial_hz": hz }))
-        .map_err(|e| ApiError::new("refused", e.to_string(), false))?;
+        .map_err(|e| refused(e.to_string()))?;
     candidate
         .save(&daemon.path)
         .map_err(|e| ApiError::new("cannot_save", e.to_string(), true))?;
     station.apply_live(&candidate);
     daemon.config = candidate;
     Ok(())
-}
-
-/// One profile asked for: an install's folder, a setup's name in it, the keying, and whether
-/// the program's settings are to be set to reach Aether first.
-struct Asked {
-    folder: String,
-    setup: String,
-    keying: Option<Keying>,
-    point: bool,
-}
-
-fn asked(params: &Value) -> Result<Vec<Asked>, ApiError> {
-    let bad = |what: &str| ApiError::new("invalid_params", what.to_owned(), false);
-    let Some(list) = params.get("imports").and_then(Value::as_array) else {
-        return Err(bad("imports must be a list of {folder, setup, keying?}"));
-    };
-    list.iter()
-        .map(|item| {
-            let folder =
-                text_param(item, "folder").ok_or_else(|| bad("an import needs its folder"))?;
-            let setup =
-                text_param(item, "setup").ok_or_else(|| bad("an import needs its setup"))?;
-            let keying = match item.get("keying") {
-                None | Some(Value::Null) => None,
-                Some(k) => Some(
-                    serde_json::from_value(k.clone())
-                        .map_err(|_| bad("keying is \"program\" or \"aether\""))?,
-                ),
-            };
-            Ok(Asked {
-                folder: folder.to_owned(),
-                setup: setup.to_owned(),
-                keying,
-                point: item.get("point").and_then(Value::as_bool) == Some(true),
-            })
-        })
-        .collect()
 }
 
 /// Make the profile a plan describes, or bring the one of its name up to date: the plan's
@@ -354,10 +345,8 @@ fn write_profile(daemon: &DaemonState, plan: &Plan) -> Result<Value, ApiError> {
     };
     let changed = config
         .merge(&plan.changes)
-        .map_err(|e| ApiError::new("refused", e.to_string(), false))?;
-    config
-        .validate()
-        .map_err(|e| ApiError::new("refused", e.to_string(), false))?;
+        .map_err(|e| refused(e.to_string()))?;
+    config.validate().map_err(|e| refused(e.to_string()))?;
     let now = crate::profile::now();
     let mut profile = Profile::capture(&plan.profile, &config, &memories, Some(&inventory), &now);
     if !created_at.is_empty() {
@@ -375,90 +364,73 @@ fn write_profile(daemon: &DaemonState, plan: &Plan) -> Result<Value, ApiError> {
         "created": existing.is_none(),
         "changed": changed,
         "keying": plan.keying,
-        "program_must": plan.program_must,
         "dial_hz": plan.dial_hz,
     }))
 }
 
-/// `hostapps.import`: a profile for each setup asked for; with `load` and one profile, the
-/// station switched to it.
-fn import<P: Ptt>(
+/// `hostapps.setup`: one setup set up for Aether — the program's settings written, the profile
+/// made or brought up to date, both remembered; with `switch`, the station switched to it.
+fn setup<P: Ptt>(
     station: &mut Station<P>,
     daemon: &mut DaemonState,
     params: &Value,
 ) -> Result<Value, ApiError> {
-    let asked = asked(params)?;
-    if asked.is_empty() {
-        return Err(ApiError::new(
-            "invalid_params",
-            "Tick a setup to import.",
-            false,
-        ));
+    let (install, name) = named(daemon, params)?;
+    let keying: Option<Keying> = match params.get("keying") {
+        None | Some(Value::Null) => None,
+        Some(k) => Some(
+            serde_json::from_value(k.clone())
+                .map_err(|_| bad("keying is \"program\" or \"aether\""))?,
+        ),
+    };
+    let switch = params.get("switch").and_then(Value::as_bool) == Some(true);
+    let Some(found) = install.setups.iter().find(|s| s.name == name) else {
+        return Err(not_found("find the programs again"));
+    };
+    // planned from the program as it is before it is written: Aether keys the radio the way the
+    // program did, which the program no longer says once its keying is handed over
+    let plan = import::plan(&install, found, keying, &aether(daemon));
+    if let Some(why) = &plan.refused {
+        return Err(refused(format!("{}: {why}", install.program_name)));
     }
-    let aether = aether(daemon);
     let state = format!("{:?}", station.state());
-    let mut imported = Vec::new();
-    let mut refused = Vec::new();
-    for a in &asked {
-        let refuse = |why: &str| json!({ "folder": a.folder, "setup": a.setup, "why": why });
-        let Some(mut install) = install_in(daemon, &a.folder) else {
-            refused.push(refuse("not found: find the programs again"));
-            continue;
-        };
-        let mut pointed = Value::Null;
-        if a.point {
-            // the program first, then the plan from what it says now
-            match point_install(&state, daemon, &install) {
-                Ok((done, fresh)) => {
-                    pointed = json!(done);
-                    install = fresh;
-                }
-                Err(why) => {
-                    refused.push(refuse(&why));
-                    continue;
-                }
-            }
-        }
-        let Some(setup) = install.setups.iter().find(|s| s.name == a.setup) else {
-            refused.push(refuse("not found: find the programs again"));
-            continue;
-        };
-        let plan = import::plan(&install, setup, a.keying, &aether);
-        if let Some(why) = &plan.refused {
-            refused.push(refuse(why));
-            continue;
-        }
-        match write_profile(daemon, &plan) {
-            Ok(mut done) => {
-                done["pointed"] = pointed;
-                imported.push(done);
-            }
-            Err(error) => refused.push(refuse(&error.message)),
-        }
-    }
-    for done in &imported {
-        let detail = format!(
-            "profile \"{}\" {} from {} in {}",
-            done["profile"].as_str().unwrap_or_default(),
-            if done["created"] == true {
-                "made"
-            } else {
-                "brought up to date"
-            },
-            done["setup"].as_str().unwrap_or_default(),
-            done["folder"].as_str().unwrap_or_default(),
-        );
-        daemon.log.record(Level::Info, "hostapps", &detail, &state);
-    }
-    if !imported.is_empty() {
-        daemon.note_profiles_changed();
-    }
-    let load = params.get("load").and_then(Value::as_bool) == Some(true);
-    let mut result = if load && imported.len() == 1 {
-        let id = imported[0]["id"].as_str().unwrap_or_default().to_owned();
+    let wanted = target(daemon, plan.keying);
+    let pointed = point_install(&state, daemon, &install, &wanted).map_err(refused)?;
+    let mut done = write_profile(daemon, &plan)?;
+    let record = SetUp {
+        folder: install.folder.clone(),
+        setup: name.clone(),
+        profile: plan.profile.clone(),
+        keying: plan.keying,
+        at: crate::profile::now(),
+    };
+    daemon
+        .hostapps
+        .note_set_up(record, &pointed.changes)
+        .map_err(|e| ApiError::new("cannot_save", e, true))?;
+    let detail = format!(
+        "{} {} in {} set up for Aether: profile \"{}\" {}",
+        install.program_name,
+        name,
+        install.folder,
+        plan.profile,
+        if done["created"] == true {
+            "made"
+        } else {
+            "brought up to date"
+        },
+    );
+    daemon.log.record(Level::Info, "hostapps", &detail, &state);
+    daemon.note_profiles_changed();
+    // what is left for the operator: the advice Aether cannot carry out itself
+    let by_hand: Vec<&import::Advice> = plan.program_must.iter().filter(|a| !a.settable).collect();
+    done["pointed"] = json!(pointed);
+    done["by_hand"] = json!(by_hand);
+    let mut result = if switch {
+        let id = done["id"].as_str().unwrap_or_default().to_owned();
         let profile = daemon.profiles.read(&id).map_err(|e| profiles::api(&e))?;
         let mut switched = profiles::commit(station, daemon, &profile, &id)?;
-        if let Some(hz) = imported[0]["dial_hz"].as_u64() {
+        if let Some(hz) = plan.dial_hz {
             declare_dial(station, daemon, hz)?;
             let detail = format!(
                 "the dial declared at {} MHz for the rules check: the program's channel",
@@ -471,8 +443,139 @@ fn import<P: Ptt>(
     } else {
         profiles::status_json(daemon)
     };
-    result["imported"] = json!(imported);
-    result["refused"] = json!(refused);
+    done["switched"] = json!(switch);
+    result["set_up"] = done;
+    result["hostapps"] = answer(daemon);
+    Ok(result)
+}
+
+/// `hostapps.restore`: go back to VARA. The setup is no longer set up; when no other setup of
+/// its install is, the settings Aether wrote into the program are put back (those changed
+/// since are left), never while the program runs. The profile stays.
+fn restore<P: Ptt>(
+    station: &mut Station<P>,
+    daemon: &mut DaemonState,
+    params: &Value,
+) -> Result<Value, ApiError> {
+    let folder =
+        text_param(params, "folder").ok_or_else(|| bad("the install's folder is needed"))?;
+    let setup = text_param(params, "setup").ok_or_else(|| bad("the setup's name is needed"))?;
+    let Some(record) = daemon.hostapps.set_up_of(folder, setup).cloned() else {
+        return Err(not_found(format!(
+            "{setup} in {folder} was not set up for Aether here."
+        )));
+    };
+    let state = format!("{:?}", station.state());
+    let others = daemon.hostapps.others_set_up(&record.folder, &record.setup);
+    let mut result = json!({
+        "folder": record.folder,
+        "setup": record.setup,
+        "profile": record.profile,
+        "others": others,
+        "put_back": [],
+        "left": [],
+        "written": [],
+    });
+    let detail = if others.is_empty() {
+        let originals = daemon.hostapps.originals(&record.folder);
+        if let Some(install) = install_in(daemon, &record.folder) {
+            let (runs, running) = runs(daemon, &install);
+            let back = point::put_back(&install, &originals, runs).map_err(refused)?;
+            if !back.written.is_empty() {
+                daemon.hostapps.replace(finding::reread(&install, &running));
+            }
+            result["put_back"] = json!(back.put_back);
+            result["left"] = json!(back.left);
+            result["written"] = json!(back.written);
+            let keys: Vec<String> = back
+                .put_back
+                .iter()
+                .map(|c| format!("{} {}", c.key, c.to))
+                .collect();
+            if keys.is_empty() {
+                format!(
+                    "{} {} in {} back to VARA: nothing to put back",
+                    install.program_name, record.setup, record.folder
+                )
+            } else {
+                format!(
+                    "{} {} in {} back to VARA: {} put back",
+                    install.program_name,
+                    record.setup,
+                    record.folder,
+                    keys.join(", ")
+                )
+            }
+        } else if Path::new(&record.folder).exists() {
+            return Err(not_found(format!(
+                "No program found in {}: find the programs again.",
+                record.folder
+            )));
+        } else {
+            format!("{} is gone: {} forgotten", record.folder, record.setup)
+        }
+    } else {
+        format!(
+            "{} in {} no longer set up for Aether; {} still use it, so the program's settings \
+             stay",
+            record.setup,
+            record.folder,
+            others.join(", ")
+        )
+    };
+    daemon
+        .hostapps
+        .forget_set_up(&record.folder, &record.setup, others.is_empty())
+        .map_err(|e| ApiError::new("cannot_save", e, true))?;
+    daemon.log.record(Level::Info, "hostapps", &detail, &state);
+    result["hostapps"] = answer(daemon);
+    Ok(result)
+}
+
+/// `hostapps.copy`: copy a Winlink Express install to a folder beside it, off the run loop, and
+/// find it; the copy is then set up as any install is. Never while it runs, never a gateway (a
+/// second copy of one would publish its channels again).
+fn copy<P: Ptt>(
+    station: &mut Station<P>,
+    daemon: &mut DaemonState,
+    params: &Value,
+) -> Result<Value, ApiError> {
+    let folder =
+        text_param(params, "folder").ok_or_else(|| bad("the install's folder is needed"))?;
+    let install = install_in(daemon, folder).ok_or_else(|| {
+        not_found(format!(
+            "No program found in {folder}: find the programs again."
+        ))
+    })?;
+    if install.program != Program::WinlinkExpress {
+        return Err(refused(format!(
+            "{} is not copied: only Winlink Express is. A second copy of a gateway would publish \
+             its channels to Winlink again.",
+            install.program_name
+        )));
+    }
+    let (running, _) = runs(daemon, &install);
+    if running {
+        return Err(refused(format!(
+            "{} is running: close it first, so its settings and mail are copied as they stand.",
+            install.program_name
+        )));
+    }
+    let to = state::copy_destination(Path::new(&install.folder)).ok_or_else(|| {
+        refused(format!(
+            "No free name beside {} for a copy.",
+            install.folder
+        ))
+    })?;
+    daemon
+        .hostapps
+        .copy(Path::new(&install.folder), &to)
+        .map_err(refused)?;
+    let detail = format!("copying {} to {}", install.folder, to.display());
+    let state = format!("{:?}", station.state());
+    daemon.log.record(Level::Info, "hostapps", &detail, &state);
+    let mut result = answer(daemon);
+    result["to"] = json!(to.display().to_string());
     Ok(result)
 }
 
@@ -623,6 +726,15 @@ mod tests {
         assert_eq!(plans.len(), 2, "program and Aether keying");
         assert_eq!(plans[0]["keying"], "program");
         assert_eq!(plans[1]["changes"]["ptt.kind"], "cat");
+        assert_eq!(plans[0]["program_changes"], json!([]), "no file to write");
+        assert!(setup["set_up"].is_null(), "not set up yet");
+        assert!(
+            installs[0]["copy_to"]
+                .as_str()
+                .is_some_and(|to| to.ends_with("RMS Express Aether")),
+            "{}",
+            installs[0]["copy_to"]
+        );
         // the copy on another port: Aether follows it there, and it controls no radio
         let other = &installs[1]["setups"][0]["plans"][0];
         assert_eq!(other["changes"]["host.bind"], "127.0.0.1:8370");
@@ -640,22 +752,23 @@ mod tests {
     }
 
     #[test]
-    fn importing_two_setups_makes_two_profiles_and_one_can_be_switched_to() {
+    fn setting_two_setups_up_makes_two_profiles_and_one_can_be_switched_to() {
         let mut station = station();
         let (mut daemon, dir) = daemon("import");
+        daemon.hostapps.running = nothing_runs;
         ok(call(&mut station, &mut daemon, "hostapps.find", json!({})));
-        let two = json!({ "imports": [
-            { "folder": "C:\\RMS Express", "setup": "N0CALL" },
-            { "folder": "c:/rms express/", "setup": "N1CALL", "keying": "aether" },
-            { "folder": "C:\\RMS Express", "setup": "N9CALL" },
-        ]});
-        let done = ok(call(&mut station, &mut daemon, "hostapps.import", two));
-        let imported = done["imported"].as_array().expect("imported");
-        assert_eq!(imported.len(), 2, "{done}");
-        assert_eq!(imported[0]["profile"], "Winlink Express N0CALL");
-        assert_eq!(imported[0]["created"], true);
-        assert_eq!(done["refused"].as_array().map(Vec::len), Some(1));
+        let first = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL" });
+        let done = ok(call(&mut station, &mut daemon, "hostapps.setup", first));
+        assert_eq!(done["set_up"]["profile"], "Winlink Express N0CALL");
+        assert_eq!(done["set_up"]["created"], true);
         assert!(done["active"].is_null(), "not switched to unless asked");
+        let row = &done["hostapps"]["installs"][0]["setups"][0];
+        assert_eq!(row["set_up"]["profile"], "Winlink Express N0CALL", "{row}");
+        let second = json!({ "folder": "c:/rms express/", "setup": "N1CALL", "keying": "aether" });
+        ok(call(&mut station, &mut daemon, "hostapps.setup", second));
+        let unknown = json!({ "folder": "C:\\RMS Express", "setup": "N9CALL" });
+        let refused = call(&mut station, &mut daemon, "hostapps.setup", unknown);
+        assert_eq!(refused.error.expect("refused").code, "not_found");
 
         let id = daemon
             .profiles
@@ -671,7 +784,6 @@ mod tests {
             applied.config.regulatory.profile, daemon.config.regulatory.profile,
             "the rules check kept with the program keying"
         );
-        assert_eq!(imported[0]["dial_hz"], 7_082_000);
         let input = applied.config.audio.input.as_deref();
         assert_eq!(
             input,
@@ -692,10 +804,10 @@ mod tests {
         );
         assert_eq!(applied.config.radio.bandwidth, 2300, "2750 runs as 2300");
 
-        // the same again, with load: brought up to date and switched to
-        let one = json!({ "imports": [{ "folder": "C:\\RMS Express", "setup": "N0CALL" }], "load": true });
-        let again = ok(call(&mut station, &mut daemon, "hostapps.import", one));
-        assert_eq!(again["imported"][0]["created"], false);
+        // the same again, switched to: brought up to date, and the program's dial declared
+        let again = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL", "switch": true });
+        let again = ok(call(&mut station, &mut daemon, "hostapps.setup", again));
+        assert_eq!(again["set_up"]["created"], false);
         let id = daemon
             .profiles
             .find("Winlink Express N0CALL")
@@ -707,6 +819,20 @@ mod tests {
             daemon.config.regulatory.dial_hz,
             Some(7_082_000),
             "the program's dial declared at the switch"
+        );
+        // going back while another setup of the install still uses Aether: only forgotten
+        let back = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL" });
+        let back = ok(call(&mut station, &mut daemon, "hostapps.restore", back));
+        assert_eq!(back["others"], json!(["N1CALL"]));
+        assert!(
+            daemon
+                .hostapps
+                .set_up_of("C:\\RMS Express", "N0CALL")
+                .is_none()
+        );
+        assert!(
+            daemon.profiles.find("Winlink Express N0CALL").is_some(),
+            "the profile stays"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -728,6 +854,18 @@ mod tests {
         }
     }
 
+    /// This computer as a find sees it with only the folders added: the files really read.
+    fn added_only(added: &[PathBuf]) -> crate::hostapps::find::Found {
+        let sources = crate::hostapps::find::Sources {
+            added: added.to_vec(),
+            ..crate::hostapps::find::Sources::default()
+        };
+        crate::hostapps::find::Found {
+            installs: crate::hostapps::find::installs(&sources),
+            took_ms: Vec::new(),
+        }
+    }
+
     fn nothing_runs() -> Vec<PathBuf> {
         Vec::new()
     }
@@ -737,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn a_program_is_set_to_reach_aether_only_while_it_is_closed() {
+    fn a_program_is_set_up_and_put_back_only_while_it_is_closed() {
         let folder = wle_folder();
         std::fs::create_dir_all(&folder).expect("dir");
         std::fs::write(folder.join("RMS Express.exe"), b"MZ").expect("exe");
@@ -753,22 +891,26 @@ mod tests {
         let (mut daemon, dir) = daemon("point");
         daemon.hostapps.source = real_computer;
         let found = ok(call(&mut station, &mut daemon, "hostapps.find", json!({})));
-        let changes = &found["installs"][0]["program_changes"];
+        let plans = &found["installs"][0]["setups"][0]["plans"];
         assert_eq!(
-            changes.as_array().map(Vec::len),
+            plans[0]["program_changes"].as_array().map(Vec::len),
             Some(2),
-            "address and launch: {changes}"
+            "address and launch (the port is 8300 already): {}",
+            plans[0]["program_changes"]
+        );
+        assert_eq!(
+            plans[1]["program_changes"].as_array().map(Vec::len),
+            Some(5),
+            "and the radio's keying and control with Aether keying: {}",
+            plans[1]["program_changes"]
         );
         let name = folder.display().to_string();
+        let asked =
+            json!({ "folder": name, "setup": "N0CALL", "keying": "aether", "switch": true });
 
-        // running: refused, the file untouched
+        // running: refused, the file untouched, nothing remembered
         daemon.hostapps.running = it_runs;
-        let refused = call(
-            &mut station,
-            &mut daemon,
-            "hostapps.point",
-            json!({ "folder": name }),
-        );
+        let refused = call(&mut station, &mut daemon, "hostapps.setup", asked.clone());
         let error = refused.error.expect("refused");
         assert_eq!(error.code, "refused");
         assert!(
@@ -777,20 +919,18 @@ mod tests {
             error.message
         );
         assert_eq!(std::fs::read_to_string(&path).expect("read"), ini);
+        assert!(daemon.hostapps.set_up_of(&name, "N0CALL").is_none());
 
-        // closed: set to reach Aether, then imported and switched to in one go
+        // closed: set up and switched to in one go, keyed by Aether as the program did
         daemon.hostapps.running = nothing_runs;
-        let one = json!({
-            "imports": [{ "folder": name, "setup": "N0CALL", "point": true }],
-            "load": true,
-        });
-        let done = ok(call(&mut station, &mut daemon, "hostapps.import", one));
+        let done = ok(call(&mut station, &mut daemon, "hostapps.setup", asked));
         assert_eq!(
-            done["imported"][0]["pointed"]["changes"]
+            done["set_up"]["pointed"]["changes"]
                 .as_array()
                 .map(Vec::len),
-            Some(2)
+            Some(5)
         );
+        assert_eq!(done["set_up"]["by_hand"], json!([]), "nothing left by hand");
         let after = crate::ini::Ini::new(std::fs::read(&path).expect("read"));
         assert_eq!(
             after.get("Vara TNC", "TNC Address").as_deref(),
@@ -801,16 +941,134 @@ mod tests {
             after.get("Vara TNC", "Auto Launch Vara").as_deref(),
             Some("False")
         );
+        assert_eq!(after.get("Vara", "Model").as_deref(), Some("Manual"));
+        assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("None"));
+        assert_eq!(after.get("Vara", "PTT Port").as_deref(), Some("None"));
         assert!(folder.join("RMS Express.ini.aether.bak").is_file());
-        // planned from the program as it is now: it points at Aether, nothing more to change
-        let fresh = ok(call(&mut station, &mut daemon, "hostapps.find", json!({})));
-        let setup = &fresh["installs"][0]["setups"][0];
-        assert_eq!(setup["tncs"][0]["pointing"], "aether");
-        assert_eq!(fresh["installs"][0]["program_changes"], json!([]));
-        assert_eq!(daemon.config.regulatory.dial_hz, Some(7_102_000));
-        assert!(matches!(daemon.config.ptt, PttConfig::Host { .. }));
+        assert!(
+            matches!(daemon.config.ptt, PttConfig::Cat { .. }),
+            "{:?}",
+            daemon.config.ptt
+        );
+        let row = &done["hostapps"]["installs"][0];
+        assert_eq!(row["setups"][0]["set_up"]["keying"], "aether");
+        assert_eq!(row["setups"][0]["tncs"][0]["pointing"], "aether");
+        assert_eq!(
+            row["going_back"]["put_back"].as_array().map(Vec::len),
+            Some(5),
+            "{}",
+            row["going_back"]
+        );
+
+        go_back_leaving_what_the_operator_changed(&mut station, &mut daemon, &name, &path, &folder);
 
         let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Going back, after the operator changed one of the settings Aether wrote: that one is
+    /// left, the rest put back, the file kept, the profile kept.
+    fn go_back_leaving_what_the_operator_changed(
+        station: &mut Station<crate::ptt::NullPtt>,
+        daemon: &mut DaemonState,
+        name: &str,
+        path: &Path,
+        folder: &Path,
+    ) {
+        // the operator changes one of them in the program: going back leaves it
+        let edited = std::fs::read_to_string(path)
+            .expect("read")
+            .replace("Control Port=None", "Control Port=COM7");
+        std::fs::write(path, edited).expect("edit");
+        let back = json!({ "folder": name, "setup": "N0CALL" });
+        daemon.hostapps.running = it_runs;
+        let refused = call(station, daemon, "hostapps.restore", back.clone());
+        assert_eq!(refused.error.expect("refused").code, "refused");
+        daemon.hostapps.running = nothing_runs;
+        let back = ok(call(station, daemon, "hostapps.restore", back));
+        assert_eq!(back["put_back"].as_array().map(Vec::len), Some(4), "{back}");
+        assert_eq!(back["left"][0]["key"], "Control Port");
+        let after = crate::ini::Ini::new(std::fs::read(path).expect("read"));
+        assert_eq!(
+            after.get("Vara TNC", "TNC Address").as_deref(),
+            Some("192.168.1.9")
+        );
+        assert_eq!(
+            after.get("Vara TNC", "Auto Launch Vara").as_deref(),
+            Some("True")
+        );
+        assert_eq!(after.get("Vara", "Model").as_deref(), Some("Yaesu FTDX10"));
+        assert_eq!(
+            after.get("Vara", "PTT Port").as_deref(),
+            Some("Yaesu FTDX10")
+        );
+        assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("COM7"));
+        assert!(folder.join("RMS Express.ini.aether-undo.bak").is_file());
+        assert!(daemon.hostapps.originals(name).is_empty());
+        assert!(
+            daemon.profiles.find("Winlink Express N0CALL").is_some(),
+            "the profile stays"
+        );
+    }
+
+    #[test]
+    fn a_winlink_express_is_copied_beside_itself_and_found() {
+        let folder =
+            wle_folder().with_file_name(format!("aether-hostapps-copy-{}", std::process::id()));
+        std::fs::create_dir_all(folder.join("N0CALL")).expect("dir");
+        std::fs::write(folder.join("RMS Express.exe"), b"MZ").expect("exe");
+        std::fs::write(
+            folder.join("RMS Express.ini"),
+            "[Properties]\nCallsign=N0CALL\n[Vara TNC]\nTCP Port=8300\n",
+        )
+        .expect("ini");
+        std::fs::write(folder.join("N0CALL").join("mail.mime"), b"mail").expect("mail");
+        let mut station = station();
+        let (mut daemon, dir) = daemon("copy");
+        daemon.hostapps.source = added_only;
+        daemon.hostapps.running = nothing_runs;
+        let name = folder.display().to_string();
+        ok(call(
+            &mut station,
+            &mut daemon,
+            "hostapps.find",
+            json!({ "add": name }),
+        ));
+        let copied = ok(call(
+            &mut station,
+            &mut daemon,
+            "hostapps.copy",
+            json!({ "folder": name }),
+        ));
+        let to = copied["to"].as_str().expect("to").to_owned();
+        assert!(to.ends_with(" Aether"), "{to}");
+        assert_eq!(copied["copy"]["state"], "done", "{}", copied["copy"]);
+        assert!(Path::new(&to).join("N0CALL").join("mail.mime").is_file());
+        assert!(daemon.hostapps.take_news());
+        assert!(
+            daemon
+                .hostapps
+                .remembered
+                .folders
+                .iter()
+                .any(|f| same_path(Path::new(f), Path::new(&to))),
+            "remembered, so every find finds it"
+        );
+        let found = answer(&daemon);
+        let folders: Vec<&str> = found["installs"]
+            .as_array()
+            .expect("installs")
+            .iter()
+            .filter_map(|i| i["folder"].as_str())
+            .collect();
+        assert!(
+            folders
+                .iter()
+                .any(|f| same_path(Path::new(f), Path::new(&to))),
+            "{folders:?}"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&to);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

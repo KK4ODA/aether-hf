@@ -362,9 +362,10 @@ pub fn plan(
     match (keying, radio) {
         (Some(Keying::Program), _) => {
             changes.insert("ptt.kind".into(), json!("host"));
-            plan.program_must.push(advice(
-                "Radio setup as it is",
-                "it keys the radio on Aether's PTT ON and tunes it, as it did with VARA",
+            plan.notes.push(advice(
+                "Keeps its radio setup",
+                "it keys the radio on Aether's PTT ON and tunes it, as it did with VARA: \
+                 nothing in its radio setup changes",
             ));
             program_dial(&mut plan, &mut changes, setup, install.program);
         }
@@ -383,7 +384,7 @@ pub fn plan(
                     .as_deref()
                     .is_some_and(|c| c.eq_ignore_ascii_case(port));
                 if shared {
-                    plan.program_must.push(advice(
+                    plan.program_must.push(settable(
                         "Radio Manual, PTT port None",
                         format!(
                             "Aether keys on {port}, which is also the radio's CAT port, \
@@ -391,7 +392,7 @@ pub fn plan(
                         ),
                     ));
                 } else {
-                    plan.program_must.push(advice(
+                    plan.program_must.push(settable(
                         "PTT port None",
                         format!(
                             "Aether keys on {port}; the program can keep its frequency \
@@ -414,7 +415,7 @@ pub fn plan(
                 {
                     changes.insert("ptt.civ_address".into(), json!(address));
                 }
-                plan.program_must.push(advice(
+                plan.program_must.push(settable(
                     "Radio Manual, PTT port None",
                     format!(
                         "Aether keys the radio by CAT on {port}, and only one program can \
@@ -471,21 +472,11 @@ fn program_dial(
              rules check stays on",
         )),
         [centre] => {
+            // said once, beside the switch that declares it: the panel's *Switch to it now and
+            // set the dial to …*
             let dial = centre.saturating_sub(CENTRE_ABOVE_DIAL_HZ);
             plan.dial_hz = Some(dial);
             changes.insert("regulatory.sideband".into(), json!("usb"));
-            plan.notes.push(advice(
-                format!("Rules check at {} MHz", mhz(dial)),
-                format!(
-                    "Aether reads no dial with the program keying, so it judges every \
-                     transmission with the dial at {} MHz: the program's channel, {} MHz, less \
-                     1.5 kHz, on the upper sideband. Set when you switch to the profile here. \
-                     When you move the program to another channel, change Dial is at on the \
-                     Session tab too",
-                    mhz(dial),
-                    mhz(*centre)
-                ),
-            ));
         }
         several => {
             changes.insert("regulatory.profile".into(), json!("none"));
@@ -572,12 +563,11 @@ mod tests {
             "the channel's centre less 1.5 kHz"
         );
         assert!(
-            plan.notes
-                .iter()
-                .any(|n| n.what == "Rules check at 7.082 MHz"),
+            plan.notes.iter().any(|n| n.what == "Keeps its radio setup"),
             "{:?}",
             plan.notes
         );
+        assert!(plan.program_must.is_empty(), "{:?}", plan.program_must);
         assert!(plan.refused.is_none());
     }
 
@@ -763,8 +753,17 @@ mod tests {
             "what Aether can write for it: {:?}",
             p.program_must
         );
-        let radio = p.program_must.iter().find(|m| m.what.contains("Radio"));
-        assert!(radio.is_some_and(|m| !m.settable), "{:?}", p.program_must);
+        let radio = p.notes.iter().find(|m| m.what.contains("radio setup"));
+        assert!(radio.is_some_and(|m| !m.settable), "{:?}", p.notes);
+        let theirs = plan(&install(&s), &s, Some(Keying::Aether), &aether());
+        assert!(
+            theirs
+                .program_must
+                .iter()
+                .any(|m| m.what.contains("Manual") && m.settable),
+            "the radio's keying is written for it too: {:?}",
+            theirs.program_must
+        );
         assert!(is_aether_app(
             "C:\\Users\\op\\AppData\\Local\\Aether HF\\Aether-HF.exe"
         ));

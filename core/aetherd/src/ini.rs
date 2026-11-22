@@ -168,6 +168,23 @@ impl Ini {
         found
     }
 
+    /// Take a setting out, its line and line end with it, and say whether it was there: a
+    /// setting put back to how a program had it, when the program had none.
+    pub fn remove(&mut self, section: &str, key: &str) -> bool {
+        let mut inside = false;
+        for (start, end) in self.lines() {
+            let line = &self.bytes[start..end];
+            if section_of(line).is_some() {
+                inside = heads(line, section);
+            } else if inside && key_end(line, key).is_some() {
+                let (next, _) = after(&self.bytes, end);
+                self.replace(start, next.min(self.bytes.len()), b"");
+                return true;
+            }
+        }
+        false
+    }
+
     /// Set a setting, and say whether that changed the file. One not there yet goes at its
     /// section's end, and a section not there yet at the file's.
     pub fn set(&mut self, section: &str, key: &str, value: &str) -> bool {
@@ -219,6 +236,11 @@ mod tests {
         assert_eq!(ini.sections(), ["Main", "N0CALL", "Vara"]);
         assert_eq!(ini.get("vara", "x"), None);
         assert_eq!(ini.get("MAIN", "A").as_deref(), Some("1"));
+        let mut edited = Ini::new(b"[A]\r\nx=1\r\ny=2\r\n[B]\r\nx=3".to_vec());
+        assert!(edited.remove("a", "X"));
+        assert!(edited.remove("B", "x"), "the last line, with no line end");
+        assert!(!edited.remove("B", "x"));
+        assert_eq!(edited.bytes(), b"[A]\r\ny=2\r\n[B]\r\n");
         assert!(
             Ini::new(Vec::new()).sections().is_empty(),
             "{:?}",

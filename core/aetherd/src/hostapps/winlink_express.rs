@@ -269,7 +269,57 @@ pub fn point(files: &Files, target: &super::point::Target) -> Vec<super::point::
                   own and stays",
         });
     }
+    if target.aether_keys {
+        aether_keys(&ini, &mut edits);
+    }
     edits
+}
+
+/// Winlink Express's keying handed to Aether, in its *Radio Setup* (`[Vara]`, shared by every
+/// callsign): its PTT port *None*; and when Aether keys on the radio's control port (a CAT
+/// command, or a line of that port), its radio *Manual* and control port *None* too, since
+/// only one program can hold a port. A line of a port of its own leaves it its radio control.
+fn aether_keys(ini: &Ini, edits: &mut Vec<super::point::Edit>) {
+    use super::point::Edit;
+    const S: &str = "Vara";
+    const CONTROL: &str = "Aether keys the radio on its control port, and only one program can \
+                           hold a port: Winlink Express stops controlling the radio";
+    let control = something(ini.get(S, "Control Port"));
+    let ptt = something(ini.get(S, "PTT Port")).filter(|p| !p.eq_ignore_ascii_case("external"));
+    if ptt.is_some() {
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "PTT Port",
+            to: "None".to_owned(),
+            why: "Aether keys the radio: Winlink Express leaves the keying to it",
+        });
+    }
+    let own_line = ptt.as_deref().is_some_and(|p| {
+        is_serial_port(p)
+            && control
+                .as_deref()
+                .is_none_or(|c| !c.eq_ignore_ascii_case(p))
+    });
+    if own_line {
+        return;
+    }
+    edits.push(Edit {
+        file: SETTINGS,
+        section: S,
+        key: "Model",
+        to: "Manual".to_owned(),
+        why: CONTROL,
+    });
+    if control.is_some() {
+        edits.push(Edit {
+            file: SETTINGS,
+            section: S,
+            key: "Control Port",
+            to: "None".to_owned(),
+            why: CONTROL,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +433,51 @@ mod tests {
         assert_eq!(bare.setups[0].radio, None);
         assert!(bare.setups[0].tncs.is_empty(), "{:?}", bare.setups[0].tncs);
         assert_eq!(bare.notes.len(), 1, "{:?}", bare.notes);
+    }
+
+    #[test]
+    fn aether_keying_takes_the_keying_and_the_radio_when_they_share_a_port() {
+        let target = crate::hostapps::point::Target {
+            host_port: 8300,
+            app: None,
+            aether_keys: true,
+        };
+        let changed = |ptt: &str, port: &str| -> Vec<(String, String)> {
+            let text = format!(
+                "[Properties]\nCallsign=N0CALL\n[Vara]\nModel=Kenwood TS-480\n\
+                 Control Port={port}\nPTT Port={ptt}\nPTT RTS=True\n\
+                 [Vara TNC]\nTCP Port=8300\nTNC Address=127.0.0.1\nAuto Launch Vara=False\n"
+            );
+            crate::hostapps::point::changes(Program::WinlinkExpress, &files(&text), &target)
+                .into_iter()
+                .map(|c| (c.key, c.to))
+                .collect()
+        };
+        let own = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+        // a CAT command: no keying, the radio Manual, no control port
+        assert_eq!(
+            changed("Kenwood TS-480", "COM4"),
+            [
+                own("PTT Port", "None"),
+                own("Model", "Manual"),
+                own("Control Port", "None"),
+            ]
+        );
+        // RTS on the control port itself (a DigiRig): the same
+        assert_eq!(changed("COM9", "COM9").len(), 3);
+        // RTS on a port of its own: Winlink Express keeps its frequency control
+        assert_eq!(changed("COM9", "COM4"), [own("PTT Port", "None")]);
+        // the program keying: its radio setup is not touched
+        let theirs = crate::hostapps::point::Target {
+            aether_keys: false,
+            ..target
+        };
+        let text = "[Properties]\nCallsign=N0CALL\n[Vara]\nModel=Kenwood TS-480\n\
+                    Control Port=COM4\nPTT Port=Kenwood TS-480\n";
+        assert!(
+            crate::hostapps::point::changes(Program::WinlinkExpress, &files(text), &theirs)
+                .is_empty()
+        );
     }
 
     #[test]

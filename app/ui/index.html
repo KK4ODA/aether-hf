@@ -1022,7 +1022,7 @@
                 <button class="small quiet" id="btn-varac-switch" title="Switch this station to the Aether profile VarAC default" hidden>Switch to VarAC default</button>
               </div>
               <div class="field-group" id="hostapps-group" role="group" aria-labelledby="hostapps-title" hidden>
-                <h4 class="sub-heading" id="hostapps-title" title="Winlink Express, RMS Trimode and RMS Packet on this computer: Aether reads each one's radio and TNC settings into an Aether profile. Nothing is written to the programs' files">Winlink programs</h4>
+                <h4 class="sub-heading" id="hostapps-title" title="Winlink Express, RMS Trimode and RMS Packet on this computer. Tick a row to set it up for Aether: its Aether profile is made from the program's radio and TNC settings, and the program's own settings are changed to reach Aether, after a window that says what will change. Untick it to go back to VARA">Winlink programs</h4>
                 <div class="row">
                   <label for="btn-hostapps-find" title="Every install of Winlink Express, RMS Trimode and RMS Packet: their usual folders, the installed programs list, Start menu and desktop shortcuts, the programs running now, and the folders added here">Find programs</label>
                   <button class="small" id="btn-hostapps-find" title="Look for every install of Winlink Express, RMS Trimode and RMS Packet on this computer again">Find</button>
@@ -1034,29 +1034,23 @@
                   <button class="small quiet" id="btn-hostapps-add" title="Look in this folder every time, too">Add</button>
                 </div>
                 <div class="table-scroll hostapps-scroll" id="hostapps-pane" hidden>
-                  <table class="hostapps" title="Each setup of each install found: one profile each. Tick the ones to import">
+                  <table class="hostapps" title="Each setup of each install found. Ticked: set up for Aether. Tick one to set it up, untick it to go back to VARA">
                     <thead>
                       <tr>
-                        <th scope="col" title="Tick to make an Aether profile of this setup">Import</th>
+                        <th scope="col" title="Ticked: set up for Aether, its profile made and the program set to reach Aether. Tick to set it up; untick to go back to VARA. A window says what will change first">Set up</th>
                         <th scope="col" title="The program">Program</th>
                         <th scope="col" title="The callsign the program runs as in this setup; the profile is named for it">Callsign</th>
                         <th scope="col" title="The program's version">Version</th>
                         <th scope="col" title="Whether the program is running now">Running</th>
                         <th scope="col" title="The TNC address and port the program points at: Aether when it is this Aether's">TNC</th>
-                        <th scope="col" title="Who keys the radio in the profile: the program on Aether's PTT ON (Host program), or Aether as the program did">Keying</th>
+                        <th scope="col" title="Who keys the radio once it is set up: the program, on Aether's PTT ON, or Aether, as the program did">Keying</th>
                         <th scope="col" title="The install's folder">Folder</th>
                       </tr>
                     </thead>
                     <tbody id="hostapps-rows"></tbody>
                   </table>
                 </div>
-                <ul class="hostapps-preview" id="hostapps-preview" title="What each ticked profile will set, and what the program must say for it to work" hidden></ul>
-                <div class="row" id="hostapps-import-row" hidden>
-                  <label for="btn-hostapps-import" title="Save an Aether profile for each ticked setup">Profiles</label>
-                  <button class="small" id="btn-hostapps-import" title="Save an Aether profile for each ticked setup, named for the program and the callsign; one made before is brought up to date and keeps its sound card and levels. The station keeps its profile" disabled>Import</button>
-                  <button class="small quiet" id="btn-hostapps-import-load" title="Save the ticked setup's profile and switch this station to it" disabled>Import and switch</button>
-                  <span class="sub" id="hostapps-note" title="What the last import did" role="status" aria-live="polite"></span>
-                </div>
+                <p class="sub hostapps-note" id="hostapps-note" title="What the last setup did" role="status" aria-live="polite"></p>
               </div>
             </li>
 
@@ -1301,5 +1295,19 @@
     </footer>
 
     <script type="module" src="app.js"></script>
+
+    <dialog class="confirm-dialog" id="hostapps-dialog" aria-labelledby="hostapps-dialog-title">
+      <h3 id="hostapps-dialog-title">Set up for Aether</h3>
+      <div class="confirm-warning" id="hostapps-dialog-warning" title="What pressing the button changes on this computer" hidden></div>
+      <div id="hostapps-dialog-body"></div>
+      <label class="confirm-switch" id="hostapps-dialog-switch-row"><input type="checkbox" id="hostapps-dialog-switch" checked /> <span id="hostapps-dialog-switch-text">Switch to it now</span></label>
+      <p class="confirm-error" id="hostapps-dialog-error" role="alert" hidden></p>
+      <div class="confirm-actions">
+        <button type="button" class="primary" id="hostapps-dialog-go">Set up</button>
+        <button type="button" id="hostapps-dialog-copy" hidden>Make a copy first</button>
+        <button type="button" class="quiet" id="hostapps-dialog-cancel" title="Close this window: nothing changes">Cancel</button>
+      </div>
+      <p class="sub" id="hostapps-dialog-copy-note" hidden></p>
+    </dialog>
   </body>
 </html>

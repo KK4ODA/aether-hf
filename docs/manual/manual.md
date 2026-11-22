@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.15.5 |
-| **Updated** | 2026-11-21 |
+| **Version** | 1.16.0 |
+| **Updated** | 2026-11-22 |
 | **Describes** | Aether HF 0.2.0-beta.169 |
 | **Licence** | CC BY 4.0 |
 
@@ -611,9 +611,9 @@ quiet leaves the signal inside the sound card's own noise.
   *VarAC default* ([VarAC in one step](#varac-in-one-step)). Once they are made the button reads
   **Update**. **VarAC profile** says whether they are there and up to date. Shown on Windows only.
 - **Winlink programs**: every install of Winlink Express, RMS Trimode and RMS Packet on the
-  computer, one row per callsign or setup, and **Import**, which makes an Aether profile of each
-  row ticked ([Finding Winlink's programs](#finding-winlinks-programs)). **Find** looks again; **Add
-  folder** adds a folder Find missed. Shown on Windows only.
+  computer, one row per callsign or setup. Tick a row to set it up for Aether, untick it to go
+  back to VARA ([Finding Winlink's programs](#finding-winlinks-programs)). **Find** looks again;
+  **Add folder** adds a folder Find missed. Shown on Windows only.
 
 ### Step 6. Save
 
@@ -1234,47 +1234,67 @@ levels in *VarAC default* are kept too.
 
 ### Finding Winlink's programs
 
-On Windows, Aether finds Winlink Express, RMS Trimode and RMS Packet and reads each one's radio and
-TNC settings into an Aether profile. When a program must change to reach Aether, Aether can make
-that change in the program's own settings for you, with the program closed.
+On Windows, Aether finds Winlink Express, RMS Trimode and RMS Packet. Tick a program's row and it
+is set up for Aether in one step: Aether changes the program's own settings so it reaches Aether,
+makes an Aether profile from the program's radio and TNC settings, and switches to it. A window
+says what will change before anything does. Untick the row to go back to VARA.
 
-![Setup step 5's Winlink programs: Find, Add folder, and a table of six setups in four installs: Winlink Express N1CALL and N2CALL in C:\RMS Express, both pointing at Aether on 127.0.0.1:8300, N1CALL in a test copy pointing at port 8310, the RMS Trimode gateway N1CALL-1 pointing at Aether, and RMS Packet's VARA FM channel and packet port for N1CALL-10, which cannot be ticked; three rows ticked, Winlink Express keyed by the host program and by Aether, and the Trimode gateway; under it what each profile will set (callsign, Host programs on, bandwidth, for the gateway automatic control and wait for clear, keying, then the sideband and the dial for the rules check or the CAT port and speed), for the gateway a ticked Set it in RMS Trimode with the program path it will write, and, in amber, what the program must say](screens/hostapps.png)
+![Setup step 5's Winlink programs: Find, Add folder, and a table of six setups in four installs. Winlink Express N1CALL in C:\RMS Express is ticked: set up for Aether, keyed by Winlink Express. N2CALL in the same install, a test copy of Winlink Express in D:\Radio\WLE test pointing at port 8310, and the RMS Trimode gateway N1CALL-1 are not ticked, each with a Keying list naming the program. RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked](screens/hostapps.png)
 
-*Figure 34. Winlink's programs found, three setups ticked, and what each profile will set.*
+*Figure 34. Winlink's programs found. Winlink Express N1CALL is set up for Aether.*
+
+![The window for the test copy of Winlink Express in D:\Radio\WLE test: an amber warning that Winlink Express's settings in that folder will change and the file is kept as RMS Express.ini.aether.bak; In Winlink Express, Auto Launch Vara True to False; the Aether profile Winlink Express N1CALL with its callsign, Host programs on, bandwidth 2300 Hz, host port 8310, keyed by Winlink Express, sideband USB, and two notes; Switch to it now and set the dial to 7.082 MHz, ticked; the buttons Set up, Make a copy first and Cancel; and a line saying a copy goes to D:\Radio\WLE test Aether](screens/hostapps-setup.png)
+
+*Figure 35. What setting up the test copy will change.*
 
 1. Setup step 5, **Winlink programs**. The list fills by itself when the window opens: one row per
    setup, with the program, the callsign, the version, whether it is running, the TNC port it
    points at (**Aether** when it is this station's) and the folder. Winlink Express keeps several
    callsigns in one install, and each is a row. **Find** looks again. If a copy is missing, type its
    folder in **Add folder** and press **Add**: it is looked in every time after.
-2. Tick the rows you want. Under the list, each ticked row shows the profile's name and what it
-   will set (callsign, Host programs, bandwidth, keying, rules, port, the dial), and in amber what
-   the program must say for it to work. Hold the pointer on any of them to see why.
-3. **Set it in** *the program*: shown when the program's own settings need a change to reach
-   Aether. Winlink Express's VARA TNC on another computer, or its *Auto Launch Vara* left on, and
-   the program RMS Trimode starts as its VARA. Each change shows as it is and as it will be. Left
-   ticked, **Import** writes them into the program's settings file and keeps the file as it was
-   beside it (`RMS Express.ini.aether.bak`). Only those settings change. Close the program first:
-   it writes its settings back when it closes, so the box cannot be ticked while it runs. Nothing
-   that publishes a gateway's channels to Winlink is ever changed.
-4. **Keying** says who keys the radio:
-   - **Host program** (the default when the program keys the radio itself): the program keeps its
-     radio setup, keys on Aether's `PTT ON` and tunes the radio, as it did with VARA. Aether reads no
-     dial, so it takes the program's channel, less 1.5 kHz, as the dial (**Dial is at**), and the
-     rules check stays on. The dial is set when you use **Import and switch**. When you move the
-     program to another channel, change **Dial is at** on the Session tab too. A gateway that scans
-     several channels leaves the rules at *None*: Aether cannot tell which channel it is on.
-   - **Aether**: Aether keys the radio the way the program did, and the rules check stays on. Set
-     the program's radio to *Manual* and its PTT port to *None*.
+2. Choose who keys the radio in **Keying**, before you tick:
+   - **The program's name** (the default when it keys the radio itself): the program keeps its
+     radio setup, keys on Aether's `PTT ON` and tunes the radio, as it did with VARA. Nothing in
+     its radio setup changes.
+   - **Aether**: Aether keys the radio the way the program did. The program's PTT port is set to
+     *None*, and when Aether keys on the radio's control port, its radio to *Manual* too, because
+     only one program can hold a port. The program then no longer tunes the radio.
    - **as it is**: the program keys by VOX or controls no radio, and Aether's keying is left alone.
-5. **Import** saves a profile for each ticked row, named for the program and the callsign
-   (*Winlink Express KK4ODA*). **Import and switch** saves one and switches to it. Importing again
-   brings a profile up to date and keeps its sound card and levels.
+3. Tick the row. A window shows what will happen ([Figure 35](#finding-winlinks-programs)):
+   - **In** *the program*: each of its settings Aether will change, as it is and as it will be.
+     *Nothing to change* means it reaches Aether as it is.
+   - **Aether profile** *name*: what the profile holds. It is named for the program and the
+     callsign (*Winlink Express KK4ODA*). Its sound card and levels are this station's, or the
+     profile's own when it was made before.
+   - **Still to do in** *the program*, in amber, only when there is something Aether cannot change
+     for you. Do it in the program yourself.
+   - **Switch to it now**: ticked, the station switches to the profile. When the program keys the
+     radio, Aether cannot read the dial, so it says **and set the dial to** *the program's channel
+     less 1.5 kHz*: the rules check uses that dial. The dial is set only by this switch. If you
+     switch to the profile later from the Profile bar, or move the program to another channel, set
+     **Dial is at** on the Session tab. A gateway that scans several channels has its rules set to
+     *None*: Aether cannot tell which channel it is on.
+4. Press **Set up**. Close the program first: it writes its settings back when it closes, so a
+   change made while it runs would be lost. If it is still running, the window says so and stays
+   open: close it and press **Set up** again. The settings file as it was is kept beside it
+   (`RMS Express.ini.aether.bak`). Only the settings shown change. Nothing that publishes a
+   gateway's channels to Winlink is ever changed.
+5. **Make a copy first** (Winlink Express only) copies the whole folder, mail included, to a new
+   folder beside it (*C:\RMS Express Aether*), and sets up the copy instead. The copy you started
+   from stays as it is for VARA. Start Winlink Express from the new folder to use Aether. From
+   then on each copy has its own mail: a message downloaded in one is not in the other.
+
+**Going back to VARA.** Untick the row and press **Go back to VARA**. Aether puts back each
+setting it changed, as it was before, unless you changed it since: those are listed and left as
+you have them. The file as it was is kept as `RMS Express.ini.aether-undo.bak`. The Aether
+profile stays. Winlink Express's settings are shared by all its callsigns, so while another
+callsign of the same install is still set up for Aether, nothing in the program changes. To
+change who keys the radio, go back to VARA and set the row up again.
 
 If the program points at another port on this computer, the profile makes Aether listen there, so
 the program needs no change. A gateway's profile (RMS Trimode) also sets **Control** to
-*Automatic*, so only the program answers calls, and **Wait for clear** on. A setup above 30 MHz, or one whose only TNC is VARA FM or AGW, waits
-for Aether FM: its box cannot be ticked.
+*Automatic*, so only the program answers calls, and **Wait for clear** on. A setup above 30 MHz, or
+one whose only TNC is VARA FM or AGW, waits for Aether FM: its box cannot be ticked.
 
 [VarAC, Winlink Express and Pat with Aether](../user/host-programs.md) has each program's settings,
 screen by screen.
@@ -1283,7 +1303,7 @@ screen by screen.
 
 ![Two rows. Winlink: your station with Winlink Express and Aether, by radio to a gateway with RMS Trimode and Aether, then the Internet to Winlink's servers. RadioPost: your station with RadioPost and Aether, by radio to RadioPost Gateway and Aether, then the Internet to your post office](fig/mail.svg)
 
-*Figure 35. Mail by radio, through a gateway: Winlink above, RadioPost below.*
+*Figure 36. Mail by radio, through a gateway: Winlink above, RadioPost below.*
 
 An Aether gateway runs RMS Trimode beside Aether; a station in the field runs Winlink Express with
 Aether. Set the gateway's Aether to *Automatic* control (Setup step 1) when nobody is at its radio.
@@ -1424,7 +1444,7 @@ is to carry RadioPost's email over FM, simplex and through repeaters.
 
 ![Aether FM as planned: simplex between two FM radios through the voice path or a 9600 data port; the far station measuring your level and telling you; through a repeater, off by default; and packet radio](fig/fm.svg)
 
-*Figure 36. Aether FM as planned.*
+*Figure 37. Aether FM as planned.*
 
 What has been decided:
 
@@ -1523,7 +1543,7 @@ frames at a good SNR, check the receive level, the drive and the receive filter.
 
 ![Three panels: the radio's filter passing all of Aether's signal; a filter moved down that cuts the top; a filter moved up that cuts the bottom, with the knob to turn for each](fig/filter.svg)
 
-*Figure 37. When the radio's receive filter cuts the signal.*
+*Figure 38. When the radio's receive filter cuts the signal.*
 
 **Checking the radio's receive filter.** Open the Diagnostics tab and look at the waterfall. The red lines
 are the edges of Aether's signal, and the band's noise should look even between them. Aether does not
@@ -1723,3 +1743,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.15.3 | 2026-11-21 | [Radio dial](#radio-dial): a scan kept on a dial past its listen says in the Log how long it stayed and what kept it there; things heard again and again keep it up to about 3½ minutes (ADR-0129 §16). |
 | 1.15.4 | 2026-11-21 | [Keying and drive level](#keying-and-drive-level): a **Tuner tone** or **Set drive** refused for a busy channel says why, in the **Busy** lamp's words, or says that a session between other stations heard moments before holds the channel, which the lamp does not show; in a narrow Compact or Mini window the refusal hides the lamps while it shows. |
 | 1.15.5 | 2026-11-21 | [Radio dial](#radio-dial): signals a scan hears but cannot read keep it on a dial about 40 s at most a visit, where they had kept it up to 3½ minutes on a busy band, and the Log says when that ended a visit; the **Busy** lamp does not hold the scan (ADR-0129 §17). |
+| 1.16.0 | 2026-11-22 | [Finding Winlink's programs](#finding-winlinks-programs): ticking a program's row sets it up for Aether in one step, after a window that says what will change: its settings changed to reach Aether (with Aether keying, its PTT port and, on a shared port, its radio control too), its Aether profile made, and the station switched to it with the program's dial; **Make a copy first** sets up a copy of Winlink Express and leaves the one you have for VARA; unticking goes back to VARA. **Import**, **Import and switch** and **Set it in** are gone; **Keying** names the program. |

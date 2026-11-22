@@ -4684,49 +4684,141 @@ table.hostapps select {
   height: var(--control-h-sm);
 }
 
-.hostapps-preview {
-  list-style: none;
-  margin: 0 0 var(--s2);
-  padding: 0;
-  display: grid;
-  gap: var(--s2);
+.hostapps-note {
+  margin: var(--s2) 0 0;
 }
 
-.hostapps-preview li {
-  display: grid;
-  gap: var(--s1);
+.hostapps-note:empty {
+  display: none;
+}
+
+.hostapps-note[data-state="error"] {
+  color: var(--status-error);
+}
+
+.hostapps-note[data-state="warn"] {
+  color: var(--status-warning);
+}
+
+/* a window that asks before something changes on this computer: Winlink's programs set up
+   for Aether, or put back to VARA */
+dialog.confirm-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: var(--card-pad-y) var(--card-pad-x);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+}
+
+dialog.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.confirm-dialog h3 {
+  margin: 0 0 var(--s3);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.confirm-warning {
+  margin: 0 0 var(--s3);
+  padding: var(--s1) 0 var(--s1) var(--s2);
+  border-left: 2px solid var(--status-warning);
+  color: var(--status-warning);
   font-size: var(--fs-sm);
 }
 
-.hostapps-sets,
-.hostapps-says,
-.hostapps-writes {
+.confirm-warning p {
+  margin: 0;
+}
+
+.confirm-warning p + p {
+  margin-top: var(--s1);
+}
+
+.confirm-error {
+  margin: 0 0 var(--s2);
+  color: var(--status-error);
+  font-size: var(--fs-sm);
+}
+
+.confirm-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: var(--s1) 0 var(--s3);
+  font-size: var(--fs-sm);
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+.confirm-dialog .sub {
+  margin: var(--s2) 0 0;
+}
+
+.hostapps-section,
+#hostapps-dialog-body > .hostapps-chips {
+  margin: 0 0 var(--s3);
+}
+
+.hostapps-section h4 {
+  margin: 0 0 var(--s1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.hostapps-section[data-kind="by-hand"] h4 {
+  color: var(--status-warning);
+}
+
+.hostapps-changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.hostapps-changes .from {
+  color: var(--text-2);
+}
+
+.hostapps-changes .none {
+  font-family: var(--face);
+  color: var(--text-2);
+}
+
+.hostapps-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--s1) var(--s2);
+  font-size: var(--fs-sm);
 }
 
-.hostapps-preview .setting {
+.hostapps-chips .setting {
   padding: 1px 8px;
   border: 1px solid var(--border);
   color: var(--text);
 }
 
-.hostapps-preview .setting[data-kind="program"] {
+.hostapps-chips .setting[data-kind="note"] {
+  color: var(--text-2);
+}
+
+/* amber only for what the operator must still do by hand */
+.hostapps-chips .setting[data-kind="by-hand"] {
   border-color: var(--status-warning);
   color: var(--status-warning);
-}
-
-.hostapps-writes {
-  align-items: center;
-}
-
-.hostapps-writes label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.hostapps-preview .setting[data-kind="note"] {
-  color: var(--text-2);
 }

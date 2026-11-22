@@ -5544,31 +5544,41 @@ function wireVarac() {
 
 // Winlink's programs found on this computer (`hostapps.find`, ADR-0133): every install of
 // Winlink Express, RMS Trimode and RMS Packet, one row per setup — a Winlink Express callsign,
-// a gateway — with the port it points at. A ticked row shows what its profile will set and
-// what the program must say; Import saves them. The modem finds off its loop: the first
-// answer may be empty, and a `hostapps` event brings the result.
+// a gateway — with the port it points at. A row's box says whether the setup is set up for
+// Aether. Ticking it sets it up in one step after a window that says what will change: the
+// program's settings written so it reaches Aether, its Aether profile made, the station
+// switched to it. Unticking it goes back to VARA: the settings Aether wrote are put back
+// (ADR-0133 §8). The modem finds off its loop: the first answer may be empty, and a
+// `hostapps` event brings the result.
 
 let hostapps = null;
-// the rows ticked, by folder and setup, with the keying chosen for each
-const hostappsTicked = new Map();
-// the installs whose settings are not to be written, by folder: unticked by the operator
-const hostappsLeave = new Set();
+// the keying chosen for a row not set up yet, by folder and setup
+const hostappsKeying = new Map();
+// a copy under way, and the setup to set up in it once it is found
+let hostappsAfterCopy = null;
+// what the window's buttons do, for the window open now
+let hostappsDialogRun = null;
 
+// who keys the radio, named for the program that would
 const HOSTAPPS_KEYING = {
-  program: ["Host program", "The program keys the radio on Aether's PTT ON and tunes it, as it did with VARA: nothing in it changes. Aether reads no dial, so its rules check judges at the program's channel, declared as the dial when you switch to the profile here"],
-  aether: ["Aether", "Aether keys the radio as the program did, and its rules check stays on; the program's radio must be Manual and its PTT port None"],
+  program: (name) => [name, `${name} keys the radio on Aether's PTT ON and tunes it, as it did with VARA: nothing in its radio setup changes`],
+  aether: (name) => ["Aether", `Aether keys the radio as ${name} did; ${name} gives up its keying, and its radio control when that is on the same port`],
 };
 
 // a profile's setting as the panel names it, with where it lives in Setup
-function hostappsSetting(key, value) {
+function hostappsSetting(key, value, program) {
   const yes = value ? "on" : "off";
+  if (key === "ptt.kind") {
+    return value === "host"
+      ? ["Keyed by", program, `Setup step 2: radio control Host program. ${program} keys the radio on Aether's PTT ON`]
+      : ["Keyed by Aether:", { cat: "CAT", serial: "serial line" }[value] ?? value, "Setup step 2: radio control"];
+  }
   const named = {
     callsign: ["Callsign", value, "Setup step 1: the callsign the station answers to"],
     "host.enabled": ["Host programs", yes, "Setup step 5: the VARA-compatible interface the program connects to"],
     "kiss.enabled": ["KISS programs", yes, "Setup step 5: the KISS port the program connects to"],
     "radio.bandwidth": ["Bandwidth", `${value} Hz`, "Setup step 4: 2300 Hz for VARA's 2300 and 2750"],
     "host.bind": ["Host port", String(value).split(":").pop(), "Setup step 5: the port Aether listens on for the program, where the program points"],
-    "ptt.kind": ["Keying", { host: "Host program", cat: "CAT", serial: "Serial line", none: "None" }[value] ?? value, "Setup step 2: radio control"],
     "ptt.port": ["Port", value, "Setup step 2: the radio's port"],
     "ptt.protocol": ["CAT", String(value).charAt(0).toUpperCase() + String(value).slice(1), "Setup step 2: the radio's command set"],
     "ptt.baud": ["Baud", String(value), "Setup step 2: the CAT port's speed, as the program had it"],
@@ -5584,6 +5594,12 @@ function hostappsSetting(key, value) {
 
 function hostappsKey(folder, setup) {
   return `${folder}\u0000${setup}`;
+}
+
+// a folder as Windows compares one: in any case, either slash, no trailing slash
+function samePath(a, b) {
+  const key = (p) => String(p ?? "").replace(/\//g, "\\").toLowerCase().replace(/\\+$/, "");
+  return key(a) === key(b);
 }
 
 async function findHostapps(params = {}) {
@@ -5604,7 +5620,7 @@ async function findHostapps(params = {}) {
   }
 }
 
-// the plan a row will import: the keying ticked, else the default
+// the plan a row will set up with: the keying chosen, else the default
 function hostappsPlan(setup, keying) {
   const plans = setup.plans ?? [];
   return plans.find((plan) => plan.keying === keying) ?? plans[0] ?? null;
@@ -5621,6 +5637,13 @@ function hostappsTncText(setup) {
     serial: [where, "It points at a serial port"],
   }[tnc.pointing] ?? [where, "Where it points"];
   return said;
+}
+
+function hostappsNote(text, state = "") {
+  const note = $("hostapps-note");
+  note.textContent = text;
+  note.title = text || "What the last setup did";
+  note.dataset.state = state;
 }
 
 function renderHostapps(answer) {
@@ -5650,14 +5673,20 @@ function renderHostapps(answer) {
       const tick = document.createElement("input");
       tick.type = "checkbox";
       const refused = (setup.plans ?? [])[0]?.refused;
+      const done = setup.set_up;
       tick.disabled = Boolean(refused);
-      tick.checked = hostappsTicked.has(key) && !refused;
-      tick.title = refused ? `No profile: ${refused}` : `Make the profile ${(setup.plans ?? [])[0]?.profile ?? ""}`;
-      tick.setAttribute("aria-label", `Import ${install.program_name} ${setup.name}`);
-      tick.addEventListener("change", () => {
-        if (tick.checked) hostappsTicked.set(key, hostappsTicked.get(key) ?? (setup.plans ?? [])[0]?.keying ?? null);
-        else hostappsTicked.delete(key);
-        renderHostappsPreview();
+      tick.checked = Boolean(done);
+      tick.title = refused
+        ? `Cannot be set up: ${refused}`
+        : done
+          ? `Set up for Aether: profile ${done.profile}. Untick to go back to VARA`
+          : `Tick to set up ${install.program_name} ${setup.name} for Aether: a window says what will change first`;
+      tick.setAttribute("aria-label", `${install.program_name} ${setup.name} set up for Aether`);
+      // the box shows what is so: it changes only once the setup, or going back, is done
+      tick.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (done) openHostappsRestore(install, setup);
+        else openHostappsSetup(install, setup, hostappsKeying.get(key) ?? (setup.plans ?? [])[0]?.keying ?? null);
       });
       tickCell.append(tick);
       const cell = (text, title) => {
@@ -5672,28 +5701,24 @@ function renderHostapps(answer) {
       if (tncText.endsWith("Aether")) tncCell.dataset.state = "ok";
       const keyingCell = document.createElement("td");
       const keyings = (setup.plans ?? []).map((plan) => plan.keying).filter(Boolean);
-      if (keyings.length) {
+      if (done) {
+        const [text, title] = done.keying ? HOSTAPPS_KEYING[done.keying](install.program_name) : ["as it is", "Aether's keying was left as it is"];
+        keyingCell.textContent = text;
+        keyingCell.title = `${title}. To change who keys the radio, go back to VARA and set it up again`;
+      } else if (keyings.length) {
         const select = document.createElement("select");
         select.className = "narrow";
-        select.title = "Who keys the radio in the profile";
+        select.title = "Who keys the radio once it is set up";
         select.setAttribute("aria-label", `Keying for ${setup.name}`);
         for (const keying of keyings) {
           const option = document.createElement("option");
           option.value = keying;
-          [option.textContent, option.title] = HOSTAPPS_KEYING[keying] ?? [keying, keying];
+          [option.textContent, option.title] = HOSTAPPS_KEYING[keying]?.(install.program_name) ?? [keying, keying];
           select.append(option);
         }
-        const chosen = hostappsTicked.get(key);
+        const chosen = hostappsKeying.get(key);
         if (chosen && keyings.includes(chosen)) select.value = chosen;
-        select.addEventListener("change", () => {
-          if (hostappsTicked.has(key)) hostappsTicked.set(key, select.value);
-          else {
-            hostappsTicked.set(key, select.value);
-            tick.checked = !tick.disabled;
-            if (tick.disabled) hostappsTicked.delete(key);
-          }
-          renderHostappsPreview();
-        });
+        select.addEventListener("change", () => hostappsKeying.set(key, select.value));
         keyingCell.append(select);
       } else {
         keyingCell.textContent = refused ? "—" : "as it is";
@@ -5714,7 +5739,7 @@ function renderHostapps(answer) {
         ),
         callCell,
         cell(install.version ?? "?", "The program's version"),
-        cell(install.running ? "yes" : "no", install.running ? "Running now" : "Not running"),
+        cell(install.running ? "yes" : "no", install.running ? "Running now: close it before you set it up or go back" : "Not running"),
         tncCell,
         keyingCell,
         folderCell,
@@ -5722,173 +5747,308 @@ function renderHostapps(answer) {
       rows.append(tr);
     }
   }
-  for (const key of [...hostappsTicked.keys()]) if (!seen.has(key)) hostappsTicked.delete(key);
+  for (const key of [...hostappsKeying.keys()]) if (!seen.has(key)) hostappsKeying.delete(key);
   $("hostapps-pane").hidden = !setups;
-  $("hostapps-import-row").hidden = !setups;
-  renderHostappsPreview();
+  afterHostappsCopy(answer);
 }
 
-function hostappsChosen() {
-  const out = [];
-  for (const install of hostapps?.installs ?? []) {
-    for (const setup of install.setups ?? []) {
-      const key = hostappsKey(install.folder, setup.name);
-      if (!hostappsTicked.has(key)) continue;
-      const plan = hostappsPlan(setup, hostappsTicked.get(key));
-      if (plan && !plan.refused) out.push({ install, setup, plan });
-    }
+// a copy asked for from the window: once it is copied and found, its setup is set up
+function afterHostappsCopy(answer) {
+  const copy = answer?.copy;
+  const pending = hostappsAfterCopy;
+  if (!pending || !copy || !samePath(copy.to, pending.to)) return;
+  if (copy.state === "failed") {
+    hostappsAfterCopy = null;
+    hostappsNote(`not copied: ${copy.error}`, "error");
+    log(`${pending.from} not copied: ${copy.error}`, true, "hostapps");
+    return;
   }
-  return out;
+  if (copy.state !== "done") return;
+  const install = (answer.installs ?? []).find((i) => samePath(i.folder, copy.to));
+  if (!install) return;
+  hostappsAfterCopy = null;
+  log(`${pending.from} copied to ${copy.to}: ${copy.files} files`, false, "hostapps");
+  const go = () =>
+    setupHostapp(install, pending.setup, pending.keying, pending.switchTo, true).catch((error) => {
+      hostappsNote(`${install.program_name} ${pending.setup} in ${install.folder} not set up: ${error.message}`, "error");
+    });
+  if (pending.switchTo) withProfileSaved(`switching to the copy's profile`, go);
+  else go();
 }
 
-// The program's own settings Aether would write for it to reach Aether: a box to tick (on
-// unless unticked) and each setting as it is and as it will be. A program that runs cannot be
-// written: it writes its settings back when it closes.
-function hostappsWrites(install, writes) {
-  const row = document.createElement("span");
-  row.className = "hostapps-writes";
-  const label = document.createElement("label");
-  const box = document.createElement("input");
-  box.type = "checkbox";
-  box.disabled = Boolean(install.running);
-  box.checked = !install.running && !hostappsLeave.has(install.folder);
-  box.addEventListener("change", () => {
-    if (box.checked) hostappsLeave.delete(install.folder);
-    else hostappsLeave.add(install.folder);
-    // what the program must say comes back when it is left to be done by hand
-    renderHostappsPreview();
-  });
-  label.append(box, ` Set it in ${install.program_name}`);
-  label.title = install.running
-    ? `Close ${install.program_name} first: it reads its settings when it starts and writes them back when it closes, so Aether cannot change them while it runs`
-    : `Write these settings into ${install.program_name}'s own file when you import. Only these change; the file as it was is kept beside it as ${writes[0].file}.aether.bak`;
-  row.append(label);
-  for (const change of writes) {
-    const chip = document.createElement("span");
-    chip.className = "setting";
-    chip.dataset.kind = "program";
-    chip.textContent = `${change.key} ${change.from ?? "—"} → ${change.to}`;
-    chip.title = `${change.file}, [${change.section}]: ${change.why}`;
-    row.append(chip);
+// set a setup up: the program written, its profile made, and with `switchTo` the station
+// switched to it. Throws what the modem refused.
+async function setupHostapp(install, setupName, keying, switchTo, copied = false) {
+  const before = liveConfig ? structuredClone(liveConfig) : null;
+  hostappsNote(`setting up ${install.program_name} ${setupName}…`);
+  let answer;
+  try {
+    answer = await call("hostapps.setup", { folder: install.folder, setup: setupName, keying, switch: switchTo });
+  } catch (error) {
+    hostappsNote("");
+    log(`${install.program_name} ${setupName} in ${install.folder} not set up: ${error.message}`, true, "hostapps");
+    throw error;
   }
-  return row;
+  const done = answer.set_up;
+  renderHostapps(answer.hostapps);
+  log(`${install.program_name} ${setupName} in ${install.folder} set up for Aether: profile ${done.profile} ${done.created ? "made" : "brought up to date"}`, false, "hostapps");
+  const wrote = done.pointed?.changes ?? [];
+  if (wrote.length) {
+    const kept = (done.pointed.written ?? []).map((w) => w.backup).join(", ");
+    log(`${install.folder}: ${wrote.map((c) => `${c.key} ${c.to || "(empty)"}`).join(", ")} written; kept as it was in ${kept}`, false, "hostapps");
+  }
+  const byHand = (done.by_hand ?? []).map((a) => a.what);
+  const parts = [`${install.program_name} ${setupName} set up${switchTo ? ", switched to it" : ""}`];
+  if (copied) parts.push(`Start ${install.program_name} from ${install.folder}`);
+  if (byHand.length) parts.push(`Still to do in ${install.program_name}: ${byHand.join("; ")}`);
+  hostappsNote(parts.join(". "), byHand.length ? "warn" : "ok");
+  if (switchTo) await afterProfileLoad(answer, `Switched to ${done.profile}.`, before);
+  else applyProfiles(answer);
 }
 
-function renderHostappsPreview() {
-  const list = $("hostapps-preview");
-  list.replaceChildren();
-  const chosen = hostappsChosen();
-  for (const { install, plan } of chosen) {
+// a part of the window: a heading and what goes under it
+function hostappsSection(heading, headingTitle, content, kind = "") {
+  const section = document.createElement("section");
+  section.className = "hostapps-section";
+  if (kind) section.dataset.kind = kind;
+  const h = document.createElement("h4");
+  h.textContent = heading;
+  h.title = headingTitle;
+  section.append(h, content);
+  return section;
+}
+
+// settings of a program's file, each as it is and as it will be
+function hostappsChangeList(changes, empty) {
+  const list = document.createElement("ul");
+  list.className = "hostapps-changes";
+  for (const change of changes) {
     const li = document.createElement("li");
-    const name = document.createElement("strong");
-    name.textContent = plan.profile;
-    name.title = `The Aether profile this makes, or brings up to date: ${plan.profile}`;
-    li.append(name);
-    const sets = document.createElement("span");
-    sets.className = "hostapps-sets";
-    for (const [key, value] of Object.entries(plan.changes ?? {})) {
-      const [label, shown, where] = hostappsSetting(key, value);
-      const chip = document.createElement("span");
-      chip.className = "setting";
-      chip.textContent = `${label} ${shown}`;
-      chip.title = where;
-      sets.append(chip);
-    }
-    if (plan.dial_hz) {
-      const chip = document.createElement("span");
-      chip.className = "setting";
-      chip.textContent = `Dial is at ${(plan.dial_hz / 1e6).toFixed(4).replace(/0$/, "")} MHz`;
-      chip.title =
-        "Declared for the rules check when you switch to the profile here (Import and switch): " +
-        "the program's channel less 1.5 kHz. A dial is this computer's setting, not the profile's. " +
-        "Change it on the Session tab when you move the program to another channel";
-      sets.append(chip);
-    }
-    li.append(sets);
-    const writes = install.program_changes ?? [];
-    if (writes.length) li.append(hostappsWrites(install, writes));
-    // what Aether writes into the program is not also said as the operator's to do
-    const writing = writes.length > 0 && !install.running && !hostappsLeave.has(install.folder);
-    const advice = [...(plan.program_must ?? []).map((a) => ["program", a]), ...(plan.notes ?? []).map((a) => ["note", a])]
-      .filter(([, item]) => !(writing && item.settable));
-    if (advice.length) {
-      const says = document.createElement("span");
-      says.className = "hostapps-says";
-      for (const [kind, item] of advice) {
-        const chip = document.createElement("span");
-        chip.className = "setting";
-        chip.dataset.kind = kind;
-        chip.textContent = kind === "program" ? `In the program: ${item.what}` : item.what;
-        chip.title = item.why;
-        says.append(chip);
-      }
-      li.append(says);
-    }
+    const key = document.createElement("span");
+    key.className = "key";
+    key.textContent = change.key;
+    const from = document.createElement("span");
+    from.className = "from";
+    from.textContent = change.from || "(empty)";
+    const to = document.createElement("span");
+    to.className = "to";
+    to.textContent = change.to || "(empty)";
+    li.append(key, " ", from, " → ", to);
+    li.title = `${change.file}, [${change.section}]: ${change.why}`;
     list.append(li);
   }
-  list.hidden = !chosen.length;
-  $("btn-hostapps-import").disabled = !chosen.length;
-  $("btn-hostapps-import-load").disabled = chosen.length !== 1;
+  if (!changes.length) {
+    const li = document.createElement("li");
+    li.className = "none";
+    li.textContent = empty;
+    list.append(li);
+  }
+  return list;
 }
 
-async function importHostapps(andSwitch) {
-  const chosen = hostappsChosen();
-  if (!chosen.length) return;
-  const imports = chosen.map(({ install, setup, plan }) => ({
-    folder: install.folder,
-    setup: setup.name,
-    keying: plan.keying,
-    point: (install.program_changes ?? []).length > 0 && !install.running && !hostappsLeave.has(install.folder),
-  }));
-  const buttons = [$("btn-hostapps-import"), $("btn-hostapps-import-load")];
-  for (const button of buttons) button.disabled = true;
-  const note = $("hostapps-note");
-  try {
-    const answer = await call("hostapps.import", { imports });
-    applyProfiles(answer);
-    const made = answer.imported ?? [];
-    const refused = answer.refused ?? [];
-    const names = made.map((m) => m.profile).join(", ");
-    note.textContent = made.length ? `saved ${names}` : "nothing saved";
-    note.title = refused.length
-      ? `Not saved: ${refused.map((r) => `${r.setup} (${r.why})`).join("; ")}`
-      : "What the last import did";
-    for (const m of made) {
-      log(`profile ${m.profile} ${m.created ? "made" : "updated"} from ${m.setup} in ${m.folder}`, false, "hostapps");
-      const wrote = m.pointed?.changes ?? [];
-      if (wrote.length) {
-        const kept = (m.pointed.written ?? []).map((w) => w.backup).join(", ");
-        log(`${m.folder}: ${wrote.map((c) => `${c.key} ${c.to}`).join(", ")} written; kept as it was in ${kept}`, false, "hostapps");
-      }
-    }
-    for (const r of refused) log(`${r.setup} in ${r.folder} not imported: ${r.why}`, true, "hostapps");
-    hostappsTicked.clear();
-    // the programs' files were read again after any write: the next find shows them as they are
-    findHostapps();
-    if (andSwitch && made.length === 1) {
-      const { id, dial_hz: dial } = made[0];
-      withProfileSaved(`switching to ${made[0].profile}`, async () => {
-        await loadProfile(id);
-        // a dial is this computer's setting, not the profile's: declared at the switch, as the
-        // Session tab's Dial is at does
-        if (dial && profiles.active === id) {
-          try {
-            await call("config.set", { "regulatory.dial_hz": dial });
-            if (liveConfig) liveConfig.regulatory = { ...(liveConfig.regulatory ?? {}), dial_hz: dial };
-            log(`the dial is declared at ${khz(dial)}: the program's channel`, false, "rules");
-            refreshStatus();
-          } catch (error) {
-            log(`the dial was not declared: ${error.message}`, true, "rules");
-          }
-        }
-      });
-    }
-  } catch (error) {
-    note.textContent = error.message;
-    log(`programs not imported: ${error.message}`, true, "hostapps");
-  } finally {
-    renderHostappsPreview();
+function hostappsChips(items) {
+  const chips = document.createElement("div");
+  chips.className = "hostapps-chips";
+  for (const [text, title, kind] of items) {
+    const chip = document.createElement("span");
+    chip.className = "setting";
+    if (kind) chip.dataset.kind = kind;
+    chip.textContent = text;
+    chip.title = title;
+    chips.append(chip);
   }
+  return chips;
+}
+
+function openHostappsDialog(view) {
+  const dialog = $("hostapps-dialog");
+  $("hostapps-dialog-title").textContent = view.title;
+  const warning = $("hostapps-dialog-warning");
+  warning.replaceChildren(
+    ...view.warnings.map((text) => {
+      const p = document.createElement("p");
+      p.textContent = text;
+      return p;
+    }),
+  );
+  warning.hidden = !view.warnings.length;
+  $("hostapps-dialog-body").replaceChildren(...view.body);
+  const switchRow = $("hostapps-dialog-switch-row");
+  switchRow.hidden = !view.switchText;
+  switchRow.title = view.switchTitle ?? "";
+  $("hostapps-dialog-switch").checked = true;
+  $("hostapps-dialog-switch-text").textContent = view.switchText ?? "";
+  const go = $("hostapps-dialog-go");
+  go.textContent = view.go;
+  go.title = view.goTitle;
+  const copy = $("hostapps-dialog-copy");
+  copy.hidden = !view.copyTo;
+  copy.title = view.copyTitle ?? "";
+  const copyNote = $("hostapps-dialog-copy-note");
+  copyNote.hidden = !view.copyTo;
+  copyNote.textContent = view.copyTo ? `A copy goes to ${view.copyTo}` : "";
+  copyNote.title = view.copyTitle ?? "";
+  $("hostapps-dialog-error").hidden = true;
+  for (const button of [go, copy, $("hostapps-dialog-cancel")]) button.disabled = false;
+  hostappsDialogRun = view.run;
+  dialog.showModal();
+  go.focus();
+}
+
+async function runHostappsDialog(choice) {
+  const run = hostappsDialogRun;
+  if (!run) return;
+  const buttons = [$("hostapps-dialog-go"), $("hostapps-dialog-copy"), $("hostapps-dialog-cancel")];
+  for (const button of buttons) button.disabled = true;
+  const error = $("hostapps-dialog-error");
+  error.hidden = true;
+  try {
+    await run(choice, $("hostapps-dialog-switch").checked);
+    hostappsDialogRun = null;
+    $("hostapps-dialog").close();
+  } catch (failed) {
+    // left open: close the program and press again, or Cancel
+    error.textContent = failed.message;
+    error.title = failed.message;
+    error.hidden = false;
+  } finally {
+    for (const button of buttons) button.disabled = false;
+  }
+}
+
+// the window before a setup: what changes in the program, what the profile holds, what is
+// left by hand, and whether to switch to it now
+function openHostappsSetup(install, setup, keying) {
+  const plan = hostappsPlan(setup, keying);
+  if (!plan || plan.refused) return;
+  const name = install.program_name;
+  const changes = plan.program_changes ?? [];
+  const warnings = [];
+  if (changes.length) {
+    warnings.push(`This changes ${name}'s settings in ${install.folder}. The file as it is now is kept as ${changes[0].file}.aether.bak.`);
+  }
+  if (install.running) warnings.push(`${name} is running: close it before you press Set up.`);
+  const profileItems = [];
+  for (const [key, value] of Object.entries(plan.changes ?? {})) {
+    const [label, shown, where] = hostappsSetting(key, value, name);
+    profileItems.push([`${label} ${shown}`, where]);
+  }
+  // a note Aether carries out itself is in the list of what it writes already
+  for (const note of plan.notes ?? []) if (!note.settable) profileItems.push([note.what, note.why, "note"]);
+  const byHand = (plan.program_must ?? []).filter((a) => !a.settable).map((a) => [a.what, a.why, "by-hand"]);
+  const body = [
+    hostappsSection(
+      `In ${name}`,
+      `What Aether writes into ${name}'s settings, each as it is and as it will be. Hold the pointer on one to see why`,
+      hostappsChangeList(changes, "Nothing to change: it reaches Aether as it is"),
+    ),
+    hostappsSection(
+      `Aether profile ${plan.profile}`,
+      "The Aether profile made, or brought up to date: the station's settings with these. Its sound card and levels stay as they are",
+      hostappsChips(profileItems),
+    ),
+  ];
+  if (byHand.length) {
+    body.push(hostappsSection(`Still to do in ${name}`, `What you change in ${name} yourself: Aether cannot write it`, hostappsChips(byHand), "by-hand"));
+  }
+  const dial = plan.dial_hz ? (plan.dial_hz / 1e6).toFixed(4).replace(/0$/, "") : null;
+  openHostappsDialog({
+    title: `Set up ${name} ${setup.name} for Aether`,
+    warnings,
+    body,
+    switchText: dial ? `Switch to it now and set the dial to ${dial} MHz` : "Switch to it now",
+    switchTitle: dial
+      ? `Switch this station to ${plan.profile}. Aether reads no dial while ${name} keys the radio, so its rules check takes the dial as ${dial} MHz: ${name}'s channel less 1.5 kHz, on the upper sideband. The dial is set only by this switch: when you switch to the profile later, or move ${name} to another channel, set Dial is at on the Session tab`
+      : `Switch this station to ${plan.profile}`,
+    go: "Set up",
+    goTitle: changes.length ? `Change ${name}'s settings and make the profile` : "Make the profile",
+    copyTo: install.copy_to ?? null,
+    copyTitle: install.copy_to
+      ? `Copy ${install.folder} to ${install.copy_to} and set up the copy; this one stays as it is for VARA. The copy's mail is its own from then on. Start ${name} from ${install.copy_to} to use Aether`
+      : "",
+    run: async (choice, switchTo) => {
+      if (choice === "copy") {
+        const answer = await call("hostapps.copy", { folder: install.folder });
+        hostappsAfterCopy = { from: install.folder, to: answer.to, setup: setup.name, keying: plan.keying, switchTo };
+        hostappsNote(`copying ${install.folder} to ${answer.to}…`);
+        log(`copying ${install.folder} to ${answer.to}`, false, "hostapps");
+        renderHostapps(answer);
+        return;
+      }
+      if (switchTo && profiles.dirty === true && profiles.active) {
+        // the profile bar asks whether to save first, as any switch does
+        withProfileSaved(`switching to ${plan.profile}`, () =>
+          setupHostapp(install, setup.name, plan.keying, true).catch((error) => hostappsNote(error.message, "error")),
+        );
+        return;
+      }
+      await setupHostapp(install, setup.name, plan.keying, switchTo);
+    },
+  });
+}
+
+// the window before going back to VARA: what is put back, or why nothing is
+function openHostappsRestore(install, setup) {
+  const name = install.program_name;
+  const done = setup.set_up;
+  const others = (install.setups ?? []).filter((s) => s.set_up && s.name !== setup.name).map((s) => s.name);
+  const back = install.going_back ?? {};
+  const put = others.length ? [] : back.put_back ?? [];
+  const warnings = [];
+  const body = [];
+  if (others.length) {
+    body.push(
+      hostappsSection(
+        `In ${name}`,
+        `${name}'s settings are shared by every callsign of this install`,
+        hostappsChangeList([], `Nothing changes: ${others.join(", ")} still uses Aether`),
+      ),
+    );
+  } else {
+    if (put.length) {
+      warnings.push(`This changes ${name}'s settings in ${install.folder}. The file as it is now is kept as ${put[0].file}.aether-undo.bak.`);
+    }
+    if (install.running) warnings.push(`${name} is running: close it before you press Go back to VARA.`);
+    body.push(
+      hostappsSection(
+        `In ${name}`,
+        `The settings Aether wrote, put back as they were before. Hold the pointer on one to see why`,
+        hostappsChangeList(put, "Nothing to put back: Aether changed nothing in it"),
+      ),
+    );
+    const left = back.left ?? [];
+    if (left.length) {
+      body.push(
+        hostappsSection(
+          "Changed since, left as they are",
+          `You changed these in ${name} after Aether set them up: they stay as you have them`,
+          hostappsChips(left.map((c) => [`${c.key} ${c.from || "(empty)"}`, `${c.file}, [${c.section}]`, "note"])),
+          "note",
+        ),
+      );
+    }
+  }
+  body.push(
+    hostappsChips([[`Aether profile ${done.profile} stays`, "The profile is kept: switch away from it, or delete it, in the Profile bar"]]),
+  );
+  openHostappsDialog({
+    title: `Go back to VARA: ${name} ${setup.name}`,
+    warnings,
+    body,
+    go: "Go back to VARA",
+    goTitle: put.length ? `Put ${name}'s settings back as they were` : `${setup.name} is no longer set up for Aether`,
+    run: async () => {
+      const answer = await call("hostapps.restore", { folder: install.folder, setup: setup.name });
+      renderHostapps(answer.hostapps);
+      const keys = (answer.put_back ?? []).map((c) => `${c.key} ${c.to || "(taken out)"}`);
+      log(
+        `${name} ${setup.name} in ${install.folder} back to VARA${keys.length ? `: ${keys.join(", ")} put back` : ""}`,
+        false,
+        "hostapps",
+      );
+      hostappsNote(`${name} ${setup.name} back to VARA${keys.length ? `: ${keys.length} settings put back` : ""}. The Aether profile ${done.profile} stays`, "ok");
+    },
+  });
 }
 
 function wireHostapps() {
@@ -5898,8 +6058,12 @@ function wireHostapps() {
     if (!folder) return;
     if (await findHostapps({ add: folder })) $("hostapps-folder").value = "";
   });
-  $("btn-hostapps-import").addEventListener("click", () => importHostapps(false));
-  $("btn-hostapps-import-load").addEventListener("click", () => importHostapps(true));
+  $("hostapps-dialog-go").addEventListener("click", () => runHostappsDialog("go"));
+  $("hostapps-dialog-copy").addEventListener("click", () => runHostappsDialog("copy"));
+  $("hostapps-dialog-cancel").addEventListener("click", () => $("hostapps-dialog").close());
+  $("hostapps-dialog").addEventListener("close", () => {
+    hostappsDialogRun = null;
+  });
 }
 
 function wireMismatch() {

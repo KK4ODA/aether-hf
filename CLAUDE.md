@@ -3390,6 +3390,20 @@ Tools: `air_account.py` labels an open window the slave left empty a "forfeit";
 `aetherd.exe` on this PC is beta.161 (`C:\Dev\AetherBench\aetherd-161\`), enough for
 `floor_trace.py --daemon` while the busy detector is unchanged.
 
+**A tick sets a Winlink program up (2026-11-22, ADR-0133 §8; the author found Import, the
+preview and *Set it in* hard to follow).** Setup step 5's *Winlink programs* row box shows whether
+the setup is set up for Aether (`hostapps.json`: `set_up`, and `written`, each setting Aether
+wrote with its value before). A click opens the panel's first `<dialog>` (`#hostapps-dialog`):
+what changes in the program, what the profile holds, amber only for what is left by hand, and
+*Switch to it now* (ticked; it names the dial it declares). `hostapps.setup` writes the program
+(with Aether keying its keying and, on a shared port, its radio control too: `Target::aether_keys`),
+makes the profile and switches; `hostapps.restore` (untick) puts back only settings still as
+Aether set them, once no other setup of the install is set up; `hostapps.copy` (*Make a copy
+first*, Winlink Express only) copies the folder, mail included, off the loop to `<folder> Aether`
+and the panel sets the copy up. `hostapps.import`/`point`, *Import*, *Set it in* and the preview
+are gone. **Owed:** Winlink Express's `[Vara] Model=Manual`, `Control Port=None`, `PTT Port=None`
+are the dialog's words, unchecked against a real file set by hand; check one before a release.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

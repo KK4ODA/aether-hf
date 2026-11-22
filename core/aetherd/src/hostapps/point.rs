@@ -2,17 +2,21 @@
 //! 2026-11-19).
 //!
 //! What a program must change to use Aether — a VARA TNC on another computer, its own launch
-//! of a TNC — is written into its settings file when the operator asks, rather than said and
-//! left to be done by hand. Each program's reader says which settings ([`Edit`]s); this module
-//! compares them with the file ([`changes`]) and writes them ([`point`]):
+//! of a TNC, and its keying when Aether keys the radio — is written into its settings file when
+//! the operator sets it up, rather than said and left to be done by hand. Each program's reader
+//! says which settings ([`Edit`]s); this module compares them with the file ([`changes`]),
+//! writes them ([`point`]) and, to go back to VARA, puts back the ones still as Aether set them
+//! ([`put_back`], ADR-0133 §8):
 //!
 //! * only the settings named, every other byte of the file kept (`crate::ini::Ini`), and the
-//!   file as it was kept beside it as `<name>.aether.bak`;
+//!   file as it was kept beside it (`<name>.aether.bak` when set up, `<name>.aether-undo.bak`
+//!   when put back);
 //! * never while the program runs: Winlink's programs read their settings when they start and
 //!   write them back when they close, so a change made under one is lost, and it would not be
 //!   seen before the next start anyway;
 //! * never the setting that publishes a gateway's channels to Winlink, or any account, address
-//!   or position: the readers name only a TNC's address, port and launch.
+//!   or position: the readers name only a TNC's address, port and launch, and the radio's
+//!   keying and control.
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +32,9 @@ pub struct Target {
     pub host_port: u16,
     /// Aether's application, for a program that starts its TNC itself.
     pub app: Option<String>,
+    /// Aether keys the radio: the program gives up its keying, and its radio control when that
+    /// is on the port Aether keys on (only one program can hold a port).
+    pub aether_keys: bool,
 }
 
 /// One setting a program's reader would have written.
@@ -71,6 +78,32 @@ pub struct Pointed {
     pub folder: String,
     /// The settings changed; empty when the program already said them all.
     pub changes: Vec<Change>,
+    /// The files written, each with the copy of it as it was.
+    pub written: Vec<Written>,
+}
+
+/// A setting as a program had it before Aether set it: what going back to VARA puts back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct Original {
+    /// The file.
+    pub file: String,
+    /// The section.
+    pub section: String,
+    /// The key.
+    pub key: String,
+    /// What it said; `None` when the file did not have it.
+    pub was: Option<String>,
+    /// What Aether set it to: it is put back only while it still says this.
+    pub set_to: String,
+}
+
+/// What [`put_back`] did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PutBack {
+    /// The settings put back, each as it was (`from`) and as it is again (`to`).
+    pub put_back: Vec<Change>,
+    /// The settings left alone: changed since Aether set them, so the operator's.
+    pub left: Vec<Change>,
     /// The files written, each with the copy of it as it was.
     pub written: Vec<Written>,
 }
@@ -139,6 +172,38 @@ pub fn files_of(install: &Install) -> Result<Files, String> {
     Ok(files)
 }
 
+/// What going back to VARA would do to an install's files now: each original as a change from
+/// the file's value to the one it had, split into those still as Aether set them (put back)
+/// and those changed since (left). Pure.
+#[must_use]
+pub fn going_back(files: &Files, originals: &[Original]) -> (Vec<Change>, Vec<Change>) {
+    let mut put = Vec::new();
+    let mut left = Vec::new();
+    for original in originals {
+        let now = files
+            .get(&original.file)
+            .and_then(|bytes| Ini::new(bytes.clone()).get(&original.section, &original.key));
+        let change = Change {
+            file: original.file.clone(),
+            section: original.section.clone(),
+            key: original.key.clone(),
+            from: now.clone(),
+            to: original.was.clone().unwrap_or_default(),
+            why: if original.was.is_some() {
+                "as it was before Aether set it".to_owned()
+            } else {
+                "not in the file before Aether set it: taken out".to_owned()
+            },
+        };
+        if now.as_deref().is_some_and(|n| same(n, &original.set_to)) {
+            put.push(change);
+        } else {
+            left.push(change);
+        }
+    }
+    (put, left)
+}
+
 /// Write a file whole or not at all: to a new file first, then over the old one.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut temporary = path.as_os_str().to_owned();
@@ -164,6 +229,14 @@ fn write_error(path: &Path, error: &std::io::Error) -> String {
     }
 }
 
+/// Why a running program's files are not written.
+fn refuse_running(name: &str) -> String {
+    format!(
+        "{name} is running: close it first. It reads its settings when it starts and writes them \
+         back when it closes, so a change made now would be lost"
+    )
+}
+
 /// Set an install's program to reach Aether: the settings [`changes`] names, written into its
 /// files, each file kept as it was beside it first. `running` is whether the program runs
 /// now, asked of the system just before: a program that runs is refused.
@@ -173,10 +246,7 @@ fn write_error(path: &Path, error: &std::io::Error) -> String {
 pub fn point(install: &Install, target: &Target, running: bool) -> Result<Pointed, String> {
     let name = install.program.name();
     if running {
-        return Err(format!(
-            "{name} is running: close it first. It reads its settings when it starts and writes \
-             them back when it closes, so a change made now would be lost"
-        ));
+        return Err(refuse_running(name));
     }
     let files = files_of(install)?;
     let changes = changes(install.program, &files, target);
@@ -210,6 +280,65 @@ pub fn point(install: &Install, target: &Target, running: bool) -> Result<Pointe
     })
 }
 
+/// Go back to VARA: put back each setting Aether set that still says what Aether set it to,
+/// leave the ones changed since, each file kept as it was beside it first
+/// (`<name>.aether-undo.bak`). `running` as for [`point`].
+///
+/// # Errors
+/// If the program runs, or a file cannot be read or written.
+pub fn put_back(
+    install: &Install,
+    originals: &[Original],
+    running: bool,
+) -> Result<PutBack, String> {
+    let name = install.program.name();
+    if running {
+        return Err(refuse_running(name));
+    }
+    let files = files_of(install)?;
+    let (put, left) = going_back(&files, originals);
+    let mut written = Vec::new();
+    for file in install.program.reader().files {
+        let mine: Vec<&Change> = put.iter().filter(|c| c.file == *file).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let Some(before) = files.get(*file) else {
+            continue;
+        };
+        let mut ini = Ini::new(before.clone());
+        for change in &mine {
+            let was = originals
+                .iter()
+                .find(|o| {
+                    o.file == change.file && o.section == change.section && o.key == change.key
+                })
+                .and_then(|o| o.was.clone());
+            match was {
+                Some(value) => {
+                    ini.set(&change.section, &change.key, &value);
+                }
+                None => {
+                    ini.remove(&change.section, &change.key);
+                }
+            }
+        }
+        let path = Path::new(&install.folder).join(file);
+        let backup = Path::new(&install.folder).join(format!("{file}.aether-undo.bak"));
+        std::fs::write(&backup, before).map_err(|e| write_error(&backup, &e))?;
+        write_atomically(&path, ini.bytes())?;
+        written.push(Written {
+            path: path.display().to_string(),
+            backup: backup.display().to_string(),
+        });
+    }
+    Ok(PutBack {
+        put_back: put,
+        left,
+        written,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +355,7 @@ mod tests {
         Target {
             host_port: 8304,
             app: Some("C:\\Aether HF\\aether-hf.exe".into()),
+            aether_keys: false,
         }
     }
 

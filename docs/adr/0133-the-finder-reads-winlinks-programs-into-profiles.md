@@ -4,6 +4,8 @@
 The keying default (§2.4) and the port rule (§2.5) are this ADR's choices. The author answered §6
 the same day, yes to both: §7 is what they changed. The finder now writes what a program must
 change to reach Aether, when asked, and a profile keyed by the program keeps the rules check.
+On 2026-11-22 the author made a tick set a program up in one step, and an untick go back to
+VARA: §8.
 
 ## 1. Context
 
@@ -237,3 +239,81 @@ choosing *Host program* keying in Setup still sets the rules to *None* (ADR-0025
 
 §2.4's cost (the rules off) holds only for a program that scans several channels. §5's first
 alternative is built, behind the operator's tick.
+
+## 8. The author's decisions of 2026-11-22: a tick sets it up
+
+The author found the finder hard to follow: a tick that changed nothing, a preview under the
+list, **Import** and **Import and switch**, a *Set it in* box, amber that meant both "Aether will
+do this" and "you must do this", and the dial said twice and set only by one of two buttons. The
+author asked for one step: ticking a row ports a program that works with VARA to Aether, with a
+warning that its settings will change. The answers to the questions that raised (2026-11-22):
+
+1. **Unticking goes back to VARA**, behind a confirmation; the Aether profile is kept.
+2. **With Aether keying, the program's radio setup is written too** (its PTT port *None*, and its
+   radio *Manual* and control port *None* when Aether keys on that port), as the TNC settings are.
+3. **Switching to the profile is a box in the window, ticked by default.**
+4. **The window also offers a copy first**, besides *Set up* and *Cancel*.
+
+### 8.1 What a tick does
+
+The row's box shows what is so: ticked when the setup is set up for Aether (remembered in
+`hostapps.json`), and it changes only once the setup, or going back, is done. A click opens a
+window (a `<dialog>`, the panel's first) instead of toggling:
+
+* **Setting up** lists each setting Aether will write into the program, as it is and as it will
+  be; what the Aether profile will hold; in amber, only what the operator must still do by hand;
+  and **Switch to it now**, which names the dial it declares when the program keys the radio
+  (*and set the dial to 7.082 MHz*), since that switch is the only thing that sets it. A warning
+  says the program's settings will change and where the old file is kept, and that a running
+  program must be closed. `hostapps.setup` writes the program, makes the profile, remembers both
+  and, with `switch`, switches and declares the dial. A refusal (the program still running) is
+  shown in the window, which stays open: close the program and press again.
+* **Going back** lists each setting put back. `hostapps.restore` writes back each setting Aether
+  wrote, with the value it had before Aether first wrote it, but only while it still says what
+  Aether set it to: one the operator changed since is the operator's, and is listed as left. A
+  setting the file did not have is taken out again (`Ini::remove`). Winlink Express's settings are
+  shared by every callsign of an install, so nothing is put back while another setup of the
+  install is still set up. The profile stays.
+* **Who keys the radio** is chosen before the tick, in the row's *Keying* list, which names the
+  program (*Winlink Express*, *Aether*) where it said *Host program*. A set-up row shows its keying
+  as text: changing it means going back and setting up again, since moving from Aether keying to
+  the program's would need the program's radio setup back first.
+
+The plan for the profile is made from the program as it was before it was written: with Aether
+keying, the program no longer says how it keyed the radio once its keying is handed over.
+
+### 8.2 The program's keying handed over (`Target::aether_keys`)
+
+Each reader's `point` takes whether Aether keys the radio, and names, besides the TNC's:
+
+* **Winlink Express** (`[Vara]`, its *Radio Setup*): `PTT Port` → `None`; unless the PTT is a line
+  of a port of its own, also `Model` → `Manual` and `Control Port` → `None`. The values are the
+  dialog's own words, which its help file and the setup guide use; they are owed a check against a
+  Winlink Express set to *Manual* and *None* by hand before the first release that carries this.
+* **RMS Trimode**: `[Vara TNC] Use CAT PTT` and `Use Serial Port PTT` → `False`; unless the PTT
+  is a line of a port of its own, also `[Radio] Model` → `None` and `Control Port` emptied, which
+  is how Trimode 1.4.4 writes its radio *Manual* (read from the author's gateway). Trimode then
+  tunes and scans no more, which the window's note says.
+
+The advice that said those by hand (*Radio Manual, PTT port None*) is now marked as carried out
+(`settable`), and *Radio setup as it is*, which asked nothing and was amber, is the plain note
+*Keeps its radio setup*. The *Rules check at …* note is gone: the dial is said once, beside the
+switch that sets it.
+
+### 8.3 A copy first (`hostapps.copy`)
+
+For an operator who wants the copy that works with VARA left alone: the install's folder, mail
+included, is copied to a new folder beside it (`C:\RMS Express Aether`, `… Aether 2` when that is
+taken), on a thread of its own (a Winlink Express folder holds its mail and logs; the run loop
+must not wait on it), refused while the program runs, and the new folder is remembered as an
+added one and found. The panel then sets up the copy's row as if it had been ticked, and says to
+start the program from the new folder. Only Winlink Express is copied: a second copy of a Trimode
+gateway would publish the same channels to Winlink again, and RMS Packet is never set up. Each
+copy has its own mail from then on, which the button's tip says.
+
+### 8.4 What this removes
+
+`hostapps.import` and `hostapps.point` (one call does both now), the preview list under the table,
+**Import**, **Import and switch** and the *Set it in* box, the install-level `program_changes`
+(now each plan's, since what is written depends on the keying), and the duplicate dial note. The
+heading's tip that said nothing is written to the programs' files, untrue since §7, is replaced.
