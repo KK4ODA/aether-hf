@@ -549,13 +549,13 @@ function ownerSuffix(status) {
   return claim ? ` for ${programName(claim)}` : " for a program";
 }
 
-// A program's name as the panel says it: the host interface's is "host program".
+// A program's name as the panel says it: the host interface's is "external program".
 function programName(claim) {
-  return claim.kind === "host" ? "host program" : claim.app || "a program";
+  return claim.kind === "host" ? "external program" : claim.app || "a program";
 }
 
 // Keep the banner true to the status the panel just read: a reload lands on a session
-// already up, a call placed by a host program shows as calling, and an idle modem with
+// already up, a call placed by an external program shows as calling, and an idle modem with
 // nothing under way takes a stale banner down. A session's end stays up its while: the
 // identifier that follows it is no news.
 function syncBanner(status) {
@@ -659,7 +659,7 @@ async function refreshStatus() {
   $("d-host").textContent = host.enabled ? (host.connected ? "connected" : "listening") : "off";
   $("d-host-sub").textContent = host.enabled
     ? `${host.command_address ?? ""} · data ${host.data_address ?? ""}`
-    : "turn on Host programs in Setup";
+    : "turn on External programs in Setup";
   applyKiss(status.kiss ?? null, host, status.datagrams ?? null);
 
   applyMetrics(status.metrics ?? {});
@@ -1813,7 +1813,7 @@ function applyDial(status) {
   } else if (hostOwnsTheDial(status)) {
     reading.textContent = "";
     hero.textContent = "—";
-    source("Host", "The host program tunes the radio: choose the frequency there");
+    source("External program", "The external program tunes the radio: choose the frequency there");
   } else if (!canTune && liveConfig?.regulatory?.dial_hz) {
     const hz = liveConfig.regulatory.dial_hz;
     reading.textContent = `declared: ${formatHz(hz)} Hz`;
@@ -3644,9 +3644,9 @@ function fillDevices(devices) {
   fill(
     $("dev-ptt"),
     [
-      // VARA's way with VarAC and Winlink Express: the host program owns the radio and keys
+      // VARA's way with VarAC and Winlink Express: the external program owns the radio and keys
       // it on PTT ON (ADR-0025)
-      { name: "host", label: "Host program" },
+      { name: "host", label: "External program" },
       ...devicesSeen.serial_ports.map((p) => ({
         name: p.name,
         label: p.description ? `${p.name} — ${p.description}` : p.name,
@@ -3657,7 +3657,7 @@ function fillDevices(devices) {
         label: `${i.name} (GPIO)`,
       })),
       { name: "rigctld", label: "rigctld" },
-      // FLRig holds the CAT port and serves several programs: a host program can tune through
+      // FLRig holds the CAT port and serves several programs: an external program can tune through
       // it while Aether keys and reads the dial there, so the rules check keeps working
       { name: "flrig", label: "FLRig" },
     ],
@@ -3866,8 +3866,8 @@ const SETTING_NAMES = {
   "record.auto": "recording",
   "record.notes": "recording notes",
   "record.send_to_project": "debug mode",
-  "host.enabled": "host programs",
-  "host.bind": "host port",
+  "host.enabled": "External programs",
+  "host.bind": "external programs port",
   "kiss.enabled": "KISS programs",
   "kiss.bind": "KISS address",
   "kiss.rung": "KISS rung",
@@ -4001,28 +4001,29 @@ function writeConfig() {
   applyHostOwnsRadio();
 }
 
-/// Whether the dial is the host program's alone: it keys the radio (ADR-0025) and no rules
+/// Whether the dial is the external program's alone: it keys the radio (ADR-0025) and no rules
 /// here need to know where the dial is. With rules chosen anyway, the dial is declared as for
 /// any radio that cannot report it.
 function hostOwnsTheDial(status) {
   return liveConfig?.ptt?.kind === "host" && status.regulatory?.policy !== "rules";
 }
 
-/// The settings a host program owns, greyed to "Host" in their places: with Host programs on,
-/// the program's MYCALL is the callsign and its BW command the bandwidth while it is attached;
-/// with the radio keyed by the host program and the rules None, their fields are unused (a
-/// profile made from a program's setup keeps the rules on, at a declared dial, and shows
-/// them). The fields keep their values underneath, saved as they were, for when the program is
-/// not there.
+/// The settings an external program owns, greyed to "External program" in their places: with External programs on,
+/// the program's MYCALL is the callsign while it is attached; with the radio keyed by the VARA
+/// program and the rules None, the rules' fields are unused (a profile made from a program's
+/// setup keeps the rules on, at a declared dial, and shows them). The fields keep their values
+/// underneath, saved as they were, for when the program is not there. The bandwidth is always
+/// shown: greyed, it hid the station's own while no program was connected, and the station ran
+/// it all the same — RadioPost, which is not an external program, cannot change it while it listens, and
+/// a 2300 Hz call was refused at a station showing nothing but "Host" (2026-11-23). A VARA
+/// program's BW is said by the header's bandwidth chip.
 function applyHostOwned() {
-  const programs = $("host-enabled").checked;
   const keyed = $("dev-ptt").value === "host";
   const own = (id, owned) => {
     $(id).hidden = owned;
     $(`${id}-host`).hidden = !owned;
   };
   applyCallsignOwner();
-  own("radio-bandwidth", programs);
   // a profile made from a program's setup keeps the rules with the program keying, at its
   // declared dial (ADR-0133 §7): the fields are shown whenever the rules are on
   const rulesOff = $("reg-profile").value === "none";
@@ -4030,9 +4031,9 @@ function applyHostOwned() {
   checkRulesStep();
 }
 
-/// The programs on the control API that hold callsigns, as Setup's callsign box says them:
-/// "KK4ODA-1 · RadioPost Gateway". Such a program speaks for the station while it runs, as a
-/// host program does (ADR-0108). Null when there is none.
+/// The programs on the control API that hold callsigns, as Setup's callsign note says them:
+/// "KK4ODA-1 · RadioPost Gateway". Such a program speaks for the station while it runs, as an
+/// external program does (ADR-0108). Null when there is none.
 function programCallsigns(status) {
   const claims = (status?.claims ?? []).filter((c) => c.kind !== "host" && (c.callsigns ?? []).length > 0);
   if (claims.length === 0) return null;
@@ -4042,36 +4043,28 @@ function programCallsigns(status) {
   return {
     text: claims.map((c) => `${c.callsigns.join(", ")} · ${programName(c)}`).join("; "),
     title:
-      `Set by ${names} while it runs: it answers for this station as ${calls}, and calls to ` +
-      `${own} are not answered meanwhile. ${own} comes back when it stops. Stop ${names} to edit it`,
+      `${names} answers for this station as ${calls} while it runs, and calls to ${own} are ` +
+      `not answered meanwhile. ${own} comes back when it stops`,
   };
 }
 
-/// Setup's callsign box, greyed to say who sets the callsign (ADR-0108): "Host" with Host
-/// programs on (the program's MYCALL, while it is attached); otherwise, while a program on the
-/// control API holds callsigns, those callsigns and the program. A placeholder callsign stays
-/// editable, so a first setup can be finished. The box keeps its value underneath, saved as
-/// it was, for when the program is not there.
+/// Setup's callsign box is always the station's own, the callsign Aether uses on its own, and the
+/// note after it says so; while a program answers for the station (ADR-0108) the note says
+/// which callsigns are in use now and whose. Greyed, the box had hidden the callsign the station
+/// used whenever no program was there, as the bandwidth's had (2026-11-23).
 function applyCallsignOwner() {
-  const box = $("wz-call");
-  const label = $("wz-call-host");
-  label.dataset.hostTitle ??= label.title;
-  const hosted = $("host-enabled").checked;
-  const saved = liveConfig?.callsign;
-  const program = !hosted && saved && saved !== "N0CALL" ? programCallsigns(lastStatus) : null;
-  if (hosted) {
-    label.textContent = "Host";
-    label.title = label.dataset.hostTitle;
-  } else if (program) {
-    label.textContent = program.text;
-    label.title = program.title;
-  }
-  const owned = hosted || program !== null;
-  box.hidden = owned;
-  label.hidden = !owned;
+  const note = $("wz-call-note");
+  note.dataset.ownTitle ??= note.title;
+  const external = $("host-enabled").checked && lastStatus?.host?.connected === true;
+  const program = programCallsigns(lastStatus);
+  let now = "";
+  if (external) now = "; an external program's MYCALL is in use now";
+  else if (program) now = `; in use now: ${program.text}`;
+  note.textContent = `(for Aether standalone use${now})`;
+  note.title = program && !external ? `${note.dataset.ownTitle}. ${program.title}` : note.dataset.ownTitle;
 }
 
-/// When the host program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
+/// When the external program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
 /// nothing to drive, and the card says where the frequency is chosen.
 function applyHostOwnsRadio() {
   const hostKeyed = liveConfig?.ptt?.kind === "host";
@@ -4108,14 +4101,14 @@ function showKeyingFields() {
 }
 
 /// Setup step 2's Dial line: what reads the radio's dial and tunes it with the radio control
-/// chosen. Keying by the host program hands the dial to the program as well, which the word
+/// chosen. Keying by the external program hands the dial to the program as well, which the word
 /// "keying" never said (the author, 2026-11-18, setting VarAC up to tune the radio).
 function showDialSource(chosen, cat) {
   const [text, title] =
     chosen === "host"
       ? [
-          "Host program",
-          "The host program tunes the radio and Aether cannot read its dial: choose the frequency in the program, and check every transmission yourself",
+          "External program",
+          "The external program tunes the radio and Aether cannot read its dial: choose the frequency in the program, and check every transmission yourself",
         ]
       : cat
         ? ["Aether, over CAT", "Aether reads the dial over CAT, and tunes the radio from the Session tab's dial list"]
@@ -4651,7 +4644,7 @@ function profileChanges(before, after, changed) {
   };
   const keying = (config) => {
     const ptt = config.ptt ?? {};
-    if (ptt.kind === "host") return "the host program";
+    if (ptt.kind === "host") return "the external program";
     if (ptt.kind === "cat") return `CAT on ${ptt.port ?? "?"}`;
     if (ptt.kind === "serial") return `${ptt.line ?? "rts"} on ${ptt.port ?? "?"}`;
     if (ptt.kind === "rigctld" || ptt.kind === "flrig") return `${ptt.kind} at ${ptt.address ?? "?"}`;
@@ -5084,7 +5077,7 @@ function checkModemSettings() {
   return ok;
 }
 
-/// The host programs port and its data port (the next number up) keep off the control port,
+/// The external programs port and its data port (the next number up) keep off the control port,
 /// which this panel and RadioPost use: on its number the modem would not start. The modem
 /// refuses such a save too; this marks the step before it is tried.
 function hostPortClear() {
@@ -5153,7 +5146,7 @@ function fillKissRungs() {
 function kissFormOk() {
   if (!$("kiss-enabled").checked) return true;
   if ($("kiss-host").value.trim() === "" || !numberWithin("kiss-port", 1024, 65535)) return false;
-  // the host programs' interface holds its port and the next one up
+  // the external programs' interface holds its port and the next one up
   const port = Number($("kiss-port").value);
   const host = Number($("host-port").value);
   return !($("host-enabled").checked && (port === host || port === host + 1));
@@ -5236,8 +5229,8 @@ function applyKiss(kiss, host, datagrams) {
     if (!using.has(shown)) using.set(shown, false);
     said.push(`${program.app} is using the station and answers for no callsign of its own now`);
   }
-  // a host program from before its claim reaches the status
-  if (host?.connected && !claims.some((c) => c.kind === "host")) using.set("host program", false);
+  // an external program from before its claim reaches the status
+  if (host?.connected && !claims.some((c) => c.kind === "host")) using.set("external program", false);
   if (count > 0) using.set(`${count} KISS`, false);
   // the station's own callsign unanswered with no program holding a callsign: under automatic
   // control only a program answers calls (ADR-0107). A program that holds one speaks for the
@@ -5311,8 +5304,8 @@ function renderBandwidth(bandwidth) {
     chip.replaceChildren(chipText(`${hz} Hz · calling ${bandwidth.callee ?? "a station"}`));
     chip.title = `${bandwidth.callee ?? "The station called"} was last heard running ${hz} Hz, so the call went out in it; the station goes back to its own ${bandwidth.home_hz} Hz after the session`;
   } else {
-    chip.replaceChildren(chipText(`${hz} Hz · host program`));
-    chip.title = `The host program asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
+    chip.replaceChildren(chipText(`${hz} Hz · external program`));
+    chip.title = `The external program asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
   }
 }
 
@@ -5659,15 +5652,15 @@ function hostappsSetting(key, value, program) {
   const yes = value ? "on" : "off";
   if (key === "ptt.kind") {
     return value === "host"
-      ? ["Keyed by", program, `Setup step 2: radio control Host program. ${program} keys the radio on Aether's PTT ON`]
+      ? ["Keyed by", program, `Setup step 2: radio control External program. ${program} keys the radio on Aether's PTT ON`]
       : ["Keyed by Aether:", { cat: "CAT", serial: "serial line" }[value] ?? value, "Setup step 2: radio control"];
   }
   const named = {
     callsign: ["Callsign", value, "Setup step 1: the callsign the station answers to"],
-    "host.enabled": ["Host programs", yes, "Setup step 5: the VARA-compatible interface the program connects to"],
+    "host.enabled": ["External programs", yes, "Setup step 5: the VARA-compatible interface the program connects to"],
     "kiss.enabled": ["KISS programs", yes, "Setup step 5: the KISS port the program connects to"],
     "radio.bandwidth": ["Bandwidth", `${value} Hz`, "Setup step 4: 2300 Hz for VARA's 2300 and 2750"],
-    "host.bind": ["Host port", String(value).split(":").pop(), "Setup step 5: the port Aether listens on for the program, where the program points"],
+    "host.bind": ["External programs port", String(value).split(":").pop(), "Setup step 5: the port Aether listens on for the program, where the program points"],
     "ptt.port": ["Port", value, "Setup step 2: the radio's port"],
     "ptt.protocol": ["CAT", String(value).charAt(0).toUpperCase() + String(value).slice(1), "Setup step 2: the radio's command set"],
     "ptt.baud": ["Baud", String(value), "Setup step 2: the CAT port's speed, as the program had it"],

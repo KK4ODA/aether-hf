@@ -52,12 +52,12 @@ then see the manual's [VarAC in one step](../manual/manual.md#varac-in-one-step)
 and the panel says so: the Setup tab carries an amber dot, the step you changed is marked, the
 save bar at the foot of the tab names what is not saved, and every other tab shows a banner with
 *Review in Setup* and *Discard changes*. Most settings apply the moment they are saved; a sound
-card, any radio control setting, Host programs, compression, the update channel or the callsign
+card, any radio control setting, External programs, compression, the update channel or the callsign
 restarts the modem, which takes a few seconds.
 
 **Keying, and the dial.** Setup step 2's *Radio control* keys the radio through a serial line
 (RTS or DTR), the radio's own *CAT command*, a CM108-class interface's GPIO pin, `rigctld` or
-FLRig; or it leaves the radio to the *Host program* (VarAC or Winlink Express keys and tunes the
+FLRig; or it leaves the radio to the *External program* (VarAC or Winlink Express keys and tunes the
 radio, see [host-programs.md](host-programs.md)), or to *None* for a VOX interface. Its *Dial*
 line says what reads the dial and tunes the radio with the choice made. Its *Preset*
 list fills the fields in for a known interface (an Icom with USB audio, a Yaesu, a

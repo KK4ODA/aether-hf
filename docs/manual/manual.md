@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.19.0 |
+| **Version** | 1.20.0 |
 | **Updated** | 2026-11-23 |
 | **Describes** | Aether HF 0.2.0-beta.172 |
 | **Licence** | CC BY 4.0 |
@@ -285,7 +285,7 @@ attention, and seven **tabs**: Status, Session, Stations, Diagnostics, Setup, Lo
 6. **The rules badge**: *Legal*, *Warning* or *TX blocked*, for your widest signal where the dial
    is now. Click it to see why.
 7. **Programs**: a chip shows each program using the station, with a green check and its name: a
-   host program such as Winlink Express, a RadioPost program, a KISS program.
+   external program such as Winlink Express, a RadioPost program, a KISS program.
    - *listening* after a name means the program answers calls.
    - A name alone means the program can call out, but calls to its callsign go unanswered until
      it listens. That is normal for a program that only calls, such as the RadioPost client.
@@ -374,7 +374,7 @@ and most have buttons that do it.
 | VarAC | VarAC is on this computer and not set up for Aether, or a new version of Aether changed what its VarAC profile needs | **Set up** or **Update**, then **Switch to VarAC default** if you want; **Not now** stops this offer ([VarAC in one step](#varac-in-one-step)) |
 | Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2 |
 
-The clipping banner shows in Compact too. Aether tells a host program nothing of it.
+The clipping banner shows in Compact too. Aether tells an external program nothing of it.
 
 ### Arranging the windows
 
@@ -442,20 +442,16 @@ settings.
 
 ### Step 1. Callsign and rules
 
-- **Callsign**: yours, with an SSID (`N1CALL-1`) or a suffix (`N1CALL/P`) if you use one, up to
-  nine characters. What you start from this window (a call, a probe, a Test, a beacon) goes out
-  under it. While a program answers for the station, the box shows whose callsign is in use
-  instead, greyed:
-  - **Host**, with **Host programs** on ([Step 5](#step-5-application-settings)). The program's
-    own callsign (its `MYCALL`) is the one Aether answers to and identifies as while the program
-    is attached. Turn Host programs off to change the callsign here.
-  - **The program's callsign and its name**, such as *N1CALL-10 · RadioPost Gateway*, while a
-    RadioPost program holds a callsign. Stop the program to change the callsign here.
-
-  Either way your own callsign is kept, and comes back when the program leaves. Set a program's
-  callsign in the program itself, not here.
+- **Aether callsign**: yours, with an SSID (`N1CALL-1`) or a suffix (`N1CALL/P`) if you use one, up
+  to nine characters. It is the callsign for Aether standalone use, as the note after the box
+  says: what you start from this window (a call, a probe, a Test, a beacon) goes out under it,
+  and calls to it are answered when no program is running. A program sets its own callsign:
+  RadioPost the callsign it was enrolled with, an external program ([Step 5](#step-5-application-settings))
+  its `MYCALL`. While one does, only the program's callsigns are answered, and the note says
+  which, such as *in use now: N1CALL-10 · RadioPost Gateway*. Yours comes back when the program
+  stops. Set a program's callsign in the program, not here.
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*. With
-  **Radio control** set to *Host program* (step 2), the rules fields read **Host**: the host program
+  **Radio control** set to *External program* (step 2), the rules fields read **External program**: the external program
   owns the radio's dial, which Aether cannot read, so you check every transmission yourself. None
   of those settings acts then, **Control** included, whatever was set before.
 - **Control**: *Local* (you are at the radio), *Remote* (you are at the radio through a control
@@ -487,7 +483,7 @@ refuse, but you remain the control operator.
   tab.
 - **Radio control**: what keys the radio, and what reads and tunes its dial. There are six ways.
 
-![Six ways to control the radio, each with a small wiring sketch and what it does with the dial: CAT command, serial line, rigctld or FLRig, CM108 interface, host program, VOX](fig/keying.svg)
+![Six ways to control the radio, each with a small wiring sketch and what it does with the dial: CAT command, serial line, rigctld or FLRig, CM108 interface, external program, VOX](fig/keying.svg)
 
 *Figure 15. The six ways to control the radio, and what each does with the dial.*
 
@@ -505,7 +501,7 @@ refuse, but you remain the control operator.
 3. **rigctld (Hamlib) or FLRig**: keys the radio, reads its dial and tunes it, and another program
    can tune the radio through it at the same time.
 4. **CM108**: a DRA or URI interface keys through its sound card's own pin, pin 3 on those boards.
-5. **Host program**: VarAC or Winlink Express owns the radio. It keys the radio when Aether says
+5. **External program**: VarAC or Winlink Express owns the radio. It keys the radio when Aether says
    PTT ON, as with VARA, and it tunes it: set the program's own frequency control (VarAC's RIG tab,
    *Frequency Control* on CAT). Aether opens no port on the radio and cannot read the dial, so the
    rules in step 1 are set to None and you check every transmission. Keep this way of working in a
@@ -519,7 +515,7 @@ refuse, but you remain the control operator.
 > keys the radio from one of them on the same port, such as a Digirig, does not key it.
 
 - **Dial**: what reads the dial and tunes the radio with the radio control chosen: *Aether, over
-  CAT*, *Aether, through rigctld* or *through FLRig*, *Host program*, or *Typed by hand*. Typed by
+  CAT*, *Aether, through rigctld* or *through FLRig*, *External program*, or *Typed by hand*. Typed by
   hand means the radio cannot report its dial: tell Aether where it is with **Dial is at** on the
   Session tab before you transmit, and again after every change of frequency.
 
@@ -541,9 +537,11 @@ quiet leaves the signal inside the sound card's own noise.
 
 - **Bandwidth**: *2300 Hz* for Winlink, Pat and the most data; *500 Hz* for contacts between two
   stations and VarAC. Both stations of a session use the same. A change takes effect once the
-  station is idle, with no restart. With **Host programs** on, the box reads **Host**: the
-  program sets it while it is attached (its `BW500` or `BW2300`), and your setting comes back when
-  it leaves.
+  station is idle, with no restart. An external program can move the station to another
+  bandwidth while it is connected (its `BW500` or `BW2300`): the header then says *500 Hz ·
+  external program*, and your setting comes back when it leaves. RadioPost does not change it
+  while it listens, so a station that answers RadioPost calls runs this setting: set it to the
+  bandwidth you will be called at. At 2300 Hz it answers 500 Hz calls too.
 - **Answer only**: take calls and answer probes, but make no call and send no beacon.
 - **Fastest mode**: the highest rung the link may climb to. The last entry is the fastest your
   bandwidth has, and it stays the fastest when you change bandwidth. Choose a lower one only to
@@ -560,7 +558,7 @@ quiet leaves the signal inside the sound card's own noise.
   other stations in a session, through the pauses between their transmissions, at least 4 s after
   the last one it heard. Aether's own answers never wait: they go in their slot.
 - **Turnaround**: how long after your radio stops sending it hears again. 0 for a radio keyed by
-  CAT, a serial line or a host program. With VOX (a SignaLink), set its delay time plus 100 ms.
+  CAT, a serial line or an external program. With VOX (a SignaLink), set its delay time plus 100 ms.
   Aether tells the other station, which waits that long before it answers. Up to 1500 ms.
 - **Answer gap**: the least time between the end of the other station's transmission and yours.
   Leave it at 0 unless the other station keys by VOX and has not set its own turnaround; then
@@ -585,7 +583,7 @@ quiet leaves the signal inside the sound card's own noise.
     as a club callsign, is identified as that callsign, even when the program has already
     closed.
   - **A US callsign always identifies.** The box is ticked and greyed, and its tooltip says why.
-    For any other callsign it is your choice, off by default; a host program's `CWID ON` turns it
+    For any other callsign it is your choice, off by default; an external program's `CWID ON` turns it
     on for the program's sessions. The program cannot choose Morse: it identifies the way you
     chose here.
   - A call or probe that leads to no session is identified 30 s later, on its own (up to 15 s
@@ -613,8 +611,10 @@ quiet leaves the signal inside the sound card's own noise.
   then wait, and go only if you keep it on. With no internet they wait and go once there is a
   connection, tried every 10 minutes, kept through a restart.
 - **Recording notes**: written into every recording that starts by itself.
-- **Host programs**: lets Winlink Express, Pat or VarAC use this station on the VARA-compatible
-  port. The command port is 8300 by default and the data port the next number up. While a
+- **External programs**: lets a program written for VARA HF (Winlink Express, Pat, VarAC, RMS
+  Trimode) use this station on the VARA-compatible port. Leave it unchecked for RadioPost, as the
+  words after the box say: RadioPost uses the control port and needs nothing here. Tick it when
+  such a program runs on the station too, beside RadioPost or not. The command port is 8300 by default and the data port the next number up. While a
   transfer waits for the other station, the program is told how much is left every 50 s, which
   Pat needs.
   - Never give it 8515, or 8514 (whose data port would be 8515). That is Aether's control port,
@@ -634,7 +634,7 @@ quiet leaves the signal inside the sound card's own noise.
 ### Step 6. Save
 
 **Save these settings** writes them to the modem. Most take effect at once. A new sound card, any
-radio control setting, Host programs, compression, the update channel or the callsign restarts the
+radio control setting, External programs, compression, the update channel or the callsign restarts the
 modem, which takes a few seconds; the window comes back by itself.
 
 - **Copy as TOML** copies the settings in the shape of the configuration file.
@@ -685,7 +685,7 @@ band, or a tuner that remembers each band. A station calling one that scans need
 the usual two; the program that publishes the scan tells the caller's program how long to keep
 calling.
 
-When a host program keys the radio, this box says so and hides the dial list: choose the
+When an external program keys the radio, this box says so and hides the dial list: choose the
 frequency in the program.
 
 ### Call
@@ -1085,7 +1085,7 @@ The tables below are made from the modem's own figures every time the manual is 
   tells its operator, and a probe tells you the bandwidth it runs.
 - **The Stations tab's Hz column** shows what your station remembers of each station. A probe's
   answer says the bandwidth a station really runs.
-- **A host program's bandwidth wins.** With Host programs on, the program's `BW` command sets the
+- **An external program's bandwidth wins.** With External programs on, the program's `BW` command sets the
   bandwidth for its sessions.
 
 ## 18. Probes, beacons and the Test session
@@ -1159,31 +1159,31 @@ rule text it rests on, and [the frequency plan](../user/frequency-plan.md) sugge
 
 Programs reach Aether through ports on the same computer. Each kind has its own.
 
-![Aether's window and RadioPost on the control port 8515; Winlink Express, Pat, VarAC and RMS Trimode on the host port 8300 and 8301; packet programs on the KISS port 8100; all into the modem, then the radio](fig/programs.svg)
+![Aether's window and RadioPost on the control port 8515; Winlink Express, Pat, VarAC and RMS Trimode on the external programs port 8300 and 8301; packet programs on the KISS port 8100; all into the modem, then the radio](fig/programs.svg)
 
 *Figure 33. The programs that use Aether and the ports they connect to.*
 
 | Port | What it is | Who uses it |
 |---|---|---|
 | 8515 | Aether's control port | Aether's own window, RadioPost, RadioPost Gateway |
-| 8300 and 8301 | The host programs port, VARA-compatible (Setup step 5, *Host programs*) | Winlink Express, Pat, VarAC, RMS Trimode |
+| 8300 and 8301 | The external programs port, VARA-compatible (Setup step 5, *External programs*) | Winlink Express, Pat, VarAC, RMS Trimode |
 | 8100 | The KISS port, off until you turn it on (Setup step 5, *KISS programs*) | APRS and packet programs, VarAC's broadcasts and relay notifications |
 
-Leave the numbers as they are unless another program needs one. Never give the host programs port
+Leave the numbers as they are unless another program needs one. Never give the external programs port
 8515 or 8514: Aether then refuses to start.
 
 ## 21. Winlink Express, Pat and VarAC
 
-Turn on **Host programs** in Setup step 5, then point the program's VARA HF settings at
+Turn on **External programs** in Setup step 5, then point the program's VARA HF settings at
 `127.0.0.1` and port 8300. There are two ways to run the radio:
 
 - **Aether keys the radio** (CAT, rigctld, FLRig, serial, CM108 or VOX). This is the usual way for
   Winlink Express and Pat.
-- **The program keys and tunes the radio** (Setup step 2, *Radio control*: *Host program*). This
+- **The program keys and tunes the radio** (Setup step 2, *Radio control*: *External program*). This
   is VarAC's way, with its RIG tab's PTT and frequency control on CAT, as with VARA. Keep it in a profile of its own.
 
-While **Host programs** is on, the program sets the callsign and the bandwidth: Setup shows **Host**
-in their places, and your own come back when the program leaves.
+While an external program is connected it sets the callsign, and its `BW` command may move the
+bandwidth; your own come back when the program leaves. Setup always shows your own.
 
 - The program's `MYCALL` names the callsigns it answers for. While it is attached, Aether answers no
   other callsign of its own.
@@ -1203,7 +1203,7 @@ in their places, and your own come back when the program leaves.
   it, though its BUSY reads ON while it runs.
 - A call through a digipeater (a path with *Via* in Winlink Express or Pat) is refused: Aether
   relays nothing. Call the station directly.
-- One program at a time uses the host port. A program that connects again replaces the old
+- One program at a time uses the external programs port. A program that connects again replaces the old
   connection, and the Log says so (*host:* lines).
 - Winlink Express closes the modem it started: turn off its automatic launch and start Aether
   yourself.
@@ -1224,10 +1224,10 @@ stay as they are, and VARA HF stays one click away.
      (`VarAC.ini`, or the one you pick in step 5), so your rig, callsign and other VarAC settings
      carry over. Only the modem settings change: VarAC starts Aether instead of VARA, on Aether's
      ports, with the KISS port on and no VARA monitor.
-   - It saves the Aether profile **VarAC default**: your settings with **Host programs** and
+   - It saves the Aether profile **VarAC default**: your settings with **External programs** and
      **KISS programs** on. If your VarAC profile keys the radio itself (CAT, OmniRig, FLRig,
-     Hamlib or DTR/RTS), the profile also sets **Radio control** to **Host program** and the rules
-     to *None*, as Setup does for a host program. If VarAC uses VOX, Aether keeps its own radio
+     Hamlib or DTR/RTS), the profile also sets **Radio control** to **External program** and the rules
+     to *None*, as Setup does for an external program. If VarAC uses VOX, Aether keeps its own radio
      control. **Control** is *Local* in it if yours was *Automatic*, as for a gateway: VarAC has an
      operator at the radio.
 3. Press **Switch to VarAC default**, or pick it on the Profile bar.
@@ -1260,7 +1260,7 @@ says what will change before anything does. Untick the row to go back to VARA.
 
 *Figure 35. Winlink's programs found. Winlink Express in C:\RMS Express is set up for Aether.*
 
-![The window for the test copy of Winlink Express in D:\Radio\WLE test: an amber warning that Winlink Express's settings in that folder will change and the file is kept as RMS Express.ini.aether.bak; In Winlink Express, Auto Launch Vara True to False; the Aether profile Winlink Express WLE test with its callsign N1CALL, Host programs on, bandwidth 2300 Hz, host port 8310, keyed by Winlink Express, sideband USB, and two notes; Switch to it now and set the dial to 7.082 MHz, ticked; the buttons Set up, Make a copy first and Cancel; and a line saying a copy goes to D:\Radio\WLE test Aether](screens/hostapps-setup.png)
+![The window for the test copy of Winlink Express in D:\Radio\WLE test: an amber warning that Winlink Express's settings in that folder will change and the file is kept as RMS Express.ini.aether.bak; In Winlink Express, Auto Launch Vara True to False; the Aether profile Winlink Express WLE test with its callsign N1CALL, External programs on, bandwidth 2300 Hz, external programs port 8310, keyed by Winlink Express, sideband USB, and two notes; Switch to it now and set the dial to 7.082 MHz, ticked; the buttons Set up, Make a copy first and Cancel; and a line saying a copy goes to D:\Radio\WLE test Aether](screens/hostapps-setup.png)
 
 *Figure 36. What setting up the test copy will change.*
 
@@ -1359,7 +1359,7 @@ Winlink lists them as VARA HF, and a VARA station could not connect to one.
 
 ### RMS Packet
 
-RMS Packet is Winlink's gateway for VHF and UHF. Its *Vara FM* setting connects to Aether's host
+RMS Packet is Winlink's gateway for VHF and UHF. Its *Vara FM* setting connects to Aether's external
 programs port, and its *KISS ACKMODE* packet channel to the KISS port; both carry a Winlink session
 on the bench. Keep it off the air with Aether HF: it reports its channel to Winlink as VARA FM, and
 its users are on VHF and UHF, where Aether HF cannot reach them. It waits for Aether FM.
@@ -1381,10 +1381,11 @@ Aether is the modem. Each is set up in its own window, and each has its own manu
 | Sending your logs to the project | Aether | [Sending files](#sending-files) |
 
 > **Note.** RadioPost needs Aether to key the radio **itself**. In Setup step 2 choose CAT, serial,
-> rigctld, FLRig, CM108 or VOX, not *Host program*. Keyed by a host program, Aether transmits only for that
+> rigctld, FLRig, CM108 or VOX, not *External program*. Keyed by an external program, Aether transmits only for that
 > program, and RadioPost's calls never reach the air.
 
-- **RadioPost connects to the control port, 8515**, not to the host programs port. Leave both
+- **RadioPost is not an external program.** Leave **External programs** unchecked for it in Setup
+  step 5: it connects to the control port, 8515, not to the external programs port. Leave both
   numbers as they are.
 - **Callsigns.** RadioPost calls and answers as the callsign it was enrolled with. Do not copy it into
   Aether. While a RadioPost program holds a callsign, Setup step 1 shows it greyed, such as
@@ -1421,7 +1422,7 @@ change.
 
 ## 25. Several programs on one station
 
-**A program speaks for the station.** This holds for a host program (Trimode, Winlink Express,
+**A program speaks for the station.** This holds for an external program (Trimode, Winlink Express,
 VarAC) and a RadioPost program alike.
 
 - While a program holds a callsign, only the programs' callsigns are answered. Your own callsign
@@ -1431,7 +1432,7 @@ VarAC) and a RadioPost program alike.
 - When a program has left, a station calling its callsign brings up the mismatch banner, which names
   the program to start again.
 
-**Two programs on one radio.** A host program and a RadioPost program (RMS Trimode and RadioPost
+**Two programs on one radio.** An external program and a RadioPost program (RMS Trimode and RadioPost
 Gateway, for example) can share one radio. Give them different callsigns, such as `N1CALL-1` for
 Trimode and `N1CALL-10` for RadioPost.
 
@@ -1440,7 +1441,7 @@ Trimode and `N1CALL-10` for RadioPost.
 - The station runs one session at a time.
 - Two programs cannot hold the same callsign: the first to claim it keeps it, and the Log says which
   program was refused it (*claims:* lines).
-- RadioPost needs Aether to key the radio itself, so the station runs with Aether keying, not *Host program*.
+- RadioPost needs Aether to key the radio itself, so the station runs with Aether keying, not *External program*.
 
 **A program that leaves takes its session with it.** When the program that owns a session or a call
 disconnects from Aether (it closed, crashed or lost its connection), Aether ends that session as
@@ -1483,7 +1484,7 @@ What has been decided:
   repeater owner's leave.
 - **Packet radio too.** 1200 baud AFSK, 9600 baud G3RUH, FX.25, IL2P and AX.25 connected mode, for
   APRS, BBSs, nodes and Winlink's packet gateways.
-- **The same programs.** RadioPost on the control port, programs written for VARA FM on the host
+- **The same programs.** RadioPost on the control port, programs written for VARA FM on the external
   port, and KISS.
 
 How fast it will be is not promised yet: figures go in this manual when they have been measured.
@@ -1613,8 +1614,8 @@ turn off USB power saving.
 **The Log says the playback skipped inside a transmission.** The computer stalled while Aether was
 sending. The cures are the ones above.
 
-**A host program says nothing is connected, or VARA is missing.** Check **Host programs** is on in step 5
-and the program points at `127.0.0.1` and the right port. With *Host program* radio control, the program must be attached
+**An external program says nothing is connected, or VARA is missing.** Check **External programs** is on in step 5
+and the program points at `127.0.0.1` and the right port. With *External program* radio control, the program must be attached
 before the window can transmit.
 
 **The Modem lamp is red.** The modem has stopped or is restarting. Wait a few seconds after a save. If it
@@ -1646,8 +1647,8 @@ them off in Setup step 5.
 | **Beacon** | Your callsign on the air once, addressed to nobody |
 | **Control** | Local, remote or automatic, under §97.109. It decides which rules apply |
 | **Datagram** | One KISS frame sent on the air on its own, outside any session |
+| **External program** | A program written for VARA HF (Winlink Express, Pat, VarAC, RMS Trimode, RMS Packet), using Aether through its VARA-compatible port. RadioPost is not one: it uses the control port |
 | **Floor, tone floor** | The slowest, most robust rungs: single tones that get through under the noise. Calls, probes and beacons go there |
-| **Host program** | Winlink Express, Pat, VarAC or RMS Trimode, using Aether through its VARA-compatible port |
 | **Ladder** | All the rungs of a bandwidth, slowest first. Also the Test session's step that tries each rung |
 | **Link protocol** | The version of the rules both stations follow on the air. Different versions cannot connect |
 | **Modem (aetherd)** | The part of Aether that does the work; the window talks to it |
@@ -1671,14 +1672,14 @@ them off in Setup step 5.
 | Sound card and radio control | Setup step 2 |
 | Receive level | Setup step 3: aim for *Good* |
 | Bandwidth, identify by, turnaround | Setup step 4 |
-| Host programs, KISS, updates, debug mode | Setup step 5 |
+| External programs, KISS, updates, debug mode | Setup step 5 |
 | Drive | Session tab › Keying and drive › **Set drive**: ALC just moving, then back off |
 | Call, disconnect, probe, beacon, Test | Session tab › Call |
 | The dial | Session tab › Radio dial, or **Dial is at** |
 | Signal, spectrum, waterfall | Diagnostics, or **Undock** (in Compact and Mini, the button after **Tune**) |
 | Sending logs and recordings | Log tab › **Send files…** |
 | Control port | 8515 (this window, RadioPost) |
-| Host programs port | 8300 and 8301 (Winlink Express, Pat, VarAC, RMS Trimode) |
+| External programs port | 8300 and 8301 (Winlink Express, Pat, VarAC, RMS Trimode) |
 | KISS port | 8100, when on (APRS, packet, VarAC's broadcasts) |
 | Settings and logs | `%APPDATA%\aether-hf\` on Windows, `~/.config/aether-hf/` on Linux and macOS |
 | Recordings | The `recordings` folder there; Session tab › **Open folder** |
@@ -1713,7 +1714,7 @@ them off in Setup step 5.
 ## Keeping this manual current
 
 This manual is part of the application. A change to anything an operator sees or sets (a tab, a box,
-a button, a setting or its default, a banner, a reading, what a host program is told) updates the
+a button, a setting or its default, a banner, a reading, what an external program is told) updates the
 manual in the same commit. So does a change in RadioPost that alters how it uses Aether. The rule is
 in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 
@@ -1778,3 +1779,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.18.0 | 2026-11-23 | [Full, Compact and Mini](#full-compact-and-mini) and [The signal window](#the-signal-window): Compact and Mini have a small button after **Tune** that opens the signal window, the waterfall, spectrum and constellation, as **Undock** does; while the window is open it brings it to the front. |
 | 1.18.1 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): one row per install, listing all its callsigns, the one in use first. A Winlink Express with several callsigns had a row for each, which looked like the same install twice, and ticking one changed them all. The profile is named for the install's folder (*Winlink Express TS480*), not the callsign, so copies of Winlink Express for different radios no longer share one profile when they run under one callsign. An install with nothing to set up has a greyed row saying why. |
 | 1.19.0 | 2026-11-23 | [Step 4](#step-4-modem-settings) and [Troubleshooting](#28-troubleshooting): the identifier sent on its own after a call or probe that led to no session is counted down on the banner in 5 s steps (*Identifying as N1CALL in 15 s, after a call nobody answered*) and named in the Log when it goes. A TX-500 keying half a minute after an unanswered call was taken for a fault. |
+| 1.20.0 | 2026-11-23 | *Host programs* are now **External programs** (Setup step 5, the ports, the programs chapter and the glossary), and the box says *leave unchecked for RadioPost* after the tick: RadioPost is not one, and an operator kept taking it for one. [Step 1](#step-1-callsign-and-rules)'s box is the **Aether callsign**, *for Aether standalone use*, and like step 4's **Bandwidth** it always shows your own setting: greyed, the bandwidth had hidden a 500 Hz setting the station ran, and a 2300 Hz call to it went unanswered. The note after the callsign says which callsigns a program uses now. |

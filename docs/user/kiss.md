@@ -7,7 +7,7 @@ Aether hears from another station goes to every program connected to the port.
 
 This is for programs that send **frames**, not sessions: APRS clients, packet programs, and
 VarAC's broadcast messages. Winlink Express and VarAC **sessions** and Pat
-use the VARA-compatible *host* interface instead (Setup → *Host programs*; port 8300), which is
+use the VARA-compatible *host* interface instead (Setup → *External programs*; port 8300), which is
 Aether's ARQ link with retransmissions and rate control. A packet program *can* run its own
 AX.25 connected sessions over the KISS port, but at HF datagram speeds that is slow — see
 *Limitations*.
@@ -68,7 +68,7 @@ bench; the others have not (see *Status*).
 VarAC uses both of Aether's ports: its sessions and pings go through the host interface (8300),
 and its **broadcast messages** through the KISS port (8100).
 
-1. In Aether: turn on **Host programs** (port 8300) and **KISS programs** (port 8100). Setup
+1. In Aether: turn on **External programs** (port 8300) and **KISS programs** (port 8100). Setup
    step 4's bandwidth can stay as you use it most: VarAC's `BW500` moves the station to 500 Hz
    while VarAC is attached, and KISS frames at the default rung are heard at either bandwidth.
 2. In VarAC's VARA HF modem settings: the command port 8300 and the KISS port 8100 — its
@@ -145,7 +145,7 @@ about 16 s of air, and on HF a channel carries one transmission at a time.
 
 ### Winlink Express
 
-For Winlink, use a **Vara HF** session in Winlink Express (Setup → *Host programs*): that is
+For Winlink, use a **Vara HF** session in Winlink Express (Setup → *External programs*): that is
 Aether's ARQ link, and it is far faster than AX.25 over datagrams. The KISS port is there for
 Winlink Express's **Packet** sessions only if you want to try them:
 

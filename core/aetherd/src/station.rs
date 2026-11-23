@@ -11537,8 +11537,8 @@ mod tests {
         let events = air.a.take_events();
         assert!(
             events.iter().any(|e| e.starts_with(
-                "bandwidth:calling KK4XYZ at 2300 Hz, as the host program asked, though it was \
-                 last heard running 500 Hz"
+                "bandwidth:calling KK4XYZ at 2300 Hz, as the program placing the call asked, \
+                 though it was last heard running 500 Hz"
             ) && !e.contains("unanswered tries")),
             "{events:?}"
         );

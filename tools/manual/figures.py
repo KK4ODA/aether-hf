@@ -403,7 +403,7 @@ def fig_keying() -> Plate:
             ("Dial typed by hand", "caution"),
         ),
         (
-            "Host program",
+            "External program",
             [("Aether", "aether", "local"), ("VarAC", "program", "key"), ("Radio", "neutral", "")],
             [
                 "The program keys the radio when",
@@ -917,7 +917,7 @@ def fig_programs() -> Plate:
         f.box(24, y, 256, 80, role, title=title, rows=lines, icon=icon, title_size=15)
     ports = [
         (82, "Control port", "8515", "the control API", 124),
-        (218, "Host port", "8300 and 8301", "VARA-compatible", 88),
+        (218, "External programs", "8300 and 8301", "VARA-compatible", 88),
         (322, "KISS port", "8100, when on", "KISS over TCP", 88),
     ]
     for y, name, number, what, h in ports:

@@ -3445,7 +3445,14 @@ gateway under the same base callsign that scans the dial, `station_call_s`). The
 19:38:52Z on 7.082 was refused at the house ("runs 500 Hz"): the operator had loaded the profile
 *P2P FTDx10 500Hz* (own bandwidth 500) and then ticked *Host programs*, which greys step 4's
 bandwidth to **Host** and hides the 500 — RadioPost is no host program and cannot set the bandwidth
-while it listens. Proposed to the author: show the number in step 4 always. The radio keying "well
+while it listens. The author's decisions (beta.173): step 4's **Bandwidth** always shows the number;
+step 1's box is the **Aether callsign**, always shown, with *(for Aether standalone use)* after it
+(and, while a program answers for the station, *in use now: …*; `wz-call-note`,
+`applyCallsignOwner`); and what an operator reads calls host programs **External programs**, the
+step 5 box saying *On (leave unchecked for RadioPost)* — the author kept taking RadioPost (an RPMI
+*host*) for one. The panel, the daemon's bandwidth sentences, the manual (1.20.0), the user guides,
+the README and two schematics say *external program*; the specs, ADRs and code keep *host*
+(`[host]`, the host interface). The radio keying "well
 after" the sessions was ADR-0055's setup identifier after each unanswered call (18:32:51, 19:29:20);
 it had no log line of its own. Now `status.identifier.setup` (`as`, `in_s`, `after`, `waiting`)
 says it is owed, the banner counts it down (*Identifying as WD5EMA in 25 s, after a call nobody

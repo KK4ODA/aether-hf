@@ -57,8 +57,8 @@
           <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
           <span id="reg-badge-text" title="The verdict on this station's widest transmission, here and now">—</span>
         </button>
-        <span class="apps-chip" id="apps-chip" title="Programs using this station now: a host program on the VARA-compatible interface, a program on the control API such as RadioPost, KISS programs on the KISS port. each connected program is a green check and its name; 'listening' marks one that answers calls to its callsigns; 'calls to … not answered', with no program there, says the station's own callsign rests unanswered" role="status" hidden></span>
-        <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: a host program asked for it, or a call came in it" role="status" hidden></span>
+        <span class="apps-chip" id="apps-chip" title="Programs using this station now: an external program on the VARA-compatible interface, a program on the control API such as RadioPost, KISS programs on the KISS port. each connected program is a green check and its name; 'listening' marks one that answers calls to its callsigns; 'calls to … not answered', with no program there, says the station's own callsign rests unanswered" role="status" hidden></span>
+        <span class="apps-chip" id="bw-chip" title="The bandwidth the station runs, when it is not its own: an external program asked for it, or a call came in it" role="status" hidden></span>
         <span class="lamp modem-lamp" id="lamp-link" title="Modem: whether this panel is connected to the modem" role="status" aria-label="Not connected to the modem">Modem</span>
         <div class="view-switch" id="view-switch" role="group" aria-label="View" title="How much of the panel to show: all of it, the readings with the channel's activity, or the readings alone">
           <button class="ghost" id="btn-view-full" data-view="full" aria-pressed="true" title="Full view: every tab, in the window you choose">Full</button>
@@ -117,7 +117,7 @@
         <span id="mismatch-banner-text" title="Who, in which bandwidth or version, and what to do"></span>
         <button class="small" id="btn-mismatch-setup" title="Open Setup step 4, where the bandwidth is set">Setup step 4</button>
         <button class="small" id="btn-mismatch-update" title="Check for a newer version of Aether HF: this station's is the older one" hidden>Check for Updates</button>
-        <button class="small" id="btn-mismatch-answer" title="Answer calls to this callsign too, from now until the modem restarts or a host program names its own callsigns; to keep it, add it in Setup step 1" hidden>Answer as it too</button>
+        <button class="small" id="btn-mismatch-answer" title="Answer calls to this callsign too, from now until the modem restarts or an external program names its own callsigns; to keep it, add it in Setup step 1" hidden>Answer as it too</button>
         <button class="small" id="btn-mismatch-call" title="Call the station heard under the same callsign with another SSID" hidden>Call it</button>
         <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">Dismiss</button>
       </div>
@@ -290,7 +290,7 @@
               <span class="sub op-note" id="dial-hero-sub" title="Where the dial reading comes from, when it is not the radio"></span>
             </div>
           </div>
-          <span class="host-owned" id="host-owns-radio" title="The host program tunes and keys the radio (Setup step 2): choose the frequency there" hidden>Host</span>
+          <span class="host-owned" id="host-owns-radio" title="The external program tunes and keys the radio (Setup step 2): choose the frequency there" hidden>External program</span>
           <div class="tool-row" id="memory-row">
             <select id="memory" title="Remembered dial frequencies: picking one tunes the radio there (CAT, rigctld or FLRig); Add your own" aria-label="Remembered dial frequencies: picking one tunes the radio"></select>
             <div class="btn-group" role="group" aria-label="Dial list" title="Edit the list of remembered dials">
@@ -567,7 +567,7 @@
         <!-- 2. the receiver's own numbers, and the programs attached -->
         <section class="card console-card tiles-card" id="receiver-card" aria-labelledby="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached">
           <div class="card-head">
-            <h2 class="card-title" id="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached. Rate control is how the other station hears you, smoothed, which your station picks its rung by, and how many frames of your last transmission it never heard. They hear you at is what the other station measured on your last burst, carried back in its acknowledgement. Mode confidence is how clearly the last frame's mode was read from its chips; below 1.3 is a guess. The busy detector line gives every number behind its decision: the level of the latest 25 ms block, the noise floor, the margin between them, the threshold, the largest margin since the last reading, the passband's shape (flat noise reads about 6 dB, a narrowband signal 15 and up) and which path last marked the channel busy. Host program and KISS say what is attached; Audio is the sound card's input.">Receiver</h2>
+            <h2 class="card-title" id="receiver-title" title="The receiver's own readings, the busy detector, the sound card and the programs attached. Rate control is how the other station hears you, smoothed, which your station picks its rung by, and how many frames of your last transmission it never heard. They hear you at is what the other station measured on your last burst, carried back in its acknowledgement. Mode confidence is how clearly the last frame's mode was read from its chips; below 1.3 is a guess. The busy detector line gives every number behind its decision: the level of the latest 25 ms block, the noise floor, the margin between them, the threshold, the largest margin since the last reading, the passband's shape (flat noise reads about 6 dB, a narrowband signal 15 and up) and which path last marked the channel busy. External program and KISS say what is attached; Audio is the sound card's input.">Receiver</h2>
           </div>
           <div class="tiles" id="readings-receiver">
             <div class="reading tile" title="How the other station hears you, smoothed: what your station chooses its speed by. Below it, how many frames of your last transmission the other station never heard at all">
@@ -591,8 +591,8 @@
               <div class="sub" id="d-busy-sub">level · floor</div>
               <div class="sub numerals" id="d-busy-why" title="The largest margin since the last reading, the passband's shape, how far the radio's AGC holds its gain down when it does, and which path last marked the channel busy"></div>
             </div>
-            <div class="reading tile" title="Whether a host program such as Winlink Express or Pat is attached">
-              <div class="label">Host program</div>
+            <div class="reading tile" title="Whether an external program such as Winlink Express or Pat is attached">
+              <div class="label">External program</div>
               <div class="value" id="d-host">—</div>
               <div class="sub" id="d-host-sub"></div>
             </div>
@@ -718,7 +718,7 @@
               <button class="step-link" data-step="2" title="Step 2: the sound card, and how the radio is keyed and tuned"><span class="step-link-n">2</span>Radio interface</button>
               <button class="step-link" data-step="3" title="Step 3: the receive level from the sound card"><span class="step-link-n">3</span>Receive level</button>
               <button class="step-link" data-step="4" title="Step 4: bandwidth, speed, the busy channel, the key limit, the identifier and band edges"><span class="step-link-n">4</span>Modem</button>
-              <button class="step-link" data-step="5" title="Step 5: updates, recording, host programs and the KISS port"><span class="step-link-n">5</span>Application</button>
+              <button class="step-link" data-step="5" title="Step 5: updates, recording, External programs and the KISS port"><span class="step-link-n">5</span>Application</button>
               <button class="step-link" data-step="6" title="Step 6: write the settings to the modem's configuration"><span class="step-link-n">6</span>Save</button>
             </nav>
           </section>
@@ -730,9 +730,9 @@
                 <h3 class="card-title step-title" title="Your callsign, the rules the station operates under, and the field log. Local and remote control follow the same rules: the data segments of your class, a signal no wider than 2.8 kHz, all of it inside the segment. Automatic is a station with nobody at the control point (an unattended mailbox or gateway): it may transmit freely only inside the automatic sub-bands of §97.221(b), and elsewhere only answer a station under local or remote control, at 500 Hz or less (§97.221(c)). Aether judges every transmission before keying and refuses what the rules do not allow; you remain the control operator. The field log's details go into every recording."><span class="step-num">1</span>Callsign and rules</h3>
               </div>
               <div class="row">
-                <label for="wz-call" title="This station's callsign">Callsign</label>
-                <input id="wz-call" title="Your callsign: letters, digits, - and /, up to nine characters. An SSID (KK4ODA-1) or a suffix (KK4ODA/P) is fine. What you start from this window goes out as it. While a program answers for the station (a host program's MYCALL, or a RadioPost program's callsign), only the program's callsigns are answered, and this box shows them; this one comes back when the program stops" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
-                <span class="host-owned" id="wz-call-host" title="Set by the host program: its MYCALL is the callsign while it is attached, and this station's own comes back when it closes. Clear Host programs in step 5 to edit it" hidden>Host</span>
+                <label for="wz-call" title="This station's own callsign: what Aether answers to and identifies as when no program speaks for it">Aether callsign</label>
+                <input id="wz-call" title="Your callsign: letters, digits, - and /, up to nine characters. An SSID (KK4ODA-1) or a suffix (KK4ODA/P) is fine. What you start from this window goes out as it. While a program answers for the station (an external program's MYCALL, or a RadioPost program's callsign), only the program's callsigns are answered; this one comes back when the program stops" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
+                <span class="sub" id="wz-call-note" title="This is the callsign Aether uses on its own: your calls, probes, Tests and beacons from this window, and calls answered when no program is running. A program sets its own callsign: RadioPost its enrolled callsign, an external program its MYCALL. While one does, only the program's callsigns are answered">(for Aether standalone use)</span>
               </div>
               <div class="row">
                 <label for="reg-profile" title="The regulations Aether judges every transmission against">Rules</label>
@@ -741,7 +741,7 @@
                   <option value="us-fcc-part97">United States — FCC Part 97</option>
                   <option value="none">None — I check every transmission myself</option>
                 </select>
-                <span class="host-owned as-select" id="reg-profile-host" title="None: the host program keys the radio and owns its dial, which Aether cannot read; you check every transmission, as with VARA. Choose another radio control in step 2 to set the rules" hidden>Host</span>
+                <span class="host-owned as-select" id="reg-profile-host" title="None: the external program keys the radio and owns its dial, which Aether cannot read; you check every transmission, as with VARA. Choose another radio control in step 2 to set the rules" hidden>External program</span>
               </div>
               <div class="row">
                 <label for="reg-control" title="How the station is controlled (§97.109)">Control</label>
@@ -751,7 +751,7 @@
                   <option value="remote">Remote — I am at the radio through a control link</option>
                   <option value="automatic">Automatic — it runs with nobody at the control point</option>
                 </select>
-                <span class="host-owned as-select" id="reg-control-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>Host</span>
+                <span class="host-owned as-select" id="reg-control-host" title="Not used: the external program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>External program</span>
               </div>
               <div class="row">
                 <label for="reg-license" title="The control operator's license class (§97.301)">License class</label>
@@ -763,13 +763,13 @@
                   <option value="extra">Amateur Extra</option>
                   <option value="novice">Novice</option>
                 </select>
-                <span class="host-owned" id="reg-license-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>Host</span>
+                <span class="host-owned" id="reg-license-host" title="Not used: the external program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>External program</span>
                 <label for="reg-sideband" class="label-inline" title="The sideband the radio transmits the modem's audio on">Sideband</label>
                 <select id="reg-sideband" class="narrow" title="The sideband the radio transmits the modem's audio on; data is sent on USB by convention, and on LSB the signal lands below the dial, mirrored">
                   <option value="usb">USB</option>
                   <option value="lsb">LSB</option>
                 </select>
-                <span class="host-owned" id="reg-sideband-host" title="Not used: the host program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>Host</span>
+                <span class="host-owned" id="reg-sideband-host" title="Not used: the external program keys the radio, and Aether's rules are None. Choose another radio control in step 2 to set it" hidden>External program</span>
               </div>
               <div class="field-group" role="group" aria-labelledby="field-log-title">
                 <h4 class="sub-heading" id="field-log-title" title="Details that go into every recording, so a report needs no follow-up">Field log</h4>
@@ -796,7 +796,7 @@
             <!-- 2 -->
             <li class="step card console-card" data-step="2">
               <div class="card-head step-head">
-                <h3 class="card-title step-title" title="The sound card, and how the radio is keyed and tuned. A serial port keys the radio through its RTS or DTR line, or by the radio's own CAT command on the CAT port, which needs no second port and also reads the dial frequency the rules need. The rate is the one in the radio's menu; an Icom also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios keyed over CAT transmit from the DATA input. rigctld and FLRig are the other ways to both, and a host program can tune through either at the same time. A radio's USB connection often shows two ports: Yaesu's Enhanced port carries CAT and its Standard port the RTS line; Icom's single port carries both. A DRA, URI or other CM108-class interface keys through its codec's own GPIO pin (3 on those boards). Host program: the host program (VarAC, Winlink Express) owns the radio, keys it on PTT ON and tunes it, as with VARA; Aether opens no port on the radio and the rules in step 1 are None. None: a VOX interface such as a SignaLink, or listening only. Without CAT, rigctld or FLRig the radio cannot report its dial: say where it is on the Session tab before transmitting."><span class="step-num">2</span>Radio interface</h3>
+                <h3 class="card-title step-title" title="The sound card, and how the radio is keyed and tuned. A serial port keys the radio through its RTS or DTR line, or by the radio's own CAT command on the CAT port, which needs no second port and also reads the dial frequency the rules need. The rate is the one in the radio's menu; an Icom also needs its CI-V address (IC-7300 94, IC-705 A4, IC-9700 A2). Yaesu radios keyed over CAT transmit from the DATA input. rigctld and FLRig are the other ways to both, and an external program can tune through either at the same time. A radio's USB connection often shows two ports: Yaesu's Enhanced port carries CAT and its Standard port the RTS line; Icom's single port carries both. A DRA, URI or other CM108-class interface keys through its codec's own GPIO pin (3 on those boards). External program: the external program (VarAC, Winlink Express) owns the radio, keys it on PTT ON and tunes it, as with VARA; Aether opens no port on the radio and the rules in step 1 are None. None: a VOX interface such as a SignaLink, or listening only. Without CAT, rigctld or FLRig the radio cannot report its dial: say where it is on the Session tab before transmitting."><span class="step-num">2</span>Radio interface</h3>
               </div>
               <div class="row">
                 <label for="wz-profile" title="Known interfaces: picking one fills in the fields below, once">Preset</label>
@@ -814,13 +814,13 @@
                 </div>
                 <div class="row">
                   <span class="label-like" title="The transmit audio level: it sets the radio's output power, and each profile keeps its own">Transmit level</span>
-                  <span class="numerals" id="setup-tx-level" title="The transmit level this station runs at, in dB below full scale. It is part of the profile, and it is set with the slider and Set drive under Keying and drive on the Session tab. A host program's drive level (VarAC's DRIVELEVEL) is not used" role="status" aria-live="polite">−12 dB</span>
+                  <span class="numerals" id="setup-tx-level" title="The transmit level this station runs at, in dB below full scale. It is part of the profile, and it is set with the slider and Set drive under Keying and drive on the Session tab. An external program's drive level (VarAC's DRIVELEVEL) is not used" role="status" aria-live="polite">−12 dB</span>
                   <button class="quiet small" id="setup-tx-goto" title="Open Keying and drive on the Session tab, where the level is set against the radio's ALC">Set…</button>
                 </div>
               </div>
               <div class="row">
                 <label for="dev-ptt" title="What keys the radio, and what reads and tunes its dial">Radio control</label>
-                <select id="dev-ptt" title="What keys the radio and tunes it: Host program (the host program keys it on PTT ON and tunes it), a serial port (by the radio's CAT command, which also reads the dial and tunes it, or by its RTS or DTR line), a CM108 interface, rigctld or FLRig; None for VOX or listening only"></select>
+                <select id="dev-ptt" title="What keys the radio and tunes it: External program (the external program keys it on PTT ON and tunes it), a serial port (by the radio's CAT command, which also reads the dial and tunes it, or by its RTS or DTR line), a CM108 interface, rigctld or FLRig; None for VOX or listening only"></select>
                 <select id="ptt-line" class="narrow" title="How the port keys the radio: a serial line, or the radio's own CAT command" aria-label="How the port keys the radio">
                   <option value="rts">RTS line</option>
                   <option value="dtr">DTR line</option>
@@ -838,8 +838,8 @@
                   <option value="8">GPIO 8</option>
                 </select>
                 <input id="ptt-address" title="Where rigctld listens, as host:port" type="text" class="address" value="127.0.0.1:4532" aria-label="rigctld address" hidden />
-                <span id="host-lead-fields" title="How long the audio waits after PTT ON, for the host program to key the radio" hidden>
-                  <input id="ptt-lead" title="Milliseconds from PTT ON to the first audio: the host program's time to key the radio (VARA allows 100)" type="text" inputmode="numeric" class="port" value="150" aria-label="Milliseconds before the audio" />
+                <span id="host-lead-fields" title="How long the audio waits after PTT ON, for the external program to key the radio" hidden>
+                  <input id="ptt-lead" title="Milliseconds from PTT ON to the first audio: the external program's time to key the radio (VARA allows 100)" type="text" inputmode="numeric" class="port" value="150" aria-label="Milliseconds before the audio" />
                   <span class="sub" title="Milliseconds">ms</span>
                 </span>
               </div>
@@ -887,11 +887,10 @@
               </div>
               <div class="row">
                 <label for="radio-bandwidth" title="This station's own bandwidth">Bandwidth</label>
-                <select id="radio-bandwidth" title="The station's own bandwidth: 2300 Hz for Winlink, Pat and the most data; 500 Hz for peer-to-peer and VarAC. Both stations of a session run the same one, and a call across a difference brings up the warning at the top naming who has to change. A 2300 Hz station answers a 500 Hz call at 500 Hz and comes back after the session">
+                <select id="radio-bandwidth" title="The station's own bandwidth: 2300 Hz for Winlink, Pat and the most data; 500 Hz for peer-to-peer and VarAC. Both stations of a session run the same one, and a call across a difference brings up the warning at the top naming who has to change. A 2300 Hz station answers a 500 Hz call at 500 Hz and comes back after the session. An external program (Winlink Express, VarAC, Trimode) may move the station while it is connected, and the header says so; RadioPost does not change it while it listens, so a station that answers runs this">
                   <option value="2300">2300 Hz</option>
                   <option value="500">500 Hz</option>
                 </select>
-                <span class="host-owned as-select" id="radio-bandwidth-host" title="Set by the host program: its BW500, BW2300 or BW2750 moves the station while it is attached, between sessions, and this station's own comes back when it closes. Clear Host programs in step 5 to edit it" hidden>Host</span>
                 <label class="check" title="Take calls and answer probes; make no call and send no beacon. An unattended station is also Automatic under Control in step 1, and the rules then decide where it may answer (§97.221)"><input id="radio-answer-only" title="Take calls and answer probes; make no call and send no beacon" type="checkbox" /> Answer only</label>
               </div>
               <div class="row">
@@ -936,7 +935,7 @@
                   <option value="morse">Morse</option>
                   <option value="data">Data signal</option>
                 </select>
-                <label class="check" id="radio-cwid-box" title="Send this station's callsign at the end of each session: the last thing it sends for the session, never during one, on a beacon or on a KISS frame. A US callsign always sends it (§97.119); for any other callsign it is your choice, off by default, or the host program's CWID ON"><input id="radio-cwid" title="Send this station's callsign at the end of each session" type="checkbox" /> On</label>
+                <label class="check" id="radio-cwid-box" title="Send this station's callsign at the end of each session: the last thing it sends for the session, never during one, on a beacon or on a KISS frame. A US callsign always sends it (§97.119); for any other callsign it is your choice, off by default, or the external program's CWID ON"><input id="radio-cwid" title="Send this station's callsign at the end of each session" type="checkbox" /> On</label>
               </div>
               <div class="row" id="radio-cwid-speed-row">
                 <label for="radio-cwid-wpm" title="The Morse identifier's speed">Morse speed</label>
@@ -955,7 +954,7 @@
             <!-- 5 -->
             <li class="step card console-card" data-step="5">
               <div class="card-head step-head">
-                <h3 class="card-title step-title" title="Updates, recording, host programs and the KISS port. Host programs use the VARA-compatible interface: point the program's TNC settings at 127.0.0.1 and the port (the data port is the next number up); the modem restarts when you change it. While the box is ticked, the program sets the callsign and the bandwidth. KISS programs connect to a KISS over TCP port, 8100 by default (VARA HF's, so a program set up for VARA needs no change); each KISS frame goes out as its own transmission with no acknowledgement, only while no session is up, and the port takes effect when saved, without a restart. Recording notes are written into every recording that starts on its own."><span class="step-num">5</span>Application settings</h3>
+                <h3 class="card-title step-title" title="Updates, recording, External programs and the KISS port. External programs use the VARA-compatible interface: point the program's TNC settings at 127.0.0.1 and the port (the data port is the next number up); the modem restarts when you change it. While the box is ticked, the program sets the callsign and the bandwidth. KISS programs connect to a KISS over TCP port, 8100 by default (VARA HF's, so a program set up for VARA needs no change); each KISS frame goes out as its own transmission with no acknowledgement, only while no session is up, and the port takes effect when saved, without a restart. Recording notes are written into every recording that starts on its own."><span class="step-num">5</span>Application settings</h3>
               </div>
               <div class="row">
                 <label for="update-channel" title="Which releases the updater offers">Updates</label>
@@ -979,9 +978,9 @@
                 <input id="record-standing" title="Notes written into every recording that starts on its own: band, antenna, dial frequency" type="text" class="prose" placeholder="Band, antenna, dial" />
               </div>
               <div class="row">
-                <label for="host-enabled" title="Winlink Express, Pat, VarAC or RMS Trimode on the VARA-compatible interface. Not RadioPost: its client and gateway use Aether's control port, 8515, and nothing set here">Host programs</label>
-                <input id="host-port" title="The command port a host program (Winlink Express, Pat, VarAC, RMS Trimode) connects to; the data port is the next number up. RadioPost's client and gateway do not use it: they connect to Aether's control port, 8515. Not 8515 or 8514 here: this port or its data port would take the control port's number, and Setup refuses it" type="text" inputmode="numeric" class="port" value="8300" aria-label="Host command port" />
-                <label class="check" title="Let a host program use this station over the VARA-compatible interface; while it is attached it sets the callsign and the bandwidth"><input id="host-enabled" title="Let a host program use this station over the VARA-compatible interface" type="checkbox" /> On</label>
+                <label for="host-enabled" title="Programs written for VARA HF — Winlink Express, Pat, VarAC, RMS Trimode, RMS Packet — on Aether's VARA-compatible interface. Not RadioPost: its client and gateway use Aether's control port, 8515, and nothing set here">External programs</label>
+                <input id="host-port" title="The command port an external program (Winlink Express, Pat, VarAC, RMS Trimode) connects to; the data port is the next number up. RadioPost's client and gateway do not use it: they connect to Aether's control port, 8515. Not 8515 or 8514 here: this port or its data port would take the control port's number, and Setup refuses it" type="text" inputmode="numeric" class="port" value="8300" aria-label="External programs command port" />
+                <label class="check" title="Let an external program (Winlink Express, Pat, VarAC, RMS Trimode) use this station over the VARA-compatible interface; while it is attached it sets the callsign and may move the bandwidth. RadioPost does not need it: leave it unchecked for RadioPost"><input id="host-enabled" title="Let an external program use this station over the VARA-compatible interface; leave it unchecked for RadioPost" type="checkbox" /> On (leave unchecked for RadioPost)</label>
               </div>
               <div class="row">
                 <label for="kiss-enabled" title="APRS and packet programs on the KISS port">KISS programs</label>
@@ -999,7 +998,7 @@
                 <select id="kiss-rung" title="The rung KISS frames go at: 0 and 1 are the tone floor's, heard by stations of either bandwidth; a faster rung reaches only stations of this bandwidth, on a better path">
                   <option value="1">1 — tone-36</option>
                 </select>
-                <label class="check" title="Hold a KISS frame until the channel is clear, as VARA's KISS port does; a host program's IGNOREKISSDCD turns this off while it is attached"><input id="kiss-wait" title="Hold a KISS frame until the channel is clear" type="checkbox" checked /> Wait for clear</label>
+                <label class="check" title="Hold a KISS frame until the channel is clear, as VARA's KISS port does; an external program's IGNOREKISSDCD turns this off while it is attached"><input id="kiss-wait" title="Hold a KISS frame until the channel is clear" type="checkbox" checked /> Wait for clear</label>
               </div>
               <div class="row">
                 <label for="btn-kiss-disconnect" title="The KISS port's state">KISS port</label>
@@ -1208,7 +1207,7 @@
                 <li><strong>The rules</strong>: the badge beside the dial says <em>Legal</em>, <em>Warning</em> or <em>TX blocked</em> for this station's widest transmission where the dial is now; click it for the reasoning. Aether keys nothing the rules refuse, and holds the link to the rungs they allow.</li>
                 <li><strong>Session → Keying and drive</strong>: <em>Key 1 s</em> should light the rig's transmit indicator. Set your drive with <em>Set drive</em> (not <em>Tuner tone</em>) — raise the level until the rig's ALC just moves, then back off so it barely tickles; if it moves even with the level low, turn down the radio's USB data input gain. Get power from the rig's power control, not the slider.</li>
                 <li><strong>Session</strong>: type the other station's callsign and <em>Connect</em>. Leave the modem listening and it answers a call to your callsign whenever it comes; with recording on, every session is kept. Type in <em>Send</em> and press Enter: what you send stays in the box with its time and a ✓ once the other station has all of it (… on its way, ✗ if the session ended first).</li>
-                <li><strong>Host programs</strong>: turn on <em>Host programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off), Pat (<code>varahf</code>) or VarAC at it. The program then sets the callsign and the bandwidth: Setup shows <em>Host</em> in their places, and Aether goes back to its own when the program leaves.</li>
+                <li><strong>External programs</strong>: turn on <em>External programs</em> in Setup, then point Winlink Express (a Vara HF session, TNC at 127.0.0.1 and the port, auto-launch off), Pat (<code>varahf</code>) or VarAC at it. While it is connected the program sets the callsign (Setup shows <em>External program</em> in its place) and may move the bandwidth; Aether goes back to its own when the program leaves. RadioPost is not one of them: it connects to the control port, so leave <em>External programs</em> unchecked for it.</li>
                 <li><strong>KISS programs</strong>: turn on <em>KISS programs</em> in Setup, then point an APRS or packet program's KISS over TCP settings at 127.0.0.1 and 8100 — VARA HF's KISS port, so one set up for VARA needs no change.</li>
               </ol>
             </section>
@@ -1240,7 +1239,7 @@
               <div class="card-head"><h2 class="card-title" id="help-beacons-title" title="Where beacons show, and how to repeat one">Beacons</h2></div>
               <ul class="help-steps">
                 <li><strong>Sending one</strong>: <em>Beacon</em> on the Session tab puts this station's callsign on the air once, on the tone floor, addressed to nobody — so anyone listening, on either bandwidth, can say they heard you.</li>
-                <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. Under the US rules it needs you at the station — local or remote control: a beacon may be automatically controlled only in the few segments of §97.203(d) (28.20–28.30 MHz and a handful above), and Aether does not beacon unattended. With the rules at None, or a host program keying the radio, that is yours to judge.</li>
+                <li><strong>Repeating it</strong>: the <em>Repeat</em> list beside the button sends one now and another every 10 to 60 minutes until you set it back to <em>once</em>. It waits for a clear channel and for any session, probe or test to finish, skips a beacon it could not send within two minutes rather than catching up, and stops when the modem restarts. Under the US rules it needs you at the station — local or remote control: a beacon may be automatically controlled only in the few segments of §97.203(d) (28.20–28.30 MHz and a handful above), and Aether does not beacon unattended. With the rules at None, or an external program keying the radio, that is yours to judge.</li>
                 <li><strong>What you sent</strong>: every beacon that goes on the air is in the <em>Log</em> (the <em>Beacons</em> filter), counted under <em>Beacons sent</em> on the Status tab, and the line under the Session tab's buttons says when the last went and when the next is due.</li>
                 <li><strong>What you heard</strong>: a beacon heard is in the Log with its callsign and SNR, in <em>Stations</em> — the <em>Beacons</em> column counts them per station and says when the last one was, and the <em>Beacons</em> filter lists only those stations — and among the Diagnostics tab's frames. A beacon is never answered: a channel where every beacon drew a reply would be unusable.</li>
               </ul>

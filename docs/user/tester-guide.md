@@ -50,7 +50,7 @@ it is done. Nothing changes until you press **Save** at the bottom.
    500–800 ms. Aether also learns each station's gap by itself: when a station calls or probes
    again after being answered, its gap grows (the Log tab says so), and it is remembered. The
    setting is the least it uses.
-5. **Application settings.** *Host programs* on (port 8300). *KISS programs* on (port 8100)
+5. **Application settings.** *External programs* on (port 8300). *KISS programs* on (port 8100)
    only for VarAC's broadcasts. **Debug mode** — leave it on (§6).
 
 Then **Save**. To set your transmit level, use **Session > Keying and drive > Set drive**: it
@@ -96,7 +96,7 @@ On Windows, the quickest way: when the banner says VarAC is on this computer, pr
 then **Switch to VarAC default**, and in VarAC choose *Switch profile → VarAC_Aether*. Switching
 VarAC back to *VarAC* returns to VARA. By hand:
 
-VarAC usually keys the radio itself (Setup step 2, *Radio control*: **Host program**), as it
+VarAC usually keys the radio itself (Setup step 2, *Radio control*: **External program**), as it
 does with VARA: VarAC's *Vara* tab with host `127.0.0.1`, main port `8300`, KISS port `8100`;
 its *RIG* tab with PTT and frequency control on CAT. Ping, chat, files, CQ, beacons, broadcasts
 and relayed VMail with its notification all work on the bench; the notification and the

@@ -140,7 +140,7 @@ callsign, another folder) is a row of its own. Choose **Keying**, close Trimode,
 The window says what will change; **Set up** makes the profile *RMS Trimode KK4ODA-1* — the first
 VARA channel's callsign, the widest VARA channel's bandwidth (500 or 2300 Hz; Trimode's 2750 runs
 as 2300), Control **Automatic** (only Trimode answers calls), *Wait for a clear channel*, and
-**Host programs** on the port Trimode's VARA TNC points at — and names Aether's application as
+**External programs** on the port Trimode's VARA TNC points at — and names Aether's application as
 the program Trimode starts as its VARA. **Keying**: *RMS Trimode* when Trimode keys the radio
 itself (*Use CAT PTT* or a serial PTT port), as it does for VARA — a gateway scanning several
 channels then has the rules at *None* and you check the dial; or *Aether*, which keys the radio
@@ -169,7 +169,7 @@ click to come back to.
    SSID is dropped), in Morse or, with *Data signal*, in Aether's own signal.
 5. **Application settings.** **Recording** on. **Debug mode** on: every session Trimode runs is
    recorded and uploaded to the project a minute after it ends, which is the point of the test.
-   **Host programs** on, port 8300. KISS programs off.
+   **External programs** on, port 8300. KISS programs off.
 6. **Save these settings.** Then *Save as…* in the Profile bar: *Gateway*.
 
 Tune to the dial from the Session tab's dial list (3.590 MHz). The rules badge in the header
@@ -258,7 +258,7 @@ gateway being open to the public, nothing to do with the service code; Aether an
 2. **Radio interface.** Aether keys the radio, as at the gateway.
 3. **Receive level.**
 4. **Modem settings.** Bandwidth **2300 Hz**. Turnaround as the interface needs.
-5. **Application settings.** **Host programs** on, port 8300. **Debug mode** on. **Recording** on.
+5. **Application settings.** **External programs** on, port 8300. **Debug mode** on. **Recording** on.
 6. **Save**, and *Save as…* a *Winlink* profile.
 
 ### 4.2 Winlink Express
@@ -309,7 +309,7 @@ gateway being open to the public, nothing to do with the service code; Aether an
 
 | What you see | Where to look |
 |---|---|
-| Winlink Express cannot reach the TNC | Aether running? *Host programs* on, port 8300, saved? Another program on 8300? |
+| Winlink Express cannot reach the TNC | Aether running? *External programs* on, port 8300, saved? Another program on 8300? |
 | Trimode says the VARA program stopped, or keeps launching it | Trimode's log: `Restart Vara` after `Vara command wasn't acknowledged` is Trimode giving up on a command; Aether's Log tab shows each new connection (*replaces it*). Before 0.2.0-beta.125 the second connection was refused with `WRONG` until Trimode was restarted, and each restart closed Aether's window and opened another. Otherwise the program path (§3.2): try the next of the three ways |
 | Aether's window closes when Winlink Express closes | Winlink Express's *auto-launch* is on and it started Aether: it ends what it started. Untick the launch in its Vara TNC Setup and start Aether yourself (§4.2) |
 | The call goes out and nobody answers (*no response*) | The gateway's dial and bandwidth (the Stations tab and the mismatch banner, at either end); Trimode running and listening (its window: under automatic control Aether answers calls only while a program holds the callsign, and the header's chip says *calls to* the callsign *not answered* when none does); the gateway's rules badge — *TX blocked* means the dial is outside the sub-band, or the radio's dial is not read (a serial line without *Dial is at*) |

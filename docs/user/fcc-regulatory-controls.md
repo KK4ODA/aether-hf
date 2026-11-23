@@ -95,9 +95,9 @@ by how much: *TX BLOCKED: signal extends 260 Hz beyond the FCC data segment*, wi
 **The dial.** Keyed over CAT, `rigctld` or FLRig, Aether reads the dial from the radio before each
 transmission. Keyed over a serial line, a CM108 interface or VOX, the radio cannot say, so the
 Session tab asks you: *Dial is at …* — set it whenever you move the dial. With no dial known,
-nothing is transmitted. Keyed by a host program (VarAC's way, Setup step 2 *Host program*),
+nothing is transmitted. Keyed by an external program (VarAC's way, Setup step 2 *External program*),
 Aether can read no dial either: choosing it sets the rules to *None*, and Setup shows the rules
-fields as **Host**. While a host program keys the radio, none of those settings acts — no rules
+fields as **External program**. While an external program keys the radio, none of those settings acts — no rules
 profile and no control, whatever the configuration file says (ADR-0024 §4). The file keeps them
 for when you choose another radio control.
 

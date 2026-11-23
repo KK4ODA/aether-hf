@@ -33,7 +33,7 @@ says it waits for Aether FM.
 
 ## Setting it up (the bench)
 
-1. In Aether's Setup step 5, turn on **Host programs** (port 8300) and, for packet, **KISS
+1. In Aether's Setup step 5, turn on **External programs** (port 8300) and, for packet, **KISS
    programs** (port 8100).
 2. **VARA FM door:** in RMS Packet, *Settings › Vara FM settings*: tick *Enable Vara FM TNC*, host
    `127.0.0.1`, command port `8300`, the port callsign (for example `N0CALL-10`). Untick *Launch

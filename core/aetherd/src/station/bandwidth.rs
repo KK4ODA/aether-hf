@@ -413,8 +413,8 @@ impl<P: Ptt> Station<P> {
             self.note(
                 "bandwidth",
                 &format!(
-                    "calling {remote} at {ours} Hz, as the host program asked, though it was \
-                     last heard running {theirs} Hz{after}"
+                    "calling {remote} at {ours} Hz, as the program placing the call asked, though \
+                     it was last heard running {theirs} Hz{after}"
                 ),
             );
         }
@@ -519,7 +519,7 @@ impl<P: Ptt> Station<P> {
         };
         let fix = if self.bandwidth.why == Why::Host {
             format!(
-                "The host program asked for {ours} Hz: have it ask for {theirs} Hz, or ask {src} \
+                "An external program asked for {ours} Hz: have it ask for {theirs} Hz, or ask {src} \
                  to call at {ours} Hz."
             )
         } else {
@@ -834,7 +834,7 @@ impl<P: Ptt> Station<P> {
         self.bandwidth.stirred_s = now;
         let reason = match &why {
             Why::Configured => "the station's own".to_owned(),
-            Why::Host => "the host program asked for it".to_owned(),
+            Why::Host => "an external program asked for it".to_owned(),
             Why::Call(call) => format!("{call} called in it; back to {from} Hz after the session"),
             Why::Unanswered(call) => format!(
                 "{call} has not answered at {from} Hz, and a {hz} Hz station ignores a wider call; \

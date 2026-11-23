@@ -431,7 +431,7 @@ cover everything else it does.
 * *None* for operators under another administration's rules, who check every transmission
   themselves.
 
-### Host programs and other software
+### External programs and other software
 
 * The **published TNC host interface** (command port 8300, data port 8301) that Winlink Express,
   Pat, VarAC and RMS Trimode already use: Winlink P2P and gateway sessions, VarAC chat, pings,
@@ -449,8 +449,8 @@ cover everything else it does.
 * Either side can own the radio: **Aether keys** (CAT, rigctld, FLRig, serial, CM108, VOX), or
   the **host program keys** and tunes it on Aether's `PTT ON`/`PTT OFF`.
 * **One place for each setting**: while a program is attached, its callsign and its `BW500`
-  / `BW2300` / `BW2750` set the station's (Setup shows *Host* there), and the station's own come
-  back when it leaves; the program sees only its own sessions.
+  / `BW2300` / `BW2750` set the station's, and the station's own (which Setup shows) come back
+  when it leaves; the program sees only its own sessions.
 * ★ **Several programs on one station**: a program on the host port and programs on the control
   API each claim their own callsigns, with answering off until they say. A call is answered only
   while the program holding its callsign listens, the session is that program's alone, and the
@@ -578,8 +578,8 @@ cover everything else it does.
 * **Testing on the air:** [`docs/user/tester-guide.md`](docs/user/tester-guide.md) is the one
   page a tester needs: install, set up, connect through Winlink Express, Pat or VarAC, and what
   debug mode sends.
-* **Host programs:** turn on *Host programs* in Setup step 5 and point the program at
-  `127.0.0.1`, port 8300. In Winlink Express that is a *Vara HF* session with its automatic
+* **External programs** (programs written for VARA; not RadioPost): turn on *External programs*
+  in Setup step 5 and point the program at `127.0.0.1`, port 8300. In Winlink Express that is a *Vara HF* session with its automatic
   launch off and Aether started first; in Pat, the `varahf` transport. On Windows, Setup step 5's
   *Winlink programs* reads Winlink Express, RMS Trimode and RMS Packet into profiles. How to set up each one,
   with the program owning the radio or Aether owning it, is in

@@ -12,7 +12,7 @@ is one click.
 | | The host program owns the radio | Aether owns the radio |
 |---|---|---|
 | Like | VarAC with VARA: VarAC tunes the radio and keys it | VARA keying the radio itself |
-| Aether's radio control (Setup step 2) | **Host program** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
+| Aether's radio control (Setup step 2) | **External program** | CAT, a serial line, a CM108 pin, `rigctld` or FLRig |
 | The host program's rig control | PTT and frequency on CAT | none when Aether keys by CAT (only one program can open the CAT port); frequency control only, when Aether keys by a serial line or a CM108 pin |
 | Aether's rules check (step 1) | **None** — you check every transmission, as with VARA | on: every transmission judged at the dial |
 | Tuning | the host program (VarAC's Auto-QSY, CQ slots) | Aether's dial list (Session tab), or by hand |
@@ -53,7 +53,7 @@ A profile made this way sets:
 
 * the program's callsign in use, and its bandwidth (500, or 2300 for VARA's 2300 and 2750);
   once the program is attached, its own `MYCALL` and `BW` are what Aether answers as;
-* **Host programs** on (or **KISS programs**, for a program that uses a KISS TNC);
+* **External programs** on (or **KISS programs**, for a program that uses a KISS TNC);
 * the port the program points at, when it is another port on this computer: Aether listens
   there while the profile is in use, so the program needs no change;
 * for a gateway (RMS Trimode), automatic control and waiting for a clear channel: only the
@@ -91,16 +91,16 @@ what it does, for doing it by hand.
 
 In **Aether**:
 
-1. Setup step 2, *Radio control*: **Host program** — VarAC or Winlink Express keys the radio on
-   `PTT ON` and tunes it, and step 2's *Dial* reads **Host program**.
-   The rules in step 1 change to **None** with it, and their fields read **Host**: Aether cannot
+1. Setup step 2, *Radio control*: **External program** — VarAC or Winlink Express keys the radio on
+   `PTT ON` and tunes it, and step 2's *Dial* reads **External program**.
+   The rules in step 1 change to **None** with it, and their fields read **External program**: Aether cannot
    read the dial of a radio it does not control. None of those settings acts while the program
    keys, the **Control** included. The milliseconds beside it (150) are how long
    Aether waits after `PTT ON` before it starts the audio; VARA allows 100.
-2. Setup step 5: **Host programs** on (port 8300), and **KISS programs** on (port 8100) for
-   VarAC's broadcasts. With Host programs on, Setup's *Callsign* and *Bandwidth* read **Host**:
-   VarAC's `MYCALL` and `BW500` set them while it is attached, and Aether's own come back when it
-   closes. Set them in VarAC.
+2. Setup step 5: **External programs** on (port 8300), and **KISS programs** on (port 8100) for
+   VarAC's broadcasts. While VarAC is attached its `MYCALL` and `BW500` set the callsign and the
+   bandwidth, and Aether's own come back when it closes. Set them in VarAC. Setup always shows
+   Aether's own: the **Aether callsign** (for Aether standalone use) and the **Bandwidth**.
 3. Save, and save it as a profile — *VarAC*, say.
 
 In **VarAC**, *Settings*:
@@ -196,7 +196,7 @@ PTT **off**.
   if it is answered there. At the default, 2 tries, a call stays at 2300 Hz to its end.
 * Winlink Express keys the radio itself only when its *Radio Setup* names a PTT port: it then
   keys on the modem's `PTT ON`/`PTT OFF`, as VarAC does, and Aether's *Radio control* must be
-  *Host program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
+  *External program*. With the radio *Manual* and the COM port *None* it keys nothing and leaves it to the
   modem: keep **Aether keying the radio** (the second way above). One keyer, never both. If
   Aether keys on a serial line or a CM108 pin, Winlink Express can still do its own frequency
   control on the radio's CAT port.
@@ -228,10 +228,13 @@ there too ([the gateway kit](gateway-kit.md)). See ADR-0050.
 
 ## How Aether follows the program
 
-* **One place for each setting.** With Setup step 5's *Host programs* on, the callsign (step 1)
-  and the bandwidth (step 4) read **Host**: the program sets them. With *Radio control* **Host
-  program** (step 2), the rules' fields read **Host** too. What is underneath is kept for when no program
-  is attached.
+* **One place for each setting.** While the program is attached, its `MYCALL` and `BW` set the
+  callsign and the bandwidth; Setup shows the station's own (the **Aether callsign**, for Aether
+  standalone use, and the **Bandwidth**), which come back when it leaves, and the note after the
+  callsign and the header say what is in use. With *Radio control* **External program** (step 2),
+  the rules' fields read **External program**: they are unused while the program keys.
+* **External programs are programs written for VARA.** RadioPost is not one: it uses Aether's
+  control port, so leave *External programs* unchecked for it (Setup step 5 says so after the box).
 * **The callsign.** The program's `MYCALL` names the callsigns it answers to and identifies as
   while it is attached, and Aether answers no other callsign of its own meanwhile: the program
   speaks for the station. When the program closes, Aether goes back to the callsign in Setup.
