@@ -194,13 +194,34 @@ impl Finder {
             .find(|s| s.setup == setup && same_path(Path::new(&s.folder), Path::new(folder)))
     }
 
-    /// The other setups of an install that are set up for Aether.
+    /// The record of an install's setup: the setup's own, or, for an install of one setup, the
+    /// one its folder has under another name. Winlink Express's one setup is named for the
+    /// callsign in use, which the operator can change, and until ADR-0133 §9 it had one setup
+    /// per callsign: a record made then is the install's now.
     #[must_use]
-    pub fn others_set_up(&self, folder: &str, setup: &str) -> Vec<String> {
+    pub fn record_of(&self, install: &Install, setup: &str) -> Option<&SetUp> {
+        if let Some(record) = self.set_up_of(&install.folder, setup) {
+            return Some(record);
+        }
+        if install.setups.len() != 1 || install.setups[0].name != setup {
+            return None;
+        }
+        self.remembered
+            .set_up
+            .iter()
+            .find(|s| same_path(Path::new(&s.folder), Path::new(&install.folder)))
+    }
+
+    /// The other setups of an install that are set up for Aether, among `setups`, the ones the
+    /// install has now: a record of a setup it no longer has (a callsign of Winlink Express's
+    /// before ADR-0133 §9) holds nothing back.
+    #[must_use]
+    pub fn others_set_up(&self, folder: &str, setup: &str, setups: &[String]) -> Vec<String> {
         self.remembered
             .set_up
             .iter()
             .filter(|s| s.setup != setup && same_path(Path::new(&s.folder), Path::new(folder)))
+            .filter(|s| setups.contains(&s.setup))
             .map(|s| s.setup.clone())
             .collect()
     }
@@ -251,8 +272,8 @@ impl Finder {
         self.save()
     }
 
-    /// Forget a setup set up; with `program` (the last of its install), forget what was
-    /// written into the install too: it has been put back.
+    /// Forget a setup set up; with `program` (the last of its install), forget every record of
+    /// the install and what was written into it too: it has been put back.
     ///
     /// # Errors
     /// If the file cannot be written.
@@ -262,9 +283,10 @@ impl Finder {
         setup: &str,
         program: bool,
     ) -> Result<(), String> {
-        self.remembered
-            .set_up
-            .retain(|s| !(s.setup == setup && same_path(Path::new(&s.folder), Path::new(folder))));
+        self.remembered.set_up.retain(|s| {
+            let here = same_path(Path::new(&s.folder), Path::new(folder));
+            !(here && (program || s.setup == setup))
+        });
         if program {
             self.remembered
                 .written
@@ -558,10 +580,15 @@ mod tests {
         assert_eq!(originals.len(), 1);
         assert_eq!(originals[0].was.as_deref(), Some("True"));
         assert_eq!(originals[0].set_to, "Off");
+        let both = ["N0CALL".to_owned(), "N1CALL".to_owned()];
         assert_eq!(
-            finder.others_set_up("C:\\RMS Express", "N0CALL"),
+            finder.others_set_up("C:\\RMS Express", "N0CALL", &both),
             ["N1CALL"]
         );
+        // a setup the install no longer has holds nothing back
+        let one = ["N0CALL".to_owned()];
+        let others = finder.others_set_up("C:\\RMS Express", "N0CALL", &one);
+        assert!(others.is_empty(), "{others:?}");
         finder
             .forget_set_up("C:\\RMS Express", "N1CALL", false)
             .expect("forgot");
@@ -570,11 +597,18 @@ mod tests {
             1,
             "N0CALL still uses it"
         );
+        // put back: every record of the install goes, one of a setup it no longer has too
+        finder.note_set_up(record("N7CALL"), &[]).expect("noted");
         finder
             .forget_set_up("C:\\RMS Express", "N0CALL", true)
             .expect("forgot");
         let left = finder.originals("C:\\RMS Express");
         assert!(left.is_empty(), "{left:?}");
         assert!(finder.set_up_of("C:\\RMS Express", "N0CALL").is_none());
+        assert!(
+            finder.remembered.set_up.is_empty(),
+            "{:?}",
+            finder.remembered.set_up
+        );
     }
 }

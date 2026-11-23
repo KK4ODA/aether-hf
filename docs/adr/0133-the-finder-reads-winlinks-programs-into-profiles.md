@@ -5,7 +5,8 @@ The keying default (§2.4) and the port rule (§2.5) are this ADR's choices. The
 the same day, yes to both: §7 is what they changed. The finder now writes what a program must
 change to reach Aether, when asked, and a profile keyed by the program keeps the rules check.
 On 2026-11-22 the author made a tick set a program up in one step, and an untick go back to
-VARA: §8.
+VARA: §8. On 2026-11-23 the author chose one row per install, and a profile named for the
+install: §9.
 
 ## 1. Context
 
@@ -325,3 +326,43 @@ copy has its own mail from then on, which the button's tip says.
 **Import**, **Import and switch** and the *Set it in* box, the install-level `program_changes`
 (now each plan's, since what is written depends on the keying), and the duplicate dial note. The
 heading's tip that said nothing is written to the programs' files, untrue since §7, is replaced.
+
+## 9. The author's decision of 2026-11-23: one row per install
+
+The author saw installs listed twice in the finder's table: `C:\RMS Express_7100_710` held
+KK4ODA and WG4PTP, `C:\RMS Express_TS480` held WD5EMA and KK4ODA, and §1's one setup per callsign
+gave each install a row per callsign, alike in everything but the callsign. Two faults came
+with them:
+
+* a tick writes what every callsign of an install shares (the TNC and the radio, §8.2), so
+  ticking one row set the others up too, while their boxes stayed clear;
+* the profile was named for the program and the callsign, and the author keeps a copy of Winlink
+  Express per radio (`_7100_710`, `_891`, `_TS480`, `_TX500`), all run as KK4ODA: every one of
+  them made the same profile, *Winlink Express KK4ODA*, and setting up a second brought the
+  first one's profile "up to date" with the second radio's port and keying.
+
+The author's answer: one row per install.
+
+* **Winlink Express's reader gives one setup an install**, named for the callsign in use, with
+  every callsign in `callsigns` (that one first) and that callsign's session type, bandwidth and
+  frequency. Once the program is attached, its `MYCALL` and `BW` are what Aether answers as
+  (ADR-0108), so the others lose nothing. Trimode was one setup an install already; RMS Packet
+  keeps a setup per channel, since its channels are different things (and wait for Aether FM).
+* **An install has a name** (`Install::name`, `find::name_of`): the program's, then what sets
+  its folder apart from the installer's (`folder_label`: *TS480* for `RMS Express_TS480`,
+  nothing for `RMS Express`, the folder's whole name for one named otherwise), then the folder
+  it is in or its drive, then a number, when that is what tells two installs of a program
+  apart (`tell_apart`), never longer than a profile's name may be. **The profile takes it**:
+  *Winlink Express*, *Winlink Express TS480*, *RMS Trimode*. A profile made before keeps its
+  name in its record.
+* **A record of a setup the install no longer has holds nothing back**: `Finder::record_of`
+  takes an install of one setup as set up when any record of its folder says so (one made from a
+  callsign's row before this, or under a callsign no longer in use), `others_set_up` counts only
+  the install's setups now, and going back forgets every record of the install with what was
+  written.
+* The panel lists the callsigns in the row, names the install in the window and the log, and
+  gives an install with nothing to set up (Winlink Express with no callsign yet) a greyed row
+  whose tooltip says why: the count read *7 installs, 8 setups* over six folders, one install
+  having no row at all. The count says installs only.
+
+What it removes: a row per callsign, and a profile per callsign.

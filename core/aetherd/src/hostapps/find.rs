@@ -74,6 +74,9 @@ pub struct Install {
     pub program: Program,
     /// Its own name, for the panel.
     pub program_name: &'static str,
+    /// The install's name, for the panel and the profile made from it: the program's, and what
+    /// sets its folder apart from the installer's (`Winlink Express TS480`); see [`name_of`].
+    pub name: String,
     /// The folder.
     pub folder: String,
     /// Its executable.
@@ -280,7 +283,8 @@ fn read_files(reader: &Reader, dir: &Path) -> Files {
     files
 }
 
-/// Every install the sources show, of every program, its files read.
+/// Every install the sources show, of every program, its files read, each with a name of its
+/// own.
 #[must_use]
 pub fn installs(sources: &Sources) -> Vec<Install> {
     let mut out = Vec::new();
@@ -296,11 +300,97 @@ pub fn installs(sources: &Sources) -> Vec<Install> {
             out.push(install(program, &dir, found_by, reading, version, sources));
         }
     }
+    tell_apart(&mut out);
     out
 }
 
+/// What sets an install's folder apart from the one its installer uses: `TS480` for
+/// `C:\RMS Express_TS480`, nothing for `C:\RMS Express` itself, the folder's whole name for one
+/// named otherwise (`WLE test`).
+#[must_use]
+pub fn folder_label(program: Program, dir: &Path) -> String {
+    let name = file_name(dir).map(Cow::into_owned).unwrap_or_default();
+    for usual in program.reader().usual {
+        let usual = usual.rsplit(SEPARATORS).next().unwrap_or(usual);
+        let starts = name
+            .get(..usual.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(usual));
+        if starts {
+            let rest = &name[usual.len()..];
+            return rest
+                .trim_matches(|c: char| c.is_whitespace() || "_-.()[]".contains(c))
+                .to_owned();
+        }
+    }
+    name.trim().to_owned()
+}
+
+/// An install's name: the program's, then what sets its folder apart, then where the folder is
+/// when that alone does not tell two installs apart, then a number when nothing else does —
+/// no longer than a profile's name may be, the folder's part shortened to fit.
+#[must_use]
+pub fn name_of(
+    program: Program,
+    label: &str,
+    place: Option<&str>,
+    number: Option<usize>,
+) -> String {
+    let place = place.map(|p| format!(" ({p})")).unwrap_or_default();
+    let number = number.map(|n| format!(" {n}")).unwrap_or_default();
+    let after = format!("{place}{number}");
+    let head = program.name();
+    let room =
+        crate::profile::NAME_CHARS.saturating_sub(head.chars().count() + after.chars().count() + 1);
+    let label: String = label.chars().take(room).collect();
+    let label = label.trim_end();
+    if label.is_empty() {
+        format!("{head}{after}")
+    } else {
+        format!("{head} {label}{after}")
+    }
+}
+
+/// Where a folder is, to tell two of one name apart: the folder it is in, or its drive (`D:`).
+fn place_of(dir: &Path) -> Option<String> {
+    let up = parent(dir)?;
+    file_name(&up).map(Cow::into_owned).or_else(|| {
+        let text = up.display().to_string();
+        let text = text.trim_end_matches(SEPARATORS);
+        (!text.is_empty()).then(|| text.to_owned())
+    })
+}
+
+/// Give installs of one program that would share a name a name each: their places added, and
+/// a number after that when even those are alike, in the order found. The profile made from an
+/// install takes its name, so two must never share one.
+fn tell_apart(installs: &mut [Install]) {
+    let alike =
+        |a: &Install, b: &Install| a.program == b.program && a.name.eq_ignore_ascii_case(&b.name);
+    let clashing: Vec<bool> = (0..installs.len())
+        .map(|i| (0..installs.len()).any(|j| j != i && alike(&installs[i], &installs[j])))
+        .collect();
+    for (install, clash) in installs.iter_mut().zip(clashing) {
+        if clash {
+            let dir = PathBuf::from(&install.folder);
+            let label = folder_label(install.program, &dir);
+            install.name = name_of(install.program, &label, place_of(&dir).as_deref(), None);
+        }
+    }
+    for i in 1..installs.len() {
+        let mut n = 1;
+        while (0..i).any(|j| alike(&installs[i], &installs[j])) {
+            n += 1;
+            let dir = PathBuf::from(&installs[i].folder);
+            let label = folder_label(installs[i].program, &dir);
+            let place = place_of(&dir);
+            installs[i].name = name_of(installs[i].program, &label, place.as_deref(), Some(n));
+        }
+    }
+}
+
 /// An install read again, as a find would report it now: after its program's settings were
-/// written, so that a plan sees them. `running` is what [`running_now`] said.
+/// written, so that a plan sees them. `running` is what [`running_now`] said. It keeps its
+/// name, which the find gave it among the others.
 #[must_use]
 pub fn reread(old: &Install, running: &[PathBuf]) -> Install {
     let reader = old.program.reader();
@@ -311,14 +401,17 @@ pub fn reread(old: &Install, running: &[PathBuf]) -> Install {
         running: running.to_vec(),
         ..Sources::default()
     };
-    install(
-        old.program,
-        &dir,
-        old.found_by.clone(),
-        reading,
-        version,
-        &sources,
-    )
+    Install {
+        name: old.name.clone(),
+        ..install(
+            old.program,
+            &dir,
+            old.found_by.clone(),
+            reading,
+            version,
+            &sources,
+        )
+    }
 }
 
 /// The executables of the programs running now: asked just before a program's settings are
@@ -349,6 +442,7 @@ fn install(
     Install {
         program,
         program_name: program.name(),
+        name: name_of(program, &folder_label(program, dir), None, None),
         folder: dir.display().to_string(),
         exe: exe.display().to_string(),
         found_by,
@@ -712,6 +806,73 @@ mod tests {
         // another program's entry names nothing of this one's
         let trimode = folders_of(Program::RmsTrimode.reader(), &sources, &exists);
         assert!(trimode.is_empty(), "{trimode:?}");
+    }
+
+    #[test]
+    fn each_install_has_a_name_of_its_own() {
+        let wle = Program::WinlinkExpress;
+        let label = |dir: &str| folder_label(wle, Path::new(dir));
+        assert_eq!(label("C:\\RMS Express"), "");
+        assert_eq!(label("C:\\RMS Express\\"), "");
+        assert_eq!(label("C:\\RMS Express_TS480"), "TS480");
+        assert_eq!(label("C:\\rms express_7100_710"), "7100_710");
+        assert_eq!(label("C:\\RMS Express Aether"), "Aether");
+        assert_eq!(label("D:\\Radio\\WLE test"), "WLE test");
+        assert_eq!(
+            folder_label(Program::RmsTrimode, Path::new("C:\\RMS\\RMS Trimode")),
+            ""
+        );
+        assert_eq!(name_of(wle, "", None, None), "Winlink Express");
+        assert_eq!(name_of(wle, "TS480", None, None), "Winlink Express TS480");
+        assert_eq!(
+            name_of(wle, "", Some("D:"), Some(2)),
+            "Winlink Express (D:) 2"
+        );
+        // never longer than a profile's name may be: the folder's part is shortened
+        let long = "a copy for the TS-480 in the truck with the screwdriver antenna";
+        let named = name_of(wle, long, Some("Radio"), None);
+        assert_eq!(named.chars().count(), crate::profile::NAME_CHARS, "{named}");
+        assert!(named.ends_with(" (Radio)"), "{named}");
+
+        // installs that would share a name are told apart by where they are, then by number
+        let install = |folder: &str| Install {
+            program: wle,
+            program_name: wle.name(),
+            name: name_of(wle, &folder_label(wle, Path::new(folder)), None, None),
+            folder: folder.into(),
+            exe: String::new(),
+            found_by: Vec::new(),
+            running: false,
+            version: None,
+            callsigns: Vec::new(),
+            setups: Vec::new(),
+            notes: Vec::new(),
+        };
+        let mut all = vec![
+            install("C:\\RMS Express"),
+            install("D:\\RMS Express"),
+            install("C:\\RMS Express_TS480"),
+            install("E:\\Radio\\RMS Express_TS480"),
+            install("F:\\Radio\\RMS Express_TS480"),
+        ];
+        let mut trimode = install("C:\\RMS\\RMS Trimode");
+        trimode.program = Program::RmsTrimode;
+        trimode.name = "Winlink Express".into();
+        all.push(trimode);
+        tell_apart(&mut all);
+        let names: Vec<&str> = all.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Winlink Express (C:)",
+                "Winlink Express (D:)",
+                "Winlink Express TS480 (C:)",
+                "Winlink Express TS480 (Radio)",
+                "Winlink Express TS480 (Radio) 2",
+                "Winlink Express",
+            ],
+            "another program's install is never a clash"
+        );
     }
 
     #[test]

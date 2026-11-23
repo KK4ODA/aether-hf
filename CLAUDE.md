@@ -3415,6 +3415,12 @@ are gone. **The words are read from files** (2026-11-23): a Winlink Express 1.8.
 Trimode 1.4.4 set to Manual by hand wrote `[Radio] Model=Manual`, `Control Port=None` and left
 `Use CAT PTT=True` (which keys nothing with no radio; the reader now reads it so). Print only the
 keys needed, never the whole file: it holds the operator's address, phone and encrypted password.
+**One row per install** (ADR-0133 §9, the author's answer of 2026-11-23, after rows per callsign
+read as duplicates): Winlink Express's reader gives one setup an install, named for the callsign
+in use, the others in `callsigns`; the profile takes the install's name (`Install::name`:
+*Winlink Express TS480* for `C:\RMS Express_TS480`, told apart by place or number when two would
+match), since the author keeps a copy per radio, all as KK4ODA, which had all made one profile;
+`Finder::record_of` reads an old per-callsign record as the install's.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

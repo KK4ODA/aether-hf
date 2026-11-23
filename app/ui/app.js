@@ -5686,25 +5686,62 @@ function hostappsNote(text, state = "") {
   note.dataset.state = state;
 }
 
+// the row of an install with nothing to set up (Winlink Express with no callsign yet, RMS
+// Packet with no channel enabled): greyed, its notes saying why
+function hostappsBareRow(install) {
+  const why = (install.notes ?? []).join(". ") || "Nothing in it to set up";
+  const tr = document.createElement("tr");
+  const tickCell = document.createElement("td");
+  const tick = document.createElement("input");
+  tick.type = "checkbox";
+  tick.disabled = true;
+  tick.title = `Cannot be set up: ${why}`;
+  tick.setAttribute("aria-label", `${install.name ?? install.program_name}: nothing to set up`);
+  tickCell.append(tick);
+  const cell = (text, title) => {
+    const td = document.createElement("td");
+    td.textContent = text;
+    td.title = title;
+    return td;
+  };
+  const folderCell = cell(install.folder, `${install.exe} — found by ${(install.found_by ?? []).join(", ")}`);
+  folderCell.classList.add("path");
+  tr.append(
+    tickCell,
+    cell(install.program_name, `${install.program_name}: ${why}`),
+    cell("—", why),
+    cell(install.version ?? "?", "The program's version"),
+    cell(install.running ? "yes" : "no", install.running ? "Running now" : "Not running"),
+    cell("—", why),
+    cell("—", why),
+    folderCell,
+  );
+  return tr;
+}
+
 function renderHostapps(answer) {
   hostapps = answer;
   const group = $("hostapps-group");
   group.hidden = !answer?.supported && !(answer?.installs ?? []).length;
   if (group.hidden) return;
   const installs = answer.installs ?? [];
-  const setups = installs.reduce((n, install) => n + (install.setups ?? []).length, 0);
   const state = $("hostapps-state");
   state.dataset.state = "";
   if (answer.finding && !answer.found) state.textContent = "looking…";
   else if (!installs.length) state.textContent = "none found";
   else {
     const programs = installs.length === 1 ? "1 install" : `${installs.length} installs`;
-    state.textContent = `${programs}, ${setups === 1 ? "1 setup" : `${setups} setups`}${answer.finding ? " · looking…" : ""}`;
+    state.textContent = `${programs}${answer.finding ? " · looking…" : ""}`;
   }
   const rows = $("hostapps-rows");
   rows.replaceChildren();
   const seen = new Set();
   for (const install of installs) {
+    // an install with nothing to set up still has its row, saying why
+    if (!(install.setups ?? []).length) {
+      rows.append(hostappsBareRow(install));
+      continue;
+    }
     for (const setup of install.setups ?? []) {
       const key = hostappsKey(install.folder, setup.name);
       seen.add(key);
@@ -5720,8 +5757,8 @@ function renderHostapps(answer) {
         ? `Cannot be set up: ${refused}`
         : done
           ? `Set up for Aether: profile ${done.profile}. Untick to go back to VARA`
-          : `Tick to set up ${install.program_name} ${setup.name} for Aether: a window says what will change first`;
-      tick.setAttribute("aria-label", `${install.program_name} ${setup.name} set up for Aether`);
+          : `Tick to set up ${install.name} for Aether: a window says what will change first`;
+      tick.setAttribute("aria-label", `${install.name} set up for Aether`);
       // the box shows what is so: it changes only once the setup, or going back, is done
       tick.addEventListener("click", (event) => {
         event.preventDefault();
@@ -5749,7 +5786,7 @@ function renderHostapps(answer) {
         const select = document.createElement("select");
         select.className = "narrow";
         select.title = "Who keys the radio once it is set up";
-        select.setAttribute("aria-label", `Keying for ${setup.name}`);
+        select.setAttribute("aria-label", `Keying for ${install.name}`);
         for (const keying of keyings) {
           const option = document.createElement("option");
           option.value = keying;
@@ -5766,16 +5803,22 @@ function renderHostapps(answer) {
       }
       const folderCell = cell(install.folder, `${install.exe} — found by ${(install.found_by ?? []).join(", ")}`);
       folderCell.classList.add("path");
-      const callTitle = install.callsigns?.length > 1
-        ? `This install is set up for ${install.callsigns.join(", ")}; this row is ${setup.name}${setup.session ? `, last run as ${setup.session}` : ""}`
-        : `${setup.name}${setup.session ? `, last run as ${setup.session}` : ""}`;
-      const callCell = cell(setup.callsigns?.[0] ?? setup.name, callTitle);
+      // one row an install: its callsigns share its TNC and radio, so one setup sets them all up
+      const calls = setup.callsigns?.length ? setup.callsigns : [setup.name];
+      const lastRun = setup.session ? `, last run as ${setup.session}` : "";
+      const callTitle = calls.length > 1
+        ? `In use: ${calls[0]}${lastRun}. Also set up for ${calls.slice(1).join(", ")}: every callsign of this install shares its TNC and radio. The profile starts as ${calls[0]}; once ${install.program_name} is attached, Aether answers to the callsign it names`
+        : `${calls[0]}${lastRun}`;
+      const callCell = cell(calls.join(", "), callTitle);
       callCell.classList.add("mono");
+      // an install of several setups (RMS Packet's channels): each row names its own
+      const several = (install.setups ?? []).length > 1;
+      const program = several ? `${install.program_name} · ${setup.session ?? setup.name}` : install.program_name;
       tr.append(
         tickCell,
         cell(
-          install.program_name,
-          [refused ? `${install.program_name}: ${refused}` : install.program_name, ...(install.notes ?? [])].join(". "),
+          program,
+          [refused ? `${program}: ${refused}` : program, ...(install.notes ?? [])].join(". "),
         ),
         callCell,
         cell(install.version ?? "?", "The program's version"),
@@ -5788,7 +5831,7 @@ function renderHostapps(answer) {
     }
   }
   for (const key of [...hostappsKeying.keys()]) if (!seen.has(key)) hostappsKeying.delete(key);
-  $("hostapps-pane").hidden = !setups;
+  $("hostapps-pane").hidden = !installs.length;
   afterHostappsCopy(answer);
 }
 
@@ -5810,7 +5853,7 @@ function afterHostappsCopy(answer) {
   log(`${pending.from} copied to ${copy.to}: ${copy.files} files`, false, "hostapps");
   const go = () =>
     setupHostapp(install, pending.setup, pending.keying, pending.switchTo, true).catch((error) => {
-      hostappsNote(`${install.program_name} ${pending.setup} in ${install.folder} not set up: ${error.message}`, "error");
+      hostappsNote(`${install.name} in ${install.folder} not set up: ${error.message}`, "error");
     });
   if (pending.switchTo) withProfileSaved(`switching to the copy's profile`, go);
   else go();
@@ -5820,25 +5863,25 @@ function afterHostappsCopy(answer) {
 // switched to it. Throws what the modem refused.
 async function setupHostapp(install, setupName, keying, switchTo, copied = false) {
   const before = liveConfig ? structuredClone(liveConfig) : null;
-  hostappsNote(`setting up ${install.program_name} ${setupName}…`);
+  hostappsNote(`setting up ${install.name}…`);
   let answer;
   try {
     answer = await call("hostapps.setup", { folder: install.folder, setup: setupName, keying, switch: switchTo });
   } catch (error) {
     hostappsNote("");
-    log(`${install.program_name} ${setupName} in ${install.folder} not set up: ${error.message}`, true, "hostapps");
+    log(`${install.name} in ${install.folder} not set up: ${error.message}`, true, "hostapps");
     throw error;
   }
   const done = answer.set_up;
   renderHostapps(answer.hostapps);
-  log(`${install.program_name} ${setupName} in ${install.folder} set up for Aether: profile ${done.profile} ${done.created ? "made" : "brought up to date"}`, false, "hostapps");
+  log(`${install.name} in ${install.folder} set up for Aether: profile ${done.profile} ${done.created ? "made" : "brought up to date"}`, false, "hostapps");
   const wrote = done.pointed?.changes ?? [];
   if (wrote.length) {
     const kept = (done.pointed.written ?? []).map((w) => w.backup).join(", ");
     log(`${install.folder}: ${wrote.map((c) => `${c.key} ${c.to || "(empty)"}`).join(", ")} written; kept as it was in ${kept}`, false, "hostapps");
   }
   const byHand = (done.by_hand ?? []).map((a) => a.what);
-  const parts = [`${install.program_name} ${setupName} set up${switchTo ? ", switched to it" : ""}`];
+  const parts = [`${install.name} set up${switchTo ? ", switched to it" : ""}`];
   if (copied) parts.push(`Start ${install.program_name} from ${install.folder}`);
   if (byHand.length) parts.push(`Still to do in ${install.program_name}: ${byHand.join("; ")}`);
   hostappsNote(parts.join(". "), byHand.length ? "warn" : "ok");
@@ -5993,7 +6036,7 @@ function openHostappsSetup(install, setup, keying) {
   }
   const dial = plan.dial_hz ? (plan.dial_hz / 1e6).toFixed(4).replace(/0$/, "") : null;
   openHostappsDialog({
-    title: `Set up ${name} ${setup.name} for Aether`,
+    title: `Set up ${install.name} for Aether`,
     warnings,
     body,
     switchText: dial ? `Switch to it now and set the dial to ${dial} MHz` : "Switch to it now",
@@ -6040,7 +6083,7 @@ function openHostappsRestore(install, setup) {
     body.push(
       hostappsSection(
         `In ${name}`,
-        `${name}'s settings are shared by every callsign of this install`,
+        `${name}'s settings are shared by every setup of this install`,
         hostappsChangeList([], `Nothing changes: ${others.join(", ")} still uses Aether`),
       ),
     );
@@ -6072,21 +6115,21 @@ function openHostappsRestore(install, setup) {
     hostappsChips([[`Aether profile ${done.profile} stays`, "The profile is kept: switch away from it, or delete it, in the Profile bar"]]),
   );
   openHostappsDialog({
-    title: `Go back to VARA: ${name} ${setup.name}`,
+    title: `Go back to VARA: ${install.name}`,
     warnings,
     body,
     go: "Go back to VARA",
-    goTitle: put.length ? `Put ${name}'s settings back as they were` : `${setup.name} is no longer set up for Aether`,
+    goTitle: put.length ? `Put ${name}'s settings back as they were` : `${install.name} is no longer set up for Aether`,
     run: async () => {
       const answer = await call("hostapps.restore", { folder: install.folder, setup: setup.name });
       renderHostapps(answer.hostapps);
       const keys = (answer.put_back ?? []).map((c) => `${c.key} ${c.to || "(taken out)"}`);
       log(
-        `${name} ${setup.name} in ${install.folder} back to VARA${keys.length ? `: ${keys.join(", ")} put back` : ""}`,
+        `${install.name} in ${install.folder} back to VARA${keys.length ? `: ${keys.join(", ")} put back` : ""}`,
         false,
         "hostapps",
       );
-      hostappsNote(`${name} ${setup.name} back to VARA${keys.length ? `: ${keys.length} settings put back` : ""}. The Aether profile ${done.profile} stays`, "ok");
+      hostappsNote(`${install.name} back to VARA${keys.length ? `: ${keys.length} settings put back` : ""}. The Aether profile ${done.profile} stays`, "ok");
     },
   });
 }

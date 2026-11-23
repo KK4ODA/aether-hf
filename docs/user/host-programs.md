@@ -25,14 +25,16 @@ programs*, lists every install of Winlink Express, RMS Trimode and RMS Packet on
 in their usual folders (`C:\RMS Express`, `C:\RMS\…`), in Windows' list of installed programs,
 in Start-menu and desktop shortcuts, among the programs running, and in any folder you add
 there. Each install shows its folder, version, whether it is running and the TNC port it points
-at (*Aether* when it is this Aether's). Winlink Express keeps several callsigns in one install:
-each is a row of its own.
+at (*Aether* when it is this Aether's), one row per install. Winlink Express keeps several
+callsigns in one install, sharing its radio and TNC settings: they are listed in its one row, the
+one in use first. RMS Packet has a row per channel.
 
 **Tick a row and it is set up for Aether in one step.** A window first says what will change:
 each of the program's settings Aether will change, as it is and as it will be; what the Aether
 profile will hold; and, in amber, anything Aether cannot change for you. **Set up** then changes
 the program's settings so it reaches Aether, makes the profile, named for the program and the
-callsign (*Winlink Express KK4ODA*), and with **Switch to it now** (ticked) switches the station
+install's folder (*Winlink Express* for `C:\RMS Express`, *Winlink Express TS480* for
+`C:\RMS Express_TS480`, so copies for different radios never share one), and with **Switch to it now** (ticked) switches the station
 to it. **Close the program first**: it writes its settings back when it closes, so a change made
 while it runs would be lost. The settings file as it was is kept beside it
 (`RMS Express.ini.aether.bak`). Setting a row up again brings the profile up to date and keeps
@@ -45,12 +47,12 @@ has its own mail from then on.
 
 **To go back to VARA**, untick the row and press **Go back to VARA**. Aether puts back each
 setting it changed, unless you changed it since, and keeps the file as it was as
-`RMS Express.ini.aether-undo.bak`. The profile stays. While another callsign of the same Winlink
-Express is still set up for Aether, its settings (shared by every callsign) stay as they are.
+`RMS Express.ini.aether-undo.bak`. The profile stays.
 
 A profile made this way sets:
 
-* the program's callsign, and its bandwidth (500, or 2300 for VARA's 2300 and 2750);
+* the program's callsign in use, and its bandwidth (500, or 2300 for VARA's 2300 and 2750);
+  once the program is attached, its own `MYCALL` and `BW` are what Aether answers as;
 * **Host programs** on (or **KISS programs**, for a program that uses a KISS TNC);
 * the port the program points at, when it is another port on this computer: Aether listens
   there while the profile is in use, so the program needs no change;

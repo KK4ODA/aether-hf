@@ -214,8 +214,9 @@ const VARAC = {
 };
 
 // what `hostapps.find` answers on a made-up computer (ADR-0133): Winlink Express with two
-// callsigns keyed by CAT, N1CALL set up for Aether; a copy of it on another port that still
-// starts VARA itself; an RMS Trimode gateway; and RMS Packet on 2 m
+// callsigns keyed by CAT, set up for Aether (one row: its callsigns share its TNC and radio,
+// §9); a copy of it on another port that still starts VARA itself; an RMS Trimode gateway; and
+// RMS Packet on 2 m
 const HOSTAPPS = (() => {
   const radio = {rig: "Yaesu FT-991A", cat_port: "COM5", cat_baud: 38400, icom_address: null,
                  ptt: {kind: "cat"}};
@@ -230,7 +231,7 @@ const HOSTAPPS = (() => {
     wle("Vara", "PTT Port", "FT-991A", "EXTERNAL", "Aether keys the radio: Winlink Express leaves the keying to it"),
     wle("Vara", "Model", "Yaesu FT-991A", "Manual", "Aether keys the radio on its control port, and only one program can hold a port"),
   ];
-  const plans = (call, bandwidth, {port = null, launch = false} = {}) => {
+  const plans = (profile, call, bandwidth, {port = null, launch = false} = {}) => {
     const base = {callsign: call, "host.enabled": true, "radio.bandwidth": bandwidth};
     if (port) base["host.bind"] = `127.0.0.1:${port}`;
     const notes = port ? [advice(`Aether on port ${port}`, "Aether listens for it where it points: the program needs no change")] : [];
@@ -241,13 +242,13 @@ const HOSTAPPS = (() => {
       ? [advice("Auto Launch Vara off", "Winlink Express ends the TNC it started when it closes", true)]
       : [];
     return [
-      {profile: `Winlink Express ${call}`, keying: "program", keyings: ["program", "aether"],
+      {profile, keying: "program", keyings: ["program", "aether"],
        changes: {...base, "ptt.kind": "host", "regulatory.sideband": "usb"},
        program_must: must,
        notes: [...notes, advice("Keeps its radio setup", "it keys the radio on Aether's PTT ON and tunes it, as it did with VARA")],
        pointing: port ? "other_port" : "aether", dial_hz: 7082000, refused: null,
        program_changes: tnc},
-      {profile: `Winlink Express ${call}`, keying: "aether", keyings: ["program", "aether"],
+      {profile, keying: "aether", keyings: ["program", "aether"],
        changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                  "ptt.baud": 38400},
        program_must: [...must, advice("Radio Manual, PTT port External", "only one program can hold COM5", true)],
@@ -255,10 +256,11 @@ const HOSTAPPS = (() => {
        program_changes: [...tnc, ...handover]},
     ];
   };
-  const setup = (call, session, bandwidth, port, pointing, {launch = false, set_up = null} = {}) => ({
-    name: call, callsigns: [call], session, bandwidth_hz: bandwidth, frequency_hz: 7083500,
+  // an install's one setup: named for the callsign in use, the others riding along
+  const setup = (profile, calls, session, bandwidth, port, pointing, {launch = false, set_up = null} = {}) => ({
+    name: calls[0], callsigns: calls, session, bandwidth_hz: bandwidth, frequency_hz: 7083500,
     gateway: false, radio, tncs: [vara(port, pointing, launch)],
-    plans: plans(call, bandwidth === 500 ? 500 : 2300,
+    plans: plans(profile, calls[0], bandwidth === 500 ? 500 : 2300,
                  {port: pointing === "other_port" ? port : null, launch}),
     set_up,
   });
@@ -278,12 +280,12 @@ const HOSTAPPS = (() => {
       frequency_hz: 3591500, channels_hz: [3591500], gateway: true, radio,
       tncs: [{...vara(8300, "aether"), launches: true}], set_up: null,
       plans: [
-        {profile: `RMS Trimode ${call}`, keying: "program", keyings: ["program", "aether"],
+        {profile: "RMS Trimode", keying: "program", keyings: ["program", "aether"],
          changes: {...base, "ptt.kind": "host", "regulatory.sideband": "usb"},
          program_must: [],
          notes: [starts, advice("Keeps its radio setup", "it keys the radio on Aether's PTT ON and tunes it, as it did with VARA")],
          pointing: "aether", dial_hz: 3590000, refused: null, program_changes: [program]},
-        {profile: `RMS Trimode ${call}`, keying: "aether", keyings: ["program", "aether"],
+        {profile: "RMS Trimode", keying: "aether", keyings: ["program", "aether"],
          changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                    "ptt.baud": 38400},
          program_must: [advice("Radio Manual, PTT off", "only one program can hold COM5", true)],
@@ -299,7 +301,7 @@ const HOSTAPPS = (() => {
   const fm = (name, session, tncs) => ({
     name, callsigns: ["N1CALL-10"], session, bandwidth_hz: null, frequency_hz: 145050000,
     gateway: true, radio: null, tncs, set_up: null,
-    plans: [{profile: "RMS Packet N1CALL-10", keying: null, keyings: [], changes: {},
+    plans: [{profile: "RMS Packet", keying: null, keyings: [], changes: {},
              program_must: [], notes: [], pointing: null, program_changes: [],
              refused: "works above 30 MHz: it waits for Aether FM"}],
   });
@@ -308,25 +310,29 @@ const HOSTAPPS = (() => {
     supported: true, finding: false, found: true, added: ["D:\\Radio\\WLE test"], copy: null,
     aether: {host_port: 8300, kiss_port: 8100},
     installs: [
-      {program: "winlink_express", program_name: "Winlink Express", folder: "C:\\RMS Express",
+      {program: "winlink_express", program_name: "Winlink Express", name: "Winlink Express",
+       folder: "C:\\RMS Express",
        exe: "C:\\RMS Express\\RMS Express.exe", found_by: ["usual", "registry", "shortcut"],
        running: true, version: "1.8.6.0", callsigns: ["N1CALL", "N2CALL"], points_at_aether: true,
        notes: [], copy_to: "C:\\RMS Express Aether",
        going_back: {put_back: [wle("Vara TNC", "Auto Launch Vara", "False", "True", "as it was before Aether set it")], left: []},
-       setups: [setup("N1CALL", "Vara HF P2P", 500, 8300, "aether",
-                      {set_up: {folder: "C:\\RMS Express", setup: "N1CALL", profile: "Winlink Express N1CALL",
-                                keying: "program", at: "2026-11-22T14:05:00Z"}}),
-                setup("N2CALL", "Vara HF Winlink", 2750, 8300, "aether")]},
-      {program: "winlink_express", program_name: "Winlink Express", folder: "D:\\Radio\\WLE test",
+       setups: [setup("Winlink Express", ["N1CALL", "N2CALL"], "Vara HF P2P", 500, 8300, "aether",
+                      {set_up: {folder: "C:\\RMS Express", setup: "N1CALL", profile: "Winlink Express",
+                                keying: "program", at: "2026-11-22T14:05:00Z"}})]},
+      {program: "winlink_express", program_name: "Winlink Express", name: "Winlink Express WLE test",
+       folder: "D:\\Radio\\WLE test",
        exe: "D:\\Radio\\WLE test\\RMS Express.exe", found_by: ["added"], running: false,
        version: "1.8.5.0", callsigns: ["N1CALL"], points_at_aether: false, notes: [],
        copy_to: "D:\\Radio\\WLE test Aether", going_back: none,
-       setups: [setup("N1CALL", "Vara HF P2P", 2300, 8310, "other_port", {launch: true})]},
-      {program: "rms_trimode", program_name: "RMS Trimode", folder: "C:\\RMS\\RMS Trimode",
+       setups: [setup("Winlink Express WLE test", ["N1CALL"], "Vara HF P2P", 2300, 8310, "other_port",
+                      {launch: true})]},
+      {program: "rms_trimode", program_name: "RMS Trimode", name: "RMS Trimode",
+       folder: "C:\\RMS\\RMS Trimode",
        exe: "C:\\RMS\\RMS Trimode\\RMS Trimode.exe", found_by: ["usual", "shortcut"],
        running: false, version: "1.4.4.2", callsigns: ["N1CALL-1"], points_at_aether: true,
        notes: [], copy_to: null, going_back: none, setups: [gateway]},
-      {program: "rms_packet", program_name: "RMS Packet", folder: "C:\\RMS\\RMS Packet",
+      {program: "rms_packet", program_name: "RMS Packet", name: "RMS Packet",
+       folder: "C:\\RMS\\RMS Packet",
        exe: "C:\\RMS\\RMS Packet\\RMS Packet.exe", found_by: ["usual", "shortcut"],
        running: false, version: "2.2.4.0", callsigns: ["N1CALL-10"], points_at_aether: false,
        notes: [], copy_to: null, going_back: none,
@@ -1178,8 +1184,8 @@ const SCENES = {
   varac: {timeline: "idle", varac: VARAC, after: [tab("setup"),
     `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = s.dataset.step !== "5"`],
           clip: ['.step[data-step="5"]']},
-  // step 5's Winlink programs: Winlink Express N1CALL set up for Aether, the test copy's
-  // keying chosen; RMS Packet's rows wait for Aether FM
+  // step 5's Winlink programs: Winlink Express set up for Aether, the test copy's keying
+  // chosen; RMS Packet's rows wait for Aether FM
   hostapps: {timeline: "idle", hostapps: HOSTAPPS, height: 1100, after: [tab("setup"),
     `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = s.dataset.step !== "5"`,
     `for (const el of document.querySelectorAll('.step[data-step="5"] > *'))
@@ -1188,7 +1194,7 @@ const SCENES = {
   // the window a tick opens: the test copy of Winlink Express, still starting VARA itself
   "hostapps-setup": {timeline: "idle", hostapps: HOSTAPPS, height: 1100, after: [tab("setup"),
     `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = s.dataset.step !== "5"`,
-    `document.querySelectorAll("#hostapps-rows input[type=checkbox]")[2].click()`],
+    `document.querySelectorAll("#hostapps-rows input[type=checkbox]")[1].click()`],
           clip: ["#hostapps-dialog"]},
 };
 

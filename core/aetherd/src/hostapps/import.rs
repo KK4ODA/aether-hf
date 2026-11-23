@@ -126,7 +126,8 @@ pub struct Plan {
     pub folder: String,
     /// The setup's name in the program.
     pub setup: String,
-    /// The profile's name: the program's and the callsign.
+    /// The profile's name: the install's ([`Install::name`]), so that two installs of one
+    /// program — a copy for each radio, run under one callsign — never write one profile.
     pub profile: String,
     /// Who keys the radio in it.
     pub keying: Option<Keying>,
@@ -244,7 +245,7 @@ pub fn plan(
         program: install.program,
         folder: install.folder.clone(),
         setup: setup.name.clone(),
-        profile: format!("{} {}", install.program.name(), call.to_uppercase()),
+        profile: install.name.clone(),
         keying: None,
         keyings: keyings(setup),
         changes: json!({}),
@@ -549,6 +550,7 @@ mod tests {
         Install {
             program: Program::WinlinkExpress,
             program_name: "Winlink Express",
+            name: "Winlink Express".into(),
             folder: "C:\\RMS Express".into(),
             exe: "C:\\RMS Express\\RMS Express.exe".into(),
             found_by: vec![FoundBy::Usual],
@@ -564,7 +566,7 @@ mod tests {
     fn a_program_that_keys_the_radio_keeps_it_by_default() {
         let s = setup(Ptt::Cat, 8300);
         let plan = plan(&install(&s), &s, None, &aether());
-        assert_eq!(plan.profile, "Winlink Express N0CALL");
+        assert_eq!(plan.profile, "Winlink Express", "the install's name");
         assert_eq!(plan.keyings, [Keying::Program, Keying::Aether]);
         assert_eq!(plan.keying, Some(Keying::Program));
         assert_eq!(plan.pointing, Some(Pointing::Aether));

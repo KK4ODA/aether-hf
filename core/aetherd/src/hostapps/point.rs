@@ -363,6 +363,7 @@ mod tests {
         Install {
             program: Program::WinlinkExpress,
             program_name: "Winlink Express",
+            name: "Winlink Express".into(),
             folder: dir.display().to_string(),
             exe: dir.join("RMS Express.exe").display().to_string(),
             found_by: vec![FoundBy::Added],

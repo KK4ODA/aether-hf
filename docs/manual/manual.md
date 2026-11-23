@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.18.0 |
+| **Version** | 1.18.1 |
 | **Updated** | 2026-11-23 |
 | **Describes** | Aether HF 0.2.0-beta.171 |
 | **Licence** | CC BY 4.0 |
@@ -625,7 +625,7 @@ quiet leaves the signal inside the sound card's own noise.
   *VarAC default* ([VarAC in one step](#varac-in-one-step)). Once they are made the button reads
   **Update**. **VarAC profile** says whether they are there and up to date. Shown on Windows only.
 - **Winlink programs**: every install of Winlink Express, RMS Trimode and RMS Packet on the
-  computer, one row per callsign or setup. Tick a row to set it up for Aether, untick it to go
+  computer, one row per install (RMS Packet: one per channel). Tick a row to set it up for Aether, untick it to go
   back to VARA ([Finding Winlink's programs](#finding-winlinks-programs)). **Find** looks again;
   **Add folder** adds a folder Find missed. Shown on Windows only.
 
@@ -1254,19 +1254,22 @@ is set up for Aether in one step: Aether changes the program's own settings so i
 makes an Aether profile from the program's radio and TNC settings, and switches to it. A window
 says what will change before anything does. Untick the row to go back to VARA.
 
-![Setup step 5's Winlink programs: Find, Add folder, and a table of six setups in four installs. Winlink Express N1CALL in C:\RMS Express is ticked: set up for Aether, keyed by Winlink Express. N2CALL in the same install, a test copy of Winlink Express in D:\Radio\WLE test pointing at port 8310, and the RMS Trimode gateway N1CALL-1 are not ticked, each with a Keying list naming the program. RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked](screens/hostapps.png)
+![Setup step 5's Winlink programs: Find, Add folder, and a table of four installs. Winlink Express in C:\RMS Express, set up for N1CALL and N2CALL, is ticked: set up for Aether, keyed by Winlink Express. A test copy of Winlink Express in D:\Radio\WLE test pointing at port 8310, and the RMS Trimode gateway N1CALL-1 are not ticked, each with a Keying list naming the program. RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked](screens/hostapps.png)
 
-*Figure 35. Winlink's programs found. Winlink Express N1CALL is set up for Aether.*
+*Figure 35. Winlink's programs found. Winlink Express in C:\RMS Express is set up for Aether.*
 
-![The window for the test copy of Winlink Express in D:\Radio\WLE test: an amber warning that Winlink Express's settings in that folder will change and the file is kept as RMS Express.ini.aether.bak; In Winlink Express, Auto Launch Vara True to False; the Aether profile Winlink Express N1CALL with its callsign, Host programs on, bandwidth 2300 Hz, host port 8310, keyed by Winlink Express, sideband USB, and two notes; Switch to it now and set the dial to 7.082 MHz, ticked; the buttons Set up, Make a copy first and Cancel; and a line saying a copy goes to D:\Radio\WLE test Aether](screens/hostapps-setup.png)
+![The window for the test copy of Winlink Express in D:\Radio\WLE test: an amber warning that Winlink Express's settings in that folder will change and the file is kept as RMS Express.ini.aether.bak; In Winlink Express, Auto Launch Vara True to False; the Aether profile Winlink Express WLE test with its callsign N1CALL, Host programs on, bandwidth 2300 Hz, host port 8310, keyed by Winlink Express, sideband USB, and two notes; Switch to it now and set the dial to 7.082 MHz, ticked; the buttons Set up, Make a copy first and Cancel; and a line saying a copy goes to D:\Radio\WLE test Aether](screens/hostapps-setup.png)
 
 *Figure 36. What setting up the test copy will change.*
 
 1. Setup step 5, **Winlink programs**. The list fills by itself when the window opens: one row per
-   setup, with the program, the callsign, the version, whether it is running, the TNC port it
-   points at (**Aether** when it is this station's) and the folder. Winlink Express keeps several
-   callsigns in one install, and each is a row. **Find** looks again. If a copy is missing, type its
-   folder in **Add folder** and press **Add**: it is looked in every time after.
+   install, with the program, its callsigns (the one in use first), the version, whether it is
+   running, the TNC port it points at (**Aether** when it is this station's) and the folder.
+   Winlink Express keeps several callsigns in one install. They share its radio and TNC settings,
+   so they share one row. RMS Packet has a row for each channel. An install with nothing to set up
+   (Winlink Express with no callsign yet) has a greyed row; its tooltip says why. **Find** looks
+   again. If a copy is missing, type its folder in **Add folder** and press **Add**: it is looked
+   in every time after.
 2. Choose who keys the radio in **Keying**, before you tick:
    - **The program's name** (the default when it keys the radio itself): the program keeps its
      radio setup, keys on Aether's `PTT ON` and tunes the radio, as it did with VARA. Nothing in
@@ -1280,8 +1283,11 @@ says what will change before anything does. Untick the row to go back to VARA.
    - **In** *the program*: each of its settings Aether will change, as it is and as it will be.
      *Nothing to change* means it reaches Aether as it is.
    - **Aether profile** *name*: what the profile holds. It is named for the program and the
-     callsign (*Winlink Express KK4ODA*). Its sound card and levels are this station's, or the
-     profile's own when it was made before.
+     install's folder: *Winlink Express* for `C:\RMS Express`, *Winlink Express TS480* for
+     `C:\RMS Express_TS480`. So each copy of Winlink Express gets its own profile, even when they
+     all run under one callsign. The profile starts with the callsign in use. Once the program is
+     attached, Aether answers to the callsign the program names. Its sound card and levels are
+     this station's, or the profile's own when it was made before.
    - **Still to do in** *the program*, in amber, only when there is something Aether cannot change
      for you. Do it in the program yourself.
    - **Switch to it now**: ticked, the station switches to the profile. When the program keys the
@@ -1303,9 +1309,7 @@ says what will change before anything does. Untick the row to go back to VARA.
 **Going back to VARA.** Untick the row and press **Go back to VARA**. Aether puts back each
 setting it changed, as it was before, unless you changed it since: those are listed and left as
 you have them. The file as it was is kept as `RMS Express.ini.aether-undo.bak`. The Aether
-profile stays. Winlink Express's settings are shared by all its callsigns, so while another
-callsign of the same install is still set up for Aether, nothing in the program changes. To
-change who keys the radio, go back to VARA and set the row up again.
+profile stays. To change who keys the radio, go back to VARA and set the row up again.
 
 If the program points at another port on this computer, the profile makes Aether listen there, so
 the program needs no change. A gateway's profile (RMS Trimode) also sets **Control** to
@@ -1765,3 +1769,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.16.2 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): with **Aether** keying, RMS Trimode's radio is set to *Manual* too, in the words Trimode writes itself; a Trimode set to *Manual* by hand is read as controlling no radio. |
 | 1.17.0 | 2026-11-23 | [Your first contact, in brief](#5-your-first-contact-in-brief) and [Step 5](#step-5-application-settings): **debug mode** is asked in a window when Aether first opens (and once on a station that had only the old banner), saying what is sent, when and to whom; nothing goes to the project until **Keep it on** or **Turn it off** is pressed. The one-line banner is gone. |
 | 1.18.0 | 2026-11-23 | [Full, Compact and Mini](#full-compact-and-mini) and [The signal window](#the-signal-window): Compact and Mini have a small button after **Tune** that opens the signal window, the waterfall, spectrum and constellation, as **Undock** does; while the window is open it brings it to the front. |
+| 1.18.1 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): one row per install, listing all its callsigns, the one in use first. A Winlink Express with several callsigns had a row for each, which looked like the same install twice, and ticking one changed them all. The profile is named for the install's folder (*Winlink Express TS480*), not the callsign, so copies of Winlink Express for different radios no longer share one profile when they run under one callsign. An install with nothing to set up has a greyed row saying why. |

@@ -1031,17 +1031,17 @@
                   <button class="small quiet" id="btn-hostapps-add" title="Look in this folder every time, too">Add</button>
                 </div>
                 <div class="table-scroll hostapps-scroll" id="hostapps-pane" hidden>
-                  <table class="hostapps" title="Each setup of each install found. Ticked: set up for Aether. Tick one to set it up, untick it to go back to VARA">
+                  <table class="hostapps" title="Each install found, one row each. Ticked: set up for Aether. Tick one to set it up, untick it to go back to VARA">
                     <thead>
                       <tr>
                         <th scope="col" title="Ticked: set up for Aether, its profile made and the program set to reach Aether. Tick to set it up; untick to go back to VARA. A window says what will change first">Set up</th>
                         <th scope="col" title="The program">Program</th>
-                        <th scope="col" title="The callsign the program runs as in this setup; the profile is named for it">Callsign</th>
+                        <th scope="col" title="The callsigns the program is set up for, the one in use first: the profile starts as that one. Every callsign of an install shares its TNC and radio">Callsigns</th>
                         <th scope="col" title="The program's version">Version</th>
                         <th scope="col" title="Whether the program is running now">Running</th>
                         <th scope="col" title="The TNC address and port the program points at: Aether when it is this Aether's">TNC</th>
                         <th scope="col" title="Who keys the radio once it is set up: the program, on Aether's PTT ON, or Aether, as the program did">Keying</th>
-                        <th scope="col" title="The install's folder">Folder</th>
+                        <th scope="col" title="The install's folder: the profile made from it is named for the program and what sets this folder apart (Winlink Express TS480 for C:\RMS Express_TS480)">Folder</th>
                       </tr>
                     </thead>
                     <tbody id="hostapps-rows"></tbody>

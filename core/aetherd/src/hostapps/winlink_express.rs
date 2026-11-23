@@ -1,4 +1,4 @@
-//! Winlink Express's reader: `RMS Express.ini` to plain [`ProgramSetup`]s, one per callsign.
+//! Winlink Express's reader: `RMS Express.ini` to one plain [`ProgramSetup`] per install.
 //!
 //! Winlink Express keeps everything in one file beside its executable: `[Properties]` lists the
 //! callsigns (`Call signs`, the one in use as `Callsign`), each callsign has a section of its own
@@ -8,6 +8,12 @@
 //! `[Vara FM TNC]`, `[Ardop TNC]` and `[Packet TNC]` the others. The callsign sections also hold
 //! the operator's address, telephone, e-mail and password: only `Mode` and the bandwidth and
 //! frequency keys are read there.
+//!
+//! An install is one setup, whatever its callsigns (ADR-0133 §9): what setting it up writes —
+//! the TNC and the radio — is shared by all of them, and once the program is attached its
+//! `MYCALL` and `BW` are what Aether answers as. The setup is named for the callsign in use, and
+//! its session, bandwidth and frequency are that callsign's; the others ride along in
+//! `callsigns`.
 //!
 //! The PTT port's values are its help file's (*Radio Control*): `External` is VOX, a radio's
 //! name or `CI-V` is a command on the control port, a serial port is its RTS or DTR line.
@@ -193,36 +199,36 @@ pub fn read(files: &Files) -> Reading {
             .notes
             .push("no VARA HF TNC is set up in Winlink Express yet".to_owned());
     }
-    for call in callsigns {
-        let mode = something(ini.get(&call, "Mode"));
-        let p2p = (
-            bandwidth(&ini, &call, "Vara P2P Channel Bandwidth"),
-            frequency(&ini, &call, "Vara P2P Center Frequency"),
-        );
-        let winlink = (
-            bandwidth(&ini, &call, "Vara WL2K Channel Bandwidth"),
-            frequency(&ini, &call, "Vara WL2K Center Frequency"),
-        );
-        // the session type the callsign last ran; for another (Telnet, packet), a gateway
-        // session's if one was set up, else a P2P one's
-        let (bandwidth_hz, frequency_hz) = match mode.as_deref() {
-            Some(m) if m.eq_ignore_ascii_case(P2P) => p2p,
-            Some(m) if m.eq_ignore_ascii_case(WINLINK) => winlink,
-            _ if winlink.0.is_some() => winlink,
-            _ => p2p,
-        };
-        reading.setups.push(super::ProgramSetup {
-            name: call.clone(),
-            callsigns: vec![call],
-            session: mode,
-            bandwidth_hz,
-            frequency_hz,
-            channels_hz: Vec::new(),
-            gateway: false,
-            radio: radio.clone(),
-            tncs: tncs.clone(),
-        });
-    }
+    // the callsign in use: its session type, bandwidth and frequency are the setup's
+    let call = callsigns[0].clone();
+    let mode = something(ini.get(&call, "Mode"));
+    let p2p = (
+        bandwidth(&ini, &call, "Vara P2P Channel Bandwidth"),
+        frequency(&ini, &call, "Vara P2P Center Frequency"),
+    );
+    let winlink = (
+        bandwidth(&ini, &call, "Vara WL2K Channel Bandwidth"),
+        frequency(&ini, &call, "Vara WL2K Center Frequency"),
+    );
+    // the session type the callsign last ran; for another (Telnet, packet), a gateway
+    // session's if one was set up, else a P2P one's
+    let (bandwidth_hz, frequency_hz) = match mode.as_deref() {
+        Some(m) if m.eq_ignore_ascii_case(P2P) => p2p,
+        Some(m) if m.eq_ignore_ascii_case(WINLINK) => winlink,
+        _ if winlink.0.is_some() => winlink,
+        _ => p2p,
+    };
+    reading.setups.push(super::ProgramSetup {
+        name: call,
+        callsigns,
+        session: mode,
+        bandwidth_hz,
+        frequency_hz,
+        channels_hz: Vec::new(),
+        gateway: false,
+        radio,
+        tncs,
+    });
     reading
 }
 
@@ -349,26 +355,36 @@ mod tests {
     }
 
     #[test]
-    fn each_callsign_is_a_setup_and_the_one_in_use_comes_first() {
+    fn an_install_is_one_setup_named_for_the_callsign_in_use() {
         let reading = read(&files(INI));
         assert_eq!(reading.version.as_deref(), Some("1.8.6.0"));
-        let names: Vec<&str> = reading.setups.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["N1CALL", "N0CALL"]);
-        let p2p = &reading.setups[1];
-        assert_eq!(p2p.callsigns, ["N0CALL"]);
-        assert_eq!(p2p.session.as_deref(), Some(P2P));
-        assert_eq!(p2p.bandwidth_hz, Some(500));
-        assert_eq!(p2p.frequency_hz, Some(7_083_500));
-        assert!(!p2p.gateway);
-        // a callsign last used for Telnet: its gateway session's figures
-        let telnet = &reading.setups[0];
-        assert_eq!(telnet.bandwidth_hz, Some(2750));
-        assert_eq!(telnet.frequency_hz, Some(3_591_500));
+        assert_eq!(reading.setups.len(), 1, "{:?}", reading.setups);
+        let setup = &reading.setups[0];
+        assert_eq!(setup.name, "N1CALL");
+        assert_eq!(
+            setup.callsigns,
+            ["N1CALL", "N0CALL"],
+            "the one in use first"
+        );
+        // the callsign in use was last used for Telnet: its gateway session's figures
+        assert_eq!(setup.session.as_deref(), Some("Telnet Winlink"));
+        assert_eq!(setup.bandwidth_hz, Some(2750));
+        assert_eq!(setup.frequency_hz, Some(3_591_500));
+        assert!(!setup.gateway);
         assert!(reading.notes.is_empty(), "{:?}", reading.notes);
+        // with N0CALL in use, its P2P session's
+        let swapped = INI.replace("Callsign=N1CALL", "Callsign=N0CALL");
+        let reading = read(&files(&swapped));
+        let setup = &reading.setups[0];
+        assert_eq!(setup.name, "N0CALL");
+        assert_eq!(setup.callsigns, ["N0CALL", "N1CALL"]);
+        assert_eq!(setup.session.as_deref(), Some(P2P));
+        assert_eq!(setup.bandwidth_hz, Some(500));
+        assert_eq!(setup.frequency_hz, Some(7_083_500));
     }
 
     #[test]
-    fn the_radio_and_the_tncs_are_shared_by_every_callsign() {
+    fn the_radio_and_the_tncs_are_read() {
         let reading = read(&files(INI));
         let radio = reading.setups[0].radio.clone().expect("a radio");
         assert_eq!(radio.rig.as_deref(), Some("Yaesu FTDX10"));
@@ -390,7 +406,6 @@ mod tests {
         assert_eq!(kiss.kind, TncKind::Kiss);
         assert_eq!(kiss.port, Some(8101));
         assert!(kiss.launches);
-        assert_eq!(reading.setups[1].radio, reading.setups[0].radio);
     }
 
     #[test]

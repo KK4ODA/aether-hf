@@ -134,7 +134,7 @@ fn install_json(install: &Install, daemon: &DaemonState) -> Value {
                 })
                 .collect();
             json["plans"] = json!(plans);
-            json["set_up"] = json!(finder.set_up_of(&install.folder, &setup.name));
+            json["set_up"] = json!(finder.record_of(install, &setup.name));
         }
     }
     value["points_at_aether"] = json!(points_at_aether);
@@ -460,13 +460,24 @@ fn restore<P: Ptt>(
     let folder =
         text_param(params, "folder").ok_or_else(|| bad("the install's folder is needed"))?;
     let setup = text_param(params, "setup").ok_or_else(|| bad("the setup's name is needed"))?;
-    let Some(record) = daemon.hostapps.set_up_of(folder, setup).cloned() else {
+    let found = install_in(daemon, folder);
+    let record = match &found {
+        Some(install) => daemon.hostapps.record_of(install, setup),
+        None => daemon.hostapps.set_up_of(folder, setup),
+    };
+    let Some(record) = record.cloned() else {
         return Err(not_found(format!(
             "{setup} in {folder} was not set up for Aether here."
         )));
     };
     let state = format!("{:?}", station.state());
-    let others = daemon.hostapps.others_set_up(&record.folder, &record.setup);
+    let setups: Vec<String> = found
+        .iter()
+        .flat_map(|i| i.setups.iter().map(|s| s.name.clone()))
+        .collect();
+    let others = daemon
+        .hostapps
+        .others_set_up(&record.folder, &record.setup, &setups);
     let mut result = json!({
         "folder": record.folder,
         "setup": record.setup,
@@ -604,8 +615,9 @@ mod tests {
         )
     }
 
-    /// Two made-up installs: Winlink Express with two callsigns keyed by CAT, pointing at
-    /// Aether, and a copy on another port with no radio.
+    /// Three made-up installs of Winlink Express: one with two callsigns keyed by CAT, pointing
+    /// at Aether; a copy on another port with no radio; and a copy for another radio run under
+    /// the first one's callsign.
     fn computer(_added: &[PathBuf]) -> crate::hostapps::find::Found {
         crate::hostapps::find::Found {
             installs: installs(),
@@ -621,9 +633,9 @@ mod tests {
             icom_address: None,
             ptt: crate::hostapps::Ptt::Cat,
         };
-        let setup = |call: &str, hz: u32, port: u16, radio: Option<Radio>| ProgramSetup {
-            name: call.into(),
-            callsigns: vec![call.into()],
+        let setup = |calls: &[&str], hz: u32, port: u16, radio: Option<Radio>| ProgramSetup {
+            name: calls[0].into(),
+            callsigns: calls.iter().map(|&c| c.to_owned()).collect(),
             session: Some("Vara HF P2P".into()),
             bandwidth_hz: Some(hz),
             frequency_hz: Some(7_083_500),
@@ -632,27 +644,35 @@ mod tests {
             radio,
             tncs: vec![Tnc::tcp(TncKind::VaraHf, "127.0.0.1", port)],
         };
-        let install = |folder: &str, setups: Vec<ProgramSetup>| Install {
+        let install = |folder: &str, name: &str, setups: Vec<ProgramSetup>| Install {
             program: Program::WinlinkExpress,
             program_name: "Winlink Express",
+            name: name.into(),
             folder: folder.into(),
             exe: format!("{folder}\\RMS Express.exe"),
             found_by: vec![FoundBy::Usual],
             running: false,
             version: Some("1.8.6.0".into()),
-            callsigns: setups.iter().map(|s| s.name.clone()).collect(),
+            callsigns: setups.iter().flat_map(|s| s.callsigns.clone()).collect(),
             setups,
             notes: Vec::new(),
         };
         vec![
             install(
                 "C:\\RMS Express",
-                vec![
-                    setup("N0CALL", 500, 8300, Some(radio.clone())),
-                    setup("N1CALL", 2750, 8300, Some(radio)),
-                ],
+                "Winlink Express",
+                vec![setup(&["N0CALL", "N1CALL"], 500, 8300, Some(radio.clone()))],
             ),
-            install("D:\\WLE 2", vec![setup("N2CALL", 2300, 8370, None)]),
+            install(
+                "D:\\WLE 2",
+                "Winlink Express WLE 2",
+                vec![setup(&["N2CALL"], 2300, 8370, None)],
+            ),
+            install(
+                "C:\\RMS Express_TS480",
+                "Winlink Express TS480",
+                vec![setup(&["N0CALL"], 2750, 8300, Some(radio))],
+            ),
         ]
     }
 
@@ -716,10 +736,16 @@ mod tests {
         let found = ok(call(&mut station, &mut daemon, "hostapps.find", json!({})));
         assert_eq!(found["found"], true);
         let installs = found["installs"].as_array().expect("installs");
-        assert_eq!(installs.len(), 2);
+        assert_eq!(installs.len(), 3);
         assert_eq!(installs[0]["points_at_aether"], true);
         assert_eq!(installs[1]["points_at_aether"], false);
         assert_eq!(installs[0]["callsigns"], json!(["N0CALL", "N1CALL"]));
+        assert_eq!(installs[0]["name"], "Winlink Express");
+        assert_eq!(
+            installs[0]["setups"].as_array().map(Vec::len),
+            Some(1),
+            "one row an install, whatever its callsigns"
+        );
         let setup = &installs[0]["setups"][0];
         assert_eq!(setup["tncs"][0]["pointing"], "aether");
         let plans = setup["plans"].as_array().expect("plans");
@@ -752,28 +778,35 @@ mod tests {
     }
 
     #[test]
-    fn setting_two_setups_up_makes_two_profiles_and_one_can_be_switched_to() {
+    fn two_installs_under_one_callsign_make_two_profiles_and_one_can_be_switched_to() {
         let mut station = station();
         let (mut daemon, dir) = daemon("import");
         daemon.hostapps.running = nothing_runs;
         ok(call(&mut station, &mut daemon, "hostapps.find", json!({})));
         let first = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL" });
         let done = ok(call(&mut station, &mut daemon, "hostapps.setup", first));
-        assert_eq!(done["set_up"]["profile"], "Winlink Express N0CALL");
+        assert_eq!(done["set_up"]["profile"], "Winlink Express");
         assert_eq!(done["set_up"]["created"], true);
         assert!(done["active"].is_null(), "not switched to unless asked");
         let row = &done["hostapps"]["installs"][0]["setups"][0];
-        assert_eq!(row["set_up"]["profile"], "Winlink Express N0CALL", "{row}");
-        let second = json!({ "folder": "c:/rms express/", "setup": "N1CALL", "keying": "aether" });
-        ok(call(&mut station, &mut daemon, "hostapps.setup", second));
-        let unknown = json!({ "folder": "C:\\RMS Express", "setup": "N9CALL" });
-        let refused = call(&mut station, &mut daemon, "hostapps.setup", unknown);
-        assert_eq!(refused.error.expect("refused").code, "not_found");
+        assert_eq!(row["set_up"]["profile"], "Winlink Express", "{row}");
+        // the copy for another radio, under the same callsign: a profile of its own
+        let second = json!({
+            "folder": "c:/rms express_ts480/",
+            "setup": "N0CALL",
+            "keying": "aether",
+        });
+        let done = ok(call(&mut station, &mut daemon, "hostapps.setup", second));
+        assert_eq!(done["set_up"]["profile"], "Winlink Express TS480");
+        assert_eq!(done["set_up"]["created"], true, "not the first one's");
+        // a callsign of an install's that is not its setup's name names nothing
+        for name in ["N9CALL", "N1CALL"] {
+            let unknown = json!({ "folder": "C:\\RMS Express", "setup": name });
+            let refused = call(&mut station, &mut daemon, "hostapps.setup", unknown);
+            assert_eq!(refused.error.expect("refused").code, "not_found", "{name}");
+        }
 
-        let id = daemon
-            .profiles
-            .find("Winlink Express N0CALL")
-            .expect("made");
+        let id = daemon.profiles.find("Winlink Express").expect("made");
         let profile = daemon.profiles.read(&id).expect("read");
         let applied = profile.apply(&daemon.config, None).expect("apply");
         assert!(matches!(applied.config.ptt, PttConfig::Host { .. }));
@@ -791,10 +824,7 @@ mod tests {
             "the station's sound card kept"
         );
 
-        let id = daemon
-            .profiles
-            .find("Winlink Express N1CALL")
-            .expect("made");
+        let id = daemon.profiles.find("Winlink Express TS480").expect("made");
         let profile = daemon.profiles.read(&id).expect("read");
         let applied = profile.apply(&daemon.config, None).expect("apply");
         assert!(
@@ -802,16 +832,14 @@ mod tests {
             "{:?}",
             applied.config.ptt
         );
+        assert_eq!(applied.config.callsign, "N0CALL");
         assert_eq!(applied.config.radio.bandwidth, 2300, "2750 runs as 2300");
 
         // the same again, switched to: brought up to date, and the program's dial declared
         let again = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL", "switch": true });
         let again = ok(call(&mut station, &mut daemon, "hostapps.setup", again));
         assert_eq!(again["set_up"]["created"], false);
-        let id = daemon
-            .profiles
-            .find("Winlink Express N0CALL")
-            .expect("made");
+        let id = daemon.profiles.find("Winlink Express").expect("made");
         assert_eq!(again["active"], json!(id));
         assert!(matches!(daemon.config.ptt, PttConfig::Host { .. }));
         assert_eq!(daemon.config.callsign, "N0CALL");
@@ -820,10 +848,24 @@ mod tests {
             Some(7_082_000),
             "the program's dial declared at the switch"
         );
-        // going back while another setup of the install still uses Aether: only forgotten
+        let left_alone = daemon.profiles.find("Winlink Express TS480");
+        assert!(
+            left_alone.is_some(),
+            "the other install's profile untouched"
+        );
+
+        // a record from when each callsign was a row of its own: it holds nothing back
+        let stale = SetUp {
+            folder: "C:\\RMS Express".into(),
+            setup: "N1CALL".into(),
+            profile: "Winlink Express N1CALL".into(),
+            keying: Some(Keying::Program),
+            at: String::new(),
+        };
+        daemon.hostapps.note_set_up(stale, &[]).expect("noted");
         let back = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL" });
         let back = ok(call(&mut station, &mut daemon, "hostapps.restore", back));
-        assert_eq!(back["others"], json!(["N1CALL"]));
+        assert_eq!(back["others"], json!([]));
         assert!(
             daemon
                 .hostapps
@@ -831,9 +873,42 @@ mod tests {
                 .is_none()
         );
         assert!(
-            daemon.profiles.find("Winlink Express N0CALL").is_some(),
+            daemon
+                .hostapps
+                .set_up_of("C:\\RMS Express", "N1CALL")
+                .is_none(),
+            "every record of the install forgotten"
+        );
+        assert!(
+            daemon.profiles.find("Winlink Express").is_some(),
             "the profile stays"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_record_made_under_another_callsign_of_the_install_shows_it_set_up() {
+        let mut station = station();
+        let (mut daemon, dir) = daemon("renamed");
+        daemon.hostapps.running = nothing_runs;
+        // set up before ADR-0133 §9, from the row of a callsign not in use now
+        let old = SetUp {
+            folder: "C:\\RMS Express".into(),
+            setup: "N1CALL".into(),
+            profile: "Winlink Express N1CALL".into(),
+            keying: Some(Keying::Program),
+            at: String::new(),
+        };
+        daemon.hostapps.note_set_up(old, &[]).expect("noted");
+        let found = ok(call(&mut station, &mut daemon, "hostapps.find", json!({})));
+        let row = &found["installs"][0]["setups"][0];
+        assert_eq!(row["name"], "N0CALL");
+        assert_eq!(row["set_up"]["profile"], "Winlink Express N1CALL", "{row}");
+        // going back from the row as it is now
+        let back = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL" });
+        let back = ok(call(&mut station, &mut daemon, "hostapps.restore", back));
+        assert_eq!(back["setup"], "N1CALL");
+        assert!(daemon.hostapps.remembered.set_up.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1007,10 +1082,16 @@ mod tests {
         assert!(folder.join("RMS Express.ini.aether-undo.bak").is_file());
         let left = daemon.hostapps.originals(name);
         assert!(left.is_empty(), "{left:?}");
-        assert!(
-            daemon.profiles.find("Winlink Express N0CALL").is_some(),
-            "the profile stays"
+        // named for the install, its folder's name not the installer's
+        let profile = back["profile"].as_str().expect("profile");
+        assert_eq!(
+            profile,
+            format!(
+                "Winlink Express aether-hostapps-point-{}",
+                std::process::id()
+            )
         );
+        assert!(daemon.profiles.find(profile).is_some(), "the profile stays");
     }
 
     #[test]
