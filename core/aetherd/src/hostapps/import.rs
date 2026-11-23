@@ -384,22 +384,26 @@ pub fn plan(
                     .as_deref()
                     .is_some_and(|c| c.eq_ignore_ascii_case(port));
                 if shared {
-                    plan.program_must.push(settable(
-                        "Radio Manual, PTT port None",
+                    hand_over(
+                        &mut plan,
+                        install.program,
+                        true,
                         format!(
-                            "Aether keys on {port}, which is also the radio's CAT port, \
-                                 and only one program can hold it"
+                            "Aether keys on {port}, which is also the radio's CAT port, and \
+                             only one program can hold it"
                         ),
-                    ));
+                    );
                 } else {
-                    plan.program_must.push(settable(
-                        "PTT port None",
+                    hand_over(
+                        &mut plan,
+                        install.program,
+                        false,
                         format!(
-                            "Aether keys on {port}; the program can keep its frequency \
-                                 control on {}",
+                            "Aether keys on {port}; the program can keep its frequency control \
+                             on {}",
                             radio.cat_port.as_deref().unwrap_or("the CAT port")
                         ),
-                    ));
+                    );
                 }
             } else {
                 let port = radio.cat_port.clone().unwrap_or_default();
@@ -415,13 +419,15 @@ pub fn plan(
                 {
                     changes.insert("ptt.civ_address".into(), json!(address));
                 }
-                plan.program_must.push(settable(
-                    "Radio Manual, PTT port None",
+                hand_over(
+                    &mut plan,
+                    install.program,
+                    true,
                     format!(
-                        "Aether keys the radio by CAT on {port}, and only one program can \
-                             hold that port"
+                        "Aether keys the radio by CAT on {port}, and only one program can hold \
+                         that port"
                     ),
-                ));
+                );
             }
         }
         _ => {
@@ -435,6 +441,26 @@ pub fn plan(
     }
     plan.changes = Value::Object(changes);
     plan
+}
+
+/// What the program must change for Aether to key the radio: its keying off, and with `radio`
+/// (Aether keys on the port its radio control holds) its radio *Manual*. Winlink Express's
+/// reader writes both, in the words Winlink Express writes; Trimode's writes the keying, and its
+/// radio *Manual* is the operator's to set until Trimode's words for it are read from a file.
+fn hand_over(plan: &mut Plan, program: Program, radio: bool, why: String) {
+    match (program, radio) {
+        (Program::WinlinkExpress, true) => plan
+            .program_must
+            .push(settable("Radio Manual, PTT port External", why)),
+        (Program::WinlinkExpress, false) => {
+            plan.program_must.push(settable("PTT port External", why));
+        }
+        (_, true) => {
+            plan.program_must.push(settable("PTT off", why.clone()));
+            plan.program_must.push(advice("Radio Manual", why));
+        }
+        (_, false) => plan.program_must.push(settable("PTT off", why)),
+    }
 }
 
 /// A frequency in megahertz as the panel writes one: at least three decimals, no trailing
@@ -692,6 +718,30 @@ mod tests {
             "{}",
             p.changes
         );
+    }
+
+    #[test]
+    fn trimodes_radio_manual_is_left_to_the_operator() {
+        let gate = setup(Ptt::Cat, 8300);
+        let trimode = Install {
+            program: Program::RmsTrimode,
+            program_name: "RMS Trimode",
+            ..install(&gate)
+        };
+        let p = plan(&trimode, &gate, Some(Keying::Aether), &aether());
+        let said: Vec<(&str, bool)> = p
+            .program_must
+            .iter()
+            .map(|m| (m.what.as_str(), m.settable))
+            .collect();
+        assert_eq!(
+            said,
+            [("PTT off", true), ("Radio Manual", false)],
+            "its PTT is written, its radio is the operator's"
+        );
+        let p = plan(&install(&gate), &gate, Some(Keying::Aether), &aether());
+        assert_eq!(p.program_must[0].what, "Radio Manual, PTT port External");
+        assert!(p.program_must[0].settable, "Winlink Express's is written");
     }
 
     #[test]

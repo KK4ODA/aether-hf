@@ -900,7 +900,7 @@ mod tests {
         );
         assert_eq!(
             plans[1]["program_changes"].as_array().map(Vec::len),
-            Some(5),
+            Some(4),
             "and the radio's keying and control with Aether keying: {}",
             plans[1]["program_changes"]
         );
@@ -928,7 +928,7 @@ mod tests {
             done["set_up"]["pointed"]["changes"]
                 .as_array()
                 .map(Vec::len),
-            Some(5)
+            Some(4)
         );
         assert_eq!(done["set_up"]["by_hand"], json!([]), "nothing left by hand");
         let after = crate::ini::Ini::new(std::fs::read(&path).expect("read"));
@@ -941,9 +941,10 @@ mod tests {
             after.get("Vara TNC", "Auto Launch Vara").as_deref(),
             Some("False")
         );
+        // in Winlink Express's own words (read from a copy set by hand): the control port left
         assert_eq!(after.get("Vara", "Model").as_deref(), Some("Manual"));
-        assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("None"));
-        assert_eq!(after.get("Vara", "PTT Port").as_deref(), Some("None"));
+        assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("COM3"));
+        assert_eq!(after.get("Vara", "PTT Port").as_deref(), Some("EXTERNAL"));
         assert!(folder.join("RMS Express.ini.aether.bak").is_file());
         assert!(
             matches!(daemon.config.ptt, PttConfig::Cat { .. }),
@@ -955,7 +956,7 @@ mod tests {
         assert_eq!(row["setups"][0]["tncs"][0]["pointing"], "aether");
         assert_eq!(
             row["going_back"]["put_back"].as_array().map(Vec::len),
-            Some(5),
+            Some(4),
             "{}",
             row["going_back"]
         );
@@ -978,7 +979,7 @@ mod tests {
         // the operator changes one of them in the program: going back leaves it
         let edited = std::fs::read_to_string(path)
             .expect("read")
-            .replace("Control Port=None", "Control Port=COM7");
+            .replace("Model=Manual", "Model=Icom IC-7300");
         std::fs::write(path, edited).expect("edit");
         let back = json!({ "folder": name, "setup": "N0CALL" });
         daemon.hostapps.running = it_runs;
@@ -986,8 +987,8 @@ mod tests {
         assert_eq!(refused.error.expect("refused").code, "refused");
         daemon.hostapps.running = nothing_runs;
         let back = ok(call(station, daemon, "hostapps.restore", back));
-        assert_eq!(back["put_back"].as_array().map(Vec::len), Some(4), "{back}");
-        assert_eq!(back["left"][0]["key"], "Control Port");
+        assert_eq!(back["put_back"].as_array().map(Vec::len), Some(3), "{back}");
+        assert_eq!(back["left"][0]["key"], "Model");
         let after = crate::ini::Ini::new(std::fs::read(path).expect("read"));
         assert_eq!(
             after.get("Vara TNC", "TNC Address").as_deref(),
@@ -997,12 +998,12 @@ mod tests {
             after.get("Vara TNC", "Auto Launch Vara").as_deref(),
             Some("True")
         );
-        assert_eq!(after.get("Vara", "Model").as_deref(), Some("Yaesu FTDX10"));
+        assert_eq!(after.get("Vara", "Model").as_deref(), Some("Icom IC-7300"));
         assert_eq!(
             after.get("Vara", "PTT Port").as_deref(),
             Some("Yaesu FTDX10")
         );
-        assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("COM7"));
+        assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("COM3"));
         assert!(folder.join("RMS Express.ini.aether-undo.bak").is_file());
         assert!(daemon.hostapps.originals(name).is_empty());
         assert!(

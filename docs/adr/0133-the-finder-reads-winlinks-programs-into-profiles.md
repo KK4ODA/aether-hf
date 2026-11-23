@@ -249,8 +249,8 @@ author asked for one step: ticking a row ports a program that works with VARA to
 warning that its settings will change. The answers to the questions that raised (2026-11-22):
 
 1. **Unticking goes back to VARA**, behind a confirmation; the Aether profile is kept.
-2. **With Aether keying, the program's radio setup is written too** (its PTT port *None*, and its
-   radio *Manual* and control port *None* when Aether keys on that port), as the TNC settings are.
+2. **With Aether keying, the program's radio setup is written too** (its PTT off, and its radio
+   *Manual* when Aether keys on that port), as the TNC settings are; §8.2 says in which words.
 3. **Switching to the profile is a box in the window, ticked by default.**
 4. **The window also offers a copy first**, besides *Set up* and *Cancel*.
 
@@ -286,17 +286,22 @@ keying, the program no longer says how it keyed the radio once its keying is han
 
 Each reader's `point` takes whether Aether keys the radio, and names, besides the TNC's:
 
-* **Winlink Express** (`[Vara]`, its *Radio Setup*): `PTT Port` → `None`; unless the PTT is a line
-  of a port of its own, also `Model` → `Manual` and `Control Port` → `None`. The values are the
-  dialog's own words, which its help file and the setup guide use; they are owed a check against a
-  Winlink Express set to *Manual* and *None* by hand before the first release that carries this.
-* **RMS Trimode**: `[Vara TNC] Use CAT PTT` and `Use Serial Port PTT` → `False`; unless the PTT
-  is a line of a port of its own, also `[Radio] Model` → `None` and `Control Port` emptied, which
-  is how Trimode 1.4.4 writes its radio *Manual* (read from the author's gateway). Trimode then
-  tunes and scans no more, which the window's note says.
+* **Winlink Express** (`[Vara]`, its *Radio Setup*): `PTT Port` → `EXTERNAL`; unless the PTT is a
+  line of a port of its own, also `Model` → `Manual`. These are the words Winlink Express 1.8.6.0
+  writes itself: the author set a copy's radio to *Manual* and its PTT port to *External* by hand,
+  and its `[Vara]` section read `Model=Manual`, `PTT Port=EXTERNAL`, with `Control Port=COM9` left
+  as it was (2026-11-23). The first build wrote `PTT Port=None` and `Control Port=None`, guessed
+  from the dialog; neither is a word Winlink Express writes, and the control port is no longer
+  touched.
+* **RMS Trimode**: `[Vara TNC] Use CAT PTT` and `Use Serial Port PTT` → `False` when they are on
+  (keys its file has, with the values it writes). Its radio *Manual* is **not** written: the first
+  build wrote `[Radio] Model=None` and emptied `Control Port`, taken from the reader's made-up test
+  file, not from one Trimode wrote. Until those words are read from a Trimode set to *Manual* by
+  hand, the plan says *Radio Manual* as something left for the operator, in amber, beside the
+  written *PTT off*.
 
-The advice that said those by hand (*Radio Manual, PTT port None*) is now marked as carried out
-(`settable`), and *Radio setup as it is*, which asked nothing and was amber, is the plain note
+The advice that said Winlink Express's by hand (*Radio Manual, PTT port External*) is now marked
+as carried out (`settable`), and *Radio setup as it is*, which asked nothing and was amber, is the plain note
 *Keeps its radio setup*. The *Rules check at …* note is gone: the dial is said once, beside the
 switch that sets it.
 

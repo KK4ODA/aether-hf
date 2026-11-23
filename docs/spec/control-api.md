@@ -448,13 +448,14 @@ program keys the radio: `ptt.kind = "host"`; the rules check stays on, `regulato
 "usb"`, and the plan's `dial_hz` — the program's one channel less 1.5 kHz — is declared as
 `regulatory.dial_hz` when the station is switched to the profile; a program scanning several
 channels gets `regulatory.profile = "none"` instead) or `aether` (Aether keys by CAT on the
-program's port, speed and protocol, or by its RTS/DTR line; the program's radio set to Manual,
-its PTT port None). A program that keys by VOX or controls no radio leaves the keying as it is.
+program's port, speed and protocol, or by its RTS/DTR line; Winlink Express's PTT port set to
+`EXTERNAL` and, on a shared port, its radio to `Manual`; RMS Trimode's PTT turned off, its radio
+*Manual* left to the operator). A program that keys by VOX or controls no radio leaves the keying as it is.
 A setup is set up in one step by `hostapps.setup` (ADR-0133 §8): the program's own files written
 with the settings its plan's `program_changes` name (a VARA HF TNC's address and port when on
 another computer, Winlink Express's *Auto Launch Vara*, the program RMS Trimode starts as its
-VARA, and with the `aether` keying the program's keying and, on a shared port, its radio
-control), the profile made or brought up to date, and with `switch` the station switched to it.
+VARA, and with the `aether` keying the program's keying and, for Winlink Express on a shared
+port, its radio control), the profile made or brought up to date, and with `switch` the station switched to it.
 `hostapps.restore` goes back to VARA: the settings Aether wrote are put back, those still as it
 set them, once no other setup of the install is set up. A program's files are never written
 while it runs, and each file written is kept first as it was beside it (`<name>.aether.bak` when

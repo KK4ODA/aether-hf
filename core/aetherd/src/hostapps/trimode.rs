@@ -265,55 +265,23 @@ pub fn point(files: &Files, target: &super::point::Target) -> Vec<super::point::
     edits
 }
 
-/// Trimode's keying handed to Aether: neither its CAT nor its serial line keys, and when Aether
-/// keys on the radio's control port, Trimode controls the radio no more (its radio *Manual*,
-/// as `Model=None` and no control port; it then tunes nothing and scans nothing).
+/// Trimode's keying handed to Aether: neither its CAT nor its serial line keys. Its radio
+/// control is not written: the words Trimode writes for a radio set to *Manual* have not been
+/// read from a file Trimode wrote, so when Aether keys on the port Trimode's radio control holds,
+/// that is left for the operator to set in Trimode (the plan says so).
 fn aether_keys(ini: &Ini, edits: &mut Vec<super::point::Edit>) {
     use super::point::Edit;
     const S: &str = "Vara TNC";
-    const KEYING: &str = "Aether keys the radio: Trimode leaves the keying to it";
-    const CONTROL: &str = "Aether keys the radio on its control port, and only one program can \
-                           hold a port: Trimode stops controlling the radio, and tunes and scans \
-                           no more";
-    let cat = yes(ini.get(S, "Use CAT PTT").as_deref());
-    let serial = yes(ini.get(S, "Use Serial Port PTT").as_deref());
-    let control = text(ini, "Radio", "Control Port");
-    let line = text(ini, S, "PTT Port");
     for key in ["Use CAT PTT", "Use Serial Port PTT"] {
-        edits.push(Edit {
-            file: SETTINGS,
-            section: S,
-            key,
-            to: "False".to_owned(),
-            why: KEYING,
-        });
-    }
-    // a serial line of a port of its own leaves Trimode its radio control
-    let own_line = serial
-        && !cat
-        && line.as_deref().is_some_and(|l| {
-            control
-                .as_deref()
-                .is_none_or(|c| !c.eq_ignore_ascii_case(l))
-        });
-    if own_line {
-        return;
-    }
-    edits.push(Edit {
-        file: SETTINGS,
-        section: "Radio",
-        key: "Model",
-        to: "None".to_owned(),
-        why: CONTROL,
-    });
-    if control.is_some() {
-        edits.push(Edit {
-            file: SETTINGS,
-            section: "Radio",
-            key: "Control Port",
-            to: String::new(),
-            why: CONTROL,
-        });
+        if yes(ini.get(S, key).as_deref()) {
+            edits.push(Edit {
+                file: SETTINGS,
+                section: S,
+                key,
+                to: "False".to_owned(),
+                why: "Aether keys the radio: Trimode leaves the keying to it",
+            });
+        }
     }
 }
 
@@ -396,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn aether_keying_takes_trimodes_keying_and_its_radio_when_they_share_a_port() {
+    fn aether_keying_turns_trimodes_ptt_off_and_leaves_its_radio() {
         let target = crate::hostapps::point::Target {
             host_port: 8300,
             app: Some("C:\\Users\\op\\AppData\\Local\\Aether HF\\aether-hf.exe".into()),
@@ -409,16 +377,9 @@ mod tests {
                 .collect()
         };
         let own = |a: &str, b: &str, c: &str| (a.to_owned(), b.to_owned(), c.to_owned());
-        // keyed by CAT: the radio Manual, no control port, neither keying
-        assert_eq!(
-            changed(INI),
-            [
-                own("Vara TNC", "Use CAT PTT", "False"),
-                own("Radio", "Model", "None"),
-                own("Radio", "Control Port", ""),
-            ]
-        );
-        // a line of a port of its own: Trimode keeps the radio, and scans
+        // keyed by CAT: the CAT PTT off, and nothing of its radio
+        assert_eq!(changed(INI), [own("Vara TNC", "Use CAT PTT", "False")]);
+        // a serial line: that line off
         let line = INI
             .replace("Use CAT PTT=True", "Use CAT PTT=False")
             .replace("Use Serial Port PTT=False", "Use Serial Port PTT=True")
@@ -427,15 +388,9 @@ mod tests {
             changed(&line),
             [own("Vara TNC", "Use Serial Port PTT", "False")]
         );
-        // a line of the control port itself: as CAT
-        let shared = line.replace("PTT Port=COM9", "PTT Port=COM6");
-        assert_eq!(changed(&shared).len(), 3, "{:?}", changed(&shared));
-        // a radio already Manual: nothing more
-        let manual = INI
-            .replace("Use CAT PTT=True", "Use CAT PTT=False")
-            .replace("Control Port=COM6", "Control Port=")
-            .replace("Model=Yaesu FTDX10", "Model=None");
-        assert!(changed(&manual).is_empty(), "{:?}", changed(&manual));
+        // keying nothing already: nothing
+        let none = INI.replace("Use CAT PTT=True", "Use CAT PTT=False");
+        assert!(changed(&none).is_empty(), "{:?}", changed(&none));
     }
 
     #[test]

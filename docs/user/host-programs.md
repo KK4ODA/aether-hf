@@ -65,9 +65,11 @@ A profile made this way sets:
   Session tab. A gateway that scans several channels leaves the rules check off, as with VARA:
   Aether cannot tell which channel it is on. The other choice, **Aether**, keys the radio the way
   the program did (CAT on its port, speed and make, or its RTS/DTR line) and keeps the rules
-  check on; Aether sets the program's PTT port to *None* and, when the program's radio control is
-  on the same port, its radio to *Manual*, because only one program can hold a port. A program
-  that keys by VOX, or controls no radio, leaves Aether's keying as it is.
+  check on; Aether sets Winlink Express's PTT port to *External* and, when its radio control is
+  on the same port, its radio to *Manual*, because only one program can hold a port. For RMS
+  Trimode Aether turns its PTT off; set its radio to *Manual* yourself when its radio control is
+  on that port. A program that keys by VOX, or controls no radio, leaves Aether's keying as it
+  is.
 
 What Aether changes in a program: Winlink Express's VARA TNC address when it names another
 computer and its *Auto Launch Vara* (off); the program RMS Trimode starts as its VARA (Aether's

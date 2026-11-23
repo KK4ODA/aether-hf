@@ -227,9 +227,8 @@ const HOSTAPPS = (() => {
   const wle = (section, key, from, to, why) => change("RMS Express.ini", section, key, from, to, why);
   // what setting it up with Aether keying writes into Winlink Express's radio setup
   const handover = [
-    wle("Vara", "PTT Port", "FT-991A", "None", "Aether keys the radio: Winlink Express leaves the keying to it"),
+    wle("Vara", "PTT Port", "FT-991A", "EXTERNAL", "Aether keys the radio: Winlink Express leaves the keying to it"),
     wle("Vara", "Model", "Yaesu FT-991A", "Manual", "Aether keys the radio on its control port, and only one program can hold a port"),
-    wle("Vara", "Control Port", "COM5", "None", "Aether keys the radio on its control port, and only one program can hold a port"),
   ];
   const plans = (call, bandwidth, {port = null, launch = false} = {}) => {
     const base = {callsign: call, "host.enabled": true, "radio.bandwidth": bandwidth};
@@ -251,7 +250,7 @@ const HOSTAPPS = (() => {
       {profile: `Winlink Express ${call}`, keying: "aether", keyings: ["program", "aether"],
        changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                  "ptt.baud": 38400},
-       program_must: [...must, advice("Radio Manual, PTT port None", "only one program can hold COM5", true)],
+       program_must: [...must, advice("Radio Manual, PTT port External", "only one program can hold COM5", true)],
        notes, pointing: port ? "other_port" : "aether", dial_hz: null, refused: null,
        program_changes: [...tnc, ...handover]},
     ];
@@ -287,12 +286,11 @@ const HOSTAPPS = (() => {
         {profile: `RMS Trimode ${call}`, keying: "aether", keyings: ["program", "aether"],
          changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                    "ptt.baud": 38400},
-         program_must: [advice("Radio Manual, PTT port None", "only one program can hold COM5", true)],
+         program_must: [advice("PTT off", "only one program can hold COM5", true),
+                        advice("Radio Manual", "only one program can hold COM5")],
          notes: [starts], pointing: "aether", dial_hz: null, refused: null,
          program_changes: [program,
-           change("RMS Trimode.ini", "Vara TNC", "Use CAT PTT", "True", "False", "Aether keys the radio: Trimode leaves the keying to it"),
-           change("RMS Trimode.ini", "Radio", "Model", "Yaesu FT-991A", "None", "only one program can hold a port"),
-           change("RMS Trimode.ini", "Radio", "Control Port", "COM5", "", "only one program can hold a port")]},
+           change("RMS Trimode.ini", "Vara TNC", "Use CAT PTT", "True", "False", "Aether keys the radio: Trimode leaves the keying to it")]},
       ],
     };
   })();

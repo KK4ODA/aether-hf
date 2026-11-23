@@ -276,22 +276,22 @@ pub fn point(files: &Files, target: &super::point::Target) -> Vec<super::point::
 }
 
 /// Winlink Express's keying handed to Aether, in its *Radio Setup* (`[Vara]`, shared by every
-/// callsign): its PTT port *None*; and when Aether keys on the radio's control port (a CAT
-/// command, or a line of that port), its radio *Manual* and control port *None* too, since
-/// only one program can hold a port. A line of a port of its own leaves it its radio control.
+/// callsign), in the words Winlink Express 1.8.6.0 writes itself (read from a copy set by hand,
+/// 2026-11-23): its PTT port `EXTERNAL`; and when Aether keys on the radio's control port (a CAT
+/// command, or a line of that port), its radio `Manual` too, since only one program can hold a
+/// port. Choosing *Manual* leaves the control port as it was, so it is left. A line of a port of
+/// its own leaves Winlink Express its radio control.
 fn aether_keys(ini: &Ini, edits: &mut Vec<super::point::Edit>) {
     use super::point::Edit;
     const S: &str = "Vara";
-    const CONTROL: &str = "Aether keys the radio on its control port, and only one program can \
-                           hold a port: Winlink Express stops controlling the radio";
     let control = something(ini.get(S, "Control Port"));
-    let ptt = something(ini.get(S, "PTT Port")).filter(|p| !p.eq_ignore_ascii_case("external"));
+    let ptt = something(ini.get(S, "PTT Port")).filter(|p| !p.eq_ignore_ascii_case(EXTERNAL));
     if ptt.is_some() {
         edits.push(Edit {
             file: SETTINGS,
             section: S,
             key: "PTT Port",
-            to: "None".to_owned(),
+            to: EXTERNAL.to_owned(),
             why: "Aether keys the radio: Winlink Express leaves the keying to it",
         });
     }
@@ -308,19 +308,16 @@ fn aether_keys(ini: &Ini, edits: &mut Vec<super::point::Edit>) {
         file: SETTINGS,
         section: S,
         key: "Model",
-        to: "Manual".to_owned(),
-        why: CONTROL,
+        to: MANUAL.to_owned(),
+        why: "Aether keys the radio on its control port, and only one program can hold a port: \
+              Winlink Express stops controlling the radio",
     });
-    if control.is_some() {
-        edits.push(Edit {
-            file: SETTINGS,
-            section: S,
-            key: "Control Port",
-            to: "None".to_owned(),
-            why: CONTROL,
-        });
-    }
 }
+
+/// The PTT port Winlink Express writes when it keys nothing itself (its help: *External*).
+const EXTERNAL: &str = "EXTERNAL";
+/// The radio Winlink Express writes when it controls none.
+const MANUAL: &str = "Manual";
 
 #[cfg(test)]
 mod tests {
@@ -454,19 +451,16 @@ mod tests {
                 .collect()
         };
         let own = |a: &str, b: &str| (a.to_owned(), b.to_owned());
-        // a CAT command: no keying, the radio Manual, no control port
+        // a CAT command: no keying, and the radio Manual; the control port is left, as
+        // Winlink Express leaves it when Manual is chosen
         assert_eq!(
             changed("Kenwood TS-480", "COM4"),
-            [
-                own("PTT Port", "None"),
-                own("Model", "Manual"),
-                own("Control Port", "None"),
-            ]
+            [own("PTT Port", "EXTERNAL"), own("Model", "Manual")]
         );
         // RTS on the control port itself (a DigiRig): the same
-        assert_eq!(changed("COM9", "COM9").len(), 3);
+        assert_eq!(changed("COM9", "COM9").len(), 2);
         // RTS on a port of its own: Winlink Express keeps its frequency control
-        assert_eq!(changed("COM9", "COM4"), [own("PTT Port", "None")]);
+        assert_eq!(changed("COM9", "COM4"), [own("PTT Port", "EXTERNAL")]);
         // the program keying: its radio setup is not touched
         let theirs = crate::hostapps::point::Target {
             aether_keys: false,
