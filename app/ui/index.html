@@ -123,12 +123,6 @@
         <span id="clip-banner-text" title="What is clipping and what to turn">The receive audio is clipping: turn the radio's audio output or the sound card's input down.</span>
         <button class="small quiet" id="btn-clip-dismiss" title="Hide this warning until the audio stops clipping and starts again">Dismiss</button>
       </div>
-      <!-- debug mode (ADR-0050), said once: what goes to the project, and the switch -->
-      <div class="note unsaved-banner" id="debug-banner" title="Debug mode sends the sessions a program runs to the Aether project: said once, with the switch to turn it off" role="status" hidden>
-        <span id="debug-banner-text" title="After each session Winlink Express, Pat, VarAC or RadioPost runs through this station, its recording, the logs and your settings (never a password) go to the Aether project (KK4ODA) to find what goes wrong on real paths. The recording is the audio, and Aether can decode what was sent from it. Setup step 5 turns it off">Debug mode is on: each program's session — its audio recording, the logs and your settings, never a password — goes to the Aether project (KK4ODA). Setup step 5.</span>
-        <button class="small" id="btn-debug-keep" title="Keep debug mode on, and stop showing this">Keep it on</button>
-        <button class="small quiet" id="btn-debug-off" title="Turn debug mode off: nothing is sent unless you send it from Log → Send files…">Turn it off</button>
-      </div>
       <!-- VarAC in one step: offered when VarAC is found, and again when a new version changes what it needs -->
       <div class="note unsaved-banner" id="varac-banner" title="VarAC is on this computer: Aether can add a VarAC profile that runs on Aether, and an Aether profile for VarAC. Setup step 5 does the same" role="status" hidden>
         <span id="varac-banner-text" title="Set up writes VarAC_Aether.ini in VarAC's folder, a copy of your VarAC profile that starts and talks to Aether, and saves the Aether profile VarAC default. In VarAC, Switch profile to VarAC_Aether runs it on Aether; switching back to VarAC runs it on VARA again"></span>
@@ -1308,6 +1302,28 @@
         <button type="button" class="quiet" id="hostapps-dialog-cancel" title="Close this window: nothing changes">Cancel</button>
       </div>
       <p class="sub" id="hostapps-dialog-copy-note" hidden></p>
+    </dialog>
+
+    <!-- debug mode (ADR-0050 §7): asked over every tab until it is answered; nothing goes to
+         the project before then -->
+    <dialog class="confirm-dialog" id="debug-dialog" aria-labelledby="debug-dialog-title" aria-describedby="debug-dialog-body" title="Debug mode is on by default during the field trials: choose whether this station's sessions go to the Aether project">
+      <h3 id="debug-dialog-title" title="Debug mode sends the sessions programs run through this station to the Aether project">Debug mode is on</h3>
+      <div class="debug-dialog-body" id="debug-dialog-body" title="What debug mode sends, when, and to whom">
+        <p>Aether is in its field trials. To find what goes wrong on real paths, it sends the Aether project (KK4ODA) each session a program runs through this station: Winlink Express, Pat, VarAC, RadioPost and the like.</p>
+        <ul>
+          <li>What goes: the session's recording with its audio, the modem's logs, and your settings without passwords.</li>
+          <li>The audio holds what was sent. The project can read the messages from it.</li>
+          <li>When: a minute after each session ends. Sessions you start from this window, and Tests, are not sent.</li>
+          <li>Nothing goes until you choose.</li>
+        </ul>
+        <p id="debug-dialog-waiting" title="Sessions recorded before you chose: they are on this computer, and go only if you keep debug mode on" hidden></p>
+        <p>You can change it later in Setup, step 5, <b>Debug mode</b>.</p>
+      </div>
+      <p class="confirm-error" id="debug-dialog-error" title="Why the answer was not taken" role="alert" hidden></p>
+      <div class="confirm-actions">
+        <button type="button" class="primary" id="debug-dialog-keep" title="Keep debug mode on: each session a program runs goes to the Aether project a minute after it ends">Keep it on</button>
+        <button type="button" id="debug-dialog-off" title="Turn debug mode off: nothing is sent unless you send it from Log, Send files">Turn it off</button>
+      </div>
     </dialog>
   </body>
 </html>

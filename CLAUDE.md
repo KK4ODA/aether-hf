@@ -1239,6 +1239,14 @@ sessions nor Tests. The panel says so once (`#debug-banner`, *Keep it on* / *Tur
 `aether.debugNoticeSeen`); Setup step 5 *Debug mode*; a headless daemon logs it at start. The
 script's day is 80 uploads / 8 GB and a refused email no longer fails an upload — **the author
 pastes `Code.gs` and deploys a New version** for that.
+**Asked in a window since 2026-11-23 (ADR-0050 §7; the author: a dialog at first start, nothing
+before the answer, every station asked once):** `#debug-dialog` opens over every tab while
+`status.debug.ask` (unanswered, not a bench) and debug mode is on, says what goes, when and to
+whom, and takes *Keep it on* / *Turn it off* (`debug.answer {send}`: sets `send_to_project`, writes
+`debug-answered.json` beside the configuration — state, not a setting, so no schema bump); the
+banner and its `localStorage` key are gone. `DebugUploads::due` is false until answered: sessions
+recorded meanwhile wait in the queue. A headless station logs at start how to answer (`POST
+/v1/debug.answer`).
 
 **The host benches of 2026-10-07 (beta.90 and after; `host-interfaces.md` §7 has every number).**
 *RMS Trimode + RMS Relay over `[sim]`* (`C:\Dev\AetherBench\trimode\`, README there): a scratch

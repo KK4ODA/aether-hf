@@ -713,7 +713,7 @@ function round3(v) {
 
 // ── the scenes ───────────────────────────────────────────────────────────────────────────────
 
-const SEEN = {"aether.debugNoticeSeen": "1", "aether.chime": "off"};
+const SEEN = {"aether.chime": "off"};
 
 /// What one shot needs: the page, the window, what the browser keeps, the station's world and
 /// what to do before the picture is taken.
@@ -809,7 +809,8 @@ function world(scene) {
     audio_fault: null,
     config_note: null,
     upload: {state: "idle", name: null, sent: 0, total: 0, error: null, link: null, to: null},
-    debug: {on: true, waiting: [], sending: null, sent: 0, last_error: null},
+    debug: {on: true, answered: !scene.debugAsk, ask: Boolean(scene.debugAsk), waiting: [],
+            sending: null, sent: 0, last_error: null},
     binary: "C:\\Users\\N1CALL\\AppData\\Local\\Aether HF\\aetherd.exe",
   };
   const metricsBase = {
@@ -1142,6 +1143,9 @@ const tab = (name) => `document.getElementById("tab-${name}").click()`;
 
 const SCENES = {
   "first-start": {configured: false, timeline: "idle", replay: false},
+  // what a new station is asked before anything goes to the project (ADR-0050 §7)
+  "debug-mode": {configured: false, timeline: "idle", replay: false, debugAsk: true,
+                 clip: ["#debug-dialog"]},
   window: {after: [tab("session")]},
   status: {},
   setup: {timeline: "ended", after: [tab("setup"), "hideEndedBanner()"]},

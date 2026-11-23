@@ -88,6 +88,7 @@ pub fn is_mutating(method: &str) -> bool {
             | "record.mark"
             | "shutdown"
             | "config.set"
+            | "debug.answer"
             | "ptt.test"
             | "heard.clear"
             | "sessions.clear"
@@ -444,6 +445,9 @@ pub fn dispatch_with<P: Ptt>(
     match request.method.as_str() {
         "config.get" => return config_get(daemon, request.id.clone()),
         "config.set" => return config_set(station, daemon, &request.params, request.id.clone()),
+        "debug.answer" => {
+            return debug_answer(station, daemon, &request.params, request.id.clone());
+        }
         "diagnostics" => return diagnostics(station, daemon, request.id.clone()),
         "share.prepare" => {
             return share_prepare(station, daemon, &request.params, request.id.clone());
@@ -586,10 +590,13 @@ fn daemon_status<P: Ptt>(station: &mut Station<P>, daemon: Option<&DaemonState>)
     result["audio_fault"] = json!(daemon.and_then(|d| d.audio_fault.clone()));
     result["config_note"] = json!(daemon.and_then(|d| d.config_note.clone()));
     result["upload"] = json!(daemon.map(|d| d.upload.progress()));
-    // debug mode (ADR-0050): whether it is on, what waits, what went
+    // debug mode (ADR-0050): whether it is on, what waits, what went, and whether the
+    // operator is still to be asked (§7: nothing goes before an answer); a bench's sessions
+    // never go, so a bench is not asked
     result["debug"] = daemon.map_or(Value::Null, |d| {
         let mut debug = json!(d.debug);
         debug["on"] = json!(d.config.record.send_to_project);
+        debug["ask"] = json!(!d.debug.answered && !d.simulated);
         debug
     });
     // which installation this daemon runs from: a shell that finds one already
@@ -1218,6 +1225,63 @@ fn config_set<P: Ptt>(
             "path": settings.path.display().to_string(),
         }),
     )
+}
+
+/// `debug.answer {send}`: the operator's answer to debug mode's notice (ADR-0050 §7). It sets
+/// `record.send_to_project` as `config.set` would and keeps the answer beside the
+/// configuration; until it comes, the sessions a program runs are recorded and wait, and
+/// nothing goes to the project. The panel's dialog asks; a station with no panel is answered
+/// with one `POST /v1/debug.answer`, as its log says at start.
+fn debug_answer<P: Ptt>(
+    station: &mut Station<P>,
+    mut daemon: Option<&mut DaemonState>,
+    params: &Value,
+    id: Option<String>,
+) -> Response {
+    let Some(send) = params.get("send").and_then(Value::as_bool) else {
+        return Response::failed(
+            id,
+            ApiError::new(
+                "bad_params",
+                "debug.answer needs send: true to keep debug mode on, false to turn it off",
+                false,
+            ),
+        );
+    };
+    let set = config_set(
+        station,
+        daemon.as_deref_mut(),
+        &json!({ "record.send_to_project": send }),
+        id.clone(),
+    );
+    if set.error.is_some() {
+        return set;
+    }
+    let Some(settings) = daemon else {
+        return set;
+    };
+    let now = unix_ms(std::time::SystemTime::now());
+    if let Err(error) = settings.debug.answer(send, now) {
+        // held for this run: the next start asks again
+        settings.log.record(
+            crate::log::Level::Warn,
+            "debug",
+            &format!("the answer to debug mode's notice was not kept: {error}"),
+            "Idle",
+        );
+    }
+    settings.log.record(
+        crate::log::Level::Info,
+        "debug",
+        if send {
+            "debug mode kept on: the sessions programs run go to the Aether project"
+        } else {
+            "debug mode turned off: nothing goes to the Aether project unless sent from \
+             Log, Send files"
+        },
+        "Idle",
+    );
+    Response::ok(id, json!({ "send": send, "answered": true }))
 }
 
 fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Response {
@@ -3471,6 +3535,73 @@ mod tests {
         .result
         .expect("status");
         assert_eq!(status["debug"]["on"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_operator_is_asked_once_and_the_answer_sets_debug_mode() {
+        // ADR-0050 §7 (2026-11-23): the panel asks until someone answers, the answer is kept
+        // beside the configuration, and turning it off is the setting
+        let dir = std::env::temp_dir().join(format!("aether-debug-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("station.toml");
+        let mut daemon = daemon();
+        daemon.config.save(&path).expect("config");
+        daemon.path = path.clone();
+        daemon.debug =
+            crate::debug::DebugUploads::open(Some(dir.join(crate::debug::QUEUE_FILE)), 0);
+        let mut station = station();
+        let mut ask = |daemon: &mut DaemonState, method: &str, params: Value| {
+            dispatch_with(
+                &mut station,
+                Some(daemon),
+                &Request {
+                    id: Some("1".into()),
+                    method: method.to_owned(),
+                    params,
+                    connection: None,
+                },
+            )
+        };
+        let debug =
+            |daemon: &mut DaemonState,
+             ask: &mut dyn FnMut(&mut DaemonState, &str, Value) -> Response| {
+                ask(daemon, "status", json!({})).result.expect("status")["debug"].clone()
+            };
+        let first = debug(&mut daemon, &mut ask);
+        assert_eq!(first["on"], true, "on by default");
+        assert_eq!(first["ask"], true, "and the operator is asked");
+        // a bench is never asked: its sessions never go
+        daemon.simulated = true;
+        assert_eq!(debug(&mut daemon, &mut ask)["ask"], false);
+        daemon.simulated = false;
+        // an answer must say which
+        let refused = ask(&mut daemon, "debug.answer", json!({}));
+        assert_eq!(refused.error.expect("refused").code, "bad_params");
+        // turned off: the setting is saved, and the operator is not asked again
+        let off = ask(&mut daemon, "debug.answer", json!({ "send": false }));
+        assert_eq!(off.result.expect("answered")["send"], false);
+        let after = debug(&mut daemon, &mut ask);
+        assert_eq!(
+            (after["on"].clone(), after["ask"].clone()),
+            (json!(false), json!(false))
+        );
+        let saved = crate::config::Config::load(&path).expect("saved");
+        assert!(!saved.record.send_to_project);
+        // the next start remembers the answer
+        let reopened =
+            crate::debug::DebugUploads::open(Some(dir.join(crate::debug::QUEUE_FILE)), 0);
+        assert!(reopened.answered);
+        // and a change of mind is another answer
+        ask(&mut daemon, "debug.answer", json!({ "send": true }))
+            .result
+            .expect("answered");
+        assert_eq!(debug(&mut daemon, &mut ask)["on"], true);
+        assert!(
+            is_mutating("debug.answer"),
+            "a read-only client cannot answer"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

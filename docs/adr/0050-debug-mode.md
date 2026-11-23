@@ -4,7 +4,8 @@
 included). `[record] send_to_project` (default `true`, live, never in a profile); configuration
 schema 11 (`debug_mode`, a step that changes nothing); `core/aetherd/src/debug.rs` (the queue),
 `control::methods::start_debug_upload`, `status.debug`; the panel's Setup step 5 *Debug mode*
-and the one-time notice (`#debug-banner`). No wire change.
+and the one-time notice (`#debug-banner`; since §7 a window, `#debug-dialog`, and nothing goes
+before it is answered). No wire change.
 
 ## 1. Context
 
@@ -114,3 +115,32 @@ for a profile switch, and the queue was gone; the author sent the files by hand 
   `a_station_offline_is_told_from_a_failure_and_writes_no_zip_for_nowhere` (`upload.rs`).
 
 No configuration key. The uninstaller leaves the file, as it leaves `program-logs.json`.
+
+## 7. Amended 2026-11-23: asked in a window, and nothing goes before the answer
+
+On 2026-11-22 two stations new to the project ran two Winlink P2P sessions with each other, and
+both uploaded on their own a minute after each. Nothing says they read the one-line notice; it shared the banner strip with the
+setup banners of a first start, and uploads began whether or not anyone had. The author's
+decisions: a window at first start, no upload before it is answered, and every station asked
+once, including those that had only the banner.
+
+* **The window** (`#debug-dialog`, the panel's second `<dialog>`) opens over every tab while
+  `status.debug.ask` is true and debug mode is on. It says what is sent (the recording with its
+  audio, the logs, the settings without passwords), that the messages can be read from the audio,
+  when (a minute after each session a program runs; never the panel's own sessions or Tests), and
+  to whom. *Keep it on* or *Turn it off*; Escape does not close it. The one-line banner
+  (`#debug-banner`, `aether.debugNoticeSeen` in the browser) is gone.
+* **The answer is the daemon's**, `debug.answer {send}`: it sets `[record] send_to_project` as
+  `config.set` would and writes `debug::ANSWER_FILE` (`debug-answered.json`) beside the
+  configuration. It is not a configuration key: it is what the operator was told, not a setting,
+  so there is no schema bump, a profile cannot carry it, and an earlier version going back over
+  the folder ignores it. A new browser or a reinstall over the same folder does not ask again; a
+  station that had only the banner has no file and is asked once.
+* **Nothing goes before the answer.** `DebugUploads::due` is false until `answered`. Sessions a
+  program runs meanwhile are recorded and wait in the queue (said in the log, one line a session);
+  *Keep it on* sends them, *Turn it off* clears the queue as turning debug mode off always has.
+* **A station with no panel** says at every start that it waits, and how to answer it: `POST
+  /v1/debug.answer {"send": true}` (or `false`). A simulated or dry-run station is never asked
+  (`ask` is false): its sessions never go.
+* Tests: `nothing_goes_before_the_notice_is_answered` (`debug.rs`),
+  `the_operator_is_asked_once_and_the_answer_sets_debug_mode` (`control/methods.rs`).

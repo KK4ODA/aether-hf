@@ -219,9 +219,10 @@ While Aether is in its field trials, every session a program runs through it (a 
 or RadioPost) is recorded
 and, a minute after it ends, sent to the Aether project with the logs and the settings (never
 a password) — **debug mode**, Setup step 5, on unless you turn it off. The recording is the
-audio of the session, so what was sent can be decoded from it. The panel says this once when
-it starts with debug mode on; a gateway without a panel says it in its log at every start
-(`[record] send_to_project = false` turns it off there). See ADR-0050.
+audio of the session, so what was sent can be decoded from it. The first time the panel opens,
+a window says this and asks whether to keep it on, and nothing is sent until it is answered. A
+gateway without a panel says it in its log at every start and sends nothing until it is answered
+there too ([the gateway kit](gateway-kit.md)). See ADR-0050.
 
 ## How Aether follows the program
 

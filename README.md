@@ -524,8 +524,8 @@ cover everything else it does.
   opens its form filled in; or a Test reported as a GitHub issue. A program's own log goes in
   too when the program offers it (RadioPost's does).
 * **Debug mode** during the field trials: sessions a program runs (Winlink Express, Pat, VarAC,
-  RadioPost) are sent to the project after they end, said once on the panel, with one switch to
-  turn it off.
+  RadioPost) are sent to the project after they end. A window asks the first time Aether opens,
+  and nothing is sent until it is answered; one switch turns it off.
 * Logs of every run kept for 30 days, and a **diagnostic bundle** of the station's state.
 
 ### Installing, updating and running unattended

@@ -121,8 +121,15 @@ send_to_project = true    # debug mode (ADR-0050): the programs' sessions go to 
 **Debug mode** is on by default during the field trials: a minute after each session a
 program (RMS Trimode, Pat, RadioPost Gateway) runs, its recording — the audio, from which what was sent
 can be decoded — the logs and the settings without their secrets are uploaded to the Aether
-project, while the station is idle. The daemon says so in its log at every start. Set
-`send_to_project = false` to keep everything on the gateway.
+project, while the station is idle. The daemon says so in its log at every start. **Nothing is
+sent until you answer**, once: a gateway with no panel is answered over its control port, and the
+answer is kept beside the configuration (`debug-answered.json`). To send the sessions:
+
+```bash
+curl -X POST http://127.0.0.1:8515/v1/debug.answer -H "Content-Type: application/json" -d '{"send": true}'
+```
+
+`{"send": false}` turns it off instead, and so does `send_to_project = false` in the file.
 
 **Nothing is transmitted until `[regulatory]` names the rules, the control and the licence
 class** (ADR-0018, [fcc-regulatory-controls.md](fcc-regulatory-controls.md)). Under

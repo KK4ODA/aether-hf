@@ -2904,12 +2904,6 @@ details.fold-card > summary:hover .card-title {
   flex: 1 1 320px;
 }
 
-/* debug mode, said once: information, not a warning */
-#debug-banner {
-  border-left: 3px solid var(--status-link);
-  padding-left: 10px;
-}
-
 /* the files for another operator: a form row over the log */
 .share-form {
   border-bottom: 1px solid var(--border);
@@ -4762,6 +4756,30 @@ dialog.confirm-dialog::backdrop {
 
 .confirm-dialog .sub {
   margin: var(--s2) 0 0;
+}
+
+/* debug mode's question (ADR-0050 §7): what goes, when and to whom, in plain sentences */
+.debug-dialog-body {
+  margin: 0 0 var(--s3);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.debug-dialog-body p,
+.debug-dialog-body ul {
+  margin: 0 0 var(--s2);
+}
+
+.debug-dialog-body ul {
+  padding-left: 1.2em;
+}
+
+.debug-dialog-body li + li {
+  margin-top: 2px;
+}
+
+#debug-dialog-waiting {
+  color: var(--status-warning);
 }
 
 .hostapps-section,

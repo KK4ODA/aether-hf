@@ -21,6 +21,15 @@
 //! not lose it. On 2026-11-18 the mobile's three sessions failed with "No such host is known",
 //! waited half an hour for a second try, and were gone when the daemon restarted for a profile
 //! switch 21 minutes later; the author sent them by hand that evening (report 19 §0).
+//!
+//! **Nothing goes before the operator has answered** (ADR-0050 §7, 2026-11-23). Debug mode is
+//! on by default, but its first upload waits until someone has been told and chose: the
+//! panel's dialog, or `debug.answer` on the control API for a station with no panel. Sessions
+//! recorded before then wait in the queue and go once the answer is to keep it on. The answer
+//! is kept beside the configuration ([`ANSWER_FILE`]), not in it: it is what the operator was
+//! told, not a setting, and an earlier version going back over the folder ignores it. The
+//! one-line banner it replaces had been easy to miss, and uploads began whether or not anyone
+//! had read it.
 
 use std::path::PathBuf;
 
@@ -42,6 +51,18 @@ pub const OFFLINE_RETRY_MS: u64 = 10 * 60_000;
 
 /// The file beside the configuration the queue is kept in.
 pub const QUEUE_FILE: &str = "debug-waiting.json";
+
+/// The file beside the configuration that says the operator answered debug mode's notice.
+pub const ANSWER_FILE: &str = "debug-answered.json";
+
+/// The operator's answer to debug mode's notice, as kept in [`ANSWER_FILE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Answer {
+    /// Whether the sessions are to go to the project.
+    pub send: bool,
+    /// When the operator answered, milliseconds since the Unix epoch.
+    pub at_ms: u64,
+}
 
 /// The most sessions in one zip: a gateway's busy evening goes in several.
 pub const MAX_PER_ZIP: usize = 6;
@@ -71,6 +92,8 @@ pub struct DebugUploads {
     pub sent: u32,
     /// Why the last upload failed, while it is still to be tried again.
     pub last_error: Option<String>,
+    /// Whether the operator has answered debug mode's notice: until then nothing goes.
+    pub answered: bool,
     /// When the last session ended.
     #[serde(skip)]
     last_session_ms: u64,
@@ -86,6 +109,9 @@ pub struct DebugUploads {
     /// Where the queue is kept, when it is.
     #[serde(skip)]
     path: Option<PathBuf>,
+    /// Where the answer is kept, when it is.
+    #[serde(skip)]
+    answer_path: Option<PathBuf>,
     /// What is to go changed since the file was written.
     #[serde(skip)]
     changed: bool,
@@ -102,7 +128,8 @@ struct Kept {
 
 impl DebugUploads {
     /// The queue kept at `path`, if any: what an earlier run left waiting goes a minute after
-    /// `now_ms`, as after a session.
+    /// `now_ms`, as after a session. The answer to the notice is read from [`ANSWER_FILE`]
+    /// beside it.
     #[must_use]
     pub fn open(path: Option<PathBuf>, now_ms: u64) -> Self {
         let waiting = path
@@ -110,12 +137,37 @@ impl DebugUploads {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|text| serde_json::from_str::<Kept>(&text).ok())
             .map_or_else(Vec::new, |kept| kept.waiting);
+        let answer_path = path.as_deref().map(|p| p.with_file_name(ANSWER_FILE));
+        let answered = answer_path
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .is_some_and(|text| serde_json::from_str::<Answer>(&text).is_ok());
         Self {
             waiting,
+            answered,
             last_session_ms: now_ms,
             path,
+            answer_path,
             ..Self::default()
         }
+    }
+
+    /// The operator answered the notice: kept in [`ANSWER_FILE`], and from now on what is
+    /// due goes (when the answer is to keep debug mode on; off, the run loop clears the queue).
+    ///
+    /// # Errors
+    /// The file could not be written: the answer holds for this run only.
+    pub fn answer(&mut self, send: bool, now_ms: u64) -> std::io::Result<()> {
+        self.answered = true;
+        let Some(path) = &self.answer_path else {
+            return Ok(());
+        };
+        let text = serde_json::to_string_pretty(&Answer {
+            send,
+            at_ms: now_ms,
+        })
+        .map_err(std::io::Error::other)?;
+        std::fs::write(path, text)
     }
 
     /// Keep only what `exists` says is still on this computer; how many were let go.
@@ -162,11 +214,13 @@ impl DebugUploads {
         (self.waiting.len() > MAX_WAITING).then(|| self.waiting.remove(0))
     }
 
-    /// Whether the next zip is due: something waits, nothing is on its way, the station is
-    /// idle and has been quiet a minute, and a failure's wait is over.
+    /// Whether the next zip is due: the operator has answered the notice, something waits,
+    /// nothing is on its way, the station is idle and has been quiet a minute, and a failure's
+    /// wait is over.
     #[must_use]
     pub fn due(&self, now_ms: u64, idle: bool, uploading: bool) -> bool {
-        !self.waiting.is_empty()
+        self.answered
+            && !self.waiting.is_empty()
             && self.sending.is_empty()
             && idle
             && !uploading
@@ -251,6 +305,14 @@ impl DebugUploads {
 mod tests {
     use super::*;
 
+    /// A queue whose operator has answered the notice, keeping debug mode on.
+    fn answered() -> DebugUploads {
+        DebugUploads {
+            answered: true,
+            ..DebugUploads::default()
+        }
+    }
+
     fn session(call: &str, at: u64) -> Pending {
         Pending {
             recording: format!("rec-{call}-{at}"),
@@ -261,7 +323,7 @@ mod tests {
 
     #[test]
     fn a_session_goes_a_minute_after_the_last_one_and_only_while_idle() {
-        let mut queue = DebugUploads::default();
+        let mut queue = answered();
         assert!(!queue.due(0, true, false), "nothing waits");
         queue.session_ended(session("W4TGA", 0), 1_000);
         assert!(!queue.due(30_000, true, false), "too soon after it ended");
@@ -286,7 +348,7 @@ mod tests {
 
     #[test]
     fn a_failure_waits_longer_each_time_and_then_leaves_the_files_here() {
-        let mut queue = DebugUploads::default();
+        let mut queue = answered();
         queue.session_ended(session("KE4QCM", 0), 0);
         let mut now = QUIET_MS;
         for tries in 1..MAX_TRIES {
@@ -313,7 +375,7 @@ mod tests {
     fn offline_costs_no_try_and_the_sessions_wait_until_the_internet_is_back() {
         // 2026-11-18: the mobile had no Internet ("No such host is known"); its sessions are
         // tried every ten minutes for as long as that lasts, and the log speaks once
-        let mut queue = DebugUploads::default();
+        let mut queue = answered();
         queue.session_ended(session("KK4ODA", 0), 0);
         let mut now = QUIET_MS;
         for spell in 0..(MAX_TRIES * 4) {
@@ -352,6 +414,7 @@ mod tests {
         let path = dir.join(QUEUE_FILE);
         let mut queue = DebugUploads::open(Some(path.clone()), 0);
         assert!(queue.waiting.is_empty(), "no file yet");
+        queue.answer(true, 0).expect("answer kept");
         queue.session_ended(session("KK4ODA", 0), 0);
         queue.session_ended(session("WD5EMA", 1), 1);
         queue.save_if_changed().expect("saved");
@@ -382,12 +445,59 @@ mod tests {
         again.save_if_changed().expect("saved");
         let reopened = DebugUploads::open(Some(path), 3_000);
         assert!(reopened.waiting.is_empty(), "{:?}", reopened.waiting);
+        assert!(reopened.answered, "the answer outlives a restart too");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nothing_goes_before_the_notice_is_answered() {
+        // 2026-11-23: two stations' sessions went to the project before anyone there need have
+        // read the one-line banner; now the queue holds them until the operator has chosen
+        let dir = std::env::temp_dir().join(format!("aether-debug-answer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(QUEUE_FILE);
+        let mut queue = DebugUploads::open(Some(path.clone()), 0);
+        assert!(
+            !queue.answered,
+            "a new station, or one that had only the banner, is asked"
+        );
+        queue.session_ended(session("N0CALL", 0), 0);
+        queue.session_ended(session("N0CALL", 1), 1);
+        let later = 10 * QUIET_MS;
+        assert!(
+            !queue.due(later, true, false),
+            "recorded and kept, not sent"
+        );
+        assert_eq!(queue.waiting.len(), 2);
+        // answered: what waited goes, and the answer is kept for the next start
+        queue.answer(true, later).expect("answer kept");
+        assert!(queue.due(later, true, false));
+        let kept: Answer = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(ANSWER_FILE)).expect("answer file"),
+        )
+        .expect("answer");
+        assert_eq!(
+            kept,
+            Answer {
+                send: true,
+                at_ms: later
+            }
+        );
+        assert!(DebugUploads::open(Some(path.clone()), later).answered);
+        // an answer to turn it off is an answer too: the setting, not the queue, says no
+        queue.answer(false, later + 1).expect("answer kept");
+        assert!(DebugUploads::open(Some(path), later).answered);
+        // a queue with nowhere to keep its answer holds it for the run
+        let mut bare = DebugUploads::default();
+        bare.answer(true, 0).expect("nothing to write");
+        assert!(bare.answered);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_busy_gateway_sends_in_several_zips_and_keeps_a_bounded_queue() {
-        let mut queue = DebugUploads::default();
+        let mut queue = answered();
         let mut dropped = Vec::new();
         for i in 0..(MAX_WAITING as u64 + 2) {
             dropped.extend(queue.session_ended(session("N0CALL", i), i));

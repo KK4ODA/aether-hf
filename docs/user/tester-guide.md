@@ -164,8 +164,9 @@ minute, and while the station is idle uploads one zip to the Aether project's fo
 
 **The recording is the audio of the session, so what was sent can be decoded from it** —
 including the text of Winlink and RadioPost messages. Amateur radio traffic is not private, but you should
-know. Aether says so once, the first time you open it with debug mode on, with *Keep it on* and
-*Turn it off*. To turn it off later: Setup step 5, untick **Debug mode**, Save. Sessions you
+know. The first time you open Aether, a window says all this and asks: *Keep it on* or *Turn it
+off*. **Nothing is sent until you answer it**; sessions recorded before then wait, and go only if
+you keep it on. To turn it off later: Setup step 5, untick **Debug mode**, Save. Sessions you
 start from Aether's own Session tab and Test sessions are never sent automatically.
 
 Every upload is written to the Log tab as it happens. With no internet, the sessions wait and

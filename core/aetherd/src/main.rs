@@ -1893,8 +1893,8 @@ fn report_frames(
 }
 
 /// Debug mode is on by default (ADR-0050): a gateway with no panel says so in its log at
-/// every start, as the panel does once on screen; and what an earlier run left to go.
-/// What debug mode does on this station.
+/// every start, as the panel's dialog does on screen, and until the operator has answered it
+/// says how (§7: nothing goes before an answer); and what an earlier run left to go.
 fn say_debug_mode(config: &Config, station: &Station<Box<dyn Ptt>>, daemon: &mut DaemonState) {
     restore_debug_queue(station, daemon);
     if config.record.send_to_project && daemon.simulated {
@@ -1903,6 +1903,17 @@ fn say_debug_mode(config: &Config, station: &Station<Box<dyn Ptt>>, daemon: &mut
             "debug",
             "debug mode is on, but this station's audio is simulated (or a dry run): its sessions \
              are a bench's and are not sent to the Aether project",
+            "Idle",
+        );
+    } else if config.record.send_to_project && !daemon.debug.answered {
+        daemon.log.record(
+            Level::Info,
+            "debug",
+            "debug mode is on and waits for an answer: every session a program runs is \
+             recorded, and nothing goes to the Aether project until the panel's notice is \
+             answered — with no panel, POST /v1/debug.answer {\"send\": true} to send the \
+             sessions (the recording with its audio, the logs, the settings without their \
+             secrets) or {\"send\": false} to turn it off",
             "Idle",
         );
     } else if config.record.send_to_project {
@@ -2116,6 +2127,18 @@ fn note_sessions(
                 remote: session.remote.clone(),
                 started_ms: session.started_ms,
             };
+            if !daemon.debug.answered {
+                daemon.log.record(
+                    Level::Info,
+                    "debug",
+                    &format!(
+                        "the session with {} is kept on this computer until debug mode's notice \
+                         is answered: nothing goes to the Aether project before then",
+                        session.remote
+                    ),
+                    &state_name(station),
+                );
+            }
             if let Some(dropped) = daemon.debug.session_ended(pending, now_ms) {
                 daemon.log.record(
                     Level::Warn,

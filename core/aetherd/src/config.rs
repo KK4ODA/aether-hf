@@ -673,8 +673,9 @@ pub struct RecordSection {
     /// included, the logs and the settings without their secrets go to the Aether project's
     /// upload folder (`tools/drive_upload/`). On by default while Aether is in its field
     /// trials: what a session did on a real path is what the project needs most, and asking
-    /// for it after the fact found the logs gone (ADR-0050). The panel says so once, with
-    /// the switch to turn it off; the audio carries what was sent.
+    /// for it after the fact found the logs gone (ADR-0050). Nothing goes until the operator
+    /// has answered the panel's dialog (or `debug.answer`), kept in `debug-answered.json`
+    /// beside this file (§7); the audio carries what was sent.
     #[serde(default = "default_true")]
     pub send_to_project: bool,
 }

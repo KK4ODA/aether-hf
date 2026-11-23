@@ -5353,52 +5353,73 @@ function wireClipping() {
 // ── debug mode (ADR-0050) ───────────────────────────────────────────
 //
 // On by default during the field trials: the sessions a program runs go to the project
-// with their audio. The operator is told once, on whatever tab is open, with the switch; the
-// daemon's log lines (`debug`) say each upload as it goes.
+// with their audio. Nothing goes before the operator has chosen (§7): the daemon says it is
+// still to ask (`status.debug.ask`), and this window asks over every tab until the answer
+// (`debug.answer`) is kept beside the configuration — the daemon's, so a new browser or a
+// reinstall does not ask again, and a station that had only the old one-line banner is asked
+// once. The daemon's log lines (`debug`) say each upload as it goes.
 
-const DEBUG_NOTICE_KEY = "aether.debugNoticeSeen";
-
-function debugNoticeSeen() {
-  try {
-    return localStorage.getItem(DEBUG_NOTICE_KEY) === "1";
-  } catch {
-    return debugNoticeHidden;
-  }
-}
-
-// a private window cannot remember: the notice then stays away for the page's life
-let debugNoticeHidden = false;
-
-function hideDebugNotice() {
-  debugNoticeHidden = true;
-  try {
-    localStorage.setItem(DEBUG_NOTICE_KEY, "1");
-  } catch {
-    // remembered for this page only
-  }
-  $("debug-banner").hidden = true;
-}
+// an answer has been taken, and the status that says so has not come yet: not asked again
+let debugAnswered = false;
 
 function renderDebug(debug) {
-  $("debug-banner").hidden = !debug?.on || debugNoticeHidden || debugNoticeSeen();
+  const dialog = $("debug-dialog");
+  if (!debug?.ask) debugAnswered = false;
+  const ask = Boolean(debug?.on && debug?.ask) && !debugAnswered;
+  if (!ask) {
+    if (dialog.open) dialog.close();
+    return;
+  }
+  const waiting = debug.waiting?.length ?? 0;
+  const line = $("debug-dialog-waiting");
+  line.hidden = waiting === 0;
+  line.textContent = waiting === 1
+    ? "1 session recorded since is waiting on this computer. It goes only if you keep debug mode on."
+    : `${waiting} sessions recorded since are waiting on this computer. They go only if you keep debug mode on.`;
+  if (!dialog.open) {
+    $("debug-dialog-error").hidden = true;
+    dialog.showModal();
+    $("debug-dialog-keep").focus();
+  }
+}
+
+async function answerDebug(send) {
+  const buttons = [$("debug-dialog-keep"), $("debug-dialog-off")];
+  for (const button of buttons) button.disabled = true;
+  const error = $("debug-dialog-error");
+  error.hidden = true;
+  try {
+    await call("debug.answer", { send });
+    debugAnswered = true;
+    // saved: the form and its baseline say so, so Setup shows nothing unsaved
+    $("record-send").checked = send;
+    if (liveConfig?.record) liveConfig.record.send_to_project = send;
+    if (setupBaseline) setupBaseline["record.send_to_project"] = send;
+    showUnsaved();
+    log(
+      send
+        ? "debug mode kept on: the sessions programs run go to the Aether project"
+        : "debug mode off: sessions are no longer sent to the Aether project",
+      "info",
+      "share",
+    );
+    $("debug-dialog").close();
+  } catch (failed) {
+    // left open: the answer is still to be given
+    error.textContent = failed.message;
+    error.title = failed.message;
+    error.hidden = false;
+  } finally {
+    for (const button of buttons) button.disabled = false;
+  }
 }
 
 function wireDebug() {
-  $("btn-debug-keep").addEventListener("click", hideDebugNotice);
-  $("btn-debug-off").addEventListener("click", async () => {
-    try {
-      await call("config.set", { "record.send_to_project": false });
-      // saved: the form and its baseline say so, so Setup shows nothing unsaved
-      $("record-send").checked = false;
-      if (liveConfig?.record) liveConfig.record.send_to_project = false;
-      if (setupBaseline) setupBaseline["record.send_to_project"] = false;
-      showUnsaved();
-      log("debug mode off: sessions are no longer sent to the Aether project", "info", "share");
-      hideDebugNotice();
-    } catch (error) {
-      log(error.message, true);
-    }
-  });
+  $("debug-dialog-keep").addEventListener("click", () => answerDebug(true));
+  $("debug-dialog-off").addEventListener("click", () => answerDebug(false));
+  // a choice, not a window to wave away: Escape leaves it open (and a browser that closes it
+  // anyway has it back with the next status)
+  $("debug-dialog").addEventListener("cancel", (event) => event.preventDefault());
 }
 
 // ── VarAC in one step ───────────────────────────────────────────────
