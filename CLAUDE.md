@@ -3436,6 +3436,23 @@ in use, the others in `callsigns`; the profile takes the install's name (`Instal
 match), since the author keeps a copy per radio, all as KK4ODA, which had all made one profile;
 `Finder::record_of` reads an old per-callsign record as the install's.
 
+**The portable's sessions of 2026-11-23 (TX-500 at 10 W into an EFHW near Ellijay → KK4ODA-1;
+`KK4ODA-2` beta.171 as `WD5EMA`, the house beta.169; both sides uploaded, fetched through
+temporary copies).** A gateway session and two 2300 Hz P2P sessions on 7.101 MHz connected; a
+500 Hz P2P call there at 19:28Z went unanswered because RadioPost Gateway still scanned three dials
+and a P2P call carried no `call_s` (RadioPost now gives a station call the `scan_s` of a listed
+gateway under the same base callsign that scans the dial, `station_call_s`). The 2300 Hz call at
+19:38:52Z on 7.082 was refused at the house ("runs 500 Hz"): the operator had loaded the profile
+*P2P FTDx10 500Hz* (own bandwidth 500) and then ticked *Host programs*, which greys step 4's
+bandwidth to **Host** and hides the 500 — RadioPost is no host program and cannot set the bandwidth
+while it listens. Proposed to the author: show the number in step 4 always. The radio keying "well
+after" the sessions was ADR-0055's setup identifier after each unanswered call (18:32:51, 19:29:20);
+it had no log line of its own. Now `status.identifier.setup` (`as`, `in_s`, `after`, `waiting`)
+says it is owed, the banner counts it down (*Identifying as WD5EMA in 25 s, after a call nobody
+answered*; `noteSetupIdentifier`, `#session-banner-note`), and an `identifier` log line names it
+when it goes (`note_setup_identified`); a setup's identifier no longer leaves a closing outcome for
+the next session. 20 m to the house failed: the skip zone.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.
