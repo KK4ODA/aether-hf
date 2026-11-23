@@ -468,10 +468,9 @@ mod tests {
         };
         let text = "[Properties]\nCallsign=N0CALL\n[Vara]\nModel=Kenwood TS-480\n\
                     Control Port=COM4\nPTT Port=Kenwood TS-480\n";
-        assert!(
-            crate::hostapps::point::changes(Program::WinlinkExpress, &files(text), &theirs)
-                .is_empty()
-        );
+        let untouched =
+            crate::hostapps::point::changes(Program::WinlinkExpress, &files(text), &theirs);
+        assert!(untouched.is_empty(), "{untouched:?}");
     }
 
     #[test]

@@ -1005,7 +1005,8 @@ mod tests {
         );
         assert_eq!(after.get("Vara", "Control Port").as_deref(), Some("COM3"));
         assert!(folder.join("RMS Express.ini.aether-undo.bak").is_file());
-        assert!(daemon.hostapps.originals(name).is_empty());
+        let left = daemon.hostapps.originals(name);
+        assert!(left.is_empty(), "{left:?}");
         assert!(
             daemon.profiles.find("Winlink Express N0CALL").is_some(),
             "the profile stays"

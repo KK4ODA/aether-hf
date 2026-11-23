@@ -573,7 +573,8 @@ mod tests {
         finder
             .forget_set_up("C:\\RMS Express", "N0CALL", true)
             .expect("forgot");
-        assert!(finder.originals("C:\\RMS Express").is_empty());
+        let left = finder.originals("C:\\RMS Express");
+        assert!(left.is_empty(), "{left:?}");
         assert!(finder.set_up_of("C:\\RMS Express", "N0CALL").is_none());
     }
 }
