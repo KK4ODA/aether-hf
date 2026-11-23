@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.18.1 |
+| **Version** | 1.19.0 |
 | **Updated** | 2026-11-23 |
 | **Describes** | Aether HF 0.2.0-beta.172 |
 | **Licence** | CC BY 4.0 |
@@ -588,8 +588,10 @@ quiet leaves the signal inside the sound card's own noise.
     For any other callsign it is your choice, off by default; a host program's `CWID ON` turns it
     on for the program's sessions. The program cannot choose Morse: it identifies the way you
     chose here.
-  - A call or probe that leads to no session is identified 30 s later, on its own. Calls,
-    probes, beacons and KISS frames carry no identifier of their own.
+  - A call or probe that leads to no session is identified 30 s later, on its own (up to 15 s
+    more if the channel is busy). The banner counts it down, *Identifying as N1CALL in 15 s, after
+    a call nobody answered*, and the Log says when it goes. Calls, probes, beacons and KISS
+    frames carry no identifier of their own.
   - The US rules cap an automatic Morse identifier at 20 wpm, whatever is set here. The speed is
     marked when the cap applies. A session longer than ten minutes is not identified in between,
     by either method: see [The rules](#19-the-rules).
@@ -1528,6 +1530,11 @@ but the audio it heard stayed the same as the band, so the radio probably did no
 radio control in step 2, and the radio's own setting for it (on many radios RTS or DTR keying works only on one
 of its two USB ports, or after a menu setting). Then press **Key 1 s** and watch the radio and the Log.
 
+**The radio keys by itself about half a minute after a call.** That is your identifier. A call or
+probe that led to no session is identified 30 s later, on its own, and up to 15 s more if the
+channel is busy. The banner counts it down, and the Log's *identifier* line names it when it goes. A
+US callsign always identifies.
+
 **The ALC moves even at a low transmit level.** Turn down the radio's USB (rear) data input gain and
 run **Set drive** again.
 
@@ -1770,3 +1777,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.17.0 | 2026-11-23 | [Your first contact, in brief](#5-your-first-contact-in-brief) and [Step 5](#step-5-application-settings): **debug mode** is asked in a window when Aether first opens (and once on a station that had only the old banner), saying what is sent, when and to whom; nothing goes to the project until **Keep it on** or **Turn it off** is pressed. The one-line banner is gone. |
 | 1.18.0 | 2026-11-23 | [Full, Compact and Mini](#full-compact-and-mini) and [The signal window](#the-signal-window): Compact and Mini have a small button after **Tune** that opens the signal window, the waterfall, spectrum and constellation, as **Undock** does; while the window is open it brings it to the front. |
 | 1.18.1 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): one row per install, listing all its callsigns, the one in use first. A Winlink Express with several callsigns had a row for each, which looked like the same install twice, and ticking one changed them all. The profile is named for the install's folder (*Winlink Express TS480*), not the callsign, so copies of Winlink Express for different radios no longer share one profile when they run under one callsign. An install with nothing to set up has a greyed row saying why. |
+| 1.19.0 | 2026-11-23 | [Step 4](#step-4-modem-settings) and [Troubleshooting](#28-troubleshooting): the identifier sent on its own after a call or probe that led to no session is counted down on the banner in 5 s steps (*Identifying as N1CALL in 15 s, after a call nobody answered*) and named in the Log when it goes. A TX-500 keying half a minute after an unanswered call was taken for a fault. |

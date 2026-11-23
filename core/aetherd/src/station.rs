@@ -849,6 +849,10 @@ struct IdentifierState {
     /// since; a session it opens is identified at its end.
     setup_at: Option<f64>,
     setup_call: String,
+    /// What that setup was, as the panel and the log say it: `call`, `probe`, `probe answer`
+    /// or `acceptance`. An operator whose radio keyed half a minute after a call nobody
+    /// answered took it for a fault (2026-11-23, the portable's TX-500).
+    setup_what: &'static str,
     /// A session's closing identifier was still to go out at the last pass: a host program
     /// hears `DISCONNECTED` once it has (ADR-0075).
     closing: bool,
@@ -2403,7 +2407,35 @@ impl<P: Ptt> Station<P> {
     pub fn identifier_status(&self) -> serde_json::Value {
         let mut status = self.identifier_check(&self.identifying_call());
         status["pending"] = serde_json::Value::Bool(self.closing_identifier_pending());
+        status["setup"] = self.setup_identifier_status();
         status
+    }
+
+    /// The identifier a contact that went no further than its setup still owes (ADR-0055), for
+    /// the panel to say before the radio keys: the callsign it goes as, the seconds until it
+    /// is due, what the setup was, and whether it waits for a clear channel. `null` while
+    /// none is owed, or while a call, probe or session is under way (a session is identified
+    /// at its end).
+    fn setup_identifier_status(&self) -> serde_json::Value {
+        let queued = self
+            .pending
+            .iter()
+            .any(|next| matches!(next, Outgoing::Identifier));
+        let owed = self.identifier.setup_at.filter(|_| {
+            self.identifier_for(&self.identifier.setup_call).is_some()
+                && self.engine.state() == State::Idle
+                && !self.probing()
+        });
+        if !queued && owed.is_none() {
+            return serde_json::Value::Null;
+        }
+        let in_s = owed.map_or(0.0, |at| (SETUP_ID_WAIT_S - (self.now() - at)).max(0.0));
+        serde_json::json!({
+            "as": crate::cwid::sent_as(&self.identifier.setup_call),
+            "in_s": (in_s * 10.0).round() / 10.0,
+            "after": self.identifier.setup_what,
+            "waiting": queued,
+        })
     }
 
     /// What the identifier would be for `call` with the station's settings — `identifier.check`,
@@ -4672,6 +4704,7 @@ impl<P: Ptt> Station<P> {
         {
             self.identifier.setup_at = Some(now);
             self.identifier.setup_call.clone_from(&self.engine.my_call);
+            self.identifier.setup_what = setup_kind(frames);
         }
     }
 
@@ -5082,7 +5115,9 @@ impl<P: Ptt> Station<P> {
             self.playback.extend(rendered.audio);
             self.playback.extend(std::iter::repeat_n(0.0f32, tail));
             self.record_sent(&frames, now);
-            self.data_identified(now, &frames);
+            // not a session's closing identifier: nothing waits for its outcome
+            self.identified(now);
+            self.note_setup_identified(&call, " in the data signal");
             return;
         }
         // nothing to say after all — no identifier for that callsign, or the rules refuse it
@@ -5094,6 +5129,23 @@ impl<P: Ptt> Station<P> {
         self.playback.extend(audio);
         self.playback.extend(std::iter::repeat_n(0.0f32, tail));
         self.identified(now);
+        self.note_setup_identified(&call, " in Morse");
+    }
+
+    /// Say in the log that a setup's identifier went out, and why the radio keyed with no
+    /// session: the identifier of a call nobody answered had no line of its own.
+    fn note_setup_identified(&mut self, call: &str, how: &str) {
+        let after = match self.identifier.setup_what {
+            "probe" => "a probe with no call after it",
+            "probe answer" => "answering a probe that no call followed",
+            "acceptance" => "an answered call that became no session",
+            _ => "a call nobody answered",
+        };
+        let sent = crate::cwid::sent_as(call);
+        self.note(
+            "identifier",
+            &format!("identified as {sent}{how}, after {after} (§97.119)"),
+        );
     }
 
     /// The engine's closing identifier on its own (ADR-0075): a master's once the last slot it
@@ -6284,6 +6336,27 @@ fn starts_an_exchange(frames: &[aether_link::TxFrame]) -> bool {
                 matches!(header.kind, DataKind::ConnectReq | DataKind::Probe)
             })
     })
+}
+
+/// What a transmission that sets up a contact is, as the panel and the log name it: the
+/// identifier that follows one that led nowhere says why the radio keyed (ADR-0055).
+fn setup_kind(frames: &[aether_link::TxFrame]) -> &'static str {
+    for frame in frames {
+        if frame.container == Container::Control && is_acceptance(&frame.payload) {
+            return "acceptance";
+        }
+        if frame.container == Container::Data
+            && let Ok((header, _)) = decode_data(&frame.payload)
+        {
+            match header.kind {
+                DataKind::Probe => return "probe",
+                DataKind::ProbeAck => return "probe answer",
+                DataKind::ConnectAck => return "acceptance",
+                _ => {}
+            }
+        }
+    }
+    "call"
 }
 
 /// Whether a queued burst is a beacon: one data frame of kind `Beacon`.
@@ -10039,6 +10112,63 @@ mod tests {
         us.probe("KK4XYZ", None).expect("idle");
         run_alone(&mut us, SETUP_ID_WAIT_S + 30.0, |s| s.stats.cw_ids > 0);
         assert_eq!(us.stats.cw_ids, 1, "the identifier never went out");
+    }
+
+    #[test]
+    fn the_identifier_of_a_call_nobody_answered_is_said_before_it_goes_and_when_it_does() {
+        // the portable's TX-500 keyed half a minute after a call nobody answered, and its
+        // operator took it for a fault (2026-11-23): the status says it is owed and when, and
+        // the log names it when it goes, in Morse or in the data signal
+        for (identify_by, how) in [
+            (IdentifyBy::Morse, "in Morse"),
+            (IdentifyBy::Data, "in the data signal"),
+        ] {
+            let mut us = Station::new(
+                StationConfig {
+                    callsign: "W4ODA-2".to_owned(),
+                    wait_for_clear: false,
+                    identify_by,
+                    ..StationConfig::default()
+                },
+                NullPtt::default(),
+                1,
+            );
+            assert!(
+                us.identifier_status()["setup"].is_null(),
+                "nothing owed at start"
+            );
+            us.connect("KK4XYZ").expect("idle");
+            run_alone(&mut us, 1.0, |_| false);
+            assert!(
+                us.identifier_status()["setup"].is_null(),
+                "{identify_by:?}: not while the call goes on"
+            );
+            run_alone(&mut us, 180.0, |s| s.state() == State::Idle);
+            assert_eq!(us.state(), State::Idle, "{identify_by:?}: the call ended");
+            let setup = us.identifier_status()["setup"].clone();
+            assert_eq!(setup["as"], "W4ODA", "{identify_by:?}: {setup}");
+            assert_eq!(setup["after"], "call", "{identify_by:?}: {setup}");
+            assert_eq!(setup["waiting"], false, "{identify_by:?}: {setup}");
+            let in_s = setup["in_s"].as_f64().expect("seconds");
+            assert!(
+                in_s > 0.0 && in_s <= SETUP_ID_WAIT_S,
+                "{identify_by:?}: {setup}"
+            );
+            let _ = us.take_events();
+            run_alone(&mut us, SETUP_ID_WAIT_S + 30.0, |s| s.stats.cw_ids > 0);
+            assert_eq!(us.stats.cw_ids, 1, "{identify_by:?}: it went out");
+            assert!(
+                us.identifier_status()["setup"].is_null(),
+                "{identify_by:?}: owed no more"
+            );
+            let events = us.take_events();
+            let said = format!(
+                "identifier:identified as W4ODA {how}, after a call nobody answered (§97.119)"
+            );
+            assert!(events.contains(&said), "{identify_by:?}: {events:?}");
+            // not a session's closing identifier: nothing is kept for the next session's end
+            assert!(us.identifier.outcome.is_none(), "{identify_by:?}");
+        }
     }
 
     #[test]

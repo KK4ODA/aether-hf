@@ -203,7 +203,7 @@ function onEvent(frame) {
       if (data.name === "disconnect") leftBehind = data.detail ?? "";
       // what the banner shows moves with these at once, not at the next poll — and the header
       // and Setup's callsign box with a program arriving or leaving (ADR-0108)
-      if (["probe", "test", "beacon", "disconnect", "closing", "claims"].includes(data.name)) refreshStatus();
+      if (["probe", "test", "beacon", "disconnect", "closing", "claims", "identifier"].includes(data.name)) refreshStatus();
       break;
     case "regulatory":
       onRegulatory(data);
@@ -417,6 +417,7 @@ function showBanner(state, text, hideAfterMs = 0) {
   clearTimeout(bannerTimer);
   banner.dataset.state = state;
   $("session-banner-text").textContent = text;
+  $("session-banner-note").textContent = "";
   banner.hidden = false;
   banner.classList.remove("pulse");
   requestAnimationFrame(() => requestAnimationFrame(() => banner.classList.add("pulse")));
@@ -492,8 +493,52 @@ function bannerFor(status) {
   if (status.beacon?.waiting) {
     return ["working", status.beacon.waiting_for_clear ? "Beacon waiting: the channel is busy" : "Sending a beacon…"];
   }
+  if (setupIdentifier && !status.transmitting) return ["working", setupIdentifierText()];
   if (status.transmitting) return ["working", "Transmitting…"];
   return null;
+}
+
+// Change an element's words only when they differ: a live region speaks on every change.
+function setText(element, text) {
+  if (element.textContent !== text) element.textContent = text;
+}
+
+// The identifier a call or probe that led to no session still owes (ADR-0055): the radio keys
+// for it about half a minute later, with nothing else under way, and an operator watching a
+// TX-500 took that for a fault (2026-11-23). `dueMs` is when it is due on this clock, so the
+// banner counts down between the status reads.
+let setupIdentifier = null;
+
+const SETUP_AFTER = {
+  call: "a call nobody answered",
+  probe: "a probe with no call after it",
+  "probe answer": "answering a probe that no call followed",
+  acceptance: "an answered call that became no session",
+};
+
+function noteSetupIdentifier(status) {
+  const setup = status.identifier?.setup;
+  if (!setup) {
+    setupIdentifier = null;
+    return;
+  }
+  const dueMs = Date.now() + (setup.in_s ?? 0) * 1000;
+  // the same identifier read again keeps its count: a status read late would make it jump
+  const same = setupIdentifier && setupIdentifier.as === setup.as && Math.abs(setupIdentifier.dueMs - dueMs) < 1500;
+  setupIdentifier = { ...setup, dueMs: same ? setupIdentifier.dueMs : dueMs };
+}
+
+function setupIdentifierText() {
+  const id = setupIdentifier;
+  const why = SETUP_AFTER[id.after] ?? SETUP_AFTER.call;
+  if (id.waiting) return `Identifying as ${id.as} once the channel is clear, after ${why}.`;
+  // in steps of five, as the other countdowns move with the status reads: the banner is read
+  // aloud by a screen reader each time it changes
+  const left = Math.ceil((id.dueMs - Date.now()) / 1000);
+  const seconds = left > 5 ? Math.ceil(left / 5) * 5 : left;
+  return seconds > 0
+    ? `Identifying as ${id.as} in ${seconds} s, after ${why}.`
+    : `Identifying as ${id.as} now, after ${why}.`;
 }
 
 // " for RadioPost gateway": the program whose call or session is under way, from its claim
@@ -516,11 +561,15 @@ function programName(claim) {
 function syncBanner(status) {
   const banner = $("session-banner");
   const showing = banner.hidden ? "" : banner.dataset.state;
+  noteSetupIdentifier(status);
+  // the ended session stays up its while; an identifier still owed is said after it, and no
+  // longer once it has gone
+  if (showing === "ended") setText($("session-banner-note"), setupIdentifier ? `. ${setupIdentifierText()}` : "");
   const next = bannerFor(status);
   if (next) {
     const [state, text] = next;
     if (showing === "ended" && state === "working") return;
-    if (showing === state) $("session-banner-text").textContent = text;
+    if (showing === state) setText($("session-banner-text"), text);
     else showBanner(state, text);
   } else if (showing && showing !== "ended") {
     banner.hidden = true;
@@ -7382,6 +7431,10 @@ function wire() {
     if (panelShown("stations")) renderHeard();
     if (socket && socket.readyState === WebSocket.OPEN) refreshStatus();
   }, 5000);
+  // an identifier still owed counts down on the banner by the second, between the status reads
+  setInterval(() => {
+    if (setupIdentifier && lastStatus) syncBanner(lastStatus);
+  }, 1000);
   wireShare();
   $("wz-profile").addEventListener("change", applyProfile);
   // a field set by hand is the operator's own setup: the list follows it
