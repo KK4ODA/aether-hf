@@ -908,7 +908,8 @@ mod tests {
         let back = json!({ "folder": "C:\\RMS Express", "setup": "N0CALL" });
         let back = ok(call(&mut station, &mut daemon, "hostapps.restore", back));
         assert_eq!(back["setup"], "N1CALL");
-        assert!(daemon.hostapps.remembered.set_up.is_empty());
+        let left = &daemon.hostapps.remembered.set_up;
+        assert!(left.is_empty(), "{left:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
