@@ -444,23 +444,16 @@ pub fn plan(
 }
 
 /// What the program must change for Aether to key the radio: its keying off, and with `radio`
-/// (Aether keys on the port its radio control holds) its radio *Manual*. Winlink Express's
-/// reader writes both, in the words Winlink Express writes; Trimode's writes the keying, and its
-/// radio *Manual* is the operator's to set until Trimode's words for it are read from a file.
+/// (Aether keys on the port its radio control holds) its radio *Manual*. The readers write both,
+/// in the words each program writes itself (read from copies set by hand, 2026-11-23).
 fn hand_over(plan: &mut Plan, program: Program, radio: bool, why: String) {
-    match (program, radio) {
-        (Program::WinlinkExpress, true) => plan
-            .program_must
-            .push(settable("Radio Manual, PTT port External", why)),
-        (Program::WinlinkExpress, false) => {
-            plan.program_must.push(settable("PTT port External", why));
-        }
-        (_, true) => {
-            plan.program_must.push(settable("PTT off", why.clone()));
-            plan.program_must.push(advice("Radio Manual", why));
-        }
-        (_, false) => plan.program_must.push(settable("PTT off", why)),
-    }
+    let what = match (program, radio) {
+        (Program::WinlinkExpress, true) => "Radio Manual, PTT port External",
+        (Program::WinlinkExpress, false) => "PTT port External",
+        (_, true) => "Radio Manual, PTT off",
+        (_, false) => "PTT off",
+    };
+    plan.program_must.push(settable(what, why));
 }
 
 /// A frequency in megahertz as the panel writes one: at least three decimals, no trailing
@@ -721,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn trimodes_radio_manual_is_left_to_the_operator() {
+    fn each_program_is_told_its_own_words() {
         let gate = setup(Ptt::Cat, 8300);
         let trimode = Install {
             program: Program::RmsTrimode,
@@ -734,11 +727,7 @@ mod tests {
             .iter()
             .map(|m| (m.what.as_str(), m.settable))
             .collect();
-        assert_eq!(
-            said,
-            [("PTT off", true), ("Radio Manual", false)],
-            "its PTT is written, its radio is the operator's"
-        );
+        assert_eq!(said, [("Radio Manual, PTT off", true)], "both written");
         let p = plan(&install(&gate), &gate, Some(Keying::Aether), &aether());
         assert_eq!(p.program_must[0].what, "Radio Manual, PTT port External");
         assert!(p.program_must[0].settable, "Winlink Express's is written");

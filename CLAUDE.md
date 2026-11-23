@@ -3403,10 +3403,10 @@ first*, Winlink Express only) copies the folder, mail included, off the loop to 
 and the panel sets the copy up. `hostapps.import`/`point`, *Import*, *Set it in* and the preview
 are gone. **The words are read from files** (2026-11-23): a Winlink Express 1.8.6.0 set to radio
 *Manual* and PTT *External* by hand wrote `Model=Manual`, `PTT Port=EXTERNAL` and left its
-`Control Port`, so that is what Aether writes; the first build's `None` values were guesses.
-Trimode's radio *Manual* is not written (only its PTT switches) until a Trimode set to Manual by
-hand is read the same way: print only the keys needed, never the whole file (it holds the
-operator's address, phone and encrypted password).
+`Control Port`, so that is what Aether writes; the first build's `None` values were guesses. A
+Trimode 1.4.4 set to Manual by hand wrote `[Radio] Model=Manual`, `Control Port=None` and left
+`Use CAT PTT=True` (which keys nothing with no radio; the reader now reads it so). Print only the
+keys needed, never the whole file: it holds the operator's address, phone and encrypted password.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

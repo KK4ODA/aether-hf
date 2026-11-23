@@ -145,8 +145,8 @@ the program Trimode starts as its VARA. **Keying**: *RMS Trimode* when Trimode k
 itself (*Use CAT PTT* or a serial PTT port), as it does for VARA — a gateway scanning several
 channels then has the rules at *None* and you check the dial; or *Aether*, which keys the radio
 the way Trimode did (CAT on its port and speed, or RTS/DTR) and keeps the rules check: Aether turns
-Trimode's PTT off; when Trimode's radio control is on the same port, set its radio to *Manual*
-yourself, and Trimode then no longer tunes or scans. The row's notes say what else to change: a
+Trimode's PTT off and, when Trimode's radio control is on the same port, sets its radio to
+*Manual*, so Trimode no longer tunes or scans. The row's notes say what to change yourself: a
 channel not under the service code `AETHER` (§2.4), the VARA TNC turned off, no channel on VARA.
 Untick the row to go back to VARA. Then check the steps below; setting up does not set the rules'
 licence class, the levels or the sound card.

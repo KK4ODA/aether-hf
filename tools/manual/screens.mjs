@@ -286,11 +286,12 @@ const HOSTAPPS = (() => {
         {profile: `RMS Trimode ${call}`, keying: "aether", keyings: ["program", "aether"],
          changes: {...base, "ptt.kind": "cat", "ptt.port": "COM5", "ptt.protocol": "yaesu",
                    "ptt.baud": 38400},
-         program_must: [advice("PTT off", "only one program can hold COM5", true),
-                        advice("Radio Manual", "only one program can hold COM5")],
+         program_must: [advice("Radio Manual, PTT off", "only one program can hold COM5", true)],
          notes: [starts], pointing: "aether", dial_hz: null, refused: null,
          program_changes: [program,
-           change("RMS Trimode.ini", "Vara TNC", "Use CAT PTT", "True", "False", "Aether keys the radio: Trimode leaves the keying to it")]},
+           change("RMS Trimode.ini", "Vara TNC", "Use CAT PTT", "True", "False", "Aether keys the radio: Trimode leaves the keying to it"),
+           change("RMS Trimode.ini", "Radio", "Model", "Yaesu FT-991A", "Manual", "only one program can hold a port"),
+           change("RMS Trimode.ini", "Radio", "Control Port", "COM5", "None", "only one program can hold a port")]},
       ],
     };
   })();

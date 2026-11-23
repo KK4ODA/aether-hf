@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.16.1 |
+| **Version** | 1.16.2 |
 | **Updated** | 2026-11-23 |
 | **Describes** | Aether HF 0.2.0-beta.169 |
 | **Licence** | CC BY 4.0 |
@@ -1256,11 +1256,10 @@ says what will change before anything does. Untick the row to go back to VARA.
    - **The program's name** (the default when it keys the radio itself): the program keeps its
      radio setup, keys on Aether's `PTT ON` and tunes the radio, as it did with VARA. Nothing in
      its radio setup changes.
-   - **Aether**: Aether keys the radio the way the program did. Winlink Express's PTT port is
-     set to *External*, and when Aether keys on the radio's control port, its radio to *Manual*
-     too, because only one program can hold a port; it then no longer tunes the radio. RMS
-     Trimode's PTT is turned off; when its radio control is on the same port, set its radio to
-     *Manual* yourself (the window says so, in amber).
+   - **Aether**: Aether keys the radio the way the program did. The program's PTT is turned off
+     (Winlink Express's PTT port *External*), and when Aether keys on the radio's control port,
+     its radio is set to *Manual* too, because only one program can hold a port. The program then
+     no longer tunes the radio, and a Trimode gateway no longer scans.
    - **as it is**: the program keys by VOX or controls no radio, and Aether's keying is left alone.
 3. Tick the row. A window shows what will happen ([Figure 35](#finding-winlinks-programs)):
    - **In** *the program*: each of its settings Aether will change, as it is and as it will be.
@@ -1747,3 +1746,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.15.5 | 2026-11-21 | [Radio dial](#radio-dial): signals a scan hears but cannot read keep it on a dial about 40 s at most a visit, where they had kept it up to 3½ minutes on a busy band, and the Log says when that ended a visit; the **Busy** lamp does not hold the scan (ADR-0129 §17). |
 | 1.16.0 | 2026-11-22 | [Finding Winlink's programs](#finding-winlinks-programs): ticking a program's row sets it up for Aether in one step, after a window that says what will change: its settings changed to reach Aether (with Aether keying, its PTT port and, on a shared port, its radio control too), its Aether profile made, and the station switched to it with the program's dial; **Make a copy first** sets up a copy of Winlink Express and leaves the one you have for VARA; unticking goes back to VARA. **Import**, **Import and switch** and **Set it in** are gone; **Keying** names the program. |
 | 1.16.1 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): with **Aether** keying, Winlink Express's PTT port is set to *External* and its radio to *Manual*, the words Winlink Express writes itself, and its control port is left as it is; RMS Trimode's PTT is turned off, and its radio *Manual* is yours to set. |
+| 1.16.2 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): with **Aether** keying, RMS Trimode's radio is set to *Manual* too, in the words Trimode writes itself; a Trimode set to *Manual* by hand is read as controlling no radio. |

@@ -293,15 +293,18 @@ Each reader's `point` takes whether Aether keys the radio, and names, besides th
   as it was (2026-11-23). The first build wrote `PTT Port=None` and `Control Port=None`, guessed
   from the dialog; neither is a word Winlink Express writes, and the control port is no longer
   touched.
-* **RMS Trimode**: `[Vara TNC] Use CAT PTT` and `Use Serial Port PTT` → `False` when they are on
-  (keys its file has, with the values it writes). Its radio *Manual* is **not** written: the first
-  build wrote `[Radio] Model=None` and emptied `Control Port`, taken from the reader's made-up test
-  file, not from one Trimode wrote. Until those words are read from a Trimode set to *Manual* by
-  hand, the plan says *Radio Manual* as something left for the operator, in amber, beside the
-  written *PTT off*.
+* **RMS Trimode**: `[Vara TNC] Use CAT PTT` and `Use Serial Port PTT` → `False` when they are on;
+  unless the PTT is a line of a port of its own, also `[Radio] Model` → `Manual` and
+  `Control Port` → `None`. These are the words Trimode 1.4.4 writes itself: the author set a
+  Trimode's radio to *Manual* by hand and its file read `Model=Manual`, `Control Port=None`, with
+  `Use CAT PTT=True` left on (2026-11-23). The first build wrote `Model=None` and an empty control
+  port, taken from the reader's made-up test file. Trimode then tunes and scans no more, which the
+  window's note says. The reader had the same gap: it dropped a model named `None` but not
+  `Manual`, so a Trimode set to Manual by hand read as a radio called *Manual* keyed by CAT with
+  no port; it now reads as no radio, and `Use CAT PTT` with no radio keys nothing.
 
-The advice that said Winlink Express's by hand (*Radio Manual, PTT port External*) is now marked
-as carried out (`settable`), and *Radio setup as it is*, which asked nothing and was amber, is the plain note
+The advice that said those by hand (*Radio Manual, PTT port External* for Winlink Express,
+*Radio Manual, PTT off* for Trimode) is now marked as carried out (`settable`), and *Radio setup as it is*, which asked nothing and was amber, is the plain note
 *Keeps its radio setup*. The *Rules check at …* note is gone: the dial is said once, beside the
 switch that sets it.
 

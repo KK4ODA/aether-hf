@@ -102,9 +102,13 @@ fn channels(ini: &Ini) -> Vec<Channel> {
 /// none: no model, no port, and VARA keyed by neither CAT nor a serial line (VOX, or the radio
 /// set to *Manual*).
 fn radio(ini: &Ini) -> Option<Radio> {
-    let rig = text(ini, "Radio", "Model");
+    // Trimode's radio *Manual* is `Model=Manual` with `Control Port=None` (read from a Trimode
+    // set to Manual by hand, 2026-11-23); `None` is filtered by `text`
+    let rig = text(ini, "Radio", "Model").filter(|m| !m.eq_ignore_ascii_case(MANUAL));
     let cat_port = text(ini, "Radio", "Control Port");
-    let ptt = if yes(ini.get("Vara TNC", "Use CAT PTT").as_deref()) {
+    // choosing Manual leaves `Use CAT PTT` as it was: with no radio to command it keys nothing
+    let cat_keys = rig.is_some() || cat_port.is_some();
+    let ptt = if cat_keys && yes(ini.get("Vara TNC", "Use CAT PTT").as_deref()) {
         Ptt::Cat
     } else if yes(ini.get("Vara TNC", "Use Serial Port PTT").as_deref()) {
         Ptt::Serial {
@@ -265,15 +269,21 @@ pub fn point(files: &Files, target: &super::point::Target) -> Vec<super::point::
     edits
 }
 
-/// Trimode's keying handed to Aether: neither its CAT nor its serial line keys. Its radio
-/// control is not written: the words Trimode writes for a radio set to *Manual* have not been
-/// read from a file Trimode wrote, so when Aether keys on the port Trimode's radio control holds,
-/// that is left for the operator to set in Trimode (the plan says so).
+/// Trimode's keying handed to Aether: neither its CAT nor its serial line keys, and when Aether
+/// keys on the port Trimode's radio control holds (a CAT command, or a line of that port), its
+/// radio *Manual* too, in the words Trimode 1.4.4 writes itself: `Model=Manual` and
+/// `Control Port=None` (read from a Trimode set to Manual by hand, 2026-11-23). Trimode then
+/// tunes and scans no more. A line of a port of its own leaves it its radio control.
 fn aether_keys(ini: &Ini, edits: &mut Vec<super::point::Edit>) {
     use super::point::Edit;
     const S: &str = "Vara TNC";
-    for key in ["Use CAT PTT", "Use Serial Port PTT"] {
-        if yes(ini.get(S, key).as_deref()) {
+    const CONTROL: &str = "Aether keys the radio on its control port, and only one program can \
+                           hold a port: Trimode stops controlling the radio, and tunes and scans \
+                           no more";
+    let cat = yes(ini.get(S, "Use CAT PTT").as_deref());
+    let serial = yes(ini.get(S, "Use Serial Port PTT").as_deref());
+    for (key, on) in [("Use CAT PTT", cat), ("Use Serial Port PTT", serial)] {
+        if on {
             edits.push(Edit {
                 file: SETTINGS,
                 section: S,
@@ -283,7 +293,36 @@ fn aether_keys(ini: &Ini, edits: &mut Vec<super::point::Edit>) {
             });
         }
     }
+    let control = text(ini, "Radio", "Control Port");
+    let line = text(ini, S, "PTT Port");
+    let own_line = serial
+        && !cat
+        && line.as_deref().is_some_and(|l| {
+            control
+                .as_deref()
+                .is_none_or(|c| !c.eq_ignore_ascii_case(l))
+        });
+    if own_line {
+        return;
+    }
+    edits.push(Edit {
+        file: SETTINGS,
+        section: "Radio",
+        key: "Model",
+        to: MANUAL.to_owned(),
+        why: CONTROL,
+    });
+    edits.push(Edit {
+        file: SETTINGS,
+        section: "Radio",
+        key: "Control Port",
+        to: "None".to_owned(),
+        why: CONTROL,
+    });
 }
+
+/// The radio Trimode writes when it controls none.
+const MANUAL: &str = "Manual";
 
 #[cfg(test)]
 mod tests {
@@ -364,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn aether_keying_turns_trimodes_ptt_off_and_leaves_its_radio() {
+    fn aether_keying_takes_trimodes_keying_and_its_radio_when_they_share_a_port() {
         let target = crate::hostapps::point::Target {
             host_port: 8300,
             app: Some("C:\\Users\\op\\AppData\\Local\\Aether HF\\aether-hf.exe".into()),
@@ -377,9 +416,16 @@ mod tests {
                 .collect()
         };
         let own = |a: &str, b: &str, c: &str| (a.to_owned(), b.to_owned(), c.to_owned());
-        // keyed by CAT: the CAT PTT off, and nothing of its radio
-        assert_eq!(changed(INI), [own("Vara TNC", "Use CAT PTT", "False")]);
-        // a serial line: that line off
+        // keyed by CAT: the CAT PTT off, the radio Manual, in Trimode's own words
+        assert_eq!(
+            changed(INI),
+            [
+                own("Vara TNC", "Use CAT PTT", "False"),
+                own("Radio", "Model", "Manual"),
+                own("Radio", "Control Port", "None"),
+            ]
+        );
+        // a line of a port of its own: that line off, and Trimode keeps the radio, and scans
         let line = INI
             .replace("Use CAT PTT=True", "Use CAT PTT=False")
             .replace("Use Serial Port PTT=False", "Use Serial Port PTT=True")
@@ -388,9 +434,9 @@ mod tests {
             changed(&line),
             [own("Vara TNC", "Use Serial Port PTT", "False")]
         );
-        // keying nothing already: nothing
-        let none = INI.replace("Use CAT PTT=True", "Use CAT PTT=False");
-        assert!(changed(&none).is_empty(), "{:?}", changed(&none));
+        // a line of the control port itself: as CAT
+        let shared = line.replace("PTT Port=COM9", "PTT Port=COM6");
+        assert_eq!(changed(&shared).len(), 3, "{:?}", changed(&shared));
     }
 
     #[test]
@@ -469,13 +515,16 @@ mod tests {
                 dtr: false,
             }
         );
-        // no radio, no keying: *Manual*, VOX or Aether keying the radio
+        // no radio, no keying: *Manual* as Trimode writes it (read from a Trimode set to
+        // Manual by hand: `Use CAT PTT` left on, which keys nothing with no radio)
         let manual = with(&[
-            ("Use CAT PTT=True", "Use CAT PTT=False"),
-            ("Control Port=COM6", "Control Port="),
-            ("Model=Yaesu FTDX10", "Model=None"),
+            ("Control Port=COM6", "Control Port=None"),
+            ("Model=Yaesu FTDX10", "Model=Manual"),
         ]);
         assert_eq!(manual.setups[0].radio, None);
+        // VOX or Aether keying the radio, the model left
+        let vox = with(&[("Use CAT PTT=True", "Use CAT PTT=False")]);
+        assert_eq!(vox.setups[0].radio.clone().expect("a radio").ptt, Ptt::None);
         // an Icom's CI-V address, kept in hex
         let icom = with(&[
             ("Model=Yaesu FTDX10", "Model=Icom IC-7300"),

@@ -112,9 +112,8 @@ turns their own settings into Aether profiles:
 `PTT ON`, as it did with VARA. Aether keeps its rules check on, taking the program's channel as
 the dial; only a gateway that scans several channels has it off, since Aether cannot tell which
 channel it is on. Or Aether keys the radio the way the program did (CAT, or an RTS/DTR line);
-Aether then sets the program's PTT port to *External* (Winlink Express) or turns its PTT off
-(RMS Trimode), and Winlink Express's radio to *Manual* when they share a port, since only one
-program can hold it.
+Aether then turns the program's PTT off, and sets its radio to *Manual* when they share a
+port, since only one program can hold it.
 
 Aether changes a program's settings only when you set it up or go back, never while it runs, and
 only the settings it shows. A setup above 30 MHz, or one whose only TNC is VARA FM or AGW, waits
