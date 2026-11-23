@@ -2240,9 +2240,21 @@ function showSignalLive() {
   mark.textContent = !signalDocked ? "in its own window" : live ? "live" : "paused";
 }
 
+// Why the card could not be undocked: under the card on the Diagnostics tab, and in the display
+// well for a few seconds when the small views' button asked, since that tab is not shown there.
 function signalNote(text) {
   $("signal-note").textContent = text;
   $("signal-note").hidden = !text;
+  if (text && currentView !== "full") sayInWell(text);
+}
+
+// The small views' button opens the window, or brings it forward once it is open.
+function showSignalButton() {
+  const label = signalDocked ? "Open the signal window" : "Bring the signal window forward";
+  $("btn-compact-undock").setAttribute("aria-label", label);
+  $("btn-compact-undock").title = signalDocked
+    ? "Open the waterfall, spectrum and constellation in a window of their own, to keep beside this one: the Diagnostics tab's Undock"
+    : "The waterfall, spectrum and constellation are in a window of their own: bring it to the front";
 }
 
 function setSignalDocked(docked) {
@@ -2250,6 +2262,7 @@ function setSignalDocked(docked) {
   $("signal-body").hidden = !docked;
   $("signal-away").hidden = docked;
   $("btn-undock").hidden = !docked;
+  showSignalButton();
   signalNote("");
   // the window may have changed the waterfall's settings while it had the card
   if (docked) scopes.reload();
@@ -2259,6 +2272,11 @@ function setSignalDocked(docked) {
 
 async function undockSignal() {
   signalNote("");
+  // a window this page opened is brought forward, not loaded again
+  if (signalPopup && !signalPopup.closed) {
+    signalPopup.focus();
+    return;
+  }
   const events = shellEvents();
   if (events?.emit) {
     try {
@@ -2277,7 +2295,7 @@ async function undockSignal() {
   }
   const popup = window.open("signal.html", "aether-signal", "popup,width=860,height=640");
   if (!popup) {
-    signalNote("The browser blocked the window: allow pop-ups for this page, then press Undock again.");
+    signalNote("The browser blocked the window: allow pop-ups for this page, then undock again.");
     return;
   }
   signalPopup = popup;
@@ -2322,6 +2340,7 @@ function wireSignalCard() {
   mountSignalBody($("signal-body"));
   scopes.wire();
   $("btn-undock").addEventListener("click", undockSignal);
+  $("btn-compact-undock").addEventListener("click", undockSignal);
   $("btn-signal-back").addEventListener("click", dockSignal);
   // the undocked window changed the waterfall: follow it
   window.addEventListener("storage", (event) => {
@@ -6285,15 +6304,16 @@ function tuneButton(playing) {
   tuneTimer = playing ? setTimeout(() => tuneButton(false), TUNE_SECONDS * 1000 + 500) : null;
 }
 
-// Why Compact's Tune did not key, in the display well in the state's place for a few seconds:
-// a line of its own would move the readings and plots, and in Mini push them out of the window.
+// Why Compact's Tune did not key, or its signal window did not open, in the display well in the
+// state's place for a few seconds: a line of its own would move the readings and plots, and in
+// Mini push them out of the window.
 let wellSaidTimer = null;
 
 function sayInWell(text) {
   const said = $("strip-said");
   clearTimeout(wellSaidTimer);
   said.textContent = text;
-  said.title = text || "What the modem answered when it refused the tone";
+  said.title = text || "What the modem answered when it refused the tone, or why the signal window did not open";
   said.hidden = !text;
   $("strip").classList.toggle("saying", Boolean(text));
   if (text) wellSaidTimer = setTimeout(() => sayInWell(""), 8000);

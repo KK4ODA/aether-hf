@@ -358,12 +358,13 @@ body.compact .strip.saying > .strip-state {
 }
 
 /* The well's row: in Full the well alone (the row is no box of its own), in Compact and Mini
-   the well with the tuner tone beside it. */
+   the well with the tuner tone and the signal window's button beside it. */
 .well-row {
   display: contents;
 }
 
-#btn-compact-tune {
+#btn-compact-tune,
+#btn-compact-undock {
   display: none;
 }
 
@@ -4242,11 +4243,11 @@ body.compact header.bar {
   border-bottom: 0;
 }
 
-/* The well has a row of its own, and Tune sits at its end, outside it: the well holds no
-   controls. The row is where the room is: the well's middle is empty at every width the small
-   views open at, where a button in the header's row would shorten the chips or wrap the row.
-   Tune keeps one width whether it says Tune or Stop, so the lamps never shift when it is
-   pressed. */
+/* The well has a row of its own, and Tune and the signal window's button sit at its end,
+   outside it: the well holds no controls. The row is where the room is: the well's middle is
+   empty at every width the small views open at, where a button in the header's row would
+   shorten the chips or wrap the row. Tune keeps one width whether it says Tune or Stop, so the
+   lamps never shift when it is pressed. */
 body.compact .well-row {
   order: 3;
   flex: 1 0 100%;
@@ -4267,6 +4268,14 @@ body.compact #btn-compact-tune {
   display: inline-flex;
   flex: none;
   min-width: 4.6em;
+}
+
+/* the signal window's button: the undock icon alone, a square of Tune's height */
+body.compact #btn-compact-undock {
+  display: inline-flex;
+  flex: none;
+  width: var(--control-h);
+  padding: 0;
 }
 
 body.compact .strip-state,

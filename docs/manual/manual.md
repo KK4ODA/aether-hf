@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.17.0 |
+| **Version** | 1.18.0 |
 | **Updated** | 2026-11-23 |
 | **Describes** | Aether HF 0.2.0-beta.171 |
 | **Licence** | CC BY 4.0 |
@@ -312,11 +312,11 @@ two small plots side by side: the speed over the last ten minutes (or the SNR, i
 in Full) and the channel's activity. **Mini** is the state and the four readings alone, for a
 corner of the screen.
 
-![Aether in Compact: the header's display with Tune beside it, four link readings and two small plots](screens/compact.png)
+![Aether in Compact: the header's display with Tune and the signal window's button beside it, four link readings and two small plots](screens/compact.png)
 
 *Figure 8. Compact: the readings and two plots.*
 
-![Aether in Mini: the header's display with Tune beside it, and four readings in a small window](screens/mini.png)
+![Aether in Mini: the header's display with Tune and the signal window's button beside it, and four readings in a small window](screens/mini.png)
 
 *Figure 9. Mini: for a corner of the screen.*
 
@@ -325,6 +325,10 @@ corner of the screen.
   stop. If the modem refuses the tone (a session, a busy channel, the rules), the display says why
   for a few seconds, in place of the state. In a window under about 470 px wide it takes the
   lamps' place too, so the **Busy** lamp is hidden while it shows.
+- The **signal window's button**, the small arrow out of a box after **Tune**, opens the
+  waterfall, spectrum and constellation in a window of their own, as **Undock** does on the
+  Diagnostics tab ([The signal window](#the-signal-window)). While that window is open, the
+  button brings it to the front. If it cannot open, the display says why for a few seconds.
 - The plots in Compact take whatever height the window has: make the window taller for taller
   plots. When a banner comes up, the plots get shorter for as long as it shows.
 - Compact has no **Axes** button, but the chart keeps its two level sliders and **Auto**. Change
@@ -857,7 +861,8 @@ touched.
 
 ### The signal window
 
-**Undock** opens the signal analysis in a window of its own, to keep in view from any tab.
+**Undock** opens the signal analysis in a window of its own, to keep in view from any tab. In
+Compact and Mini, the small button after **Tune** does the same.
 
 ![The undocked signal window: constellation, spectrum and waterfall, with a Busy lamp and a Tune button](screens/signal.png)
 
@@ -1659,7 +1664,7 @@ them off in Setup step 5.
 | Drive | Session tab › Keying and drive › **Set drive**: ALC just moving, then back off |
 | Call, disconnect, probe, beacon, Test | Session tab › Call |
 | The dial | Session tab › Radio dial, or **Dial is at** |
-| Signal, spectrum, waterfall | Diagnostics, or **Undock** |
+| Signal, spectrum, waterfall | Diagnostics, or **Undock** (in Compact and Mini, the button after **Tune**) |
 | Sending logs and recordings | Log tab › **Send files…** |
 | Control port | 8515 (this window, RadioPost) |
 | Host programs port | 8300 and 8301 (Winlink Express, Pat, VarAC, RMS Trimode) |
@@ -1759,3 +1764,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.16.1 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): with **Aether** keying, Winlink Express's PTT port is set to *External* and its radio to *Manual*, the words Winlink Express writes itself, and its control port is left as it is; RMS Trimode's PTT is turned off, and its radio *Manual* is yours to set. |
 | 1.16.2 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): with **Aether** keying, RMS Trimode's radio is set to *Manual* too, in the words Trimode writes itself; a Trimode set to *Manual* by hand is read as controlling no radio. |
 | 1.17.0 | 2026-11-23 | [Your first contact, in brief](#5-your-first-contact-in-brief) and [Step 5](#step-5-application-settings): **debug mode** is asked in a window when Aether first opens (and once on a station that had only the old banner), saying what is sent, when and to whom; nothing goes to the project until **Keep it on** or **Turn it off** is pressed. The one-line banner is gone. |
+| 1.18.0 | 2026-11-23 | [Full, Compact and Mini](#full-compact-and-mini) and [The signal window](#the-signal-window): Compact and Mini have a small button after **Tune** that opens the signal window, the waterfall, spectrum and constellation, as **Undock** does; while the window is open it brings it to the front. |
