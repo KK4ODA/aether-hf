@@ -2067,7 +2067,9 @@ impl<P: Ptt> Station<P> {
         let asked = self.engine.disconnect_requested();
         self.engine.disconnect();
         let queued = self.engine.tx_pending_bytes();
-        if !asked && queued > 0 {
+        // a queue the session could not carry within the drain was given up, and the engine's
+        // own `disconnect` line says so (ADR-0135)
+        if !asked && queued > 0 && !self.engine.queue_given_up() {
             if let Some(left) = self.leave_in_s() {
                 // the master closes at its limit; a slave's request is read an answer later,
                 // and the master counts from there
@@ -3400,6 +3402,8 @@ impl<P: Ptt> Station<P> {
             }
             if let Some(watch) = &mut self.keyed_audio {
                 watch.keyed(now);
+                // what it plays, which a radio may send back (ADR-0136)
+                watch.playing(self.playback.iter().copied(), self.air.info().audio_rate);
             }
             self.clock.cut_short = false;
             self.stats.transmissions += 1;
@@ -3847,6 +3851,10 @@ impl<P: Ptt> Station<P> {
         // in the band where a receiver's mute shows, not under an interface's hum
         let level = watch.level_db(audio, rate);
         watch.block(now, seconds, level, transmitting, deaf);
+        if transmitting {
+            // and the audio itself, for a radio that sends the station's signal back
+            watch.sound(now, seconds, audio);
+        }
     }
 
     /// The key came down: say what the radio's audio did while it was up, when there is

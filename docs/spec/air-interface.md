@@ -1,6 +1,6 @@
 # Aether HF air interface — specification v0.1
 
-Status: **draft**, tracking the reference model on `master` (link protocol version 12,
+Status: **draft**, tracking the reference model on `master` (link protocol version 13,
 §7.1). Numbering and constants are stable enough to implement against; anything still open is
 called out in §11.
 
@@ -716,7 +716,7 @@ CONTROL container, seven bytes (link protocol 8, ADR-0069):
 | 0 | 1–0 | level: in a header, the gap level of the slot it grants; in an answer, the level its sender needs; in a `DISC`, the level of the `DISC_ACK`'s slot |
 | 1 | 7–1 | the session number's low seven bits (data frames carry all eight) |
 | 1 | 0 | fam: in a header, the family the answer goes in (1 = the tone floor); in an answer, the family its sender needs headers in |
-| 2 | 7 | flag: in a header, the slot is an open window; in an answer, its sender asks to leave |
+| 2 | 7 | flag: in a header, the slot is an open window; in an answer, its sender asks to leave; in a `DISC`, base and bitmap acknowledge the slave's data (ADR-0135: a `DISC` without it, from before 0.2.0-beta.175, carries zeros there and is not read as acknowledging) |
 | 2 | 6 | in a header or an answer, `measure` (version 9): the data frames after it are measurement frames, or with none after it, its sender's last were and it has not read the report; in a `DISC` or a `DISC_ACK`, the `DISC_ACK`'s slot includes the slave's closing identifier |
 | 2 | 5–0 | SNR: how the sender hears the other station, signed whole decibels −31 … +31 (3 kHz reference, ties to even), 0x20 = not measured |
 | 3 | | base: the next sequence number the sender needs of the other's data |
@@ -829,7 +829,12 @@ deadline. The rules, numbered as in the formal specification
 4. **The master's next key.** After a decoded slave frame of the slot stated its end `S`, the
    master keys no sooner than `S + max(D_f, T_slave − KEY) + GUARD`; when it decoded nothing of
    the slot, no sooner than `end_max` plus the slowest answer family's decode budget and
-   `GUARD`. Nothing else moves this deadline.
+   `GUARD`. Nothing else moves this deadline earlier. When the slave's last data has just been
+   delivered here, the slave wants nothing more and neither station has anything to send or is
+   leaving, the master holds its next transmission up to 0.35 s for its program's reply, and
+   keys as soon as the reply comes (ADR-0135): a program answers 0.17–0.32 s after it is handed
+   data. The slave's answer counts in `n` its own data frames sent in that very transmission;
+   the master grants that count less the ones of them it decoded.
 5. **Attribution by air time.** A slave frame belongs to the slot when it began after the
    master's last transmission ended. An older frame's content is kept (sequence numbers make
    that safe); its timing is ignored.
@@ -843,14 +848,20 @@ deadline. The rules, numbered as in the formal specification
    one the slave may hold; when at most four data frames follow, one of them a copy at RV 0 (the
    only version that decodes alone on every rung, ADR-0073); when none of them goes above the
    rung the master's own rate controller chooses — a try's frame, or a pinned rung's — unless
-   the header would be a floor frame (ADR-0076, ADR-0099); and when no measurement is under way.
+   the header would be a floor frame (ADR-0076, ADR-0099); when no measurement is under way; and
+   when the transmission is not the last of the master's data with rule 8's reply room at a
+   level above 0 (ADR-0135).
 8. **Gap levels.** The slave asks in every answer for the level its own lateness needs, and for
    one that starts its slots no sooner than its answer gap (configured, or learned of the master)
    after the master's frames;
    it eases a level after six slots answered on time. The master grants the larger of what was
    asked and its silence level, which two silent slots in a row raise one step and four slots
    answered on time lower one. A call's or a probe's level is in its capability bits 3–4 and
-   rises every second try.
+   rises every second try. The transmission that carries the last of the master's data grants the
+   slave at least one data frame of room, at no lower a level than the one that covers 0.35 s,
+   so that the slave's program can reply in that answer; the slave decides that answer at the
+   last moment its slot allows (ADR-0135). An answer states its own length, so room it leaves
+   unused costs nothing.
 9. **Rate.** Each station chooses its own data's rung, and nothing else does (ADR-0094,
    ADR-0099): by the data each rung's frames delivered per second of the air they took, frames
    never heard included, against a prior from the other station's reports of how it hears this
@@ -899,11 +910,16 @@ deadline. The rules, numbered as in the formal specification
     `DISC_ACK`; it repeats it at most three times, then ends ("closed (no DISC_ACK)"). It sends
     its `DISC` once its queue is acknowledged; once the longer of two whole exchanges and 20 s
     has passed with nothing new acknowledged; or a minute after the operator asked — whichever
-    comes first — and says what it left. The slave asks to leave with `flag` in an answer; the master then sends its `DISC` once
-    what the slave had is delivered, without waiting for its own. A station that left a session
-    without the other's word that it was over (an abort, "closed (no DISC_ACK)", "no response",
-    a link timeout) remembers it for a link timeout and answers a header of it with a `DISC`, or
-    a `DISC` of it with a `DISC_ACK`, in the frame's slot (ADR-0052); an aborting master says its
+    comes first — and says what it left. A disconnect whose queue could not go within that
+    minute at the rate the session has delivered — once its data has been acknowledged for
+    30 s — leaves the queue at once and says so (ADR-0135). The slave asks to leave with `flag`
+    in an answer; the master then sends its `DISC` once what the slave had is delivered, without
+    waiting for its own. The `DISC` acknowledges the slave's data (byte 2 bit 7), so the slave's
+    last bytes, sent with its request to leave, need no header of their own (ADR-0135). A
+    station that left a session without the other's word that it was over (an abort, "closed (no
+    DISC_ACK)", "no response", a link timeout) remembers it for a link timeout and answers a
+    header of it with a `DISC`, or a `DISC` of it with a `DISC_ACK`, in the frame's slot
+    (ADR-0052); an aborting master says its
     `DISC` on the floor, granting the `DISC_ACK`'s slot, up to three times. A station's link
     timer is four exchanges of the size in use, 45 s at least; the master also ends once more than
     eight slots in a row have gone silent ("no response").

@@ -195,6 +195,10 @@ pub const HEADER_UNDECODABLE_SHARE: f64 = 0.4;
 pub const READABLE_ALONE_RVS: [u8; 1] = [0];
 /// An idle link's open window, after an ordinary and after a floor header.
 pub const OPEN_WINDOW_S: [f64; 2] = [4.0, 10.0];
+/// How long this station's data must have been acknowledged before a disconnect trusts the
+/// session's rate to say what is queued cannot go within the drain (ADR-0135): sooner, the drain
+/// runs as ADR-0072 has it.
+pub const RATE_KNOWN_AFTER_S: f64 = 30.0;
 /// The most tries a call makes: Setup's largest choice (ADR-0126 §7.4), and the most a call asked
 /// to last (`call_s`, ADR-0129) is given.
 pub const MAX_CALL_TRIES: usize = 15;
@@ -352,6 +356,13 @@ pub struct GrantConfig {
     pub disc_drain_s: f64,
     /// DISCs an aborting master says, one a slot, while nothing answers (ADR-0052).
     pub leave_repeats: usize,
+    /// How long a hand-over waits for the program's reply (ADR-0135). A program answers what it
+    /// was handed 0.17–0.26 s after it arrives, which was after the station had decided its next
+    /// transmission: each miss cost an exchange, about 5 s at 500 Hz. The master holds its next
+    /// transmission this long for its program after the slave's last data reached it; after its
+    /// own last data it grants the slave's answer one frame of room at the level that covers
+    /// this, and the slave decides that answer at the last moment. 0 turns both off.
+    pub reply_wait_s: f64,
     /// A station asks for the other's control frames on the floor while it hears the other less
     /// than this above the ordinary control frame's threshold (swept 0–3 dB on the review's
     /// campaign: smaller margins win a steady channel at the boundary and lose on fading ones).
@@ -478,6 +489,7 @@ impl Default for GrantConfig {
             disc_patience_s: 20.0,
             disc_drain_s: 60.0,
             leave_repeats: 3,
+            reply_wait_s: 0.35,
             answer_floor_margin_db: 3.0,
             family_readings: 3,
             link_timeout_s: 45.0,
@@ -1061,6 +1073,26 @@ pub struct GrantedEngine {
     /// How long this session's disconnect waits for what is queued
     /// ([`disconnect_within`](Self::disconnect_within)).
     leave_drain_s: f64,
+    /// Since when the session has been up, how much of this station's data it has had
+    /// acknowledged, and when the first of it was: the rate a disconnect weighs what is queued
+    /// against (ADR-0135).
+    up_since: Option<f64>,
+    acked_bytes: usize,
+    first_ack_at: Option<f64>,
+    /// A disconnect gave up on this station's queue: it could not go within the drain at the
+    /// session's rate, and it is no longer sent or offered (ADR-0135).
+    abandoned: bool,
+    /// The other station's transmission being received has delivered data to this station's
+    /// program: a hand-over, after which the program may answer (ADR-0135).
+    delivered_here: bool,
+    /// The slave's data frames the master decoded in the slot its last answer opened: the
+    /// answer's `n` counts them, sent in that very transmission (ADR-0135).
+    want_decoded: usize,
+    /// The master has held this slot's end for its program's reply; it is holding it now.
+    reply_waited: bool,
+    reply_waiting: bool,
+    /// The blocks the transmission being built carries.
+    sent_now: Vec<u8>,
     /// A measurement asked for ([`Self::measure`]) and not yet sent: its rung and frames.
     measure_ask: Option<(usize, usize)>,
     /// A measurement sent and not yet reported: its rung and the frames it went with. Until the
@@ -1287,6 +1319,15 @@ impl GrantedEngine {
             patience_until: None,
             leave_since: None,
             leave_drain_s: drain,
+            up_since: None,
+            acked_bytes: 0,
+            first_ack_at: None,
+            abandoned: false,
+            delivered_here: false,
+            want_decoded: 0,
+            reply_waited: false,
+            reply_waiting: false,
+            sent_now: Vec::new(),
             measure_ask: None,
             measure_out: None,
             measure_unheard: false,
@@ -1359,6 +1400,15 @@ impl GrantedEngine {
         self.patience_until = None;
         self.leave_since = None;
         self.leave_drain_s = self.config.disc_drain_s;
+        self.up_since = None;
+        self.acked_bytes = 0;
+        self.first_ack_at = None;
+        self.abandoned = false;
+        self.delivered_here = false;
+        self.want_decoded = 0;
+        self.reply_waited = false;
+        self.reply_waiting = false;
+        self.sent_now.clear();
         self.measure_ask = None;
         self.measure_out = None;
         self.measure_unheard = false;
@@ -1537,6 +1587,13 @@ impl GrantedEngine {
     #[must_use]
     pub const fn probing(&self) -> bool {
         self.probing.is_some()
+    }
+
+    /// Whether this session's disconnect gave up on what was queued, which could not go within
+    /// the drain at the session's rate (ADR-0135): the engine has said so in a `disconnect` event.
+    #[must_use]
+    pub const fn queue_given_up(&self) -> bool {
+        self.abandoned
     }
 
     /// Whether the station has asked to leave a session that is still up.
@@ -1839,10 +1896,55 @@ impl GrantedEngine {
         if self.leave_since.is_none() {
             self.leave_since = Some(self.now);
         }
+        if drain_s.is_none() {
+            self.give_up_if_hopeless();
+        }
         if self.role == Role::Slave && self.window.is_some() {
             self.cause = "disconnect";
             self.try_window();
         }
+    }
+
+    /// A disconnect whose queue could not go within the drain at this session's rate leaves it
+    /// at once (ADR-0135). On 2026-11-24 Winlink Express gave up on a 52 kB file after five
+    /// minutes, with 43.7 kB queued at 224 bit/s, and the drain sent on for 70 s: 1.7 kB of a
+    /// message nobody would ever have whole. A queue that would go in time — the `FQ` a program
+    /// writes before it asks to leave — still goes first, as ADR-0072 has it; so does any queue
+    /// before the session's rate is known ([`RATE_KNOWN_AFTER_S`]). The bytes stay counted as
+    /// undelivered, so a program is not told its message went.
+    fn give_up_if_hopeless(&mut self) {
+        if self.state != State::Connected || self.abandoned {
+            return;
+        }
+        let Some(up) = self.up_since else {
+            return;
+        };
+        let left = self.tx_undelivered_bytes();
+        let Some(first) = self.first_ack_at else {
+            return;
+        };
+        if left == 0 || self.now - first < RATE_KNOWN_AFTER_S {
+            return;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let rate = self.acked_bytes as f64 / (self.now - up).max(1e-9);
+        #[allow(clippy::cast_precision_loss)]
+        let need = left as f64 / rate;
+        if need <= self.leave_drain_s {
+            return;
+        }
+        let drain = self.leave_drain_s;
+        self.abandoned = true;
+        self.leave_drain_s = 0.0;
+        self.event(
+            "disconnect",
+            format!(
+                "{left} bytes not delivered: at this session's {:.0} bit/s they would take about \
+                 {need:.0} s, more than the {drain:.0} s a disconnect waits for them; closing \
+                 without them",
+                rate * 8.0
+            ),
+        );
     }
 
     /// Drop the session now. A master says DISC from idle, on the floor, at its next
@@ -1871,6 +1973,13 @@ impl GrantedEngine {
         if self.role == Role::Slave && self.window.is_some() {
             self.cause = "send";
             self.try_window();
+        }
+        if self.reply_waiting && !data.is_empty() {
+            // the program answered what it was handed: the master's next transmission carries
+            // it, now (ADR-0135)
+            self.reply_waiting = false;
+            self.deadlines.remove(Timer::Proceed);
+            self.proceed();
         }
     }
 
@@ -3193,6 +3302,7 @@ impl GrantedEngine {
         self.peer_caller_code = caller_code(&req.src).unwrap_or(0);
         self.state = State::Connected;
         self.role = Role::Slave;
+        self.up_since = Some(self.now);
         self.heard(frame);
         self.measure_lateness(frame);
         self.ans_sticky = floor;
@@ -3296,6 +3406,7 @@ impl GrantedEngine {
         self.level_asked = usize::from(acc.level);
         self.state = State::Connected;
         self.role = Role::Master;
+        self.up_since = Some(self.now);
         self.heard(frame);
         if let Some(snr) = acc.snr_db {
             self.peer_snr_db = Some(snr);
@@ -3511,6 +3622,7 @@ impl GrantedEngine {
         }
         self.take_ack(ctl, true);
         self.slave_want = Some(usize::from(ctl.n));
+        self.want_decoded = 0;
         self.level_asked = usize::from(ctl.level);
         self.hdr_floor = ctl.fam || self.floor_only();
         self.possible = Families::of(frame.floor);
@@ -3552,6 +3664,9 @@ impl GrantedEngine {
         if index.is_none_or(|i| self.rx[i].payload.is_none()) {
             return;
         }
+        if index.is_some_and(|i| self.rx[i].seq.is_some()) {
+            self.want_decoded += 1;
+        }
         let rescued = index.is_some_and(|i| self.rx[i].combined);
         self.heard(frame);
         self.ack_owed = true;
@@ -3576,6 +3691,21 @@ impl GrantedEngine {
         {
             return;
         }
+        if self.wait_for_reply() {
+            return;
+        }
+        self.reply_waiting = false;
+        self.reply_waited = false;
+        // The slave's answer counts its own frames sent in that very transmission among those it
+        // still has: what of them arrived is not wanted again. Granted again, they cost an
+        // exchange at the end of every run of the slave's data — the slot the slave answers with
+        // nothing, then the DISC (2026-11-24, report 21 §8.1; ADR-0135)
+        if let Some(want) = self.slave_want
+            && want > 0
+        {
+            self.slave_want = Some(want.saturating_sub(self.want_decoded));
+        }
+        self.want_decoded = 0;
         self.close_slot();
         if self.state == State::Idle {
             return;
@@ -3607,8 +3737,33 @@ impl GrantedEngine {
     /// (ADR-0023's receiving station; `80m-leave-together-500`). Either waits no longer than
     /// the drain's limit from when the disconnect was asked (ADR-0072) or the patience with
     /// nothing moving (ADR-0039), and says what it leaves.
+    /// Hold the master's next transmission [`GrantConfig::reply_wait_s`] for its program's
+    /// reply when the slave's last data has just reached it (ADR-0135): the slave wants nothing
+    /// more, this station has nothing to send, nobody is leaving. [`Self::send`] ends the wait
+    /// the moment the reply comes.
+    fn wait_for_reply(&mut self) -> bool {
+        if self.config.reply_wait_s <= 0.0
+            || self.reply_waited
+            || !self.delivered_here
+            || self.state != State::Connected
+            || self.disc_requested
+            || self.slave_leaves
+            || self.has_work()
+        {
+            return false;
+        }
+        if self.slave_want.is_some_and(|want| want > self.want_decoded) {
+            return false;
+        }
+        self.reply_waited = true;
+        self.reply_waiting = true;
+        self.deadlines
+            .set(Timer::Proceed, self.now + self.config.reply_wait_s);
+        true
+    }
+
     fn can_leave(&mut self) -> bool {
-        let own_done = self.all_acknowledged() || self.slave_leaves;
+        let own_done = self.all_acknowledged() || self.slave_leaves || self.abandoned;
         if own_done && self.slave_want.unwrap_or(0) == 0 && self.max_seen.is_none() {
             return true;
         }
@@ -3633,7 +3788,8 @@ impl GrantedEngine {
     /// when the disconnect is its own, and what the slave still said it had.
     fn say_left(&mut self, why: &str) {
         let mut left = Vec::new();
-        let own = if self.slave_leaves {
+        // given up at the disconnect, the queue was said then (ADR-0135)
+        let own = if self.slave_leaves || self.abandoned {
             0
         } else {
             self.tx_undelivered_bytes()
@@ -3738,6 +3894,9 @@ impl GrantedEngine {
     }
 
     fn has_work(&self) -> bool {
+        if self.abandoned {
+            return false;
+        }
         !self.tx_queue.is_empty() || !self.unacked().is_empty() || self.measuring()
     }
 
@@ -3786,7 +3945,7 @@ impl GrantedEngine {
         // family and stated in another, five OFDM frames' slot was read as five tone frames,
         // 27 s, and the master's next header went 9 s into it (ADR-0099 §2.2)
         let sized = self.robust_mode(self.slave_floor_only);
-        let (n, open_window, index) = self.grant_size(sized);
+        let (mut n, open_window, index) = self.grant_size(sized);
         let wanted =
             self.wants_floor() || self.silent >= 2 || self.recent_silent.iter().any(|&s| s);
         let mut elide = self.elide(n, open_window, wanted);
@@ -3810,6 +3969,24 @@ impl GrantedEngine {
             && !data.is_empty()
             && data.len() <= usize::from(MAX_FOLLOWS) + 1
             && data.iter().any(|f| READABLE_ALONE_RVS.contains(&f.rv));
+        // The last of this station's data: the slave's program will likely answer it, so the
+        // answer gets a frame of room and a slot that opens late enough for the reply to be in
+        // it (ADR-0135). An answer states its own length, so unused room costs nothing when it is
+        // heard.
+        let reply = self.config.reply_wait_s > 0.0
+            && !data.is_empty()
+            && !measuring
+            && self.tx_queue.is_empty()
+            && self.unacked().iter().all(|s| self.sent_now.contains(s));
+        let reply_level = if reply {
+            self.level_for(self.config.reply_wait_s)
+        } else {
+            0
+        };
+        if reply {
+            n = n.max(1);
+            elide = elide && reply_level == 0;
+        }
         // data above the rung the slave asks for is a bet that it decodes — copies still at the
         // rung they first went at, data pinned — and when none of it does, a transmission
         // without its header granted nothing: a wait and a floor poll. An ordinary header is
@@ -3820,7 +3997,11 @@ impl GrantedEngine {
             let chosen = self.own_choice();
             elide = elide && !data.iter().any(|f| f.mode > chosen);
         }
-        let level = if elide { 0 } else { self.level() };
+        let level = if elide {
+            0
+        } else {
+            self.level().max(reply_level)
+        };
         if !elide {
             self.possible.insert(wanted);
         }
@@ -3885,11 +4066,18 @@ impl GrantedEngine {
         let wanted = self.wants_floor() || self.silent >= 1;
         let floor = self.hdr_floor || self.silent >= 1 || self.floor_only();
         let level = self.level();
+        // The DISC acknowledges what the slave has sent, and its `flag` says it does: a DISC
+        // without it (beta.174's) carries zeros, which would read as acknowledging every sequence
+        // number half a window behind 0 (ADR-0135)
         let mut ctl = GrantFrame::new(GrantKind::Disc, self.session & 0x7F);
         ctl.level = u8::try_from(level).unwrap_or(3);
         ctl.fam = wanted;
+        ctl.flag = true;
         ctl.ident = self.peer_identifier_s > 0.0;
         ctl.snr_db = self.heard_db;
+        let (base, bitmap) = self.ack_fields();
+        ctl.base = base;
+        ctl.bitmap = bitmap;
         self.possible.insert(wanted);
         let answer_floors = self.possible.with(wanted);
         let mut slot = Slot::new(
@@ -3962,6 +4150,11 @@ impl GrantedEngine {
             self.peer_reading(snr);
         }
         if ctl.kind == GrantKind::Disc {
+            if ctl.flag {
+                // what the master acknowledges with it is delivered: the program's last bytes (an
+                // FQ) are not reported lost at the end (ADR-0135)
+                self.take_ack(ctl, false);
+            }
             self.end_session("peer disconnected", true);
             self.answer_disc(ctl, frame, GrantKind::DiscAck);
             return;
@@ -4114,6 +4307,15 @@ impl GrantedEngine {
         if what == AnswerKind::Window || (what == AnswerKind::Ans && !self.heard_all()) {
             return;
         }
+        if what == AnswerKind::Ans
+            && self.config.reply_wait_s > 0.0
+            && self.delivered_here
+            && !self.has_work()
+        {
+            // its program was just handed data and may answer it: decided at the last moment, so
+            // that the reply goes in this answer (ADR-0135)
+            return;
+        }
         self.deadlines.remove(Timer::Answer);
         self.key_answer();
     }
@@ -4256,6 +4458,9 @@ impl GrantedEngine {
     }
 
     fn queued_frames(&self) -> usize {
+        if self.abandoned {
+            return 0;
+        }
         let cap = data_capacity(self.timing.capacity(self.burst_mode()));
         let unacked: usize = self
             .unacked()
@@ -4442,7 +4647,8 @@ impl GrantedEngine {
     /// its report.
     #[allow(clippy::too_many_lines)]
     fn data_frames(&mut self, room_s: f64) -> Vec<TxFrame> {
-        if room_s <= 0.0 || self.measure_out.is_some() {
+        self.sent_now.clear();
+        if room_s <= 0.0 || self.measure_out.is_some() || self.abandoned {
             return Vec::new();
         }
         if self.measure_ask.is_some() && self.unacked().is_empty() {
@@ -4585,6 +4791,7 @@ impl GrantedEngine {
             .filter(|s| self.records.get(s).is_some_and(|r| r.pieces.is_some()))
             .collect();
         if !split.is_empty() {
+            self.sent_now.clone_from(&split);
             return self.piece_frames(&split, room);
         }
         seqs.truncate(room);
@@ -4627,6 +4834,7 @@ impl GrantedEngine {
             self.tx_next = seq_after(self.tx_next, 1);
             seqs.push(seq);
         }
+        self.sent_now.clone_from(&seqs);
         let mut frames = Vec::with_capacity(seqs.len());
         let count = seqs.len();
         for (i, s) in seqs.iter().enumerate() {
@@ -4827,6 +5035,10 @@ impl GrantedEngine {
                 newly.push(s);
                 self.top_acked_mode = Some(self.top_acked_mode.unwrap_or(0).max(rec.mode));
                 self.stats.bytes_acked += rec.body.len();
+                self.acked_bytes += rec.body.len();
+                if self.first_ack_at.is_none() {
+                    self.first_ack_at = Some(self.now);
+                }
             }
         }
         while self.tx_base != self.tx_next
@@ -4976,6 +5188,7 @@ impl GrantedEngine {
     fn restart_rx(&mut self) {
         self.rx.clear();
         self.rx_t0 = None;
+        self.delivered_here = false;
         self.grid = None;
         self.rx_measure = false;
         self.rx_pieces = false;
@@ -5192,6 +5405,9 @@ impl GrantedEngine {
                 self.stats.bytes_delivered += data.len();
                 if !data.is_empty() {
                     self.actions.push(Action::Deliver(data));
+                    if !late {
+                        self.delivered_here = true;
+                    }
                 }
             }
             if self

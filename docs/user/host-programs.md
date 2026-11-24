@@ -284,9 +284,23 @@ there too ([the gateway kit](gateway-kit.md)). See ADR-0050.
   them, Aether tells the program how many again (`BUFFER`) every 50 s, even when the count has
   not moved. Pat gives up on a transfer after a minute with no word of the count ("write: buffer
   timeout"), and on a weak path a burst can wait longer than that for its answer (ADR-0109).
+* **A long message from Winlink Express.** In a P2P session Winlink Express asks to disconnect
+  exactly five minutes after it sends a message, whatever the modem says meanwhile ("P2P session
+  inactivity timeout"). A `DISCONNECT` that comes while the program's own data is still going, and
+  after it has written and been handed nothing for four minutes, is answered `OK` and the
+  transfer goes on; the Log says so. A second `DISCONNECT` within a minute, or `ABORT`, ends the
+  session (ADR-0134).
+* **A program's quick answer.** A program answers what it is handed a fifth to a third of a
+  second later (Winlink Express's `FF` and `FQ`). Aether waits for it at each hand-over, so the
+  answer goes in the next transmission instead of one exchange later (ADR-0135).
+* **A disconnect that could not finish.** After a program's `DISCONNECT`, what is still queued is
+  sent first, for a minute at most; when it could not go in that minute at the speed the session
+  has managed, the session closes at once and the Log says how much was left (ADR-0135).
 * **The keying check.** The first transmission after a program attaches is judged on its own:
   if the radio's receive audio does not change while it is keyed, the Log says the radio may not
-  be transmitting. A program keying a port nothing is wired to is caught at its first try.
+  be transmitting. A program keying a port nothing is wired to is caught at its first try. A
+  radio that sends its own signal back on its audio while keyed (the Lab599 TX-500) is recognised
+  by that signal and passes (ADR-0136).
 * **Aether's own sessions.** A call or a Test session started from Aether's Session tab while a
   program is attached is not the program's: the program keys the radio for it, when it owns the
   radio, and sees the channel busy — and is told nothing else. Its idle timer cannot end the

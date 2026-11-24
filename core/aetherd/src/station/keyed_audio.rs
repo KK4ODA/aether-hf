@@ -22,8 +22,21 @@
 //! [`UNCHANGED_RUN`] such transmissions in a row are said once, and again after [`SAY_AGAIN_S`];
 //! a keying test (*Key 1 s*) is judged on its own, since the operator pressed it to find out.
 //! A report only: nothing is refused on it.
+//!
+//! A radio may send its own signal back at the band's level, and then the level cannot tell. The
+//! portable's Lab599 TX-500 on 2026-11-24 mutes its receiver while keyed (outside its signal the
+//! audio fell 28–54 dB) and sends the transmitted audio back to the sound card, at −19 to −23 dBFS
+//! in the band, where a busy 40 m read −20 to −29 while receiving: three transmissions in a row
+//! read "unchanged", and the warning came while every frame was decoded at the other end. What
+//! came back was the station's own signal: the frames decoded from it and rendered again matched
+//! it at |r| 0.98–0.99, about 0.26 s after the key, the sign flipping between keyings. So a
+//! transmission the level calls unchanged is checked for that ([`monitored`]): the audio heard
+//! while keyed against what was played, at every delay up to [`MONITOR_LOOP_S`]. A key that does
+//! nothing leaves the band's own noise, which no delay of the played signal matches (ADR-0136).
 
 use std::collections::VecDeque;
+
+use rustfft::{FftPlanner, num_complex::Complex64};
 
 /// The band the watch measures, Hz.
 pub const BAND_HZ: (f64, f64) = (1000.0, 2500.0);
@@ -46,6 +59,16 @@ pub const MONITOR_ABOVE_DB: f64 = 3.0;
 pub const UNCHANGED_RUN: u32 = 3;
 /// How long before it is said again while it goes on.
 const SAY_AGAIN_S: f64 = 600.0;
+/// How much of the audio heard while keyed, from [`KEY_SETTLE_S`], is checked against what was
+/// played.
+pub const MONITOR_LISTEN_S: f64 = 1.0;
+/// The longest delay from playing a sample to hearing it back: the card's output and input
+/// latencies and the radio's own (the TX-500's 0.26 s, with room).
+pub const MONITOR_LOOP_S: f64 = 0.8;
+/// The least correlation, either sign, that makes the audio heard while keyed the station's own
+/// signal. The TX-500 read 0.98–0.99; the band's noise against a second of a played signal reads
+/// about 0.1 at its best delay.
+pub const MONITOR_CORRELATION: f64 = 0.5;
 
 /// What one transmission's receive audio said.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,13 +79,17 @@ pub struct Reading {
     pub heard_low: f64,
     /// The loud end (its 90th percentile), dBFS.
     pub heard_high: f64,
+    /// What the radio sent back while keyed was the station's own signal ([`monitored`]).
+    pub monitored: bool,
 }
 
 impl Reading {
-    /// Whether the radio's audio while keyed reads as it does while receiving.
+    /// Whether the radio's audio while keyed reads as it does while receiving, and is not the
+    /// station's own signal coming back.
     #[must_use]
     pub fn unchanged(&self) -> bool {
-        self.keyed >= self.heard_low - MUTED_BELOW_DB
+        !self.monitored
+            && self.keyed >= self.heard_low - MUTED_BELOW_DB
             && self.keyed <= self.heard_high + MONITOR_ABOVE_DB
     }
 }
@@ -91,6 +118,12 @@ pub struct KeyedAudio {
     /// The filter for [`BAND_HZ`], at the rate it was made for: its state runs on from block to
     /// block.
     band: Option<(usize, InBand)>,
+    /// The start of what the transmission played, its lead's silence first, at `rate`.
+    played: Vec<f32>,
+    /// What the radio sent back while keyed, from [`KEY_SETTLE_S`], at `rate`.
+    heard_keyed: Vec<f32>,
+    /// The sample rate of those two.
+    rate: usize,
 }
 
 impl KeyedAudio {
@@ -160,13 +193,40 @@ impl KeyedAudio {
     pub fn keyed(&mut self, now: f64) {
         self.keyed_at = Some(now);
         self.keyed.clear();
+        self.played.clear();
+        self.heard_keyed.clear();
         self.test = std::mem::take(&mut self.test_next);
+    }
+
+    /// What the transmission keyed now plays, from its first sample (its lead's silence), at
+    /// `rate`: what the radio may send back. Only as much as a check needs is kept.
+    pub fn playing(&mut self, audio: impl IntoIterator<Item = f32>, rate: usize) {
+        let keep = ((KEY_SETTLE_S + MONITOR_LISTEN_S + MONITOR_LOOP_S) * rate as f64) as usize;
+        self.played.clear();
+        self.played.extend(audio.into_iter().take(keep));
+        self.rate = rate;
+    }
+
+    /// A block of what the radio sends while keyed, at `now`, `seconds` long: kept from
+    /// [`KEY_SETTLE_S`] after the key for [`MONITOR_LISTEN_S`].
+    pub fn sound(&mut self, now: f64, seconds: f64, audio: &[f32]) {
+        let Some(at) = self.keyed_at else {
+            return;
+        };
+        if now - seconds < at + KEY_SETTLE_S || self.rate == 0 {
+            return;
+        }
+        let keep = (MONITOR_LISTEN_S * self.rate as f64) as usize;
+        let room = keep.saturating_sub(self.heard_keyed.len());
+        self.heard_keyed.extend(audio.iter().take(room));
     }
 
     /// The key came down on the watchdog or a failing interface: no reading.
     pub fn abandon(&mut self) {
         self.keyed_at = None;
         self.keyed.clear();
+        self.played.clear();
+        self.heard_keyed.clear();
         self.test = false;
     }
 
@@ -176,7 +236,14 @@ impl KeyedAudio {
     pub fn released(&mut self, now: f64) -> Option<Said> {
         self.keyed_at = None;
         let test = std::mem::take(&mut self.test);
-        let reading = self.reading()?;
+        let mut reading = self.reading()?;
+        // only a reading the level calls unchanged is checked for the station's own signal
+        if reading.unchanged() {
+            reading.monitored =
+                monitored(&self.heard_keyed, &self.played, self.rate) >= MONITOR_CORRELATION;
+        }
+        self.played.clear();
+        self.heard_keyed.clear();
         let unchanged = reading.unchanged();
         if test {
             return Some(Said::Test(reading));
@@ -212,8 +279,79 @@ impl KeyedAudio {
             keyed: at(&keyed, 0.5),
             heard_low: at(&heard, 0.1),
             heard_high: at(&heard, 0.9),
+            monitored: false,
         })
     }
+}
+
+/// How closely what the radio sent back while keyed (`heard`, from [`KEY_SETTLE_S`] after the
+/// key) matches what was played (`played`, from the transmission's first sample), at the best
+/// delay up to [`MONITOR_LOOP_S`]: the largest correlation of either sign, both in [`BAND_HZ`].
+/// 0 when there is too little of either.
+#[must_use]
+pub fn monitored(heard: &[f32], played: &[f32], rate: usize) -> f64 {
+    if rate == 0 || heard.len() < rate / 10 || played.len() < rate / 10 {
+        return 0.0;
+    }
+    // the played signal behind a loop's worth of silence: a sample played at `j` is heard at
+    // `j + delay`, and with the silence in front every delay up to the loop's is a lag of 0 or
+    // more
+    let lead = (MONITOR_LOOP_S * rate as f64) as usize;
+    let settle = (KEY_SETTLE_S * rate as f64) as usize;
+    let heard_band = in_band(heard.iter().map(|&x| f64::from(x)), rate, heard.len());
+    let mut padded = vec![0.0; lead];
+    padded.extend(played.iter().map(|&x| f64::from(x)));
+    let played_band = in_band(padded.iter().copied(), rate, padded.len());
+    let size = (heard_band.len() + played_band.len()).next_power_of_two();
+    let mut planner = FftPlanner::new();
+    let forward = planner.plan_fft_forward(size);
+    let inverse = planner.plan_fft_inverse(size);
+    let mut fa: Vec<Complex64> = heard_band.iter().map(|&x| Complex64::new(x, 0.0)).collect();
+    fa.resize(size, Complex64::new(0.0, 0.0));
+    let mut fb: Vec<Complex64> = played_band
+        .iter()
+        .map(|&x| Complex64::new(x, 0.0))
+        .collect();
+    fb.resize(size, Complex64::new(0.0, 0.0));
+    forward.process(&mut fa);
+    forward.process(&mut fb);
+    // cross[k] = sum_i heard[i] played[i + k]
+    let mut cross: Vec<Complex64> = fb.iter().zip(&fa).map(|(y, x)| y * x.conj()).collect();
+    inverse.process(&mut cross);
+    let energy_heard: f64 = heard_band.iter().map(|x| x * x).sum();
+    if energy_heard <= 0.0 {
+        return 0.0;
+    }
+    let mut prefix = Vec::with_capacity(played_band.len() + 1);
+    prefix.push(0.0);
+    for x in &played_band {
+        prefix.push(prefix[prefix.len() - 1] + x * x);
+    }
+    // heard sample `i` is `settle + i` after the key; played sample `j` (in the padded signal) is
+    // heard at `j - lead + delay`: the lag `k = j - i` runs from `settle` (a delay of a whole
+    // loop) to `settle + lead` (none)
+    let mut best: f64 = 0.0;
+    for k in settle..=(settle + lead) {
+        let end = (k + heard_band.len()).min(played_band.len());
+        if k >= end {
+            break;
+        }
+        let energy_played = prefix[end] - prefix[k];
+        if energy_played <= 0.0 {
+            continue;
+        }
+        let r = cross[k].re / size as f64 / (energy_heard * energy_played).sqrt();
+        best = best.max(r.abs());
+    }
+    best
+}
+
+/// `len` samples of `audio` in [`BAND_HZ`], through the watch's own filter.
+fn in_band(audio: impl Iterator<Item = f64>, rate: usize, len: usize) -> Vec<f64> {
+    let mut band = InBand::new(rate as f64);
+    let mut out = Vec::with_capacity(len);
+    out.extend(audio.map(|x| band.filter(x)));
+    out
 }
 
 /// One second-order section, transposed direct form II.
@@ -537,5 +675,110 @@ mod tests {
             matches!(said_whole, Some(Said::Unchanged(_, 3))),
             "{said_whole:?}"
         );
+    }
+
+    /// A station's transmissions through a radio that sends the played signal back at `back`
+    /// times its level, `delay_s` late and of `sign`, or — with `back` 0 — through a key that
+    /// does nothing, the band's noise going on; receive audio of the same level between. What
+    /// the releases said.
+    fn monitored_session(back: f64, delay_s: f64, sign: f64) -> Vec<Option<Said>> {
+        let rate = 48_000_usize;
+        let block = 960_usize;
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut ka = KeyedAudio::default();
+        let mut said = Vec::new();
+        let mut t = 0.0;
+        let delay = (delay_s * rate as f64) as usize;
+        for _ in 0..4 {
+            // ten seconds of the band, noise at about -27 dBFS in the watch's band
+            for _ in 0..(10 * rate / block) {
+                let audio = noise_and_hum(&mut seed, t, block as f64 / rate as f64, 0.06, 0.0);
+                t += block as f64 / rate as f64;
+                let db = ka.level_db(&audio, rate);
+                ka.block(t, block as f64 / rate as f64, db, false, false);
+            }
+            // a transmission: a stand-in for a tone frame, a tone stepping across 1.3-1.7 kHz
+            // every 40 ms, at about the band's level, after a 150 ms lead
+            let len = 3 * rate;
+            let lead = rate * 15 / 100;
+            let played: Vec<f32> = (0..len)
+                .map(|i| {
+                    if i < lead {
+                        return 0.0;
+                    }
+                    let symbol = (i - lead) / (rate / 25);
+                    let hz = 1300.0 + 25.0 * ((symbol * 7) % 16) as f64;
+                    (0.05 * (std::f64::consts::TAU * hz * i as f64 / rate as f64).sin()) as f32
+                })
+                .collect();
+            ka.keyed(t);
+            ka.playing(played.iter().copied(), rate);
+            let mut i = 0;
+            while i < len {
+                let noise = noise_and_hum(&mut seed, t, block as f64 / rate as f64, 0.06, 0.0);
+                let audio: Vec<f32> = (0..block)
+                    .map(|k| {
+                        let at = i + k;
+                        let echo = if back > 0.0 && at >= delay {
+                            sign * back * f64::from(played[at - delay])
+                        } else {
+                            0.0
+                        };
+                        // a muted receiver leaves little noise under the radio's own signal
+                        let floor = if back > 0.0 { 0.05 } else { 1.0 };
+                        (echo + floor * f64::from(noise[k])) as f32
+                    })
+                    .collect();
+                t += block as f64 / rate as f64;
+                i += block;
+                let db = ka.level_db(&audio, rate);
+                ka.block(t, block as f64 / rate as f64, db, true, false);
+                ka.sound(t, block as f64 / rate as f64, &audio);
+            }
+            said.push(ka.released(t));
+        }
+        said
+    }
+
+    #[test]
+    fn a_radio_that_sends_its_own_signal_back_at_the_bands_level_transmits() {
+        // the TX-500 on 2026-11-24: its own signal back at -19 to -23 dBFS in the band, the band
+        // at -20 to -29 dBFS — unchanged by the level, "may not be transmitting" after three
+        // transmissions, while every frame was decoded at the other end. The audio was the
+        // station's own signal, 0.26 s late, its sign flipping between keyings.
+        for sign in [1.0, -1.0] {
+            let said = monitored_session(1.0, 0.26, sign);
+            assert!(said.iter().all(Option::is_none), "sign {sign}: {said:?}");
+        }
+    }
+
+    #[test]
+    fn a_key_that_does_nothing_is_still_said() {
+        // the band's own noise goes on under a dead key: no delay of the played signal matches it
+        let said = monitored_session(0.0, 0.26, 1.0);
+        assert!(
+            said.iter()
+                .any(|s| matches!(s, Some(Said::Unchanged(r, _)) if !r.monitored)),
+            "{said:?}"
+        );
+    }
+
+    #[test]
+    fn the_match_reads_the_signal_and_not_the_noise() {
+        // the correlation at the best delay: near 1 for the signal sent back, small for noise
+        let rate = 48_000_usize;
+        let mut seed = 0x1234_5678_9abc_def0_u64;
+        let played = noise_and_hum(&mut seed, 0.0, 2.1, 0.1, 0.0);
+        let settle = (KEY_SETTLE_S * rate as f64) as usize;
+        let delay = (0.4 * rate as f64) as usize;
+        // heard from the settle, 0.4 s behind: its first tenth of a second is before playback began
+        let back: Vec<f32> = (0..rate)
+            .map(|i| (settle + i).checked_sub(delay).map_or(0.0, |j| -played[j]))
+            .collect();
+        let r = monitored(&back, &played, rate);
+        assert!(r > 0.9, "the signal sent back read {r:.2}");
+        let noise = noise_and_hum(&mut seed, 0.0, 1.0, 0.1, 0.0);
+        let r = monitored(&noise, &played, rate);
+        assert!(r < 0.2, "noise read {r:.2}");
     }
 }

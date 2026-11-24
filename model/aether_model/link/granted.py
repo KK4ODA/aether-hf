@@ -233,6 +233,10 @@ and 2 never decode alone, and RV 3 only on the rungs whose RV 3 carries every sy
 went silent, eight of the 21 silent slots (ADR-0073)."""
 OPEN_WINDOW_S = (4.0, 10.0)
 """An idle link's open window, after an ordinary and after a floor header."""
+RATE_KNOWN_AFTER_S = 30.0
+"""How long this station's data must have been acknowledged before a disconnect trusts the
+session's rate to say what is queued cannot go within the drain (ADR-0135): sooner, the drain
+runs as ADR-0072 has it."""
 
 MAX_CALL_TRIES = 15
 """The most tries a call makes: Setup's largest choice (ADR-0126 §7.4), and the most a call asked
@@ -393,6 +397,14 @@ class GrantConfig:
     the soak of 2026-10-15 drew three that would have taken 30–40 minutes."""
     leave_repeats: int = 3
     """DISCs an aborting master says, one a slot, while nothing answers (ADR-0052)."""
+    reply_wait_s: float = 0.35
+    """How long a hand-over waits for the program's reply (ADR-0135). A program answers what it
+    was handed 0.17–0.26 s after it arrives (Winlink Express on 2026-11-24; RadioPost Gateway
+    0.23–0.32 s on 11-21), which is after the station has decided its next transmission: each
+    miss cost an exchange, about 5 s at 500 Hz. The master holds its next transmission this long
+    for its program after the slave's last data reached it; after its own last data it grants the
+    slave's answer one frame of room at the level that covers this, and the slave decides that
+    answer at the last moment. 0 turns both off."""
     answer_floor_margin_db: float = 3.0
     """A station asks for the other's control frames on the floor while it hears the other
     less than this above the ordinary control frame's threshold (07-protocol-8.md §7)."""
@@ -818,6 +830,26 @@ class GrantedEngine:
         it first read the slave's request (ADR-0072)."""
         self._leave_drain_s = self.cfg.disc_drain_s
         """How long this session's disconnect waits for what is queued (:meth:`disconnect`)."""
+        self._up_since: float | None = None
+        self._acked_bytes = 0
+        self._first_ack_at: float | None = None
+        """Since when the session has been up, how much of this station's data it has had
+        acknowledged, and when the first of it was: the rate a disconnect weighs what is queued
+        against (ADR-0135)."""
+        self._abandoned = False
+        """A disconnect gave up on this station's queue: it could not go within the drain at
+        the session's rate, and it is no longer sent or offered (ADR-0135)."""
+        self._delivered_here = False
+        """The other station's transmission being received has delivered data to this
+        station's program: a hand-over, after which the program may answer (ADR-0135)."""
+        self._want_decoded = 0
+        """The slave's data frames the master decoded in the slot its last answer opened: the
+        answer's ``n`` counts them, sent in that very transmission (ADR-0135)."""
+        self._reply_waited = False
+        self._reply_waiting = False
+        """The master has held this slot's end for its program's reply; it is holding it now."""
+        self._sent_now: set[int] = set()
+        """The blocks the transmission being built carries."""
         self._measure_ask: tuple[int, int] | None = None
         """A measurement asked for (:meth:`measure`) and not yet sent: its rung and frames."""
         self._measure_out: tuple[int, int] | None = None
@@ -1037,9 +1069,48 @@ class GrantedEngine:
             self._leave_drain_s = max(0.0, drain_s)
         if self._leave_since is None:
             self._leave_since = self.now
+        if drain_s is None:
+            self._give_up_if_hopeless()
         if self.role is Role.SLAVE and self._window is not None:
             self._cause = "disconnect"
             self._try_window()
+
+    def _give_up_if_hopeless(self) -> None:
+        """A disconnect whose queue could not go within the drain at this session's rate leaves
+        it at once (ADR-0135). On 2026-11-24 Winlink Express gave up on a 52 kB file after five
+        minutes, with 43.7 kB queued at 224 bit/s, and the drain sent on for 70 s: 1.7 kB of a
+        message nobody would ever have whole. A queue that would go in time — the ``FQ`` a
+        program writes before it asks to leave — still goes first, as ADR-0072 has it; so does
+        any queue before the session's rate is known (:data:`RATE_KNOWN_AFTER_S`). The bytes stay
+        counted as undelivered, so a program is not told its message went."""
+        if self.state is not State.CONNECTED or self._abandoned or self._up_since is None:
+            return
+        left = self.tx_undelivered_bytes
+        if not left or self._first_ack_at is None:
+            return
+        if self.now - self._first_ack_at < RATE_KNOWN_AFTER_S:
+            return
+        rate = self._acked_bytes / max(1e-9, self.now - self._up_since)
+        need = left / rate
+        if need <= self._leave_drain_s:
+            return
+        drain = self._leave_drain_s
+        self._abandoned = True
+        self._leave_drain_s = 0.0
+        self.actions.append(
+            Event(
+                "disconnect",
+                f"{left} bytes not delivered: at this session's {rate * 8:.0f} bit/s they would "
+                f"take about {need:.0f} s, more than the {drain:.0f} s a disconnect waits for "
+                "them; closing without them",
+            )
+        )
+
+    @property
+    def queue_given_up(self) -> bool:
+        """Whether this session's disconnect gave up on what was queued, which could not go
+        within the drain at the session's rate (ADR-0135)."""
+        return self._abandoned
 
     @property
     def disconnect_requested(self) -> bool:
@@ -1076,6 +1147,12 @@ class GrantedEngine:
         if self.role is Role.SLAVE and self._window is not None:
             self._cause = "send"
             self._try_window()
+        if self._reply_waiting and data:
+            # the program answered what it was handed: the master's next transmission carries
+            # it, now (ADR-0135)
+            self._reply_waiting = False
+            self._disarm("proceed")
+            self._proceed()
 
     def set_answer_gap(self, seconds: float) -> None:
         """The least time between the other station's frames and this station radiating
@@ -2115,6 +2192,7 @@ class GrantedEngine:
         self._peer_caller_code = caller_code(req.src)
         self.state = State.CONNECTED
         self.role = Role.SLAVE
+        self._up_since = self.now
         self._heard(frame)
         self._measure_lateness(frame)
         self._ans_sticky = floor
@@ -2195,6 +2273,7 @@ class GrantedEngine:
         self._level_asked = acc.level
         self.state = State.CONNECTED
         self.role = Role.MASTER
+        self._up_since = self.now
         self._heard(frame)
         if acc.snr_db is not None:
             self.peer_snr_db = acc.snr_db
@@ -2343,6 +2422,7 @@ class GrantedEngine:
                 self._peer_late_s = max(0.0, late, self._peer_late_s - 0.1)
         self._take_ack(ctl)
         self._slave_want = ctl.n
+        self._want_decoded = 0
         self._level_asked = ctl.level
         self._hdr_floor = ctl.fam or self._floor_only()
         self._possible = {frame.floor}
@@ -2371,6 +2451,8 @@ class GrantedEngine:
         self._note_data(rec)
         if rec.payload is None:
             return
+        if rec.seq is not None:
+            self._want_decoded += 1
         self._heard(frame)
         self._ack_owed = True
         if frame.follows is not None and frame.follows < MAX_FOLLOWS and not rec.combined:
@@ -2388,6 +2470,17 @@ class GrantedEngine:
             State.DISCONNECTING,
         ):
             return
+        if self._wait_for_reply():
+            return
+        self._reply_waiting = False
+        self._reply_waited = False
+        # The slave's answer counts its own frames sent in that very transmission among those
+        # it still has: what of them arrived is not wanted again. Granted again, they cost an
+        # exchange at the end of every run of the slave's data — the slot the slave answers with
+        # nothing, then the DISC (2026-11-24, report 21 §8.1; ADR-0135)
+        if self._slave_want:
+            self._slave_want = max(0, self._slave_want - self._want_decoded)
+        self._want_decoded = 0
         self._close_slot()
         if self.state is State.IDLE:
             return
@@ -2406,13 +2499,35 @@ class GrantedEngine:
             return
         self._send_header()
 
+    def _wait_for_reply(self) -> bool:
+        """Hold the master's next transmission :attr:`GrantConfig.reply_wait_s` for its
+        program's reply when the slave's last data has just reached it (ADR-0135): the slave
+        wants nothing more, this station has nothing to send, nobody is leaving. :meth:`send`
+        ends the wait the moment the reply comes."""
+        if (
+            self.cfg.reply_wait_s <= 0
+            or self._reply_waited
+            or not self._delivered_here
+            or self.state is not State.CONNECTED
+            or self._disc_requested
+            or self._slave_leaves
+            or self._has_work()
+        ):
+            return False
+        if self._slave_want is not None and self._slave_want - self._want_decoded > 0:
+            return False
+        self._reply_waited = True
+        self._reply_waiting = True
+        self._arm_at("proceed", self.now + self.cfg.reply_wait_s)
+        return True
+
     def _can_leave(self) -> bool:
         """Whether the master may send its DISC now. What the slave still has goes first, and
         the master's own queue when the disconnect is its own; when the slave asked, its
         operator has stopped receiving, and what the master has not delivered stays undelivered
         (ADR-0023's receiving station; `80m-leave-together-500`). Either waits no longer than
         :meth:`_disc_patience` (ADR-0039)."""
-        own_done = self.all_acknowledged() or self._slave_leaves
+        own_done = self.all_acknowledged() or self._slave_leaves or self._abandoned
         if own_done and not self._slave_want and self._max_seen is None:
             return True
         if self._patience_until is None:
@@ -2431,7 +2546,8 @@ class GrantedEngine:
         """What a closing master leaves behind, said once as it decides to close: its own
         queue when the disconnect is its own, and what the slave still said it had."""
         left = []
-        own = 0 if self._slave_leaves else self.tx_undelivered_bytes
+        # given up at the disconnect, the queue was said then (ADR-0135)
+        own = 0 if self._slave_leaves or self._abandoned else self.tx_undelivered_bytes
         if own:
             left.append(f"{own} bytes not delivered")
         if self._slave_want:
@@ -2498,6 +2614,8 @@ class GrantedEngine:
         self.ladder.append(LadderRung(mode, sent, 0, None))
 
     def _has_work(self) -> bool:
+        if self._abandoned:
+            return False
         return bool(self._tx_queue) or bool(self._unacked()) or self.measuring
 
     def _grant_size(self, rung: int) -> tuple[int, bool, int]:
@@ -2561,6 +2679,21 @@ class GrantedEngine:
             and 0 < len(data) <= MAX_FOLLOWS + 1
             and any(f.rv in READABLE_ALONE_RVS for f in data)
         )
+        # The last of this station's data: the slave's program will likely answer it, so the
+        # answer gets a frame of room and a slot that opens late enough for the reply to be in
+        # it (ADR-0135). An answer states its own length, so unused room costs nothing when it
+        # is heard.
+        reply = (
+            self.cfg.reply_wait_s > 0
+            and bool(data)
+            and not measuring
+            and not self._tx_queue
+            and all(s in self._sent_now for s in self._unacked())
+        )
+        reply_level = self._level_for(self.cfg.reply_wait_s) if reply else 0
+        if reply:
+            n = max(n, 1)
+            elide = elide and reply_level == 0
         # data above the rung the slave asks for is a bet that it decodes — the Test's ladder
         # pins its rungs there — and when none of it does, a transmission without its header
         # granted nothing: a wait and a floor poll. An ordinary header is cheap, so it goes
@@ -2570,7 +2703,7 @@ class GrantedEngine:
             # (ADR-0099 §2.2)
             chosen = self._own_choice()
             elide = elide and not any(f.mode > chosen for f in data)
-        level = 0 if elide else self.level
+        level = 0 if elide else max(self.level, reply_level)
         if not elide:
             self._possible.add(wanted)
         answer_floors = set(self._possible | {wanted})
@@ -2627,13 +2760,18 @@ class GrantedEngine:
         wanted = self._wants_floor() or self._silent >= 1
         floor = self._hdr_floor or self._silent >= 1 or self._floor_only()
         level = self.level
+        # The DISC acknowledges what the slave has sent, and its ``flag`` says it does: a DISC
+        # without it (beta.174's) carries zeros, which would read as acknowledging every
+        # sequence number half a window behind 0 (ADR-0135)
         ctl = GrantFrame(
             GrantKind.DISC,
             self.session & 0x7F,
             level=level,
             fam=wanted,
+            flag=True,
             ident=self._peer_identifier_s > 0,
             snr_db=self._heard_db,
+            **self._ack_fields(),
         )
         self._possible.add(wanted)
         answer_floors = frozenset(self._possible | {wanted})
@@ -2691,6 +2829,10 @@ class GrantedEngine:
         if ctl.snr_db is not None:
             self._peer_reading(ctl.snr_db)
         if ctl.kind is GrantKind.DISC:
+            if ctl.flag:
+                # what the master acknowledges with it is delivered: the program's last bytes
+                # (an FQ) are not reported lost at the end (ADR-0135)
+                self._take_ack(ctl, fresh=False)
             self._end_session("peer disconnected", disc_heard=True)
             self._answer_disc(ctl, frame, GrantKind.DISC_ACK)
             return
@@ -2809,6 +2951,15 @@ class GrantedEngine:
             return
         if answer.what == "ans" and not self._heard_all():
             return
+        if (
+            answer.what == "ans"
+            and self.cfg.reply_wait_s > 0
+            and self._delivered_here
+            and not self._has_work()
+        ):
+            # its program was just handed data and may answer it: decided at the last moment,
+            # so that the reply goes in this answer (ADR-0135)
+            return
         self._disarm("answer")
         self._key_answer()
 
@@ -2920,6 +3071,8 @@ class GrantedEngine:
         return self.rate.snr_db is not None and self.timing.is_floor(self._burst_mode())
 
     def _queued_frames(self) -> int:
+        if self._abandoned:
+            return 0
         cap = data_capacity(self.timing.capacity(self._burst_mode()))
         unacked = sum(self._records[s].frames for s in self._unacked())
         queued = unacked + math.ceil(len(self._tx_queue) / max(1, cap))
@@ -3011,7 +3164,8 @@ class GrantedEngine:
         :data:`MAX_DATA` allow. Each frame states how many follow it, three meaning three or
         more. A measurement asked for goes alone once nothing of this station's data is
         unacknowledged, and nothing goes while one waits for its report."""
-        if room_s <= 0 or self._measure_out is not None:
+        self._sent_now = set()
+        if room_s <= 0 or self._measure_out is not None or self._abandoned:
             return []
         if self._measure_ask is not None and not self._unacked():
             return self._measurement(room_s)
@@ -3111,6 +3265,7 @@ class GrantedEngine:
             return []
         split = [s for s in seqs if self._records[s].pieces is not None]
         if split:
+            self._sent_now = set(split)
             return self._piece_frames(split, room)
         seqs = seqs[:room]
         # a measurement asked for waits only for what is in flight: nothing new goes before it
@@ -3138,6 +3293,7 @@ class GrantedEngine:
             self._records[rec.seq] = rec
             self._tx_next = seq_after(self._tx_next)
             seqs.append(rec.seq)
+        self._sent_now = set(seqs)
         frames = []
         for i, s in enumerate(seqs):
             rec = self._records[s]
@@ -3305,6 +3461,9 @@ class GrantedEngine:
                 newly.add(s)
                 self.top_acked_mode = max(self.top_acked_mode or 0, rec.mode)
                 self.stats.bytes_acked += len(rec.body)
+                self._acked_bytes += len(rec.body)
+                if self._first_ack_at is None:
+                    self._first_ack_at = self.now
         while self._tx_base != self._tx_next and self._records[self._tx_base].acked:
             del self._records[self._tx_base]
             self._tx_base = seq_after(self._tx_base)
@@ -3404,6 +3563,7 @@ class GrantedEngine:
     def _restart_rx(self) -> None:
         self._rx = []
         self._rx_t0 = None
+        self._delivered_here = False
         self._grid = None
         self._rx_measure = False
         self._rx_pieces = False
@@ -3538,6 +3698,8 @@ class GrantedEngine:
                 self.stats.bytes_delivered += len(data)
                 if data:
                     self.actions.append(Deliver(data))
+                    if not late:
+                        self._delivered_here = True
             if self._max_seen is not None and seq_distance(self._max_seen, self._rx_base) >= WINDOW:
                 self._max_seen = None
         return True

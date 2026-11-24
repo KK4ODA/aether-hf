@@ -197,8 +197,12 @@ class TwoStationSim:
         phantom_trusted: float = 0.05,
         count_misread: float = 0.0,
         echo: float | None = None,
+        on_deliver: Callable[[int, bytes, float], None] | None = None,
     ) -> None:
         self.st = [_Station(a), _Station(b)]
+        self.on_deliver = on_deliver
+        """Called with (station, data, time) for every delivery to a station's program: a
+        program that answers what it was handed, a moment later, with :meth:`send_at`."""
         self.snr_db = snr_db
         self.prop_s = prop_s
         self.rng = random.Random(seed)
@@ -329,6 +333,8 @@ class TwoStationSim:
                 self._launch(who, at, act)
             elif isinstance(act, Deliver):
                 st.delivered += act.data
+                if self.on_deliver is not None:
+                    self.on_deliver(who, act.data, at)
             elif isinstance(act, Event):
                 st.events.append(f"{act.name}:{act.detail}")
 
@@ -571,12 +577,22 @@ class TwoStationSim:
                 elif ev.kind == "phantom":
                     self._phantom(ev.who, nt)
                     continue  # a phantom alone is no progress: an idle pair still stops
+                elif ev.kind == "send":
+                    engine = self.st[ev.who].engine
+                    engine.tick(nt)
+                    engine.send(cast("bytes", ev.data))
+                    self._pump(ev.who, nt)
                 progressed = True
             if progressed:
                 last = self.t
             elif self.t - last > idle_gap:
                 break
         return self.t
+
+    def send_at(self, who: int, t: float, data: bytes) -> None:
+        """A station's program writes ``data`` at ``t``: what a host program does when it answers
+        what it was handed (ADR-0135)."""
+        self._push(t, "send", who, data)
 
     # ── convenience ───────────────────────────────────────────────────
 

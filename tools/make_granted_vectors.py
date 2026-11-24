@@ -114,6 +114,7 @@ def config_doc(c: GrantConfig) -> dict[str, Any]:
         "disc_patience_s": bits(c.disc_patience_s),
         "disc_drain_s": bits(c.disc_drain_s),
         "leave_repeats": c.leave_repeats,
+        "reply_wait_s": bits(c.reply_wait_s),
         "answer_floor_margin_db": bits(c.answer_floor_margin_db),
         "family_readings": c.family_readings,
         "link_timeout_s": bits(c.link_timeout_s),
@@ -1534,6 +1535,47 @@ def call_again() -> list[Recorder]:
     return [ra, rb]
 
 
+def hand_overs() -> list[Recorder]:
+    """ADR-0135: programs that answer what they are handed, 0.4 s after the simulator hands it
+    over (a station decodes about 0.15 s after a frame ends, Winlink Express writes 0.22-0.26 s
+    after that). The called station's greeting, the caller's reply (the master waits for it), the
+    called station's FQ (its answer gets a frame of room in a later slot) with its request to
+    leave, which the DISC acknowledges; then a call whose caller leaves with more queued than a
+    minute carries at the session's rate, which it gives up at once."""
+    a, b, ra, rb = _pair(NARROW)
+    rng = random.Random(71)
+    greeting, reply, fq = _message(rng, 100), _message(rng, 60), b"FQ\r"
+    got = {0: b"", 1: b""}
+    leave_at: list[float] = []
+
+    def on_deliver(who: int, data: bytes, at: float) -> None:
+        got[who] += data
+        if who == 0 and got[0] == greeting:
+            sim.send_at(0, at + 0.4, reply)
+        if who == 1 and got[1] == reply:
+            sim.send_at(1, at + 0.4, fq)
+            leave_at.append(at + 0.4)
+
+    sim = TwoStationSim(a, b, snr_db=12.0, seed=71, on_deliver=on_deliver)
+    a.connect("KK4XYZ")
+    sim.run(until=30.0)
+    b.send(greeting)
+    t = sim.t
+    while t < 150.0 and a.state is not State.IDLE:
+        t += 0.25
+        sim.run(until=t)
+        if leave_at and sim.t >= leave_at[0] and not b.disconnect_requested and b.connected:
+            b.disconnect()
+    sim.run(until=t + 30.0)
+    a.connect("KK4XYZ")
+    sim.run(until=sim.t + 30.0)
+    a.send(_message(rng, 12000))
+    sim.run(until=sim.t + 60.0)
+    a.disconnect()
+    sim.run(until=sim.t + 120.0)
+    return [ra, rb]
+
+
 SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     "clean-wide": clean_wide,
     "weak-narrow": weak_narrow,
@@ -1594,6 +1636,8 @@ SESSIONS: dict[str, Callable[[], list[Recorder]]] = {
     # a call asked to last, to a station that scans (ADR-0129); last, so that the blob table's
     # indices of every session before it stay as they were
     "call-lasting": call_lasting,
+    # hand-overs and endings (ADR-0135); after every session before it, for the same reason
+    "hand-overs": hand_overs,
 }
 
 

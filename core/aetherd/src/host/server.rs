@@ -48,6 +48,11 @@ pub struct HostConfig {
     /// How long a count of bytes still to send goes unsaid before `BUFFER` says it again
     /// (ADR-0109). Not a setting: [`BUFFER_REPEAT`], which the tests shorten.
     pub buffer_repeat: Duration,
+    /// How long a program in its own session must have written nothing on the data port, and
+    /// been handed nothing, before a `DISCONNECT` that comes while its data is still going is
+    /// taken for its inactivity timer (ADR-0134). Not a setting: [`PROGRAM_IDLE`], which the
+    /// tests shorten.
+    pub program_idle: Duration,
 }
 
 impl Default for HostConfig {
@@ -57,6 +62,7 @@ impl Default for HostConfig {
             bind: format!("127.0.0.1:{DEFAULT_COMMAND_PORT}"),
             trace: false,
             buffer_repeat: BUFFER_REPEAT,
+            program_idle: PROGRAM_IDLE,
         }
     }
 }
@@ -89,6 +95,18 @@ const KEEPALIVE: Duration = Duration::from_secs(10);
 /// issue 397: a Winlink upload dropped after 93 s near 0 dB) and says the count again after 50 s;
 /// so does this.
 pub const BUFFER_REPEAT: Duration = Duration::from_secs(50);
+/// How long a program must have been quiet in its own session for its `DISCONNECT` to be taken
+/// for an inactivity timer (ADR-0134). Winlink Express 1.8.6.0 sends `DISCONNECT` exactly 300 s
+/// after its last write to the data port in a P2P session ("P2P session inactivity timeout"),
+/// whatever the modem says meanwhile: it writes a whole message at once, so a message that takes
+/// longer than five minutes to cross was cut off (WD5EMA's 50 kB file, 2026-11-24, at 224
+/// bit/s). A real end comes seconds after the program's last write or the last data it was
+/// handed — the `FQ` it sent or read. 240 s is under the 300 with room, and far over any real
+/// end (Mercury measured 4.1 s at most over 112 of them, its pull request 581).
+pub const PROGRAM_IDLE: Duration = Duration::from_secs(240);
+/// A `DISCONNECT` that comes within this of one held for the program's timer goes through: an
+/// operator who means it presses Disconnect again (ADR-0134).
+const SECOND_DISCONNECT: Duration = Duration::from_secs(60);
 /// How long a read waits for the program before the notification path gets a turn.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -247,6 +265,7 @@ impl HostServer {
                 notes: Arc::clone(&notes),
                 trace: config.trace,
                 buffer_repeat: config.buffer_repeat,
+                program_idle: config.program_idle,
             },
         )?;
 
@@ -280,6 +299,7 @@ struct Shared {
     notes: Notes,
     trace: bool,
     buffer_repeat: Duration,
+    program_idle: Duration,
 }
 
 /// Bind the command port and the data port beside it.
@@ -699,9 +719,11 @@ fn serve_commands(
         notes,
         trace,
         buffer_repeat,
+        program_idle,
     } = shared;
     let trace = *trace;
     let buffer_repeat = *buffer_repeat;
+    let program_idle = *program_idle;
     // This program's own connection to the modem: its requests carry it, the callsigns it
     // claims are held by it, and the sessions they bring up are its own — told it by the
     // `owner` of the state events. When it goes, its claim goes with it (ADR-0106).
@@ -778,6 +800,12 @@ fn serve_commands(
     let mut pending_on_listen = false;
     // when the program last turned LISTEN on: it is told of a held call `LISTEN_ON_SETTLE` after
     let mut listen_on_at: Option<Instant> = None;
+    // Since when the program, in its own session, has written nothing on the data port and been
+    // handed nothing (from the CONNECTED it was told), and when a DISCONNECT of its was last
+    // taken for its inactivity timer and not acted on (ADR-0134)
+    let mut program_quiet_since = Instant::now();
+    let mut was_connected = false;
+    let mut timer_disconnect_held: Option<Instant> = None;
 
     let say = |writer: &mut &TcpStream, line: &str| -> bool {
         if trace {
@@ -912,15 +940,46 @@ fn serve_commands(
                     untold = true;
                 }
                 let own = connected_to.is_some() || calling;
-                match apply(&outcome.action, own, handle, &mut host, &mut writer, &say) {
-                    Applied::Done => {}
-                    // Armed as soon as the modem has taken the call. What the modem said
-                    // before then — the `disconnected` of a call just aborted — was sent
-                    // before the answer to the command that caused it, and has been read by
-                    // now: the daemon publishes what a request sets in motion before its reply
-                    Applied::Calling => calling = true,
-                    Applied::Beacon(asked) => beacon = Some(asked),
-                    Applied::Closed => return,
+                // Winlink Express's P2P inactivity timer (ADR-0134): a DISCONNECT from a program
+                // that has written nothing and been handed nothing for `program_idle`, while its
+                // own data is still going out, is its timer and not its operator. It is answered
+                // OK (already said) and not acted on, and the transfer goes on; a second one
+                // within `SECOND_DISCONNECT`, or ABORT, ends the session.
+                let timer = outcome.action == HostAction::Disconnect
+                    && connected_to.is_some()
+                    && !calling
+                    && host.buffer > 0
+                    && program_quiet_since.elapsed() >= program_idle
+                    && timer_disconnect_held.is_none_or(|at| at.elapsed() >= SECOND_DISCONNECT);
+                if timer {
+                    timer_disconnect_held = Some(Instant::now());
+                    if trace {
+                        eprintln!("host (DISCONNECT held: the program's inactivity timer)");
+                    }
+                    note(
+                        notes,
+                        false,
+                        format!(
+                            "the program asked to disconnect {} s after it last wrote or was \
+                             handed data, with {} bytes of its own still going: taken for its \
+                             inactivity timer and not acted on, so the transfer goes on. A \
+                             second DISCONNECT within a minute, or ABORT, ends the session",
+                            program_quiet_since.elapsed().as_secs(),
+                            host.buffer
+                        ),
+                    );
+                } else {
+                    match apply(&outcome.action, own, handle, &mut host, &mut writer, &say) {
+                        Applied::Done => {}
+                        // Armed as soon as the modem has taken the call. What the modem said
+                        // before then — the `disconnected` of a call just aborted — was sent
+                        // before the answer to the command that caused it, and has been read by
+                        // now: the daemon publishes what a request sets in motion before its
+                        // reply
+                        Applied::Calling => calling = true,
+                        Applied::Beacon(asked) => beacon = Some(asked),
+                        Applied::Closed => return,
+                    }
                 }
             }
         }
@@ -1043,6 +1102,12 @@ fn serve_commands(
         // in the pipe for the next — never into a session the panel started, whose other end
         // is not the program's correspondent (and the modem refused it before any session,
         // which lost it).
+        // The program's quiet time starts again with each session it is told of (ADR-0134)
+        if connected_to.is_some() != was_connected {
+            was_connected = connected_to.is_some();
+            program_quiet_since = Instant::now();
+            timer_disconnect_held = None;
+        }
         let outbound = if connected_to.is_some() {
             pipe.lock()
                 .map(|mut pipe| std::mem::take(&mut pipe.to_radio))
@@ -1051,6 +1116,7 @@ fn serve_commands(
             Vec::new()
         };
         if !outbound.is_empty() {
+            program_quiet_since = Instant::now();
             let _ = handle.call(request("send", json!({ "data": to_base64(&outbound) })));
         }
 
@@ -1085,6 +1151,7 @@ fn serve_commands(
                 }
                 // the program hears the payload of its own sessions only
                 "data" if connected_to.is_some() => {
+                    program_quiet_since = Instant::now();
                     if let Some(text) = event.data["data"].as_str() {
                         if let Some(bytes) = from_base64(text)
                             && let Ok(mut pipe) = pipe.lock()
@@ -1893,6 +1960,7 @@ mod tests {
                 bind: "127.0.0.1:0".to_owned(),
                 trace: false,
                 buffer_repeat: BUFFER_REPEAT,
+                program_idle: PROGRAM_IDLE,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -2049,6 +2117,7 @@ mod tests {
                 bind: "127.0.0.1:0".to_owned(),
                 trace: false,
                 buffer_repeat: BUFFER_REPEAT,
+                program_idle: PROGRAM_IDLE,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -2725,6 +2794,17 @@ mod tests {
             answer: impl Fn(&str, &ControlChannel) -> serde_json::Value + Send + 'static,
             buffer_repeat: Duration,
         ) -> (Self, HostServer) {
+            Self::start_with(answer, buffer_repeat, PROGRAM_IDLE)
+        }
+
+        /// [`Modem::start`], with both of the adapter's timings chosen: `BUFFER` said again
+        /// after `buffer_repeat` (ADR-0109), a quiet program's DISCONNECT taken for its timer
+        /// after `program_idle` (ADR-0134).
+        fn start_with(
+            answer: impl Fn(&str, &ControlChannel) -> serde_json::Value + Send + 'static,
+            buffer_repeat: Duration,
+            program_idle: Duration,
+        ) -> (Self, HostServer) {
             let (handle, control) = channel();
             let control = Arc::new(Mutex::new(control));
             let stop = Arc::new(AtomicBool::new(false));
@@ -2787,6 +2867,7 @@ mod tests {
                     bind: "127.0.0.1:0".to_owned(),
                     trace: false,
                     buffer_repeat,
+                    program_idle,
                 },
                 handle,
                 flags.clone(),
@@ -3050,6 +3131,7 @@ mod tests {
                 bind: "127.0.0.1:0".to_owned(),
                 trace: false,
                 buffer_repeat: BUFFER_REPEAT,
+                program_idle: PROGRAM_IDLE,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -3587,6 +3669,132 @@ mod tests {
             seen.last().map(|(method, _)| method.as_str()),
             Some("closed")
         );
+    }
+
+    /// A program in its own session with `queued` bytes of its data going, on a modem whose
+    /// adapter takes a quiet program's DISCONNECT for its timer after `idle` (ADR-0134).
+    fn session_with_data_going(idle: Duration, queued: u64) -> (Modem, HostServer, Client) {
+        let (modem, server) = Modem::start_with(|_, _| json!({}), BUFFER_REPEAT, idle);
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        client.send("MYCALL WD5EMA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        client.send("CONNECT WD5EMA KK4ODA");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !modem.methods().iter().any(|m| m == "connect") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                modem.methods()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4ODA (master)", "callsign": "WD5EMA"}),
+        );
+        assert!(
+            client
+                .expect(|l| l.starts_with("CONNECTED") || l.starts_with("BUFFER"))
+                .starts_with("CONNECTED")
+        );
+        if queued > 0 {
+            modem.publish(
+                "metrics",
+                json!({"queued_bytes": queued, "channel_busy": false, "mode": 9,
+                       "link": {"remote": "KK4ODA", "seconds": 3.0}}),
+            );
+            assert_eq!(
+                client.expect(|l| l.starts_with("BUFFER")),
+                format!("BUFFER {queued}")
+            );
+        }
+        (modem, server, client)
+    }
+
+    /// Whether the modem was asked to `method` within `wait`.
+    fn asked_within(modem: &Modem, method: &str, wait: Duration) -> bool {
+        let deadline = std::time::Instant::now() + wait;
+        while std::time::Instant::now() < deadline {
+            if modem.methods().iter().any(|m| m == method) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    #[test]
+    fn a_quiet_programs_disconnect_while_its_data_goes_is_its_timer() {
+        // Winlink Express 1.8.6.0 sends DISCONNECT 300 s after its last write in a P2P session
+        // ("P2P session inactivity timeout"), whatever the modem says meanwhile; WD5EMA's 50 kB
+        // file needed 31 minutes and was cut off at five (2026-11-24). Here 300 ms stands in for
+        // the 240 s after which a quiet program's DISCONNECT is taken for its timer (ADR-0134).
+        let (modem, server, mut client) =
+            session_with_data_going(Duration::from_millis(300), 43_665);
+        std::thread::sleep(Duration::from_millis(400));
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            !asked_within(&modem, "disconnect", Duration::from_millis(400)),
+            "the timer's DISCONNECT ended the session: {:?}",
+            modem.methods()
+        );
+        // the operator means it: a second DISCONNECT within the minute goes through
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            asked_within(&modem, "disconnect", Duration::from_secs(2)),
+            "a second DISCONNECT was held too: {:?}",
+            modem.methods()
+        );
+        drop(client);
+        drop(server);
+    }
+
+    #[test]
+    fn a_disconnect_soon_after_the_programs_last_write_goes_through() {
+        // A real end comes seconds after the program's last write (its FQ): a program that has
+        // just written is not idle, whatever is queued
+        let (modem, server, mut client) = session_with_data_going(Duration::from_millis(300), 3);
+        std::thread::sleep(Duration::from_millis(400));
+        let mut data = TcpStream::connect(server.data_address).expect("data port");
+        data.write_all(b"FQ\r").expect("write");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !modem.methods().iter().any(|m| m == "send") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{:?}",
+                modem.methods()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            asked_within(&modem, "disconnect", Duration::from_secs(2)),
+            "{:?}",
+            modem.methods()
+        );
+        drop(data);
+        drop(client);
+    }
+
+    #[test]
+    fn a_quiet_programs_disconnect_with_nothing_going_goes_through() {
+        // all of its data acknowledged: nothing is cut off, and the program may mean it
+        let (modem, server, mut client) = session_with_data_going(Duration::from_millis(300), 0);
+        std::thread::sleep(Duration::from_millis(400));
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            asked_within(&modem, "disconnect", Duration::from_secs(2)),
+            "{:?}",
+            modem.methods()
+        );
+        drop(client);
+        drop(server);
     }
 
     #[test]

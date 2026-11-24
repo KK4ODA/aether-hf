@@ -120,6 +120,7 @@ fn config(doc: &Value) -> GrantConfig {
         disc_patience_s: num(&doc["disc_patience_s"]),
         disc_drain_s: num(&doc["disc_drain_s"]),
         leave_repeats: int(&doc["leave_repeats"]),
+        reply_wait_s: num(&doc["reply_wait_s"]),
         answer_floor_margin_db: num(&doc["answer_floor_margin_db"]),
         family_readings: int(&doc["family_readings"]),
         link_timeout_s: num(&doc["link_timeout_s"]),

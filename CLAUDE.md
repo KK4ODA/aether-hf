@@ -3497,6 +3497,24 @@ station's slot later through its header's level), expected without a protocol ch
 on the harness's Winlink-shaped scenarios — settles report 20's change 4; (4) the DISC carries
 the acknowledgement of the slave's last data, no protocol bump; (5) the keyed-audio watch counts
 a transmission on the air when the keyed audio is the station's own signal coming back.
+**Built the same evening (beta.175; Winlink Express's log: *P2P session inactivity timeout*, 300 s
+after *Sending*, no setting for it).** ADR-0134 (host adapter): a `DISCONNECT` from a program that
+has written and been handed nothing for `PROGRAM_IDLE` (240 s) while its own data is going
+(`BUFFER` > 0) is answered `OK` and not acted on; a second within `SECOND_DISCONNECT` (60 s), or
+`ABORT`, ends the session. ADR-0135 (model first, no protocol bump; `test_handover.py`, the vectors'
+`hand-overs` session): `GrantConfig.reply_wait_s` (0.35 s) — the master holds its next
+transmission for its program's reply after the slave's last data (`_wait_for_reply`; `send` ends
+the wait), and the transmission carrying the master's last data keeps its header and grants the
+answer a frame of room at the level covering the wait, which the slave decides at the last moment;
+the master grants the slave's `n` less what of it decoded (`_want_decoded`); the DISC carries the
+acknowledgement, said by its `flag` (a DISC without it carries zeros and is not read); a disconnect
+whose queue could not go within the drain at the session's rate, once data has been acknowledged
+30 s (`RATE_KNOWN_AFTER_S`), leaves it at once (`_give_up_if_hopeless`, `queue_given_up`). Tests
+that watch the end of a transfer for header elision run with `reply_wait_s = 0`. ADR-0136
+(`keyed_audio.rs`): a transmission the level calls unchanged is checked against what it played
+(`monitored`: FFT cross-correlation in the band, delays up to 0.8 s, |r| ≥ 0.5) and counts as on
+the air when it matches. The harness's programs answer each line `think_s` air-seconds late
+(`[script]`), and `40m-wle-p2p-500` is session 2.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

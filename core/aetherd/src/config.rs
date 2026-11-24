@@ -1546,6 +1546,7 @@ impl Config {
             bind: self.host.bind.clone(),
             trace: self.host.trace,
             buffer_repeat: crate::host::BUFFER_REPEAT,
+            program_idle: crate::host::PROGRAM_IDLE,
         }
     }
 

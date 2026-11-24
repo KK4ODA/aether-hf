@@ -1,0 +1,35 @@
+name = "40m-wle-p2p-500"
+description = """Winlink Express P2P on 40 m at 500 Hz, as on 2026-11-24 18:48Z (report 21 §8.1): the
+portable (TX-500, 10 W) calls home, heard there at about -2 dB, hearing home at +8. Home's program
+greets, the portable's answers, home proposes and sends a 2.2 kB message, the portable says FF,
+home says FQ and leaves. Each program answers 0.25 s after the last byte reached it, as Winlink
+Express did (`think_s`). Every change of direction is a hand-over: on 2026-11-24 the replies
+missed the next transmission and the DISC waited for an acknowledgement, about 15 s of 94
+(ADR-0135)."""
+tags = ["40m", "winlink", "p2p"]
+bandwidth = 500
+seconds = 600
+seed = 135
+
+[stations.a]
+callsign = "WD5EMA"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+cfo_hz = 2.0
+[path.a_to_b]
+snr_db = -2.0
+[path.b_to_a]
+snr_db = 8.0
+
+[script]
+think_s = 0.25
+steps = ["connect", "reply 68", "message 73", "reply 121", "message 5", "reply 2231", "message 3", "reply 3", "disconnect b"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true

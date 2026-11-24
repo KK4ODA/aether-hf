@@ -137,3 +137,7 @@ context → decision → alternatives considered → consequences.
 | [0130](0130-a-short-transmission-goes-at-the-most-robust-rung-that-carries-it.md) | A short transmission goes at the most robust rung that carries it | accepted |
 | [0131](0131-the-channel-estimate-takes-the-delay-out-before-it-interpolates.md) | The channel estimate takes the delay out before it interpolates | accepted for building: the model step (off), the port to come (§9) |
 | [0132](0132-the-receive-filter-is-not-read.md) | The receive filter is not read; the waterfall shows it | accepted |
+| [0133](0133-the-finder-reads-winlinks-programs-into-profiles.md) | Aether finds Winlink's programs and reads their settings into profiles | accepted for building; §8 a tick sets a program up, §9 one row per install |
+| [0134](0134-a-programs-inactivity-timer-is-not-its-operator.md) | A program's inactivity timer is not its operator: Winlink Express's five-minute `DISCONNECT` is held while its data is still going | accepted, beta.175; the air owed (§5) |
+| [0135](0135-hand-overs-and-endings.md) | Hand-overs wait for the program's reply, and a session ends in one exchange: exact wants, a DISC that acknowledges, a drain that gives up | accepted, beta.175; no protocol bump |
+| [0136](0136-the-keyed-audio-watch-knows-its-own-signal.md) | The keyed-audio watch knows the station's own signal coming back | accepted, beta.175 |

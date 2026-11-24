@@ -879,6 +879,12 @@ def step(run: Run, text: str) -> bool:
     if word in ("message", "reply"):
         sender, receiver = (a, b) if word == "message" else (b, a)
         n = int(arg)
+        # a program takes a moment to answer what it was handed: `[script] think_s` of air
+        # before each message after the first (Winlink Express, 0.17-0.26 s on 2026-11-24;
+        # ADR-0135). Unset, it answers the moment the last byte arrived, as before.
+        think = float(run.scenario.get("script", {}).get("think_s", 0.0))
+        if think > 0 and run.transfers:
+            run.wait("think", lambda: False, think, note=False)
         before = receiver.counter("bytes_delivered")
         data = incompressible(n, salt=len(run.notes) + n)
         began = run.air_s()

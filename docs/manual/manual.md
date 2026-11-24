@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.21.0 |
+| **Version** | 1.22.0 |
 | **Updated** | 2026-11-24 |
 | **Describes** | Aether HF 0.2.0-beta.174 |
 | **Licence** | CC BY 4.0 |
@@ -703,8 +703,10 @@ Type the other station's callsign, with its SSID if it uses one. Then:
 - **Disconnect**: send what is still queued, then close. It waits a minute at most; past that the
   session closes anyway. While it waits, the banner and the line under the buttons say how much is
   left and the seconds left: *Disconnecting from N2CALL: sending the last 1.2 kB (45 s at most).
-  Abort closes now.* When the session ends, the banner says what did not get through. While
-  calling, the button reads **Stop calling**.
+  Abort closes now.* When what is queued could not go in a minute at the speed the session has
+  managed, Aether does not try: it closes at once, and the Log says how much was left and why.
+  When the session ends, the banner says what did not get through. While calling, the button reads
+  **Stop calling**.
 - **Abort**: drop the session at once. Aether sends no more data: it only tells the other station
   it has gone, then sends your Morse ID if you identify.
 - **Probe**: one frame and one answer, no session. It tells you whether the other station hears
@@ -1201,7 +1203,16 @@ bandwidth; your own come back when the program leaves. Setup always shows your o
   Log says why (a *host* line, also in the tooltip of the program's name in the header).
 - The first transmission after a program attaches is checked on its own: if the receive audio does
   not change while the radio is keyed, the Log says the radio may not be transmitting. A program set
-  to key a port nothing is wired to is found at once.
+  to key a port nothing is wired to is found at once. A radio that sends its own signal back on its
+  audio while it transmits (the Lab599 TX-500 does) is recognised by that signal, and no warning
+  comes.
+- Winlink Express gives up on a peer-to-peer message five minutes after it sends it, whatever the
+  modem says: it asks to disconnect while the message is still going. Aether answers and carries
+  on, and the Log says so (a *host* line). Press **Disconnect** in Winlink Express a second time
+  within a minute, or **Abort**, to end the session.
+- When a program answers what it was just sent (Winlink Express's `FF` and `FQ`), Aether waits up
+  to a third of a second for the answer, so it goes in the next transmission instead of one
+  exchange later.
 - The program sees only its own sessions. A session you start from the window is not reported to
   it, though its BUSY reads ON while it runs.
 - A call through a digipeater (a path with *Via* in Winlink Express or Pat) is refused: Aether
@@ -1784,3 +1795,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.19.0 | 2026-11-23 | [Step 4](#step-4-modem-settings) and [Troubleshooting](#28-troubleshooting): the identifier sent on its own after a call or probe that led to no session is counted down on the banner in 5 s steps (*Identifying as N1CALL in 15 s, after a call nobody answered*) and named in the Log when it goes. A TX-500 keying half a minute after an unanswered call was taken for a fault. |
 | 1.20.0 | 2026-11-23 | *Host programs* are now **External programs** (Setup step 5, the ports, the programs chapter and the glossary), and the box says *leave unchecked for RadioPost* after the tick: RadioPost is not one, and an operator kept taking it for one. [Step 1](#step-1-callsign-and-rules)'s box is the **Aether callsign**, *for Aether standalone use*, and like step 4's **Bandwidth** it always shows your own setting: greyed, the bandwidth had hidden a 500 Hz setting the station ran, and a 2300 Hz call to it went unanswered. The note after the callsign says which callsigns a program uses now. |
 | 1.21.0 | 2026-11-24 | While RadioPost listens, the station runs 2300 Hz, which answers 500 Hz calls too, and your **Bandwidth** comes back when it stops ([Setup step 4](#step-4-modem-settings)); the header's bandwidth chip names the program that moved the station, or says *listening*. A 500 Hz call makes its quick tries only to a station heard running 500 Hz lately ([Call](#call)). After an unanswered call, another SSID is suggested only when it was heard more recently than the callsign called. From the portable's sessions of 2026-11-23: a 2300 Hz call to a station a profile had set to 500 Hz went unanswered, a 500 Hz call's quick tries were lost on a 2300 Hz listener, and the advice said to call the gateway's callsign a minute after the station called had answered. |
+| 1.22.0 | 2026-11-24 | From three Winlink Express P2P sessions the same day: a disconnect whose queue could not go in a minute closes at once ([Call](#call)); Winlink Express's five-minute timeout no longer cuts off a long message, a program's quick answer goes in the next transmission, and a radio that sends its own signal back while keyed is not warned about ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |

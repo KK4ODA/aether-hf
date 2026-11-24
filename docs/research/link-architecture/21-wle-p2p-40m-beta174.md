@@ -314,3 +314,18 @@ From the three sessions; asked one at a time and answered by the author on 2026-
 | 4 | The DISC waits for an exchange that acknowledges the slave's last bytes (§4, §8.1) | **The DISC carries the acknowledgement, no protocol bump**: the master's DISC acknowledges what the slave sent in the slot where it asked to leave, and the slave takes it before its DISC_ACK. beta.174 sends the fields as zero and ignores them, so mixed versions end as today; to be confirmed in the model and the vectors | the engine (model first) |
 | 5 | The TX-500's own signal makes the keyed-audio watch warn (§6) | **Recognise its own signal**: a transmission counts as on the air when the audio heard while keyed is the station's own signal coming back at the radio's delay; a key that does nothing still warns | `station/keyed_audio.rs` |
 | — | The portable's data on the floor at −2 dB in session 1 (§5) | No change: evidence for the rate controller's review (P9-21), by rule | — |
+
+**Built the same evening** (the author's "go ahead with all fixes", with Winlink Express's own log
+of the day). Its log says only *P2P session inactivity timeout. Disconnecting.* at 19:00:29, 300 s
+after *Sending 07MVP34173Z0*, and then waited 78 s for the modem; its settings have no such
+timeout, so fix 1 went into the host adapter instead of the program finder:
+
+* fix 1, **ADR-0134**: a `DISCONNECT` from a program quiet for 240 s, with its own data still
+  going, is answered and not acted on; a second within a minute, or `ABORT`, ends the session;
+* fixes 2, 3 and 4, **ADR-0135**: a drain that could not finish at the session's rate closes at
+  once; the master waits up to 0.35 s for its program's reply after the slave's last data, and
+  after its own last data grants the slave's answer a frame of room at a later level, which the
+  slave decides at the last moment; the slave's count of its own frames is no longer granted
+  again; the DISC acknowledges the slave's data, said by its `flag` bit (no protocol bump);
+* fix 5, **ADR-0136**: the keyed-audio watch takes a transmission whose audio is the station's
+  own signal coming back as on the air.

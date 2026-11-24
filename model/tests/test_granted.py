@@ -774,7 +774,8 @@ def test_a_count_rescued_with_its_block_places_no_end(
     slave answered over them. A count is believed only from a copy that decoded alone, by either
     station. The sender's data is pinned a little above the path, so frames are rescued, and
     every rescued copy's count reads as none to follow (``count_misread``). The master's case
-    needs the slave's answer lost — its stated count is the end otherwise — so half are."""
+    needs the slave's answer lost — its stated count is the end otherwise — so half are. With
+    the reply wait off (ADR-0135: the last of a station's data keeps its header)."""
     snr = {"2300": 8.0, "500": 4.0}[air]
     table = _timing(AIRS[air]).mode_threshold_db
     # the rung whose threshold is the nearest over the path by 1.5 dB or more
@@ -785,7 +786,7 @@ def test_a_count_rescued_with_its_block_places_no_end(
         # eight seeds: under C1 at the sender (ADR-0094) the master's case misled no one in the
         # first four without the rule, five of sixteen
         for seed in range(8):
-            a, b = _pair(AIRS[air], header_above_recommendation=header_above)
+            a, b = _pair(AIRS[air], header_above_recommendation=header_above, reply_wait_s=0.0)
             sender, receiver = (a, 1) if side == "slave" else (b, 0)
             hits = random.Random(900 + seed)
 
@@ -844,7 +845,7 @@ def test_a_count_rescued_with_its_block_places_no_end(
 
 @pytest.mark.parametrize("air", ["2300", "500"])
 def test_an_aborting_slave_answers_the_next_header_with_a_disc(air: str) -> None:
-    a, b = _pair(AIRS[air])
+    a, b = _pair(AIRS[air], reply_wait_s=0.0)
     sim = TwoStationSim(a, b, snr_db=8.0, seed=4)
     a.connect("KK4XYZ")
     a.send(b"q" * 4000)
@@ -1580,8 +1581,10 @@ def test_a_bulk_transfer_leaves_out_headers_that_change_nothing() -> None:
     """R7: a transmission of four data frames or fewer, all at the station's own choice, goes
     without its header. The rung is pinned so that the test holds R7 and not where the rate
     controller ends a transfer: under ADR-0111's guess this transfer's last transmission carried
-    a try's frame, which keeps the header (ADR-0076), and none was left out."""
-    a, b = _pair(WIDE)
+    a try's frame, which keeps the header (ADR-0076), and none was left out. With the reply
+    wait off: since ADR-0135 the last of a station's data keeps its header, and the last is
+    what is watched here."""
+    a, b = _pair(WIDE, reply_wait_s=0.0)
     a.pin_mode(16)
     sim = TwoStationSim(a, b, snr_db=14.0, seed=10)
     done = _exchange(sim, a, b, b"e" * 30000, b"")
@@ -1595,8 +1598,10 @@ def test_a_transmission_no_frame_of_which_can_be_read_alone_keeps_its_header() -
     header, and the slave, which believes a count only from a copy that decoded alone (R2), could
     grant itself nothing: eight silent slots. R7 now leaves a header out only when an RV 0 copy
     goes with it (ADR-0073). Here the master's data fades out mid-transfer, as a path does, and
-    the frame on the air when it went is sent again at its rung until re-encoded."""
-    a, b = _pair(NARROW)
+    the frame on the air when it went is sent again at its rung until re-encoded. With the
+    reply wait off: since ADR-0135 the last of a station's data keeps its header, and the last
+    is what is watched here."""
+    a, b = _pair(NARROW, reply_wait_s=0.0)
     fade = {"on": True}
 
     def faded(frame: TxFrame) -> float:
@@ -2286,8 +2291,15 @@ def test_a_pinned_transmission_above_the_recommendation_keeps_a_cheap_header() -
     assert with_pinned, "the pinned rung went out"
     assert with_pinned[0][0].container is Container.CONTROL and not with_pinned[0][0].floor
     assert silent == 0
+    # the reply wait off: since ADR-0135 the last of a station's data keeps its header, which
+    # states the answer's later slot, and the pinned transmission is the session's last data
     _, sent, silent, _ = _ladder_rung(
-        pinned, snr_db=6.0, seed=31, pinned=True, header_above_recommendation=False
+        pinned,
+        snr_db=6.0,
+        seed=31,
+        pinned=True,
+        header_above_recommendation=False,
+        reply_wait_s=0.0,
     )
     assert _at(sent, pinned)[0][0].container is Container.DATA, "elided without the rule"
     assert silent >= 1
