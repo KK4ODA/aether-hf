@@ -1,9 +1,12 @@
 # Winlink Express P2P on 40 m at 500 Hz, portable to home (2026-11-24)
 
-One session at 18:42:54Z (local 13:42), on 40 m at 500 Hz: Winlink Express at the portable
-calls Winlink Express at home in a *Vara HF P2P* session. It is the first P2P session on the air
-run by a Winlink program through Aether since the *external programs* build (beta.173, beta.174).
-Both stations uploaded the session by debug mode, with audio. The author's note: the external
+Three sessions on 40 m at 500 Hz, 18:42–19:01Z (local 13:42–14:01): Winlink Express at the
+portable calls Winlink Express at home in a *Vara HF P2P* session. §0–§7 read the first; §8 the
+second (a 2.2 kB message, fine) and the third (a 50 kB file that Winlink Express gave up on after
+5 minutes); §9 is the list of fixes the author decided. The first session, at 18:42:54Z, is the
+first P2P session on the air run by a Winlink program through Aether since the *external
+programs* build (beta.173, beta.174). Both stations uploaded every session by debug mode, with
+audio. The author's note: the external
 programs interface worked great.
 
 * **Who**:
@@ -233,11 +236,81 @@ Two ways to tell, for the author:
 * **Profiles** were made by the program finder at both ends (the names above), and the home
   profile was renamed on the panel before the session.
 
-## 8. Changes proposed
+## 8. Two more sessions the same afternoon
 
-| # | change | where | whose call |
+The same stations and settings, beta.174 at both ends, both sides uploaded with audio (the zips
+`20261124-185111Z KK4ODA-1 …`, `20261124-185118Z KK4ODA-2 …`, `20261124-190242Z KK4ODA-1 …` and
+`20261124-190243Z KK4ODA-2 …`, fetched through temporary copies). Both read with `two_sides.py
+--from-loops`; session 3 also with `rung_reading.py`. Neither had a capture skip inside it, and
+neither overlapped (least clear air 0.639 and 0.646 s; home's answers 112–124 ms into their slots,
+at least 226 ms inside their limit).
+
+### 8.1 Session 2 (18:48Z): home sends a message
+
+Recordings `20261124-184807_KK4ODA_WD5EMA` and `20261124-184816_WD5EMA_KK4ODA`. The portable
+called (first try, 10.8 s; home read the call at +1.1 and +3.4 dB) and had nothing to send. Home's
+Winlink Express proposed one message and sent it, 2 231 bytes, at rungs 11 and 12 in about 47 s;
+the portable read home at +5 to +13 dB. Then `FF`, `FQ` and the disconnect: 94 s connected.
+
+The end lost three exchanges, about 15 s, on the portable's clock:
+
+| at | who | what |
+|---|---|---|
+| 94.73 | home | the message's last four frames |
+| 100.03 | portable | header acknowledging them; its program wrote `FF` at this moment, 0.22 s after the frames were delivered: too late for this transmission |
+| 104.05 | home | answer, nothing else |
+| 105.13 | portable | `FF`, one frame at rung 5 |
+| 107.00 | home | answer, nothing else; its program wrote `FQ` at 106.77, 0.17 s too late |
+| 108.08 | portable | header with nothing: an open window |
+| 112.10 | home | answer with the leave flag (its program asked to disconnect at 110.81) and `FQ` |
+| 114.23 | portable | header acknowledging `FQ` |
+| 118.25 | home | answer, nothing else |
+| 119.33 | portable | DISC |
+
+So §4's two waits happen at the calling station too: a master decides its next transmission as soon
+as the other station's slot ends, and Winlink Express at the portable replied 0.22 s after its data
+arrived.
+
+### 8.2 Session 3 (18:55Z): a 50 kB file that Winlink Express gave up on
+
+Recordings `20261124-185507_KK4ODA_WD5EMA` and `20261124-185513_WD5EMA_KK4ODA`. The portable called
+(first try, 8.1 s; home read the call at +7.5 dB) and sent a message with a 50 kB incompressible
+file. Its Winlink Express wrote the whole of it, 52 148 bytes, at 18:55:29.602. Aether sent it at
+rung 9 (16-QAM ½, 53 bytes a frame), six frames a transmission, an exchange every 8.7 s.
+
+| rung | sends | failed | decoded alone | delivered | over the exchanges | SNR read at home |
+|---|---|---|---|---|---|---|
+| 6 (QPSK ⅔) | 12 | 0 | 12 | 372 B | 130 bit/s | +1.8 dB |
+| 9 (16-QAM ½) | 230 | 39 (and 3 never detected) | 188 | 9 700 B | 224 bit/s | +5.7 dB |
+| 10 (16-QAM ⅔) | 8 | 5 | 3 | 272 B | 245 bit/s | +6.2 dB |
+
+Home read the portable at −2 to +9 dB, fading through the session. Rung 10 measured worse than
+rung 9 (25 % of 4 first copies against 82 %), so the rate fits the path; at 224 bit/s the file
+needed about 31 minutes.
+
+At 19:00:29.632, **exactly 300 s after it wrote the file**, Winlink Express sent `DISCONNECT`
+("inactivity", the operator's report). `BUFFER` had fallen every 9 s throughout (52 148 → 43 665),
+and `SN`, `BITRATE`, `PTT` and `IAMALIVE` lines kept coming, so none of them counts as activity to
+it. The last data it received came about 0.2 s before it wrote the file, so a timer from either
+moment fits. A web search found nothing on Winlink Express's timer.
+
+Aether then kept the session up for **70 s**, sending what was queued as ADR-0072's drain does, and
+closed with *41955 bytes not delivered*: it delivered 1.7 kB of a message that could never be
+complete. The drain took 70 s rather than 60 because a silent slot (at 340 s on the portable's
+recording clock) put home's answers on the floor for four slots (ADR-0069 Step 3's rule), which stretched the exchanges to 11.4 s.
+
+Both identifiers went as before. The TX-500 warning of §6 came again at 18:55:36 (*−23 dBFS
+keyed; −29 to −24 dBFS receiving*): it is said once every ten minutes of use.
+
+## 9. The fixes, decided
+
+From the three sessions; asked one at a time and answered by the author on 2026-11-24.
+
+| # | finding | decided | where |
 |---|---|---|---|
-| 1 | The master's DISC acknowledges what the slave sent in the slot that asked to leave, and the slave takes it before its DISC_ACK; one exchange less whenever a program asks to leave with its last bytes (every B2F session Winlink Express answers) | Aether, the engine (model first, ADR-0069 / ADR-0072); a protocol question for older stations | the author's |
-| 2 | After a slave hands data to a program, its slot opens late enough for a reply ~0.3 s later. Report 20's change 4, with the evidence that Winlink Express takes 0.26 s; costs every exchange where the program has nothing to send | Aether, the engine | the author's |
-| 3 | The keyed-audio watch recognises a radio that returns its own signal (the fall outside the signal, or the signal itself in the keyed audio) | Aether, `station/keyed_audio.rs` | the author's |
-| 4 | The portable's data on the floor at −2 dB where an OFDM rung had 1.6–3.2 dB in hand | the rate controller's review (P9-21) | waits for the air, by rule |
+| 1 | Winlink Express gives up on a long one-way transfer after 5 minutes (§8.2) | **The author checks Winlink Express first**: its session log's text around 19:00:29Z and whether its settings have a timeout. If it is a setting in its ini file, the program finder can raise it when it sets Winlink Express up | the author, then `hostapps` |
+| 2 | After a program's `DISCONNECT`, the drain sends what can never finish (§8.2) | **Close if it can't finish**: when what is queued could not go within the drain at the rate this session has delivered, it is dropped and the session closes at once, the log saying how much. A queue that fits (`FQ`) still goes first | the engine (model first, ADR-0072) |
+| 3 | A program's reply misses the next transmission (§4, §8.1) | **Both stations wait at hand-overs**: when one side has just sent the last of what it had, the station that received it holds its next transmission up to about 0.35 s for its program's reply. The calling station waits; for the called station the caller opens the reply slot later, which its header can already say. Expected to need no protocol change. Settles report 20's change 4 | the engine (model first), judged on the harness's Winlink-shaped scenarios |
+| 4 | The DISC waits for an exchange that acknowledges the slave's last bytes (§4, §8.1) | **The DISC carries the acknowledgement, no protocol bump**: the master's DISC acknowledges what the slave sent in the slot where it asked to leave, and the slave takes it before its DISC_ACK. beta.174 sends the fields as zero and ignores them, so mixed versions end as today; to be confirmed in the model and the vectors | the engine (model first) |
+| 5 | The TX-500's own signal makes the keyed-audio watch warn (§6) | **Recognise its own signal**: a transmission counts as on the air when the audio heard while keyed is the station's own signal coming back at the radio's delay; a key that does nothing still warns | `station/keyed_audio.rs` |
+| — | The portable's data on the floor at −2 dB in session 1 (§5) | No change: evidence for the rate controller's review (P9-21), by rule | — |

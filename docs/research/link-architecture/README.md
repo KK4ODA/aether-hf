@@ -174,11 +174,12 @@ It is faster than ADR-0068 on bulk and exchange traffic.
 20. [20-radiopost-scan-80m-40m-beta168.md](20-radiopost-scan-80m-40m-beta168.md): RadioPost mail
    checks to the three-dial scanning gateway (2026-11-21): the scan's lingers on a busy band
    (ADR-0129 §16, §17), and two waits a session from the programs' timing.
-21. [21-wle-p2p-40m-beta174.md](21-wle-p2p-40m-beta174.md): the first Winlink Express P2P
-   session on the air through the external programs build (2026-11-24, 40 m, 500 Hz, both
-   sides): clean slots, the host interface as Winlink Express expects it, two exchanges lost
-   at the end (a reply 50 ms too late for its slot, a DISC that waits for an acknowledgement),
-   and a false keyed-audio warning from the TX-500's monitor.
+21. [21-wle-p2p-40m-beta174.md](21-wle-p2p-40m-beta174.md): three Winlink Express P2P
+   sessions on the air through the external programs build (2026-11-24, 40 m, 500 Hz, both
+   sides): clean slots; exchanges lost at the end to programs' replies that miss the next
+   transmission and to a DISC that waits for an acknowledgement; a 50 kB file Winlink Express
+   gave up on after exactly 5 minutes, and a drain that sent on for 70 s after; a false
+   keyed-audio warning from the TX-500's monitor; and the five fixes the author decided.
 
 ## Reproduction
 

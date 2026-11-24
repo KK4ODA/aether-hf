@@ -3482,6 +3482,21 @@ zero and unread): 10 of the session's 38 s. The TX-500 returns its own signal to
 while keyed, at the band's level in 1–2.5 kHz, so the keyed-audio watch said *may not be
 transmitting* (outside the signal the audio fell 28–54 dB). The README's *Winlink Express peer to
 peer* figure is `tools/air_p2p_figure.py` (`air-40m-p2p.png`, both recordings on one clock).
+**Two more that afternoon (report 21 §8):** 18:48Z home sent a 2.2 kB message (rungs 11–12, fine;
+the end lost three exchanges, ~15 s: the portable's `FF` missed its own next transmission by
+0.22 s, so it happens at a master too). 18:55Z the portable sent a 50 kB incompressible file at
+rung 9, ~224 bit/s (home read −2 to +9 dB; rung 10 measured worse); **Winlink Express sent
+`DISCONNECT` exactly 300 s after writing the file** though `BUFFER`, `SN`, `BITRATE`, `PTT` and
+`IAMALIVE` came throughout, and Aether's drain then sent on 70 s with 41 955 bytes left.
+**The author's decisions (§9), none built yet:** (1) the author checks Winlink Express's log text
+and settings for the timer first — if it is an ini setting, the program finder raises it; (2) a
+drain that cannot finish within the minute at the session's rate drops the queue and closes at
+once (a queue that fits, `FQ`, still goes); (3) both stations wait up to ~0.35 s for their
+program's reply at a hand-over (the master before proceeding; the caller opens the called
+station's slot later through its header's level), expected without a protocol change, judged
+on the harness's Winlink-shaped scenarios — settles report 20's change 4; (4) the DISC carries
+the acknowledgement of the slave's last data, no protocol bump; (5) the keyed-audio watch counts
+a transmission on the air when the keyed audio is the station's own signal coming back.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
