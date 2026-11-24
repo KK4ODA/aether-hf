@@ -4,7 +4,7 @@
 "go ahead with all fixes"). Model first, then the port and the granted vectors. **No protocol
 bump:** link protocol 13 as before, and a station of 0.2.0-beta.174 connects and ends sessions
 with this one as it did (§2.2). No configuration key, no schema bump. Fix 3 judged on the
-harness (§5).
+harness (§5): every run passed on both builds, no radiated overlap, air ×0.913 paired.
 
 ## 1. Context
 
@@ -105,4 +105,31 @@ to answer each line). The results are in §5.1.
 
 ### 5.1 Results
 
-To be filled from the A/B run.
+The build before (`f47f221`) against this one, eight scenarios × 3 draws (seeds s, s+1000,
+s+2000), the same draws on each build: `40m-wle-p2p-500`, `40m-winlink-exchange-2300`,
+`80m-winlink-exchange-500`, `80m-gateway-fq-hangup-2300`, `40m-trimode-gateway-2300`,
+`40m-gateway-three-clients-2300`, `80m-varac-chat-and-ping-500`, `quick-awgn-2300`.
+
+* **24 of 24 passed on both builds; no radiated overlap on either.**
+* **Air time, paired by draw: ×0.913 geometric mean, ×0.969 median.** By scenario:
+  `80m-gateway-fq-hangup-2300` ×1.015 / 0.722 / 0.630, `80m-varac-chat-and-ping-500`
+  ×0.756 / 1.020 / 0.694, `40m-trimode-gateway-2300` ×0.882 / 0.987 / 0.944,
+  `80m-winlink-exchange-500` ×0.971 / 1.004 / 0.968, `quick-awgn-2300` ×0.707 / 0.975 / 0.970,
+  `40m-wle-p2p-500` ×0.972 / 0.830 / 1.039, `40m-winlink-exchange-2300` ×0.911 / 1.140 / 0.934,
+  `40m-gateway-three-clients-2300` ×1.165 / 0.862 / 1.079.
+* **The hand-overs themselves.** In `40m-wle-p2p-500` each short line of the caller's program
+  (73, 5 and 3 bytes) crossed in 9 s instead of 11, in every draw. In
+  `40m-winlink-exchange-2300` the called station's short replies (80 and 40 bytes) crossed in
+  3 s instead of 4–5. The first draw of `40m-wle-p2p-500` repeats on the old build (299.4 and
+  299.5 s) and ran 280.4, 290.9 and 291.3 s on the new one.
+* **The slower draws, run again twice on each build.** `40m-winlink-exchange-2300` s1031
+  (×1.140) repeats exactly: 81.7 s old, 93.0 s new, both times. Its 2 kB reply took 24 s instead
+  of 12. The new build sent the reply's first 291-byte block alone, in the room the master's last
+  data now gives the slave's answer, and that frame was lost in a fade; the sender's rate
+  controller then went from rung 14 to 11 for the rest of the reply. On the old build the reply
+  started 5 s later, in another stretch of the fading, at rung 15. The hand-over did what it
+  should. Where the fade fell is the draw: the session's timing moved. The reaction to one lost
+  frame is the rate controller's, left to its review by the standing rule.
+  `40m-gateway-three-clients-2300`'s first draw (×1.165) does not repeat on either build (old
+  197.3 and 171.4 s, new 199.6 and 171.7 s): its steps run on the wall clock. Its second draw,
+  run twice more, went 221.1 and 222.4 s old, 167.9 and 160.7 s new.

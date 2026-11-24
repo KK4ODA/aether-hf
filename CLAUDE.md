@@ -3514,7 +3514,10 @@ that watch the end of a transfer for header elision run with `reply_wait_s = 0`.
 (`keyed_audio.rs`): a transmission the level calls unchanged is checked against what it played
 (`monitored`: FFT cross-correlation in the band, delays up to 0.8 s, |r| ≥ 0.5) and counts as on
 the air when it matches. The harness's programs answer each line `think_s` air-seconds late
-(`[script]`), and `40m-wle-p2p-500` is session 2.
+(`[script]`), and `40m-wle-p2p-500` is session 2. Harness A/B against `f47f221` (eight
+Winlink-shaped scenarios × 3 draws): 24/24 both, no radiated overlap, air ×0.913 paired; the one
+draw slower on reruns (`40m-winlink-exchange-2300` s1031) lost the reply's first block, now sent
+alone in the answer's room, to a fade, and the rate controller stepped down (its review's).
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
