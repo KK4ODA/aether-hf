@@ -630,6 +630,21 @@ One Aether serves both; there is no separate RadioPost build of the modem. Radio
 crossed the air through an Aether gateway since 2026-11-12; [On the air](#on-the-air) shows two of
 that day's sessions.
 
+## Coming: Arcana
+
+[Arcana](https://github.com/KK4ODA/arcana), by the same author, is a library that works with no
+Internet: encyclopedias, medical references, repair guides, amateur radio rules and maps, kept on
+a drive or a Raspberry Pi and read from any device on the network. Through its
+[integration API](https://github.com/KK4ODA/arcana/blob/main/docs/integration-api.md), Aether
+will be able to **send a cited excerpt in a conversation**: search the library from the Session
+tab's Send box and send a short passage, about a kilobyte, with its source, edition and licence on
+one line, and its warnings, so a medical page never goes out without them. RadioPost will bring
+the same library to mail
+([its plans](https://github.com/KK4ODA/RadioPost#coming-an-offline-library-beside-your-mail)).
+
+Neither needs the other: Aether works without Arcana, you let it in once from Arcana's
+**Settings → Integrations**, and Arcana itself never transmits.
+
 ## Where things stand
 
 A full technical audit was done on 2026-09-13 — read [`docs/AUDIT.md`](docs/AUDIT.md). In
