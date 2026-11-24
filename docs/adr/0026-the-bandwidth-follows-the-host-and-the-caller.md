@@ -87,4 +87,20 @@ are the operator's switch (a program that should not move the station sends no `
   it has for answering is the one Aether now always does); answering a wider call; queuing a
   host's `BW` until a session ends (a program told `OK` calls at once).
 
+## 4. Amendment: each program's request, and one for listening (2026-11-24)
+
+From the portable's sessions of 2026-11-23: a profile had left KK4ODA-1 at 500 Hz while its
+`RadioPost` client listened, and WD5EMA's 2300 Hz P2P call went unanswered. `RadioPost` never
+asked for a bandwidth while it listened, and a request made over the control API outlived the
+program that made it.
+
+* `bandwidth.set` is held for each connection apart, the latest in force, and goes when its
+  connection closes: a program that crashes leaves the station as it found it.
+* `bandwidth.set {hz, listening: true}` is the bandwidth a program wants calls answered in while it
+  listens. It is never refused, is in force only while no other request is (a host program's
+  `BW500` on `VarAC`'s calling frequency outranks it), and the station moves to it once idle.
+  `RadioPost`'s adapter asks for 2300 Hz while its program listens: a 2300 Hz station answers 500 Hz
+  calls too (§2), so a listener answers both.
+* `status.bandwidth` says `listening` and `by` (the program's name), and `why` can be `listening`.
+
 [`RETURN_QUIET_S`]: ../../core/aetherd/src/station/bandwidth.rs

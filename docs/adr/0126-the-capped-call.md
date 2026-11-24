@@ -518,3 +518,14 @@ read, refused and said so, as every other version's.
 `("0.2.0-beta.160", 14)`), Setup step 4's **Call tries**, the manual's words. A call of six or
 more keeps ADR-0058's move to 500 Hz after four unanswered tries at 2 300 Hz;
 `40m-wide-calls-narrow-unprobed` now runs with six.
+
+## 11. Amendment: a 500 Hz call's quick tries (2026-11-24)
+
+A 2300 Hz station reads only the tone part of a 500 Hz call (§9.3). A call heard strong opens with
+three quick 500 Hz OFDM tries, which such a station cannot read at all: WD5EMA's 500 Hz call to
+KK4ODA, a few minutes after a 2300 Hz session with it, had one try in four the station could read
+(2026-11-23). Now a 500 Hz call makes its quick tries only to a station heard running 500 Hz within
+15 minutes (a beacon, call, probe or probe answer stated it); any other gets the tries of a station
+not heard lately, whose tone part both bandwidths read. `RadioPost` listeners run 2300 Hz (ADR-0026
+§4), so this is the common case for a 500 Hz P2P call. No wire change; the engine's
+`quick_tries_for` says which plan a reading would choose, and the daemon decides.

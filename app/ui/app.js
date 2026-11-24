@@ -5282,8 +5282,9 @@ function chipName(name) {
   return name.replace(/\s+v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "") || name;
 }
 
-// The bandwidth the station runs, in the header, when it is not its own (ADR-0026): a host
-// program's BW command moved it, or a call in the narrower one did.
+// The bandwidth the station runs, in the header, when it is not its own (ADR-0026): a program
+// asked for it (an external program's BW command, RadioPost listening or calling), or a call in
+// the narrower one moved it.
 function renderBandwidth(bandwidth) {
   const chip = $("bw-chip");
   if (bandwidth && bandwidth.bandwidth_hz !== stationBandwidthHz) {
@@ -5303,9 +5304,14 @@ function renderBandwidth(bandwidth) {
   } else if (bandwidth.why === "calling") {
     chip.replaceChildren(chipText(`${hz} Hz · calling ${bandwidth.callee ?? "a station"}`));
     chip.title = `${bandwidth.callee ?? "The station called"} was last heard running ${hz} Hz, so the call went out in it; the station goes back to its own ${bandwidth.home_hz} Hz after the session`;
+  } else if (bandwidth.why === "listening") {
+    const by = bandwidth.by ? chipName(bandwidth.by) : "A program";
+    chip.replaceChildren(chipText(`${hz} Hz · listening`));
+    chip.title = `${by} listens in ${hz} Hz, which answers calls in 500 and 2300 Hz alike; the station goes back to its own ${bandwidth.home_hz} Hz when it stops listening`;
   } else {
-    chip.replaceChildren(chipText(`${hz} Hz · external program`));
-    chip.title = `The external program asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
+    const by = bandwidth.by ? chipName(bandwidth.by) : "an external program";
+    chip.replaceChildren(chipText(`${hz} Hz · ${by}`));
+    chip.title = `${by[0].toUpperCase()}${by.slice(1)} asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
   }
 }
 

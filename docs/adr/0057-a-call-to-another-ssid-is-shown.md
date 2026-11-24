@@ -29,3 +29,9 @@ callsigns, so that said nothing either.
 
 Not done: answering a call to another SSID by itself. Two stations of one operator under different
 SSIDs are a real arrangement (a gateway and a home station); which name answers is the operator's.
+
+## Amendment (2026-11-24)
+
+The suggestion is made only when the station called was not heard after its kin. WD5EMA's call to
+KK4ODA, a minute after a session with it, went unanswered on a band that had closed, and the
+suggestion said to call the gateway KK4ODA-1, heard 22 minutes before (2026-11-23).

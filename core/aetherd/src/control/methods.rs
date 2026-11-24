@@ -9,7 +9,7 @@ use base64_lite::{decode, encode};
 use serde_json::{Value, json};
 
 use crate::{
-    control::protocol::{ApiError, Request, Response},
+    control::protocol::{ApiError, ConnectionId, Request, Response},
     ptt::Ptt,
     station::Station,
 };
@@ -1327,7 +1327,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
         "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
         "beacon" => beacon(station, params, id),
         "beacon.every" => beacon_every(station, params, id),
-        "bandwidth.set" => bandwidth_set(station, params, id),
+        "bandwidth.set" => bandwidth_set(station, params, id, request.connection),
         "ptt.test" => {
             let seconds = params
                 .get("duration_s")
@@ -2275,10 +2275,18 @@ fn beacon_every<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<Str
     }
 }
 
-/// `bandwidth.set {hz}`: the bandwidth a host program asked for with VARA's `BW500`, `BW2300`
-/// or `BW2750` — 2750 is 2300 here — or `null` to go back to the station's own (ADR-0026). The
-/// station moves between sessions only: refused, and retryable, while anything is under way.
-fn bandwidth_set<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+/// `bandwidth.set {hz, listening?}`: the bandwidth a program asks for — a host program's VARA
+/// `BW500`, `BW2300` or `BW2750` (2750 is 2300 here), or `RadioPost` for a call — or `null` to
+/// withdraw it (ADR-0026). It holds while the asking connection lasts. The station moves between
+/// sessions only: refused, and retryable, while anything is under way. With `listening`, it is
+/// the bandwidth calls are to be answered in while the program listens: held below the others,
+/// never refused, the station moving once idle.
+fn bandwidth_set<P: Ptt>(
+    station: &mut Station<P>,
+    params: &Value,
+    id: Option<String>,
+    connection: Option<ConnectionId>,
+) -> Response {
     let hz = match params.get("hz") {
         None | Some(Value::Null) => None,
         Some(value) => match value.as_u64() {
@@ -2296,7 +2304,11 @@ fn bandwidth_set<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<St
             }
         },
     };
-    match station.host_bandwidth(hz) {
+    let listening = params
+        .get("listening")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match station.host_bandwidth_for(connection, hz, listening) {
         Ok(_) => Response::ok(id, station.bandwidth_status()),
         Err(reason) => Response::failed(
             id,
@@ -4227,6 +4239,52 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn a_programs_bandwidth_request_ends_with_its_connection() {
+        // RadioPost's P2P listener asks for a bandwidth over its connection (here 500, the
+        // station's own being 2300); a VARA program attached later asks for 2300 and leaves; the
+        // listener's request is in force again, and when its connection closes — RadioPost
+        // quitting or crashing — nothing is asked for and the station's own holds
+        use crate::control::protocol::{ConnectionId, ConnectionKind};
+        let mut station = station();
+        let listener = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        let varac = ConnectionId {
+            id: 8,
+            kind: ConnectionKind::Host,
+        };
+        let ask = |station: &mut Station<NullPtt>, hz: Value, connection: ConnectionId| {
+            dispatch(
+                station,
+                &Request {
+                    id: Some("1".into()),
+                    method: "bandwidth.set".to_owned(),
+                    params: json!({ "hz": hz }),
+                    connection: Some(connection),
+                },
+            )
+            .result
+            .expect("result")
+        };
+        let asked = |station: &mut Station<NullPtt>| {
+            call(station, "status", json!({})).result.expect("status")["bandwidth"]["host_hz"]
+                .clone()
+        };
+        assert_eq!(ask(&mut station, json!(500), listener)["bandwidth_hz"], 500);
+        assert_eq!(ask(&mut station, json!(2300), varac)["bandwidth_hz"], 2300);
+        station.connection_closed(varac);
+        assert_eq!(asked(&mut station), 500);
+        station.connection_closed(listener);
+        assert_eq!(asked(&mut station), Value::Null);
+        // a program withdrawing its own request leaves the others'
+        ask(&mut station, json!(500), listener);
+        ask(&mut station, json!(2300), varac);
+        ask(&mut station, Value::Null, varac);
+        assert_eq!(asked(&mut station), 500);
     }
 
     #[test]

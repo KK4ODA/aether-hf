@@ -481,8 +481,10 @@ impl<P: Ptt> Station<P> {
     /// claim's line: two of KK4ODA's `RadioPost` sessions lost their program with nothing in
     /// either log to say how (2026-11-12).
     pub fn connection_closed_because(&mut self, connection: ConnectionId, why: Option<&str>) {
-        // its scan ends whether or not it held callsigns (ADR-0129 rule 10)
+        // its scan ends whether or not it held callsigns (ADR-0129 rule 10), and so does the
+        // bandwidth it asked for
         self.scan_connection_closed(connection);
+        self.bandwidth_connection_closed(connection);
         let index = self
             .claims
             .list

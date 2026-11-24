@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.20.0 |
-| **Updated** | 2026-11-23 |
+| **Version** | 1.21.0 |
+| **Updated** | 2026-11-24 |
 | **Describes** | Aether HF 0.2.0-beta.173 |
 | **Licence** | CC BY 4.0 |
 
@@ -293,7 +293,8 @@ attention, and seven **tabs**: Status, Session, Stations, Diagnostics, Setup, Lo
    - With no program there, the chip may say *calls to* your callsign *not answered*. Its
      tooltip says why: under automatic control only a program answers calls.
    - A second chip shows the **bandwidth** when the station is running one that is not its own
-     setting.
+     setting, and why: the program that asked for it (*500 Hz · VarAC*), *listening* when
+     RadioPost listens in 2300 Hz, or the station that called.
    - When the header is short of room, the chips shorten and end in *…*; the tooltip says all of
      it. Widen the window to see them whole.
 8. **Modem**: quiet when the window is talking to the modem, red when it is not. In Compact and
@@ -538,10 +539,11 @@ quiet leaves the signal inside the sound card's own noise.
 - **Bandwidth**: *2300 Hz* for Winlink, Pat and the most data; *500 Hz* for contacts between two
   stations and VarAC. Both stations of a session use the same. A change takes effect once the
   station is idle, with no restart. An external program can move the station to another
-  bandwidth while it is connected (its `BW500` or `BW2300`): the header then says *500 Hz ·
-  external program*, and your setting comes back when it leaves. RadioPost does not change it
-  while it listens, so a station that answers RadioPost calls runs this setting: set it to the
-  bandwidth you will be called at. At 2300 Hz it answers 500 Hz calls too.
+  bandwidth while it is connected (its `BW500` or `BW2300`): the header then names it, *500 Hz ·
+  VarAC*, and your setting comes back when it leaves. While RadioPost listens it runs the station
+  at 2300 Hz, because a 2300 Hz station answers 500 Hz calls too: with this set to 500 the header
+  says *2300 Hz · listening*, and your setting comes back when RadioPost stops listening or
+  closes. An external program's own bandwidth outranks RadioPost's listening.
 - **Answer only**: take calls and answer probes, but make no call and send no beacon.
 - **Fastest mode**: the highest rung the link may climb to. The last entry is the fastest your
   bandwidth has, and it stays the fastest when you change bandwidth. Choose a lower one only to
@@ -695,7 +697,8 @@ Type the other station's callsign, with its SSID if it uses one. Then:
 - **Connect**: call it and start a session. A call is two tries by default (**Call tries**, Setup
   step 4), chosen by how well you last heard the station: the fast OFDM frame and the robust tone
   frame together when you have not heard it lately, quick tries first when you heard it strong,
-  tone frames when you heard it weak. The last try comes after a 15 to 21 s pause. If nobody
+  tone frames when you heard it weak. A 500 Hz call makes quick tries only to a station heard
+  running 500 Hz in the last 15 minutes: a 2300 Hz station cannot read them. The last try comes after a 15 to 21 s pause. If nobody
   answers, the call ends in about 40 s; press **Connect** again to call again.
 - **Disconnect**: send what is still queued, then close. It waits a minute at most; past that the
   session closes anyway. While it waits, the banner and the line under the buttons say how much is
@@ -1545,8 +1548,8 @@ run **Set drive** again.
 
 - Check you both run the same bandwidth. If not, the mismatch banner says so on the other side.
 - Check you both run versions with the same link protocol. A newer one shows **Update required**.
-- Check the callsign, SSID included. If the operator was heard under another SSID, the banner offers to
-  call that one.
+- Check the callsign, SSID included. If the operator was heard under another SSID more recently
+  than the callsign you called, the banner offers to call that one.
 - Probe first: it tells you whether either of you hears the other at all.
 - A station under automatic control answers only while a program there holds the callsign you
   call and listens.
@@ -1780,3 +1783,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.18.1 | 2026-11-23 | [Finding Winlink's programs](#finding-winlinks-programs): one row per install, listing all its callsigns, the one in use first. A Winlink Express with several callsigns had a row for each, which looked like the same install twice, and ticking one changed them all. The profile is named for the install's folder (*Winlink Express TS480*), not the callsign, so copies of Winlink Express for different radios no longer share one profile when they run under one callsign. An install with nothing to set up has a greyed row saying why. |
 | 1.19.0 | 2026-11-23 | [Step 4](#step-4-modem-settings) and [Troubleshooting](#28-troubleshooting): the identifier sent on its own after a call or probe that led to no session is counted down on the banner in 5 s steps (*Identifying as N1CALL in 15 s, after a call nobody answered*) and named in the Log when it goes. A TX-500 keying half a minute after an unanswered call was taken for a fault. |
 | 1.20.0 | 2026-11-23 | *Host programs* are now **External programs** (Setup step 5, the ports, the programs chapter and the glossary), and the box says *leave unchecked for RadioPost* after the tick: RadioPost is not one, and an operator kept taking it for one. [Step 1](#step-1-callsign-and-rules)'s box is the **Aether callsign**, *for Aether standalone use*, and like step 4's **Bandwidth** it always shows your own setting: greyed, the bandwidth had hidden a 500 Hz setting the station ran, and a 2300 Hz call to it went unanswered. The note after the callsign says which callsigns a program uses now. |
+| 1.21.0 | 2026-11-24 | While RadioPost listens, the station runs 2300 Hz, which answers 500 Hz calls too, and your **Bandwidth** comes back when it stops ([Setup step 4](#step-4-modem-settings)); the header's bandwidth chip names the program that moved the station, or says *listening*. A 500 Hz call makes its quick tries only to a station heard running 500 Hz lately ([Call](#call)). After an unanswered call, another SSID is suggested only when it was heard more recently than the callsign called. From the portable's sessions of 2026-11-23: a 2300 Hz call to a station a profile had set to 500 Hz went unanswered, a 500 Hz call's quick tries were lost on a 2300 Hz listener, and the advice said to call the gateway's callsign a minute after the station called had answered. |

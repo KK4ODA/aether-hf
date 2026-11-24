@@ -1890,8 +1890,14 @@ impl<P: Ptt> Station<P> {
         if idle && !keep_bandwidth {
             self.move_for_call(remote);
         }
-        // how well the station called was read lately chooses a capped call's tries (ADR-0126)
-        let heard_db = self.heard_lately(remote, self.now());
+        // how well the station called was read lately chooses a capped call's tries (ADR-0126);
+        // a 500 Hz call's quick tries go only to a station heard running 500 Hz lately, the
+        // others getting tries whose tone part both bandwidths read
+        let now = self.now();
+        let mut heard_db = self.heard_lately(remote, now);
+        if self.engine.quick_tries_for(heard_db) && !self.quick_tries_heard(remote, now) {
+            heard_db = None;
+        }
         self.engine
             .connect_lasting(remote, as_call, heard_db, call_s)?;
         self.call_lasting = call_s.is_some_and(|s| s > 0.0);
@@ -5068,7 +5074,7 @@ impl<P: Ptt> Station<P> {
             return;
         };
         if let Some(hz) = report.bandwidth_hz {
-            self.learn_bandwidth(&from, hz as usize);
+            self.heard_bandwidth(&from, hz as usize, now);
         }
         if report.decoded {
             self.note_sender(&from, now, report.snr_db);
@@ -11423,6 +11429,53 @@ mod tests {
     }
 
     #[test]
+    fn no_other_ssid_is_suggested_for_a_station_heard_since() {
+        // WD5EMA called KK4ODA a minute after a session with it and was told to call the
+        // gateway KK4ODA-1, heard 22 minutes before (2026-11-23): the station called, heard
+        // more recently than its kin, is there
+        let mut station = idle_station();
+        station.note_sender("KK4ODA-1", 0.0, 5.0);
+        station.note_sender("KK4ODA", 1300.0, 8.0);
+        station.suggest_kin("KK4ODA", 1360.0);
+        assert!(station.mismatch().is_none());
+        // heard only before its kin, it may be the wrong name
+        station.note_sender("KK4ODA-1", 1400.0, 5.0);
+        station.suggest_kin("KK4ODA", 1460.0);
+        assert_eq!(
+            station.mismatch().and_then(|m| m.called.as_deref()),
+            Some("KK4ODA-1")
+        );
+    }
+
+    #[test]
+    fn a_500_hz_call_keeps_its_quick_tries_for_a_station_heard_at_500_hz() {
+        // WD5EMA's 500 Hz call to KK4ODA, minutes after a 2 300 Hz session with it, opened with
+        // three quick 500 Hz OFDM tries the 2 300 Hz listener could not read (2026-11-23)
+        let mut station = idle_station();
+        station.host_bandwidth(Some(500)).expect("idle");
+        let now = station.now();
+        station.note_sender("KK4ODA", now, 20.0);
+        let first_try = |station: &mut Station<NullPtt>| {
+            station.connect("KK4ODA").expect("idle");
+            let first = station.engine().call_plan().first().copied();
+            station.abort();
+            first
+        };
+        // stated 2 300 Hz lately, or 500 Hz only in an earlier run: tries both bandwidths read
+        station.heard_bandwidth("KK4ODA", 2300, now);
+        assert_eq!(first_try(&mut station), Some(b'H'));
+        station.learn_bandwidth("KK4ODA", 500);
+        assert_eq!(first_try(&mut station), Some(b'H'));
+        // stated 500 Hz lately: the quick tries it reads
+        station.heard_bandwidth("KK4ODA", 500, now);
+        assert_eq!(first_try(&mut station), Some(b'C'));
+        // a 2 300 Hz call keeps them whatever was stated
+        station.host_bandwidth(Some(2300)).expect("idle");
+        station.heard_bandwidth("KK4ODA", 2300, now);
+        assert_eq!(first_try(&mut station), Some(b'C'));
+    }
+
+    #[test]
     fn a_call_is_told_how_well_the_station_called_was_heard_lately() {
         // ADR-0126 §2.3: the SNR of the last frame read from the station, within 15 minutes
         let mut air = Air::new(1.0, 0.0005);
@@ -11789,6 +11842,92 @@ mod tests {
         station.set_host(HostPresence::default());
         station.connection_closed(HOST_PROGRAM);
         assert_eq!(station.pending_callsigns, Some(vec!["W4ODA".to_owned()]));
+    }
+
+    #[test]
+    fn a_listening_request_waits_for_idle_and_yields_to_a_programs_own() {
+        // RadioPost listens in a bandwidth (here 500, the station's own being 2300): asked while
+        // a call goes out it is taken and waits; a VARA program's own BW outranks it while that
+        // program is attached; each goes with its connection
+        use crate::control::protocol::{ConnectionId, ConnectionKind};
+        let mut station = idle_station();
+        let listener = ConnectionId {
+            id: 5,
+            kind: ConnectionKind::Control,
+        };
+        let varac = ConnectionId {
+            id: 6,
+            kind: ConnectionKind::Host,
+        };
+        let settle = |station: &mut Station<NullPtt>, hz: usize| {
+            let rate = WIDE_2300.audio_rate as f64;
+            let mut out = vec![0.0f32; 4096];
+            for seed in 0..(30.0 * rate / 4096.0) as u32 {
+                station.playback(&mut out).expect("playback");
+                station.capture(&quiet_block(seed)).expect("capture");
+                if station.bandwidth_hz() == hz {
+                    break;
+                }
+            }
+            assert_eq!(station.bandwidth_hz(), hz);
+        };
+        station.connect("KK4ABC").expect("idle");
+        assert_eq!(
+            station.host_bandwidth_for(Some(listener), Some(500), true),
+            Ok(2300)
+        );
+        assert_eq!(station.bandwidth_status()["host_hz"], 500);
+        assert_eq!(station.bandwidth_status()["listening"], true);
+        station.abort();
+        settle(&mut station, 500);
+        assert_eq!(station.bandwidth_status()["why"], "listening");
+        // a program's own request moves the station now and holds while it lasts
+        assert_eq!(
+            station.host_bandwidth_for(Some(varac), Some(2300), false),
+            Ok(2300)
+        );
+        assert_eq!(station.bandwidth_status()["listening"], false);
+        // asked again for listening, the listener stays under it
+        assert_eq!(
+            station.host_bandwidth_for(Some(listener), Some(500), true),
+            Ok(2300)
+        );
+        assert_eq!(station.bandwidth_status()["host_hz"], 2300);
+        station.connection_closed(varac);
+        settle(&mut station, 500);
+        assert_eq!(station.bandwidth_status()["why"], "listening");
+        station.connection_closed(listener);
+        settle(&mut station, 2300);
+        assert_eq!(station.bandwidth_status()["why"], "configured");
+    }
+
+    #[test]
+    fn a_programs_bandwidth_goes_with_its_connection() {
+        // a program that asked for a bandwidth and then went without a word — RadioPost
+        // crashing while it listens — leaves the station as it found it once idle
+        use crate::control::protocol::{ConnectionId, ConnectionKind};
+        let mut station = idle_station();
+        let program = ConnectionId {
+            id: 5,
+            kind: ConnectionKind::Control,
+        };
+        assert_eq!(
+            station.host_bandwidth_for(Some(program), Some(500), false),
+            Ok(500)
+        );
+        assert_eq!(station.bandwidth_hz(), 500);
+        station.connection_closed(program);
+        let rate = WIDE_2300.audio_rate as f64;
+        let mut out = vec![0.0f32; 4096];
+        for seed in 0..(30.0 * rate / 4096.0) as u32 {
+            station.playback(&mut out).expect("playback");
+            station.capture(&quiet_block(seed)).expect("capture");
+            if station.bandwidth_hz() == 2300 {
+                break;
+            }
+        }
+        assert_eq!(station.bandwidth_hz(), 2300);
+        assert_eq!(station.bandwidth_status()["why"], "configured");
     }
 
     #[test]

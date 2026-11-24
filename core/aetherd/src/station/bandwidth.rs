@@ -7,8 +7,11 @@
 //!   modem's mode with them ("Set VARA HF to 500Hz Narrow mode"), and a program set up for
 //!   VARA sends the one it wants — `VarAC` 500 Hz on its calling frequencies, Winlink Express
 //!   its session's, Pat its configuration's — so an operator going from one program to the
-//!   other no longer changes Setup and restarts the modem. The request holds while that
-//!   program is attached; when it goes, the station goes back to its own.
+//!   other no longer changes Setup and restarts the modem. A control-API program asks the
+//!   same with `bandwidth.set`: `RadioPost` asks for 2 300 Hz while it listens for P2P calls,
+//!   so that every call is answered whichever bandwidth it comes in. Each program's request
+//!   holds while its connection lasts, the latest one in force; when the last goes, the
+//!   station goes back to its own.
 //! * **A call to this station in the narrower bandwidth.** A 2 300 Hz station hears a 500 Hz
 //!   station's call — calls start on the tone floor (ADR-0016), whose frames are the same on
 //!   both airs — and answers it at 500 Hz, as VARA's *Accept 500 Hz connections* does; once
@@ -42,6 +45,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{State, Station};
+use crate::control::protocol::ConnectionId;
 use crate::ptt::Ptt;
 
 /// How long the channel stays quiet, after a session in the bandwidth a call brought, before
@@ -132,8 +136,11 @@ pub enum Why {
     /// Its own: `[radio] bandwidth`.
     #[default]
     Configured,
-    /// A host program asked for it with `BW<n>`.
+    /// A program asked for it: a host program's `BW<n>`, or `RadioPost` for its call.
     Host,
+    /// A program listening for calls asked for it: `RadioPost` listens in 2 300 Hz, which
+    /// answers calls in either bandwidth.
+    Listening,
     /// A call to this station came in it; the callsign that called.
     Call(String),
     /// This station called one it knows runs it (ADR-0035); the callsign called.
@@ -148,6 +155,7 @@ impl Why {
         match self {
             Self::Configured => "configured",
             Self::Host => "host",
+            Self::Listening => "listening",
             Self::Call(_) => "call",
             Self::Calling(_) | Self::Unanswered(_) => "calling",
         }
@@ -159,8 +167,10 @@ impl Why {
 pub(super) struct Bandwidth {
     /// The station's own: `[radio] bandwidth`.
     pub(super) home_hz: usize,
-    /// What the host program attached now asked for.
-    host_hz: Option<usize>,
+    /// What each program asked for with `bandwidth.set`, the latest last. The latest holds — a
+    /// listening request only when no other holds — and a request goes when its connection
+    /// closes, so a program that crashes leaves the station as it found it.
+    requests: Vec<Request>,
     /// Why the station runs what it runs now.
     why: Why,
     /// Station time the station was last anything but idle and quiet while it runs another
@@ -168,8 +178,10 @@ pub(super) struct Bandwidth {
     stirred_s: f64,
     /// Moves made since the modem started.
     moves: usize,
-    /// Other stations' bandwidths as their frames stated them, the most recently heard last.
-    known: VecDeque<(String, usize)>,
+    /// Other stations' bandwidths as their frames stated them, the most recently heard last,
+    /// with the station time it was stated — minus infinity for what the stations-heard list
+    /// kept from an earlier run.
+    known: VecDeque<(String, usize, f64)>,
     /// The last call or probe to this station in a bandwidth whose calls it does not answer.
     mismatch: Option<Mismatch>,
     /// The callsigns frames have named as their sender, with the station time each was last
@@ -182,7 +194,7 @@ impl Bandwidth {
     pub(super) fn new(home_hz: usize) -> Self {
         Self {
             home_hz,
-            host_hz: None,
+            requests: Vec::new(),
             why: Why::Configured,
             stirred_s: f64::NEG_INFINITY,
             moves: 0,
@@ -194,8 +206,52 @@ impl Bandwidth {
 
     /// The bandwidth the station should run when nothing holds it where it is.
     fn target_hz(&self) -> usize {
-        self.host_hz.unwrap_or(self.home_hz)
+        self.host_hz().unwrap_or(self.home_hz)
     }
+
+    /// The bandwidth of the request in force, if one is.
+    fn host_hz(&self) -> Option<usize> {
+        self.in_force().map(|request| request.hz)
+    }
+
+    /// The request in force: the latest a program still connected made for its calls or its
+    /// mode, else the latest made for listening. A program's `BW500` on `VarAC`'s calling
+    /// frequency is its choice, and outranks `RadioPost` listening in 2 300 Hz on the same radio.
+    fn in_force(&self) -> Option<&Request> {
+        self.requests
+            .iter()
+            .rev()
+            .find(|request| !request.listening)
+            .or_else(|| self.requests.last())
+    }
+
+    /// Why a station that runs its target runs it: the request in force, or its own.
+    fn why_for_target(&self) -> Why {
+        match self.in_force() {
+            Some(request) if request.listening => Why::Listening,
+            Some(_) => Why::Host,
+            None => Why::Configured,
+        }
+    }
+
+    /// Withdraw what `connection` asked for: whether it had asked anything.
+    fn withdraw(&mut self, connection: Option<ConnectionId>) -> bool {
+        let before = self.requests.len();
+        self.requests.retain(|request| request.by != connection);
+        self.requests.len() != before
+    }
+}
+
+/// A program's `bandwidth.set`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Request {
+    /// The connection it came on, `None` for one that came without one (a one-shot `POST`).
+    by: Option<ConnectionId>,
+    /// The bandwidth asked for.
+    hz: usize,
+    /// Whether it is for listening: held below the others, and the station moves to it once
+    /// idle, never refused.
+    listening: bool,
 }
 
 impl<P: Ptt> Station<P> {
@@ -205,26 +261,66 @@ impl<P: Ptt> Station<P> {
         self.air.info().bandwidth_hz
     }
 
-    /// A host program's `BW<n>`: run `hz` from now on while the program is attached — or, with
-    /// `None`, the station's own again. 2 750 Hz, which Winlink Express asks for unless told
-    /// otherwise, is 2 300 Hz: a narrower signal is always inside what was asked.
+    /// A request made without a connection ([`Self::host_bandwidth_for`] with `None`): a
+    /// one-shot `POST`, and the tests.
+    ///
+    /// # Errors
+    /// As [`Self::host_bandwidth_for`].
+    pub fn host_bandwidth(&mut self, hz: Option<usize>) -> Result<usize, String> {
+        self.host_bandwidth_for(None, hz, false)
+    }
+
+    /// A program's `bandwidth.set` — a host program's `BW<n>` through the VARA-compatible
+    /// adapter, or `RadioPost` listening: run `hz` from now on while the program's connection
+    /// lasts — or, with `None`, withdraw what it asked for, and run the request before it or
+    /// the station's own. 2 750 Hz, which Winlink Express asks for unless told otherwise, is
+    /// 2 300 Hz: a narrower signal is always inside what was asked.
     ///
     /// The move is made now or not at all: a program that asked for 500 Hz and was told `OK`
     /// calls at once, and a move that waited for a session to end would have it call in the
     /// wrong bandwidth. Withdrawing a request always succeeds; the move back waits for the
     /// station to be idle.
     ///
+    /// A request for `listening` is the bandwidth a program wants calls answered in while it
+    /// listens: never refused, held below the other requests, and the station moves to it now
+    /// if it can, or once idle (`RadioPost`, which listens in 2 300 Hz so that a call in either
+    /// bandwidth is answered: a profile had left its station at 500 Hz, and WD5EMA's 2 300 Hz
+    /// call went unanswered, 2026-11-23).
+    ///
     /// # Errors
     /// With the reason in a sentence: a bandwidth this version does not run, or something under
     /// way that runs on the air the station would leave.
-    pub fn host_bandwidth(&mut self, hz: Option<usize>) -> Result<usize, String> {
+    pub fn host_bandwidth_for(
+        &mut self,
+        connection: Option<ConnectionId>,
+        hz: Option<usize>,
+        listening: bool,
+    ) -> Result<usize, String> {
         let Some(hz) = hz else {
-            self.bandwidth.host_hz = None;
+            self.bandwidth.withdraw(connection);
             return Ok(self.bandwidth_hz());
         };
         let hz = if hz == 2750 { 2300 } else { hz };
         if params_for(hz).is_none() {
             return Err(format!("this modem runs 2300 or 500 Hz, not {hz}"));
+        }
+        let request = Request {
+            by: connection,
+            hz,
+            listening,
+        };
+        if listening {
+            self.bandwidth.withdraw(connection);
+            self.bandwidth.requests.push(request);
+            // what a program's own request holds stays held; this one waits under it
+            if self.bandwidth.target_hz() == hz {
+                if hz == self.bandwidth_hz() {
+                    self.bandwidth.why = Why::Listening;
+                } else if self.movable().is_ok() {
+                    self.move_to(hz, Why::Listening);
+                }
+            }
+            return Ok(self.bandwidth_hz());
         }
         if hz != self.bandwidth_hz() {
             self.movable()?;
@@ -232,18 +328,41 @@ impl<P: Ptt> Station<P> {
         } else if self.bandwidth.why != Why::Host {
             self.bandwidth.why = Why::Host;
         }
-        self.bandwidth.host_hz = Some(hz);
+        self.bandwidth.withdraw(connection);
+        self.bandwidth.requests.push(request);
         Ok(hz)
     }
 
+    /// A connection has closed: what it asked for goes, and the station goes back to the
+    /// request before it, or its own, once idle.
+    pub(super) fn bandwidth_connection_closed(&mut self, connection: ConnectionId) {
+        if self.bandwidth.withdraw(Some(connection)) {
+            let target = self.bandwidth.target_hz();
+            if target != self.bandwidth_hz() {
+                self.note(
+                    "bandwidth",
+                    &format!(
+                        "the program that asked for {} Hz has gone: back to {target} Hz once idle",
+                        self.bandwidth_hz()
+                    ),
+                );
+            }
+        }
+    }
+
     /// The bandwidth, as `status.bandwidth` reports it: what runs, the station's own, what a
-    /// host program asked for, and why.
+    /// program asked for and which, whether for listening, and why.
     #[must_use]
     pub fn bandwidth_status(&self) -> Value {
+        let request = self.bandwidth.in_force();
         json!({
             "bandwidth_hz": self.bandwidth_hz(),
             "home_hz": self.bandwidth.home_hz,
-            "host_hz": self.bandwidth.host_hz,
+            "host_hz": request.map(|request| request.hz),
+            "listening": request.is_some_and(|request| request.listening),
+            "by": request
+                .and_then(|request| request.by)
+                .and_then(|by| self.program_name(by)),
             "why": self.bandwidth.why.name(),
             "caller": match &self.bandwidth.why {
                 Why::Call(call) => Some(call.as_str()),
@@ -269,13 +388,19 @@ impl<P: Ptt> Station<P> {
             .filter(|m| m.ours_hz == self.bandwidth_hz())
     }
 
-    /// Remember the bandwidth a station runs, as one of its frames stated it — or as the
-    /// stations-heard list kept it, which is how a restarted daemon still knows.
+    /// Remember the bandwidth a station runs, as the stations-heard list kept it from an
+    /// earlier run — which is how a restarted daemon still knows — with no time it was heard.
     pub fn learn_bandwidth(&mut self, callsign: &str, hz: usize) {
+        self.heard_bandwidth(callsign, hz, f64::NEG_INFINITY);
+    }
+
+    /// Remember the bandwidth a station runs, as one of its frames stated it at station time
+    /// `now`.
+    pub(super) fn heard_bandwidth(&mut self, callsign: &str, hz: usize, now: f64) {
         let callsign = callsign.trim().to_ascii_uppercase();
         let known = &mut self.bandwidth.known;
-        known.retain(|(call, _)| *call != callsign);
-        known.push_back((callsign, hz));
+        known.retain(|(call, _, _)| *call != callsign);
+        known.push_back((callsign, hz, now));
         while known.len() > KNOWN_LIMIT {
             known.pop_front();
         }
@@ -326,9 +451,9 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A call this station made went unanswered: if a station under the same base callsign as
-    /// the one called, but another SSID, has been heard within [`KIN_HEARD_S`], the panel
-    /// suggests calling that one (ADR-0057). Calling KK4ODA when only KK4ODA-1 listens is the
-    /// mistake KO4WX made the other way round.
+    /// the one called, but another SSID, has been heard within [`KIN_HEARD_S`], and the one
+    /// called has not been heard since, the panel suggests calling that one (ADR-0057). Calling
+    /// KK4ODA when only KK4ODA-1 listens is the mistake KO4WX made the other way round.
     pub(super) fn suggest_kin(&mut self, called: &str, now: f64) {
         let called = called.trim().to_ascii_uppercase();
         let base = base_callsign(&called).to_owned();
@@ -344,6 +469,17 @@ impl<P: Ptt> Station<P> {
         else {
             return;
         };
+        // the station called was heard after its kin: it is there, and the advice would send
+        // the operator elsewhere — WD5EMA's call to KK4ODA, a minute after a session with it,
+        // was told to call the gateway KK4ODA-1 (2026-11-23)
+        if self
+            .bandwidth
+            .heard_at
+            .iter()
+            .any(|(call, heard, _)| *call == called && *heard >= at)
+        {
+            return;
+        }
         let minutes = ((now - at) / 60.0).round();
         let when = if minutes < 1.0 {
             "just now".to_owned()
@@ -381,18 +517,38 @@ impl<P: Ptt> Station<P> {
     /// call then goes out in the station's own, as it would unknown.
     #[must_use]
     pub fn known_bandwidth(&self, callsign: &str) -> Option<usize> {
+        self.bandwidth_stated_since(callsign, f64::NEG_INFINITY)
+    }
+
+    /// [`Self::known_bandwidth`], from what frames stated at station time `since` or later.
+    fn bandwidth_stated_since(&self, callsign: &str, since: f64) -> Option<usize> {
         let callsign = callsign.trim().to_ascii_uppercase();
-        let known = &self.bandwidth.known;
-        if let Some(&(_, hz)) = known.iter().rev().find(|(call, _)| *call == callsign) {
+        let known = || {
+            self.bandwidth
+                .known
+                .iter()
+                .filter(move |(_, _, at)| *at >= since)
+        };
+        if let Some(&(_, hz, _)) = known().rev().find(|(call, _, _)| *call == callsign) {
             return Some(hz);
         }
         let base = base_callsign(&callsign);
-        let mut kin = known
-            .iter()
-            .filter(|(call, _)| base_callsign(call) == base)
-            .map(|&(_, hz)| hz);
+        let mut kin = known()
+            .filter(|(call, _, _)| base_callsign(call) == base)
+            .map(|&(_, hz, _)| hz);
         let first = kin.next()?;
         kin.all(|hz| hz == first).then_some(first)
+    }
+
+    /// Whether a 500 Hz call to `remote` keeps its quick tries: only when the station was heard
+    /// running 500 Hz within [`CALL_HEARD_S`] of station time `now`. The quick tries are 500 Hz
+    /// OFDM, which a 2 300 Hz station does not read at all — it reads a 500 Hz call's tone part
+    /// only (ADR-0126 §8) — and a listener runs 2 300 Hz to answer both (`RadioPost`): WD5EMA's
+    /// 500 Hz call to KK4ODA, a few minutes after a 2 300 Hz session with it, went as three
+    /// quick tries the station could not read and one it could (2026-11-23).
+    pub(super) fn quick_tries_heard(&self, remote: &str, now: f64) -> bool {
+        self.bandwidth_hz() != 500
+            || self.bandwidth_stated_since(remote, now - CALL_HEARD_S) == Some(500)
     }
 
     /// A call that keeps the bandwidth its host program chose (ADR-0102), to a station
@@ -751,6 +907,13 @@ impl<P: Ptt> Station<P> {
     pub(super) fn advance_bandwidth(&mut self, now: f64) {
         let target = self.bandwidth.target_hz();
         if target == self.bandwidth_hz() {
+            // a request withdrawn may leave another in force at the same bandwidth: say whose
+            if matches!(
+                self.bandwidth.why,
+                Why::Configured | Why::Host | Why::Listening
+            ) {
+                self.bandwidth.why = self.bandwidth.why_for_target();
+            }
             return;
         }
         let quiet = self.movable().is_ok() && !self.receiving() && now >= self.deaf_until;
@@ -765,11 +928,7 @@ impl<P: Ptt> Station<P> {
         {
             return;
         }
-        let why = if self.bandwidth.host_hz.is_some() {
-            Why::Host
-        } else {
-            Why::Configured
-        };
+        let why = self.bandwidth.why_for_target();
         self.move_to(target, why);
     }
 
@@ -834,7 +993,11 @@ impl<P: Ptt> Station<P> {
         self.bandwidth.stirred_s = now;
         let reason = match &why {
             Why::Configured => "the station's own".to_owned(),
-            Why::Host => "an external program asked for it".to_owned(),
+            Why::Host => "a program asked for it".to_owned(),
+            Why::Listening => {
+                "a program listening for calls asked for it: it answers calls in either bandwidth"
+                    .to_owned()
+            }
             Why::Call(call) => format!("{call} called in it; back to {from} Hz after the session"),
             Why::Unanswered(call) => format!(
                 "{call} has not answered at {from} Hz, and a {hz} Hz station ignores a wider call; \

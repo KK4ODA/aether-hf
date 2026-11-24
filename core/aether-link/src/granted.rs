@@ -1709,6 +1709,14 @@ impl GrantedEngine {
         self.connect_lasting(remote_call, as_call, heard_db, None)
     }
 
+    /// Whether a call to a station heard at `heard_db` would open with quick OFDM tries
+    /// (ADR-0126 §2.3), which only a station running the call's bandwidth reads: the daemon
+    /// keeps them for a station known to.
+    #[must_use]
+    pub fn quick_tries_for(&self, heard_db: Option<f64>) -> bool {
+        self.plan_for(heard_db, Some(1)).first() == Some(&b'C')
+    }
+
     /// [`connect_heard`](Self::connect_heard), with the call's tries to keep starting for at
     /// least `call_s` seconds (ADR-0129): a call to a station that scans its channels makes
     /// [`tries_lasting`](Self::tries_lasting) tries.

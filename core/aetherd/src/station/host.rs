@@ -59,8 +59,8 @@ impl<P: Ptt> Station<P> {
             }
         }
         if !presence.attached && was.attached {
-            // what it asked for goes with it; withdrawing a request cannot fail. Its callsigns
-            // go with its connection's claim (ADR-0106).
+            // what it asked for goes with its connection, as its callsigns go with its claim
+            // (ADR-0106); a request made without one goes now. Withdrawing cannot fail.
             let _ = self.host_bandwidth(None);
         }
         if presence.cw_id != was.cw_id {
