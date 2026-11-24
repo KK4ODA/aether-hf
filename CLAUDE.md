@@ -3458,7 +3458,15 @@ it had no log line of its own. Now `status.identifier.setup` (`as`, `in_s`, `aft
 says it is owed, the banner counts it down (*Identifying as WD5EMA in 25 s, after a call nobody
 answered*; `noteSetupIdentifier`, `#session-banner-note`), and an `identifier` log line names it
 when it goes (`note_setup_identified`); a setup's identifier no longer leaves a closing outcome for
-the next session. 20 m to the house failed: the skip zone.
+the next session. 20 m to the house failed: the skip zone. **Built 2026-11-24 (the author's answers, asked one at a time with the day's evidence):**
+`bandwidth.set` is held per connection and goes with it; `listening: true` is a listening
+program's request, in force only under no other, the station moving once idle (ADR-0026 §4) —
+RadioPost's adapter asks 2300 Hz while its host listens, so a listener answers both bandwidths;
+the kin-callsign advice waits for the station called not to have been heard since (ADR-0057); a
+500 Hz call's quick tries go only to a station stated at 500 Hz within 15 minutes (ADR-0126 §11,
+`quick_tries_heard`). The 7 pm calls (Eastern) of 2026-11-23 on 40 m were heard by nothing at
+home with every setting right: 40 m had closed for the 95 km path after dark (RadioPost now
+predicts a P2P call's band). Not built: an unanswered 2300 Hz call retried at 500 Hz.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
