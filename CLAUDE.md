@@ -3468,6 +3468,21 @@ the kin-callsign advice waits for the station called not to have been heard sinc
 home with every setting right: 40 m had closed for the 95 km path after dark (RadioPost now
 predicts a P2P call's band). Not built: an unanswered 2300 Hz call retried at 500 Hz.
 
+**Winlink Express P2P on the air (2026-11-24 18:42Z, `docs/research/link-architecture/
+21-wle-p2p-40m-beta174.md`).** The first host-program session since the external programs build:
+Winlink Express as `WD5EMA` at the portable (`KK4ODA-2`, TX-500, 10 W, linked EFHW) called Winlink
+Express as `KK4ODA` at home (`KK4ODA-1`), 40 m at 500 Hz, beta.174 at both ends, each program
+keying its own radio on `PTT ON`; both sides with audio. Today's earlier sessions (16:22–16:55Z)
+were RadioPost's. The B2F handshake with no mail; first try, 10.9 s; every frame at its first copy;
+no overlap (0.645 s), answers 121 ms into their slots. Found, each the author's call: Winlink
+Express wrote `FQ` 0.26 s after delivery, 50 ms past the answer's latest decision (report 20 §4
+again, so a program's reply time is not RadioPost's alone), and the master's DISC waited for a
+header to acknowledge the slave's last bytes (`_can_leave`; a DISC carries acknowledgement fields,
+zero and unread): 10 of the session's 38 s. The TX-500 returns its own signal to the sound card
+while keyed, at the band's level in 1–2.5 kHz, so the keyed-audio watch said *may not be
+transmitting* (outside the signal the audio fell 28–54 dB). The README's *Winlink Express peer to
+peer* figure is `tools/air_p2p_figure.py` (`air-40m-p2p.png`, both recordings on one clock).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

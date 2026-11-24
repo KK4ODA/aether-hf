@@ -68,6 +68,29 @@ window in Mini. While VarAC is attached it sets the callsign and the bandwidth, 
 radio and sets its frequency, as it does with VARA. The GPS position in VarAC's status bar is
 covered; the grid square is left.</sub>
 
+### Winlink Express peer to peer
+
+On 2026-11-24 at 18:42Z, Winlink Express at a portable station called Winlink Express at home in
+a *Vara HF P2P* session, at 500 Hz on 40 m, with Aether as the modem at both ends. The portable
+ran a Lab599 TX-500 at 10 W into a linked end-fed half-wave; home runs a Yaesu FTDX10 at 50 W into
+a T2D. Aether's program finder had set up both copies of Winlink Express. Each kept its own radio
+setup and keyed its radio when Aether said `PTT ON`, as it does with VARA.
+
+The call connected at its first try, in 11 s. Home read the portable at −5 to +1 dB SNR (in
+3 kHz), and the portable read home at +5 to +9 dB. Neither station had mail waiting, so the
+session was the B2F handshake: home's greeting, the portable's `FF`, home's `FQ`, then each
+station's identifier. Every frame decoded at its first copy, and no transmission overlapped the
+other station's. The whole contact took 57 s, from the call to the last identifier
+([report 21](docs/research/link-architecture/21-wle-p2p-40m-beta174.md)).
+
+![Both stations of the P2P contact on one clock: the sequence of transmissions, from the call to the identifiers, over each station's receive audio as a waterfall](docs/images/air-40m-p2p.png)
+
+<sub>Drawn from both stations' own recordings, joined on one clock. The portable's headers
+and its data went on the tone floor (3.2 and 5.4 s frames), since home heard it weakly; home
+answered in short OFDM frames, which the portable heard well. While the TX-500 transmits it sends
+its own signal back to the sound card, so the portable's waterfall shows its own transmissions;
+the FTDX10 goes quiet instead.</sub>
+
 ## Works with Winlink apps
 
 Winlink's own programs talk to Aether as they talk to VARA. They use VARA HF's published host

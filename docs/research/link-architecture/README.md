@@ -165,6 +165,20 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    own probe learned; report 16's hidden frame again, a header at the slave and an answer at the
    master in one exchange; a learned answer gap raised by the Test's own probe; and three slow
    climbs back after a fade, for the rate controller's review.
+18. [18-radiopost-40m-beta162.md](18-radiopost-40m-beta162.md): RadioPost mail on 40 m at
+   2300 Hz from the mobile to the scanning gateway (2026-11-17): short replies sent at 64-QAM,
+   which led to ADR-0130, and a scan that ended on a read-back the radio missed (ADR-0129 §13).
+19. [19-radiopost-p2p-40m-beta164.md](19-radiopost-p2p-40m-beta164.md): RadioPost gateway and
+   P2P sessions on 40 m under QRM (2026-11-18): the data identifier refused after a program's
+   session, and a both-ways try's tone part read as a call heard again (both fixed).
+20. [20-radiopost-scan-80m-40m-beta168.md](20-radiopost-scan-80m-40m-beta168.md): RadioPost mail
+   checks to the three-dial scanning gateway (2026-11-21): the scan's lingers on a busy band
+   (ADR-0129 §16, §17), and two waits a session from the programs' timing.
+21. [21-wle-p2p-40m-beta174.md](21-wle-p2p-40m-beta174.md): the first Winlink Express P2P
+   session on the air through the external programs build (2026-11-24, 40 m, 500 Hz, both
+   sides): clean slots, the host interface as Winlink Express expects it, two exchanges lost
+   at the end (a reply 50 ms too late for its slot, a DISC that waits for an acknowledgement),
+   and a false keyed-audio warning from the TX-500's monitor.
 
 ## Reproduction
 
