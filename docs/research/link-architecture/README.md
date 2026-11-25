@@ -180,6 +180,14 @@ It is faster than ADR-0068 on bulk and exchange traffic.
    transmission and to a DISC that waits for an acknowledgement; a 50 kB file Winlink Express
    gave up on after exactly 5 minutes, and a drain that sent on for 70 s after; a false
    keyed-audio warning from the TX-500's monitor; and the five fixes the author decided.
+22. [22-wle-p2p-80m-beta175.md](22-wle-p2p-80m-beta175.md): seven Winlink Express P2P sessions on
+   80 m with beta.175 (2026-11-24, six at 500 Hz, one at 2300 Hz with a 161.6 kB file): the two
+   *Disconnecting* messages were Winlink Express's own 300 s timer, held as ADR-0134 has it, the
+   link healthy throughout; the first calls failed because home's Winlink Express was not
+   attached, while Aether's advice named its own `KK4ODA-1`; the Host indicators removed on
+   2026-11-23 by decision, with the value in use now said nowhere in Setup; throughput that
+   followed the path (500 Hz the better choice at −1 dB); the *Receiving at* line and the Mode
+   tile explained; a regression test plan, and seven questions for the author.
 
 ## Reproduction
 
