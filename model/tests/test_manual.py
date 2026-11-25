@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "tools" / "manual" / "build.py"
 FIGURES = ROOT / "tools" / "manual" / "figures.py"
+ONE_PAGE = ROOT / "tools" / "manual" / "onepage.py"
 
 
 def run(tool: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -42,6 +43,17 @@ def test_the_schematics_are_what_their_script_draws() -> None:
     assert result.returncode == 0, (
         "docs/manual/fig/ is out of date with tools/manual/figures.py.\n"
         "Run: python -m uv run python tools/manual/figures.py\n"
+        f"{result.stdout}{result.stderr}"
+    )
+
+
+def test_the_one_page_guides_are_printed_from_their_sources() -> None:
+    """The README links the VarAC and Winlink Express one-pagers' PDFs, so they must say what
+    their Markdown says: a guide changed without printing it again fails here."""
+    result = run(ONE_PAGE, "check")
+    assert result.returncode == 0, (
+        "A one-page guide in docs/user/ is out of date with its PDF.\n"
+        "Run: python tools/manual/onepage.py print\n"
         f"{result.stdout}{result.stderr}"
     )
 

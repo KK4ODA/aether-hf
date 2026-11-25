@@ -12,6 +12,13 @@ server. Its air interface is published, every transmission is checked against th
 rules before the radio keys, and the same modem runs as a desktop application on Windows,
 Linux and macOS or headless on a Raspberry Pi gateway.
 
+**Start here, on one printed page each:**
+[Aether HF with VarAC](docs/user/one-page-varac.pdf) ·
+[Aether HF with Winlink Express](docs/user/one-page-winlink-express.pdf). Installing, Setup, the
+one-step setup of the program, the drive, and what to do when something is wrong, on Windows
+(also on screen: [VarAC](docs/user/one-page-varac.md),
+[Winlink Express](docs/user/one-page-winlink-express.md)).
+
 > **Status: beta, on the air.** Signed builds ship from
 > [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.178` at the time of
 > writing): a Windows installer, Linux `.deb` and AppImage packages, an unsigned macOS build for
@@ -649,17 +656,20 @@ cover everything else it does.
   page a tester needs: install, set up, connect through Winlink Express, Pat or VarAC, and what
   debug mode sends.
 * **External programs** (programs written for VARA; not RadioPost): turn on *External programs*
-  in Setup step 5 and point the program at `127.0.0.1`, port 8300. In Winlink Express that is a *Vara HF* session with its automatic
-  launch off and Aether started first; in Pat, the `varahf` transport. On Windows, Setup step 5's
-  *Winlink programs* reads Winlink Express, RMS Trimode and RMS Packet into profiles. How to set up each one,
-  with the program owning the radio or Aether owning it, is in
+  in Setup step 5 and point the program at `127.0.0.1`, port 8300. In Winlink Express that is a
+  *Vara HF* session with its automatic launch off and Aether started first; in Pat, the `varahf`
+  transport. On Windows, Setup step 5's *Winlink programs* reads Winlink Express, RMS Trimode and
+  RMS Packet into profiles; Winlink Express is set up
+  [on one page](docs/user/one-page-winlink-express.pdf). How to set up each one, with the program
+  owning the radio or Aether owning it, is in
   [`docs/user/host-programs.md`](docs/user/host-programs.md); what each program sends and what
   has been verified is in [`docs/spec/host-interfaces.md` §7](docs/spec/host-interfaces.md).
-* **VarAC, on Windows:** do Setup steps 1 to 3 (callsign, sound card, receive level). When the
-  banner says VarAC is on this computer, press **Set up**, then **Switch to VarAC default**. In
-  VarAC, choose *Switch profile*, then *VarAC_Aether*: VarAC restarts and starts Aether. Close
-  VARA HF first. Switching VarAC back to its usual profile runs it on VARA again. Setup step 5's
-  **VarAC** row does the same when VarAC is not in `C:\VarAC`. The manual's
+* **VarAC, on Windows** ([on one page](docs/user/one-page-varac.pdf)): do Setup steps 1 to 3
+  (callsign, sound card, receive level). When the banner says VarAC is on this computer, press
+  **Set up**, then **Switch to VarAC default**. In VarAC, choose *Switch profile*, then
+  *VarAC_Aether*: VarAC restarts and starts Aether. Close VARA HF first. Switching VarAC back to
+  its usual profile runs it on VARA again. Setup step 5's **VarAC** row does the same when VarAC
+  is not in `C:\VarAC`. The manual's
   [VarAC in one step](docs/manual/manual.md#varac-in-one-step) has the details.
 * **Finding an Aether gateway:** Aether gateways are in Winlink's channel list under the service
   code **`AETHER`**, never under `PUBLIC` (a VARA station could not connect to one). In Winlink

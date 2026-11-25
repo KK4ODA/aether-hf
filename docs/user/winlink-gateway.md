@@ -170,7 +170,7 @@ click to come back to.
 5. **Application settings.** **Recording** on. **Debug mode** on: every session Trimode runs is
    recorded and uploaded to the project a minute after it ends, which is the point of the test.
    **External programs** on, port 8300. KISS programs off.
-6. **Save these settings.** Then *Save as…* in the Profile bar: *Gateway*.
+6. **Save** (Setup step 6). Then *Save as…* in the Profile bar: *Gateway*.
 
 Tune to the dial from the Session tab's dial list (3.590 MHz). The rules badge in the header
 must say **Legal**. Under automatic control it says *TX blocked* at any dial outside the

@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.26.1 |
+| **Version** | 1.27.0 |
 | **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.178 |
 | **Licence** | CC BY 4.0 |
@@ -250,7 +250,7 @@ so problems on real paths can be found. Nothing is sent until you choose **Keep 
 *Figure 5. Debug mode: asked once, before anything is sent.*
 
 1. **Setup**, steps 1 to 6 ([Setup](#7-setup)): your callsign and the rules, the sound card and
-   how the radio is keyed, the receive level, the bandwidth. Press **Save these settings**.
+   how the radio is keyed, the receive level, the bandwidth. Press **Save** in step 6.
 2. **Set the drive** on the Session tab ([Keying and drive level](#keying-and-drive-level)).
 3. **Make a contact** ([Making a contact, step by step](#14-making-a-contact-step-by-step)).
 
@@ -649,7 +649,7 @@ quiet leaves the signal inside the sound card's own noise.
 
 ### Step 6. Save
 
-**Save these settings** writes them to the modem. Most take effect at once. A new sound card, any
+**Save** writes them to the modem. Most take effect at once. A new sound card, any
 radio control setting, External programs, compression, the update channel or the callsign restarts the
 modem, which takes a few seconds; the window comes back by itself.
 
@@ -1727,7 +1727,7 @@ them off in Setup step 5.
 
 | What | Where, or what it is |
 |---|---|
-| First start | Setup, steps 1 to 6, then **Save these settings** |
+| First start | Setup, steps 1 to 6, then **Save** |
 | Callsign, rules, control, licence class | Setup step 1 |
 | Sound card and radio control | Setup step 2 |
 | Receive level | Setup step 3: aim for *Good* |
@@ -1754,6 +1754,8 @@ them off in Setup step 5.
 | Subject | Document |
 |---|---|
 | Installing, checking downloads, updating, uninstalling | [Installing Aether HF](../user/install.md) |
+| VarAC, on one printed page | [Aether HF with VarAC](../user/one-page-varac.md) ([PDF](../user/one-page-varac.pdf)) |
+| Winlink Express, on one printed page | [Aether HF with Winlink Express](../user/one-page-winlink-express.md) ([PDF](../user/one-page-winlink-express.pdf)) |
 | On-air testing, for testers | [The tester's guide](../user/tester-guide.md) |
 | Winlink Express, Pat and VarAC, program by program | [VarAC, Winlink Express and Pat with Aether](../user/host-programs.md) |
 | RMS Packet, today and with Aether FM | [RMS Packet with Aether](../user/rms-packet.md) |
@@ -1848,3 +1850,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.25.0 | 2026-11-25 | The Status tab's **Mode** says **Control** on its Receiving row, with the frames' family, while the other station only answers with control frames; a dash now means nothing heard ([The Status tab](#9-the-status-tab)). |
 | 1.26.0 | 2026-11-25 | A sound card that is unplugged, missing at start or at the wrong rate is opened again by itself when it comes back, with nothing transmitted meanwhile; the same interface in another USB port, renamed by Windows with a number, is found and used, with a banner and **Keep** ([Banners](#banners), [The computer](#the-computer)). |
 | 1.26.1 | 2026-11-25 | [The header](#the-header): the **Rung** is not shown outside a session, as the Status tab's **Mode** shows a dash there. It read *Rung 0* after every session, the rung a station starts from before a call has read the path. |
+| 1.27.0 | 2026-11-25 | [Where to read more](#where-to-read-more): two one-page guides to print, Aether with VarAC and Aether with Winlink Express, each as Markdown and as a PDF (`tools/manual/onepage.py`). Setup's last button is **Save**, as the window says; the manual had called it *Save these settings*. |

@@ -63,18 +63,23 @@ make switching between programs one click.
 ## 3. Your program
 
 Aether answers on VARA HF's host port, so you set your program up as for VARA and point it at
-Aether. The full guide is [host-programs.md](host-programs.md); here is the short version.
+Aether. The full guide is [host-programs.md](host-programs.md); here is the short version. To
+print: [Aether HF with VarAC](one-page-varac.pdf) and
+[Aether HF with Winlink Express](one-page-winlink-express.pdf), one page each.
 
 ### Winlink Express
 
 * **Use your plain registered callsign** — no SSID. Winlink Express proposes no messages to a
   station whose callsign has an SSID: the session connects and ends with nothing sent.
-* *Vara HF* setup: host `127.0.0.1`, port `8300`. The TNC path can be Aether's application,
-  `C:\Users\<you>\AppData\Local\Aether HF\aether-hf.exe` — or leave auto-launch off and start
-  Aether first. **Never point it at `VARA.exe`.**
-* **Aether keys the radio** (Setup step 2: CAT, a serial line, a CM108 pin, `rigctld` or FLRig), not
-  Winlink Express. If Aether keys on a serial line or a CM108 pin, Winlink Express can still do
-  its own frequency control on the radio's CAT port.
+* On Windows, Setup step 5's **Winlink programs** sets Winlink Express up for you: tick its row.
+* *Vara HF* setup: host `127.0.0.1`, port `8300`. Leave its automatic launch off and start Aether
+  first: Winlink Express closes the TNC it started when it closes. **Never point it at
+  `VARA.exe`.**
+* **One keyer, never both.** Aether keys the radio (Setup step 2: CAT, a serial line, a CM108
+  pin, `rigctld` or FLRig), or Winlink Express does, on Aether's `PTT ON`, when its *Radio Setup*
+  names a PTT port; Aether's *Radio control* is then *External program*. If Aether keys on a
+  serial line or a CM108 pin, Winlink Express can still do its own frequency control on the
+  radio's CAT port.
 * The bandwidth is set in Winlink Express's session window; Aether follows it.
 * Winlink Express asks to update its propagation estimates at every HF session: *No – Wait till
   later* is fine.

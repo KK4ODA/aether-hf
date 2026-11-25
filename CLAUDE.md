@@ -100,6 +100,11 @@ run's cost, and pass `confirm: true` only after the author says yes.
   The version it names (the header's **Describes** row) is a `tools/release.py` site, so `bump`
   moves it and `check` (CI) holds it. Write user-facing prose plainly: short sentences, no
   filler, the operator's words.
+  **The one-pagers** (`docs/user/one-page-varac.md`, `one-page-winlink-express.md`, linked at
+  the top of the README as PDFs beside them) are held to the same rule: a change to what they
+  say is reprinted in the same commit with `python tools/manual/onepage.py print` (Chrome or
+  Chromium, `$CHROME`), which refuses a second page; `test_manual.py` fails when a source no
+  longer matches the SHA-256 in `docs/user/one-page.json`.
 
 ## Current phase
 Phases 0–5 are done and on `master`, **releases are flowing** (`v0.2.0-beta.2` through
