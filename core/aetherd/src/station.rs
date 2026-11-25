@@ -1233,6 +1233,10 @@ pub struct Station<P: Ptt> {
     /// showed tone-36 under data arriving at tone4x100-75 (12-two-paths-80m.md §16).
     data_sent: Option<(f64, usize)>,
     data_heard: Option<(f64, usize)>,
+    /// The last control frame decoded from the session's other station, with when and whether
+    /// it was on the tone floor: what the Mode tile's *Receiving* row says while the other
+    /// station only answers — a dash there read as "nothing heard" (the author, 2026-11-25).
+    control_heard: Option<(f64, bool)>,
     /// The answer the transmission rendered last carries — a call's acceptance or a probe's
     /// answer — told to the learned gaps when it is keyed: until then nothing the other
     /// station sends can say it was missed (ADR-0054, report 19 §7).
@@ -1416,6 +1420,7 @@ impl<P: Ptt> Station<P> {
             moved: VecDeque::new(),
             data_sent: None,
             data_heard: None,
+            control_heard: None,
             answer_rendered: None,
             crossed: 0,
             frequency: FrequencyCache::default(),
@@ -1765,6 +1770,19 @@ impl<P: Ptt> Station<P> {
         let recent =
             |moved: Option<(f64, usize)>| moved.filter(|(t, _)| *t >= since).map(|(_, rung)| rung);
         (recent(self.data_sent), recent(self.data_heard))
+    }
+
+    /// The family of the control frames decoded from the session's other station in the same
+    /// window — `Some(true)` on the tone floor, `Some(false)` ordinary — or `None` when none
+    /// was: what the panel's *Receiving* row says while no data arrives but the other station
+    /// answers (headers and acknowledgements carry no data, so they have no rate to draw).
+    #[must_use]
+    pub fn control_heard(&self) -> Option<bool> {
+        let link = self.link?;
+        let since = (self.now() - THROUGHPUT_WINDOW_S).max(link.started_s);
+        self.control_heard
+            .filter(|(t, _)| *t >= since)
+            .map(|(_, floor)| floor)
     }
 
     /// The dial frequency, when the keying interface can ask the radio.
@@ -4282,7 +4300,7 @@ impl<P: Ptt> Station<P> {
         if report.decoded || report.detect_confidence >= DETECT_CONFIDENCE_TRUSTED {
             self.rx_until = self.rx_until.max(now + 0.5);
         }
-        self.note_session_frame(&report, rung, now);
+        self.note_session_frame(&report, rung, frame.floor, now);
         self.scan_heard(&report, now);
         self.reports.push(report);
     }
@@ -4290,7 +4308,7 @@ impl<P: Ptt> Station<P> {
     /// A frame the session's other station sent, decoded: the session's notes for the history,
     /// and the rung its data came in at for the speed chart (a frame that did not decode moves
     /// that too, where the engine files it).
-    fn note_session_frame(&mut self, report: &FrameReport, rung: usize, now: f64) {
+    fn note_session_frame(&mut self, report: &FrameReport, rung: usize, floor: bool, now: f64) {
         let Some(notes) = &mut self.session_notes else {
             return;
         };
@@ -4306,6 +4324,8 @@ impl<P: Ptt> Station<P> {
         if report.kind == "data" {
             notes.top_rung_heard = Some(notes.top_rung_heard.map_or(rung, |t| t.max(rung)));
             self.data_heard = Some((now, rung));
+        } else if report.kind == "control" {
+            self.control_heard = Some((now, floor));
         }
     }
 
@@ -11035,12 +11055,24 @@ mod tests {
             "{sent:?} sent, {heard:?} heard"
         );
         assert_eq!(answered, None);
+        // and the caller hears the called station only answer: control frames, no data
+        air.run(30.0, |a, _| a.control_heard().is_some());
+        assert!(
+            air.a.control_heard().is_some(),
+            "the caller heard no control frames from the called station"
+        );
+        assert_eq!(air.a.data_rungs().1, None);
 
         air.a.disconnect();
         air.run(60.0, |a, b| {
             a.state() == State::Idle && b.state() == State::Idle
         });
         assert!(air.a.link().is_none(), "the account ends with the session");
+        assert_eq!(
+            air.a.control_heard(),
+            None,
+            "nothing heard outside a session"
+        );
         assert!(air.a.throughput_bps().abs() < f64::EPSILON);
     }
 

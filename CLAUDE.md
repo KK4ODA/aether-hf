@@ -3579,6 +3579,14 @@ there; plant a fault to see it fail.
 
 **The idle Mode tile (2026-11-25, after beta.177):** *next: 0* after a session read as a warning; the rung cell now holds only a number or a dash, *next* goes in the name cell (`next · QPSK ½`), and outside a session Sending is a dash — the engine resets its rate controller at a session's end, so `metrics.mode` idle is only `initial_mode` (0), and a session's first rung comes from the call's reading. The header's well still shows *Rung N* idle. `panel_check.mjs` feeds metrics through `__screens.metrics(patch)`.
 
+**Control frames on the Receiving row (2026-11-25, the author: a dash while the other station
+only answered read as "nothing received").** `metrics.receiving_control` (`"floor"`, `"ordinary"`,
+null; `Station::control_heard`, set from decoded control frames of the session's peer in the 30 s
+window) makes the Mode tile's Receiving row say **Control** and the family (*tone floor*/*OFDM*)
+when no data arrives; a dash now means nothing heard. No rate is shown and the speed chart draws
+no *receiving at* line for it: control frames carry no data. `panel_check.mjs`'s `answering` scene,
+manual figure 22.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

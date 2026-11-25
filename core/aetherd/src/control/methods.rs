@@ -2618,6 +2618,9 @@ pub fn metrics<P: Ptt>(station: &Station<P>) -> Value {
         // rate lines (null where nothing moved that way)
         "sending_rung": station.data_rungs().0,
         "receiving_rung": station.data_rungs().1,
+        // the family of the other station's control frames in the same window ("floor",
+        // "ordinary", null): what the panel says while it only answers, with no data to draw
+        "receiving_control": station.control_heard().map(|floor| if floor { "floor" } else { "ordinary" }),
         // whether the audio clips (ADR-0132): the panel's banner and its Receive level line
         "clipping": {
             "share": station.clipping().0,

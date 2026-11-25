@@ -619,6 +619,7 @@ function timeline(kind) {
       throughput_bps: Math.round(throughput),
       sending_rung: live && t > connectAt + 3 ? SEND_RUNG : null,
       receiving_rung: live && t > connectAt + 8 ? RECEIVE_RUNG : null,
+      receiving_control: live ? "ordinary" : null,
       link: live ? {started_s: 2200 + connectAt, seconds: round1(seconds), remote: PEER,
                     bytes_sent: Math.round(bytesSent), bytes_received: Math.round(bytesReceived)}
         : null,
@@ -731,6 +732,14 @@ const SEEN = {"aether.chime": "off"};
 function world(scene) {
   const kind = scene.timeline ?? "session";
   const t = timeline(kind);
+  // the other station only answering: control frames on the floor, no data from it
+  if (scene.answering) {
+    for (const e of t.events) {
+      if (e.event === "metrics" && e.data.link) {
+        e.data = {...e.data, receiving_rung: null, receiving_control: "floor"};
+      }
+    }
+  }
   const configured = scene.configured !== false;
   const bandwidth = scene.bandwidth ?? 2300;
   const callsign = configured ? ME : "N0CALL";
@@ -847,7 +856,7 @@ function world(scene) {
          advice: "Very quiet. Turn the radio's audio output or the sound card's input up."},
     tx_peak_dbfs: configured ? -7.9 : null, snr_db: null, cfo_hz: null, last_frame_s: null,
     peer_snr_db: null, rate_snr_db: null, missed_there: null, throughput_bps: 0,
-    sending_rung: null, receiving_rung: null,
+    sending_rung: null, receiving_rung: null, receiving_control: null,
     clipping: scene.clipping ?? {share: 0, clips: false},
     link: null,
   };
@@ -1197,6 +1206,8 @@ const SCENES = {
     `document.getElementById("btn-share-open").click()`]},
   help: {timeline: "ended", after: [tab("help"), "hideEndedBanner()"]},
   compact: {storage: {"aether.view": "compact"}, view: "compact"},
+  // the Link card while this station sends and the other only answers with control frames
+  answering: {answering: true, clip: ["#readings-link"]},
   mini: {storage: {"aether.view": "mini"}, view: "mini"},
   light: {storage: {"aether.theme": "light"}, after: [tab("session")]},
   signal: {page: "signal.html", width: 860, height: 640, settle: 52000, hold: "rx"},

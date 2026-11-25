@@ -844,19 +844,24 @@ function rungRate(rung) {
 
 // The Mode tile and the well's rung. The tile has a row each way (the author's choice of
 // 2026-11-25, report 22 §6): Sending, this station's data rung, and Receiving, the other
-// station's, over the last 30 s, a dash for a direction where none moved. With nothing moving,
-// Sending shows the rung this station's own rate controller would send at next (`metrics.mode`).
-// The well keeps its one line: the rung the data moves at, both when both. A daemon before
-// 0.2.0-beta.109 says neither direction: its rung shows as the next.
+// station's, over the last 30 s. With nothing moving, Sending shows the rung this station's own
+// rate controller would send at next (`metrics.mode`). While the other station only answers —
+// headers and acknowledgements, no data — Receiving says *Control* and the frames' family
+// (`metrics.receiving_control`, 0.2.0-beta.178): a dash there read as "nothing heard" (the
+// author, 2026-11-25). Control frames carry no data, so no rate is shown for them. A dash is
+// left only for nothing heard from the other station in 30 s. The well keeps its one line: the
+// rung the data moves at, both when both. A daemon before 0.2.0-beta.109 says neither
+// direction: its rung shows as the next.
 function applyRung(metrics) {
   const mode = metrics.mode;
   const told = metrics.sending_rung !== undefined;
   const sending = told ? metrics.sending_rung : null;
   const receiving = told ? metrics.receiving_rung : null;
+  const control = receiving == null ? (metrics.receiving_control ?? null) : null;
   if (sending == null && receiving == null && mode === undefined) return;
   currentMode = receiving ?? sending ?? mode;
-  // the rung cell holds a number or a dash, nothing else, so it reads in the tile's numerals
-  // whatever the state; "next" is a quiet word in the name cell (beta.177 drew "next: 0" in
+  // the rung cell holds a number, a dash or Receiving's *Control*, nothing else, so it reads in
+  // the tile's numerals whatever the state; "next" is a quiet word in the name cell (beta.177 drew "next: 0" in
   // the display face and it read as a warning). Outside a session there is no next: the
   // engine starts its controller afresh, and the next session's first rung comes from what
   // the call and its acceptance read, so the configured initial rung (0) is not shown
@@ -866,7 +871,7 @@ function applyRung(metrics) {
     if (rung == null) {
       rungCell.textContent = "—";
       nameCell.textContent = "";
-      return "none in the last 30 s";
+      return rungId === "v-mode-recv" ? "nothing heard in the last 30 s" : "none in the last 30 s";
     }
     rungCell.textContent = String(rung);
     nameCell.textContent = next ? `next · ${rungName(rung)}` : rungName(rung);
@@ -879,9 +884,20 @@ function applyRung(metrics) {
   if (idle && !inSession) {
     sent = "no session; the first rung of the next one is chosen from what the call reads";
   }
-  const heard = row("v-mode-recv", "v-mode-recv-name", receiving, false);
+  let heard;
+  if (control) {
+    const family = control === "floor" ? "tone floor" : "OFDM";
+    $("v-mode-recv").textContent = "Control";
+    $("v-mode-recv-name").textContent = family;
+    heard =
+      `control frames only, on the ${family}: the other station is answering (headers and ` +
+      "acknowledgements), and has sent no data in the last 30 s. Control frames carry no data, so they have no rate";
+  } else {
+    heard = row("v-mode-recv", "v-mode-recv-name", receiving, false);
+  }
   $("mode-tile").title = `Sending: ${sent}. Receiving: ${heard}`;
   const strip = $("strip-rung");
+  const answering = control ? "; the other station answers with control frames" : "";
   if (sending != null && receiving != null) {
     strip.textContent = `Rung ${sending} ↑  ${receiving} ↓`;
     strip.title = `Sending at rung ${sending}, receiving at rung ${receiving}`;
@@ -890,10 +906,10 @@ function applyRung(metrics) {
     strip.title = `Receiving at rung ${receiving}, ${rungRate(receiving)} on the air`;
   } else if (sending != null) {
     strip.textContent = `Rung ${sending} ↑  ${rungRate(sending)}`;
-    strip.title = `Sending at rung ${sending}, ${rungRate(sending)} on the air`;
+    strip.title = `Sending at rung ${sending}, ${rungRate(sending)} on the air${answering}`;
   } else {
     strip.textContent = modeTable[mode] ? `Rung ${mode}  ${rungRate(mode)}` : `Rung ${mode}`;
-    strip.title = `No data moving: rung ${mode} is the rung this station would send at next`;
+    strip.title = `No data moving: rung ${mode} is the rung this station would send at next${answering}`;
   }
   strip.hidden = false;
 }
@@ -932,7 +948,9 @@ function applyMetrics(metrics) {
     // speed is zero with no session; a rung's on-air rate is drawn only where data moved at
     // it, each way: the rung this station would send at moves nothing while it only answers
     // (KK4ODA-1's chart showed tone-36 under data arriving at tone4x100-75, report 12 §16).
-    // A daemon that does not say (before 0.2.0-beta.109) is drawn as before, its own rung
+    // A daemon that does not say (before 0.2.0-beta.109) is drawn as before, its own rung.
+    // Control frames alone draw no *receiving at* line: they carry no data, and a rate there
+    // would read as data arriving; the tile's Receiving row says *Control* instead
     const rateOf = (rung) => (rung == null ? null : (modeTable[rung]?.net_bit_rate ?? null));
     const told = metrics.sending_rung !== undefined;
     const sending = metrics.link ? rateOf(told ? metrics.sending_rung : mode) : null;

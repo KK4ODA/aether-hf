@@ -193,6 +193,22 @@ const CHECKS = [
     })()`,
   },
   {
+    scene: "answering",
+    what: "the other station only answering: Receiving says Control and the family, no dash, no line",
+    page: `(() => {
+      const out = [], $ = (id) => document.getElementById(id);
+      if (!/^\\d+$/.test($("v-mode-send").textContent.trim()))
+        out.push("Sending reads '" + $("v-mode-send").textContent + "'");
+      if ($("v-mode-recv").textContent.trim() !== "Control")
+        out.push("Receiving reads '" + $("v-mode-recv").textContent + "', not Control");
+      if ($("v-mode-recv-name").textContent.trim() !== "tone floor")
+        out.push("Receiving's family reads '" + $("v-mode-recv-name").textContent + "'");
+      if (!$("mode-tile").title.includes("control frames only"))
+        out.push("the tile's tooltip does not say control frames only");
+      return out;
+    })()`,
+  },
+  {
     scene: "banners",
     what: "idle after a held DISCONNECT: the banner with its two buttons, and no next rung outside a session",
     page: `(() => {
