@@ -449,7 +449,15 @@ steps `host-write N` and `host-closed S`; `[expect]` keys `wle_timer` (its timer
 `wle_held` (the session ran on past it) and `wle_closes` (it closed within two minutes of it).
 Two real-time scenarios: `80m-wle-long-message-500` (a message that takes over five minutes and
 under fifteen: held, delivered, clean end) and `80m-wle-hopeless-file-500` (60 kB on a −2 dB
-path: closed at the first timer). The other rows of §7's table stay to do.
+path: closed at the first timer). Built on 2026-11-25 (the author's choice: the fast ones and
+the panel): `40m-wle-program-callsign-2300` (a call to the base callsign of a station whose own has
+an SSID, unanswered with the mismatch `program` before its program attaches, connected after) and
+`40m-wle-abort-and-recall-2300` (a program aborts mid-file and calls again; the called program is
+handed exactly the new message), both in CI's quick set, with the harness steps `host b wle CALL`,
+`host-unanswered`, `host-abort` and `host-exact`; and `tools/manual/panel_check.mjs`, which opens the
+manual's scenes in headless Chrome and checks the greyed fields and their notes, the Mode tile's
+rows, the speed chart's two lines and the held banner (CI's app job, Linux). The further real-time
+scenarios of §7 are left until a field session points at one.
 
 Run on this build, one draw each, real time:
 

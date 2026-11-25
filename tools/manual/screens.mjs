@@ -43,8 +43,11 @@ const MS = 1000;
 
 const VERSION = /^version = "([^"]+)"/m.exec(readFileSync(join(ROOT, "pyproject.toml"), "utf8"))[1];
 
+// uv as installed: a `uv` on the path (CI's setup-uv), else Python's own module
+const UV = spawnSync("uv", ["--version"]).status === 0 ? ["uv"] : ["python", "-m", "uv"];
+
 function python(args) {
-  const run = spawnSync("python", ["-m", "uv", "run", "--with", "pillow", "python",
+  const run = spawnSync(UV[0], [...UV.slice(1), "run", "--with", "pillow", "python",
     join(ROOT, "tools", "manual", "screen_data.py"), ...args], {cwd: ROOT, encoding: "utf8"});
   if (run.status !== 0) throw new Error(`screen_data.py ${args[0]} failed:\n${run.stderr}`);
   return run.stdout;
@@ -1270,6 +1273,8 @@ async function launch() {
     "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--mute-audio",
     "--force-color-profile=srgb", "--disable-background-timer-throttling",
     "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
+    // Chrome will not sandbox itself as root (a container); the pages are this tree's own
+    ...(process.getuid?.() === 0 ? ["--no-sandbox"] : []),
     "about:blank",
   ], {stdio: ["ignore", "ignore", "pipe"]});
   const url = await new Promise((done, fail) => {
@@ -1320,7 +1325,9 @@ class Cdp {
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-async function shoot(cdp, origin, name, scene) {
+/// A scene's page opened, its data played back and its steps taken, ready to be looked at:
+/// what `shoot` photographs and `panel_check.mjs` asserts on.
+async function openScene(cdp, origin, name, scene) {
   const width = scene.width ?? WIDTH;
   const height = scene.height ?? HEIGHT;
   const data = world(scene);
@@ -1398,6 +1405,12 @@ async function shoot(cdp, origin, name, scene) {
     await evaluate(`window.__screens.hold = "${scene.hold}"`);
     await sleep(800);
   }
+  const close = () => cdp.send("Target.closeTarget", {targetId});
+  return {send, evaluate, close, problems, width};
+}
+
+async function shoot(cdp, origin, name, scene) {
+  const {send, evaluate, close, problems, width} = await openScene(cdp, origin, name, scene);
   await evaluate("document.activeElement?.blur?.(); true");
   let clip;
   if (scene.clip) {
@@ -1412,7 +1425,7 @@ async function shoot(cdp, origin, name, scene) {
                                                      captureBeyondViewport: false});
   const file = join(OUT, `${name}.png`);
   await writeFile(file, Buffer.from(shot.data, "base64"));
-  await cdp.send("Target.closeTarget", {targetId});
+  await close();
   for (const problem of [...problems, ...errors]) console.error(`  ${name}: ${problem}`);
   return file;
 }
@@ -1442,7 +1455,12 @@ async function main() {
   process.stdout.write(python(["shrink", ...files]));
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+export {Cdp, EXTERNAL_CALL, ME, SCENES, launch, openScene, serve, sleep};
+
+// run as a program, not imported by panel_check.mjs
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

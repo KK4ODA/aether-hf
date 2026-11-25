@@ -3558,6 +3558,10 @@ ADR-0095's count-bound rule is left (one overlap in ~10 000 counts); ADR-0129 §
 as it is; report 19's capture skips under 10 ms are counted (a measurement, no handling change);
 its fast-tone bench under partial-band QRM is left for more on-air evidence; report 22 §7's
 fast-clock scenarios and the panel tests are built, its further real-time scenarios not.
+`tools/manual/panel_check.mjs` is the panel's test: it imports `screens.mjs` (which now exports its
+scenes and `openScene`, and runs only when run itself) and asserts on the manual's scenes in
+headless Chrome; CI's app job runs it on Linux. A new panel behaviour worth holding gets a check
+there; plant a fault to see it fail.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

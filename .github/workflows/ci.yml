@@ -229,3 +229,21 @@ jobs:
       # its screen, and the shell's calls against a stand-in window
       - name: The panel's window placement
         run: node --test app/tests/placement.test.mjs
+
+      # what an operator reads on the panel, asserted in headless Chrome against the manual's
+      # made-up station (tools/manual/panel_check.mjs): the settings an external program sets,
+      # the Mode tile, the speed chart's lines both ways, the held-DISCONNECT banner. Linux only:
+      # the runner's Chrome, Node 22 for its WebSocket client, uv for the ladder read from the model
+      - name: Node 22 (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install uv (Linux)
+        if: runner.os == 'Linux'
+        uses: astral-sh/setup-uv@v10.1.0
+
+      - name: What the panel shows
+        if: runner.os == 'Linux'
+        run: node tools/manual/panel_check.mjs
