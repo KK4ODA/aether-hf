@@ -1,12 +1,11 @@
 # ADR-0131: The channel estimate takes the delay out before it interpolates
 
-**Status:** accepted, built 2026-11-25 (§10) — de-rotation only, the author's answer (§8) to the
-measurements of §7. Started on the author's "start on 1 and 2" after the MER tool's first readings
-(issue #15, `tools/mer_reading.py`). The model step is built behind `FrameReceiver.derotate`
-(`model/aether_model/phy/rx.py`), off; the port (`aether-phy/src/rx.rs`) turns it on in the model
-and the core together, with the vectors regenerated and the harness A/B (§9). No wire change, no
-configuration key. The reported SNR does not move (§2.3), so the rate controller's rule is not
-touched.
+**Status:** accepted, built 2026-11-25 (§10), judged on the harness the same day (§11) — de-rotation
+only, the author's answer (§8) to the measurements of §7. Started on the author's "start on 1 and 2"
+after the MER tool's first readings (issue #15, `tools/mer_reading.py`). On in the model
+(`FrameReceiver.derotate`, `model/aether_model/phy/rx.py`) and the core (`aether-phy/src/rx.rs`)
+together, with the vectors regenerated. No wire change, no configuration key. The reported SNR does
+not move (§2.3), so the rate controller's rule is not touched.
 
 ## 1. Context
 
@@ -221,5 +220,31 @@ the data symbols were estimated from (the followed ones when ADR-0082 follows).
   plain receiver (`derotate=False`), and `tools/bench_estimate.py`'s `before` arm says
   `derotate=false`: the default changed under them. The Rust workspace (955 tests) passes,
   including the field tier: no recording in `field/sessions/` decodes fewer frames.
-* **The harness A/B** against the build before is in §11.
+* **The harness A/B** against the build before is §11.
 
+## 11. The harness A/B (2026-11-25)
+
+Every scenario that runs at the harness's own pace (69; the four held to real time left out) × 2
+draws (its seed and +1000), on this build and on the build before it (`e1fa689`, the same tree with
+the slope not taken out), two at a time each.
+
+* **Passes:** 135 of 138 against 136. Two draws fail on both builds alike
+  (`80m-agc-carrier-inside-500` s1033's message, `80m-trimode-gateway-client-vanishes-500` s1046's
+  connection). The third, `80m-leave-together-500` s1042 (ITU NVIS at 8 dB, 500 Hz), lost its
+  1 000-byte message past its 300 s budget on this build, where the build before took 278 s.
+  Run twice more on each build, the same draw took 278 and 217 s here and 278 and 288 s before: a
+  draw at its budget's edge that the harness's wall-clock steps put on another course, not the
+  change. The two runs had received the same frames until the second session; there this one
+  tried the first OFDM rung 18 times (6 decoded) against 10 (4).
+* **No radiated overlap** in either arm.
+* **Air time, paired by draw over the 135 runs both passed:** ×0.980 (geometric mean; the median
+  ×1.000, 69 runs within half a percent), 500 Hz ×0.981, 2300 Hz ×0.980. Faster by more than 2 %:
+  29 runs; slower: 21, the most ×1.135 (`80m-asymmetric-500` s1011).
+* **Tests:** file rates ×1.041 at 500 Hz and ×1.072 at 2300 Hz over 24 and 14 Tests; message
+  rates ×1.032 and ×0.934. The message is short and goes in one or two transmissions, so its rate
+  follows the rung the first move took; the three 2300 Hz Tests whose message went slower
+  (`20m-dx-moderate-2300` s1051, `40m-moderate-2300-vara-qrm` s1007, `40m-rtty-contest-2300` s19)
+  sent their files faster.
+
+So the change is neutral to slightly better on the harness, as §7's bench said it would be outside
+ITU Poor, which the harness's scenarios seldom reach. It ships in the next beta.
