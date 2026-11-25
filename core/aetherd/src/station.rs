@@ -11434,7 +11434,11 @@ mod tests {
         air.run(60.0, |_, b| b.mismatch().is_some());
         let mismatch = air.b.mismatch().expect("the call was noticed").clone();
         assert_eq!(
-            (mismatch.callsign.as_str(), mismatch.what, mismatch.called.as_deref()),
+            (
+                mismatch.callsign.as_str(),
+                mismatch.what,
+                mismatch.called.as_deref()
+            ),
             ("W4ODA", "program", Some("KK4XYZ-1"))
         );
         assert_eq!(

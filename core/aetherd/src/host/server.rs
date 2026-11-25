@@ -3862,10 +3862,16 @@ mod tests {
             modem.methods()
         );
         // and the panel's banner goes with the session
-        modem.publish("state", json!({"name": "disconnected", "detail": "aborted"}));
+        modem.publish(
+            "state",
+            json!({"name": "disconnected", "detail": "aborted"}),
+        );
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         while modem.flags.disconnect_held_ms.load(Ordering::SeqCst) != 0 {
-            assert!(std::time::Instant::now() < deadline, "still said as held after the session");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "still said as held after the session"
+            );
             std::thread::sleep(Duration::from_millis(5));
         }
         drop(client);
@@ -3877,11 +3883,14 @@ mod tests {
         // The 161 kB file of 2026-11-24 went at 67 bit/s: about five hours. Past
         // `HOLD_FINISH_S` at the session's rate the DISCONNECT is acted on (ADR-0134 §6), and the
         // drain closes at once without the rest (ADR-0135).
-        let (modem, server, mut client) =
-            session_answering(Duration::from_millis(300), 158_812, |method, _| match method {
+        let (modem, server, mut client) = session_answering(
+            Duration::from_millis(300),
+            158_812,
+            |method, _| match method {
                 "status" => json!({"queue_finish_s": 18_960.0, "session_rate_bps": 67.0}),
                 _ => json!({}),
-            });
+            },
+        );
         std::thread::sleep(Duration::from_millis(400));
         client.send("DISCONNECT");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
@@ -3898,11 +3907,14 @@ mod tests {
     #[test]
     fn the_timers_disconnect_is_held_when_the_transfer_would_finish_in_time() {
         // ten minutes to go at the session's rate: held, as ADR-0134 has it
-        let (modem, server, mut client) =
-            session_answering(Duration::from_millis(300), 20_000, |method, _| match method {
+        let (modem, server, mut client) = session_answering(
+            Duration::from_millis(300),
+            20_000,
+            |method, _| match method {
                 "status" => json!({"queue_finish_s": 600.0, "session_rate_bps": 267.0}),
                 _ => json!({}),
-            });
+            },
+        );
         std::thread::sleep(Duration::from_millis(400));
         client.send("DISCONNECT");
         assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");

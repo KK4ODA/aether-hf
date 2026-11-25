@@ -2347,7 +2347,7 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
         station.engine().session_rate().map(|rate| rate * 8.0),
         station.engine().queue_finish_s(),
     );
-    let mut status = status_object(station, frequency_hz, sent_pending, sent_recent);
+    let mut status = status_object(station, frequency_hz, &sent_pending, &sent_recent);
     status["session_rate_bps"] = json!(pace.0);
     status["queue_finish_s"] = json!(pace.1);
     status
@@ -2356,8 +2356,8 @@ fn status<P: Ptt>(station: &mut Station<P>) -> Value {
 fn status_object<P: Ptt>(
     station: &mut Station<P>,
     frequency_hz: Option<u64>,
-    sent_pending: Vec<String>,
-    sent_recent: Vec<crate::station::Delivery>,
+    sent_pending: &[String],
+    sent_recent: &[crate::station::Delivery],
 ) -> Value {
     let engine = station.engine();
     json!({
