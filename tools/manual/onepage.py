@@ -37,7 +37,7 @@ STYLE = """
                  font: 7.5pt Inter, sans-serif; color: #94a3b8; }
   @bottom-right { content: "MADE"; font: 7.5pt Inter, sans-serif; color: #94a3b8; } }
 :root { --ink: #1e293b; --muted: #475569; --hair: #cbd5e1; --accent: #0f766e; }
-html { font: 9.3pt/1.38 Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
+html { font: 9pt/1.38 Inter, "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: var(--ink); }
 body { margin: 0; }
 h1 { font-size: 19pt; margin: 0 0 0.15rem; color: var(--accent); }
 h1 + p { margin: 0 0 0.6rem; color: var(--muted); }
@@ -48,14 +48,14 @@ p { margin: 0.2rem 0; }
 ul, ol { margin: 0.15rem 0; padding-left: 1.2rem; }
 li { margin: 0.12rem 0; break-inside: avoid; }
 a { color: var(--accent); text-decoration: none; }
-code { font: 8.4pt "JetBrains Mono", Consolas, "DejaVu Sans Mono", monospace;
+code { font: 8.2pt "JetBrains Mono", Consolas, "DejaVu Sans Mono", monospace;
        background: #f1f5f9; padding: 0 0.15em; border-radius: 2px; white-space: nowrap; }
 .trouble h2 { margin-top: 0.7rem; }
-table { border-collapse: collapse; width: 100%; font-size: 8.9pt; }
+table { border-collapse: collapse; width: 100%; font-size: 8.7pt; }
 th, td { border-bottom: 1px solid var(--hair); padding: 0.18rem 0.4rem; text-align: left;
          vertical-align: top; }
 th { background: #f1f5f9; }
-td:first-child { width: 36%; }
+td:first-child { width: 31%; }
 """
 
 
