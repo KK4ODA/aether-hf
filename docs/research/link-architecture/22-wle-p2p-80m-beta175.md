@@ -450,3 +450,16 @@ steps `host-write N` and `host-closed S`; `[expect]` keys `wle_timer` (its timer
 Two real-time scenarios: `80m-wle-long-message-500` (a message that takes over five minutes and
 under fifteen: held, delivered, clean end) and `80m-wle-hopeless-file-500` (60 kB on a −2 dB
 path: closed at the first timer). The other rows of §7's table stay to do.
+
+Run on this build, one draw each, real time:
+
+* **Long message**: 12 kB crossed in 879 s at 109 bit/s. The timer's `DISCONNECT`s at 315 and
+  615 s were held, the sender hung up once its data was confirmed sent (895 s), and both programs
+  heard `DISCONNECTED` 24–28 s later. No overlap.
+* **Hopeless file**: the timer fired at 315 s with 56 kB left, about 75 minutes at the session's
+  100 bit/s. The adapter acted on it, the drain gave up at once, and both programs heard
+  `DISCONNECTED` 31–36 s later, after the DISC and both identifiers. No overlap.
+
+The first runs found two faults in the harness's judges, not in Aether: the receiving program's
+timer never fires while it is handed data, so `wle_timer` asks that one program's did; and a
+session the program itself already asked to close is not one a later timer ended.
