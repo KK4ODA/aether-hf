@@ -762,6 +762,13 @@ OFDM_RECEIVE_CASES = (
 """OFDM frames received at a known start (ADR-0082): a steady channel, where the comb pilots
 are averaged a third each as they always were, and two paths whose Doppler shifts beat at 9–12
 Hz — a channel that moves within the frame, followed with a lighter weight — on both airs."""
+OFDM_SLOPE_CASES = (
+    (WIDE_2300, 9, 0, 0, [[1.0, 0.0, 0.0, 8]], 0.02),
+    (NARROW_500, 7, 0, 0, [[0.6, 0.0, 0.0, 6], [0.8, 0.0, 0.4, 10]], 0.02),
+)
+"""Frames whose channel is centred about a millisecond (eight samples) after the receiver's
+timing, so its phase turns across the carriers and the slope is taken out before the pilots are
+interpolated (ADR-0131). Last in the list, so the cases before keep their noise."""
 OFDM_FILTERED_CASES = (
     # (waveform, mode index, rv, follows, rays, noise, filter, floor)
     (
@@ -801,7 +808,11 @@ def ofdm_receive_cases() -> list[dict[str, object]]:
     whether it decodes."""
     out = []
     rng = np.random.default_rng(4242)
-    cases = [(*case, None, 0.0) for case in OFDM_RECEIVE_CASES] + list(OFDM_FILTERED_CASES)
+    cases = (
+        [(*case, None, 0.0) for case in OFDM_RECEIVE_CASES]
+        + list(OFDM_FILTERED_CASES)
+        + [(*case, None, 0.0) for case in OFDM_SLOPE_CASES]
+    )
     for i, (params, mode_index, rv, follows, rays, noise, shaping, floor) in enumerate(cases):
         air = NARROW if params is NARROW_500 else WIDE
         control = mode_index is None

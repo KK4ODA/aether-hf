@@ -1,6 +1,6 @@
 # ADR-0131: The channel estimate takes the delay out before it interpolates
 
-**Status:** accepted for building, 2026-11-17 — de-rotation only, the author's answer (§8) to the
+**Status:** accepted, built 2026-11-25 (§10) — de-rotation only, the author's answer (§8) to the
 measurements of §7. Started on the author's "start on 1 and 2" after the MER tool's first readings
 (issue #15, `tools/mer_reading.py`). The model step is built behind `FrameReceiver.derotate`
 (`model/aether_model/phy/rx.py`), off; the port (`aether-phy/src/rx.rs`) turns it on in the model
@@ -202,3 +202,24 @@ On a machine with a Rust toolchain, in one change:
    about a millisecond from the timing, so the slope is exercised.
 3. The harness A/B (every scenario × 2 draws against the build before), then a beta, with the
    manual unchanged (nothing an operator sees or sets changes).
+
+## 10. Built (2026-11-25, the author's "port it now")
+
+As §9 planned, in one change. `FrameReceiver::derotate` in `aether-phy/src/rx.rs`, on by default,
+and `FrameReceiver.derotate = True` in the model. The slope is read over the full pilot symbols
+after their chips are known; the data symbols' estimate and ADR-0082's re-estimate take it out,
+interpolate and put it back, each pilot carrier keeping its own value; the chip detection before it
+stays plain, and the signal power the SNR is read from is the plain interpolation's, of the rows
+the data symbols were estimated from (the followed ones when ADR-0082 follows).
+
+* **Vectors.** `phy_vectors.json` regenerated: in the eight `ofdm_receive` cases that existed, every
+  SNR is the same to the bit and the symbols moved (up to 10 in the moving channel at 2300 Hz). Two
+  cases were added after them, `OFDM_SLOPE_CASES` (a 2300 Hz frame eight samples late; a 500 Hz
+  frame on two rays six and ten samples late), last in the list so the cases before keep their
+  noise. A sign planted in the port's slope fails the vectors.
+* **Tests.** The model's `test_the_estimate_takes_the_delay_out_before_it_interpolates` names its
+  plain receiver (`derotate=False`), and `tools/bench_estimate.py`'s `before` arm says
+  `derotate=false`: the default changed under them. The Rust workspace (955 tests) passes,
+  including the field tier: no recording in `field/sessions/` decodes fewer frames.
+* **The harness A/B** against the build before is in §11.
+

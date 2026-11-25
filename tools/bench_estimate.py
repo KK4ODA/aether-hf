@@ -32,7 +32,8 @@ sys.path.insert(0, str(ROOT / "model"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 ARMS: dict[str, tuple[str, ...]] = {
-    "before": (),
+    # the receiver before ADR-0131, named: de-rotation is the default since the port has it
+    "before": ("derotate=false",),
     "derotate": ("derotate=true",),
     "wiener": ("channel_estimator=wiener",),
 }

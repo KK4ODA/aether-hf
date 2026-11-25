@@ -1,0 +1,30 @@
+name = "40m-wle-abort-and-recall-2300"
+description = """A Winlink Express P2P session aborted by its program in the middle of a file, and the
+program calling again at once (report 22 §1 and §7: the operator aborted a 161 kB file after 13
+minutes, 2026-11-24). Both programs hear DISCONNECTED, the call made again connects, and the
+called program is handed exactly the new message: nothing of the aborted session's queue comes
+with it (ADR-0052)."""
+tags = ["40m", "host", "winlink", "p2p", "quick"]
+bandwidth = 2300
+seconds = 900
+seed = 137
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+
+[path]
+profile = "good"
+snr_db = 10.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a wle", "host b wle", "host-connect", "host-write 30000", "wait 40", "host-abort", "wait 10", "host-connect", "host-send 2000", "host-exact b", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+idle = true

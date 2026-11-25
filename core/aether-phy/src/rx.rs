@@ -271,6 +271,7 @@ fn median(values: &[f64]) -> f64 {
 
 /// Turns a located frame into symbols and LLR weights.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // four independent switches, the model's own, for benches
 pub struct FrameReceiver {
     params: WaveformParams,
     air: AirInterface,
@@ -304,6 +305,14 @@ pub struct FrameReceiver {
     /// the per-symbol figure's mean. Off, one figure per symbol for every carrier, as the
     /// band's noise would be if nothing shaped it.
     pub noise_shape: bool,
+    /// Take the channel's phase slope across frequency out before interpolating between the
+    /// comb pilots, and put it back after (ADR-0131). The pilots are 160 Hz apart, and a
+    /// channel centred a millisecond after the receiver's timing turns 58° between two of them:
+    /// a straight line between two points of a rotating phasor cuts the corner, and on ITU Poor
+    /// at 24 dB the data carriers lost 10–12 dB that the pilots did not. Each pilot carrier keeps
+    /// its own value, so the residuals the noise is read from are the plain interpolation's, and
+    /// the SNR is reported from the plain interpolation's power, as before.
+    pub derotate: bool,
 }
 
 impl Default for FrameReceiver {
@@ -327,6 +336,7 @@ impl FrameReceiver {
             carrier_noise_threshold: 2.0,
             track_motion: true,
             noise_shape: true,
+            derotate: true,
         }
     }
 
@@ -550,6 +560,26 @@ impl FrameReceiver {
             out
         };
 
+        // the phase slope out, a straight line between the pilots, the slope back; at the pilots
+        // themselves their own values, exactly, so the residuals the noise and the SNR are read
+        // from are the plain interpolation's (ADR-0131 §2.3)
+        let interpolate_turned = |row: &[Complex], turn: &[Complex]| -> Vec<Complex> {
+            let level: Vec<Complex> = row
+                .iter()
+                .zip(&pilot_carriers)
+                .map(|(&value, &carrier)| c::mul(value, c::conj(turn[carrier])))
+                .collect();
+            let mut out: Vec<Complex> = interpolate(&level)
+                .into_iter()
+                .zip(turn)
+                .map(|(value, &t)| c::mul(value, t))
+                .collect();
+            for (&value, &carrier) in row.iter().zip(&pilot_carriers) {
+                out[carrier] = value;
+            }
+            out
+        };
+
         let pilot_symbols: Vec<usize> = layout
             .pilot_symbol_indices()
             .into_iter()
@@ -621,6 +651,34 @@ impl FrameReceiver {
                 known[symbol][carrier] = pilot_reference[slot];
             }
         }
+        // the channel's phase slope across frequency (ADR-0131), now that the full pilot symbols'
+        // chips are known: carrier to adjacent carrier, H[k+1]·H*[k] turns by the slope whatever
+        // the channel's magnitude; until here (the chips) the interpolation was plain
+        let turn: Option<Vec<Complex>> = if self.derotate {
+            let mut slope = (0.0, 0.0);
+            for symbol in (pre..n_sym).filter(|&s| is_pilot_symbol[s]) {
+                let direct: Vec<Complex> = (0..n_carriers)
+                    .map(|carrier| c::div(raw[symbol][carrier], known[symbol][carrier]))
+                    .collect();
+                for pair in direct.windows(2) {
+                    slope = c::add(slope, c::mul(pair[1], c::conj(pair[0])));
+                }
+            }
+            (c::norm_sq(slope) > 0.0).then(|| {
+                let angle = slope.1.atan2(slope.0);
+                (0..n_carriers)
+                    .map(|carrier| c::from_angle(angle * carrier as f64))
+                    .collect()
+            })
+        } else {
+            None
+        };
+        let estimate = |row: &[Complex]| -> Vec<Complex> {
+            match &turn {
+                Some(turn) => interpolate_turned(row, turn),
+                None => interpolate(row),
+            }
+        };
         let moving = if self.track_motion {
             motion(&comb, &raw, &known, &is_pilot_symbol, pre)
         } else {
@@ -644,7 +702,7 @@ impl FrameReceiver {
                     };
                 }
             } else {
-                channel[symbol] = interpolate(&smoothed[symbol]);
+                channel[symbol] = estimate(&smoothed[symbol]);
             }
         }
 
@@ -684,15 +742,18 @@ impl FrameReceiver {
             *value = *value / data_symbols.len().max(1) as f64 * bias;
         }
         let mut reported = self.reported_noise(&per_pilot, sigma2);
+        let mut estimated_from = &smoothed;
+        let followed_rows;
         if let Some((weight, noise)) = moving {
             // re-estimate between the full pilot symbols with the weight the motion asks for;
             // the residuals above, from the steady estimate, keep their shape — which symbols an
             // impulse hit, which carriers an interferer sits on — scaled to what the frame's
             // noise is, read across frequency, plus the error this estimate leaves
-            let followed = follow(&comb, pre, weight);
+            followed_rows = follow(&comb, pre, weight);
             for &symbol in &data_symbols {
-                channel[symbol] = interpolate(&followed[symbol]);
+                channel[symbol] = estimate(&followed_rows[symbol]);
             }
+            estimated_from = &followed_rows;
             let scale = (noise * (5.0 / 3.0 - 2.0 * weight) / sigma2.max(1e-12)).min(1.0);
             for value in &mut sigma2_symbol {
                 *value *= scale;
@@ -700,12 +761,21 @@ impl FrameReceiver {
             reported *= scale;
         }
 
-        let signal_power: f64 = data_symbols
-            .iter()
-            .flat_map(|&s| (0..n_carriers).map(move |carrier| (s, carrier)))
-            .map(|(s, carrier)| c::norm_sq(channel[s][carrier]))
-            .sum::<f64>()
-            / (data_symbols.len() * n_carriers) as f64;
+        // the SNR is reported as it was (ADR-0131 §2.3): from the plain interpolation's power,
+        // which cuts the corners the de-rotated one does not
+        let signal_power: f64 = if turn.is_some() {
+            data_symbols
+                .iter()
+                .flat_map(|&s| interpolate(&estimated_from[s]))
+                .map(c::norm_sq)
+                .sum::<f64>()
+        } else {
+            data_symbols
+                .iter()
+                .flat_map(|&s| (0..n_carriers).map(move |carrier| (s, carrier)))
+                .map(|(s, carrier)| c::norm_sq(channel[s][carrier]))
+                .sum::<f64>()
+        } / (data_symbols.len() * n_carriers) as f64;
         let snr_carrier = signal_power / reported.max(1e-12);
         let bandwidth_ratio = self.params.occupied_bandwidth_hz() / 3000.0;
 

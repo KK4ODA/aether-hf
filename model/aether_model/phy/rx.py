@@ -171,9 +171,9 @@ class FrameReceiver:
     path's, and 16-QAM ½ decoded 4 frames of 20 at +8 dB of the 18 that following the channel
     decodes. Where the pilots' change from symbol to symbol stands clear of their noise, the
     neighbours' weight is the one that leaves the least error (:meth:`_motion`)."""
-    derotate: bool = False
+    derotate: bool = True
     """Take the channel's phase slope across frequency out before interpolating between the comb
-    pilots, and put it back after (ADR-0131, accepted; off until ``rx.rs`` has it too). The
+    pilots, and put it back after (ADR-0131; the port's ``derotate`` too, on in both). The
     pilots are 160 Hz apart, and a channel centred 1 ms after the receiver's timing turns 58°
     between two of them: a straight line between two points of a rotating phasor cuts the corner,
     and on ITU Poor at 24 dB the data carriers lost 10–12 dB that the pilots did not

@@ -281,6 +281,9 @@ class Run:
     # air standing still, or the runner's own error
     faults: list[str] = field(default_factory=list)
     stalled_at: float | None = None
+    # the last `host-send`'s bytes, and how much each program had been handed at a `host-abort`
+    last_sent: bytes = b""
+    received_mark: dict[str, int] = field(default_factory=dict)
     pin: int | None = None
     """A rung every station's own data is pinned at (``--pin``; a station's ``pin_rung`` in the
     scenario overrides it): the rate controller's review runs each scenario at each fixed rung,
@@ -391,8 +394,11 @@ class Host:
     holds and no ``BUFFER`` line for a minute of wall clock is a fault, and it hangs up as Pat
     does then. A ``CONNECTED`` without both callsigns is a fault too: Pat panics on one."""
 
-    def __init__(self, run: Run, station: Station, kind: str) -> None:
+    def __init__(self, run: Run, station: Station, kind: str, mycall: str = "") -> None:
         self.run, self.station, self.kind = run, station, kind
+        # the callsign the program says in MYCALL: the station's own unless the script names
+        # another (report 22 §2: Winlink Express as KK4ODA on a station whose own is KK4ODA-1)
+        self.mycall = mycall or station.callsign
         self.cmd = _connect(station.host_port)
         self.data = _connect(station.host_port + 1)
         # connected: from now on a read waits as long as the session does (a reader that
@@ -404,6 +410,8 @@ class Host:
         # VARA log keeps them ("In:"/"Out:"): written beside the station's files at the end
         self.log: list[tuple[float, str, str]] = []
         self.received = 0
+        # what it was handed, in order: `host-exact` compares a span of it with what was sent
+        self.data_in = bytearray()
         self.calls_from = 0  # CONNECTEDs heard before a `host-call`
         self.dialled_at = 0.0  # the air time of the program's last CONNECT
         self.connected_at = 0.0  # and of the last CONNECTED it heard
@@ -438,7 +446,7 @@ class Host:
         threading.Thread(target=self._read_data, daemon=True).start()
         bw = "BW500" if run.scenario.get("bandwidth") == 500 else "BW2300"
         if kind == "trimode":
-            opening = [f"MYCALL {station.callsign}", bw, "PUBLIC ON", "CWID ON", "LISTEN ON"]
+            opening = [f"MYCALL {self.mycall}", bw, "PUBLIC ON", "CWID ON", "LISTEN ON"]
         elif kind == "varac":
             opening = [
                 bw,
@@ -447,7 +455,7 @@ class Host:
                 "IGNOREKISSDCD ON",
                 "LISTEN CQ",
                 "VERSION",
-                f"MYCALL {station.callsign} {station.callsign}-T",
+                f"MYCALL {self.mycall} {self.mycall}-T",
                 bw,
             ]
         elif kind == "pat":
@@ -455,7 +463,7 @@ class Host:
                 "PUBLIC ON",
                 "CWID ON",
                 "COMPRESSION TEXT",
-                f"MYCALL {station.callsign}",
+                f"MYCALL {self.mycall}",
                 "LISTEN OFF",
             ]
             if station.who == "b":
@@ -466,7 +474,7 @@ class Host:
                 "CWID ON",
                 "COMPRESSION TEXT",
                 bw,
-                f"MYCALL {station.callsign}",
+                f"MYCALL {self.mycall}",
                 "LISTEN ON",
             ]
         for line in opening:
@@ -491,7 +499,7 @@ class Host:
             self.send("BW500" if self.run.scenario.get("bandwidth") == 500 else "BW2300")
             self.send("WINLINK SESSION")
         self.dialled_at = self.run.air_s()
-        self.send(f"CONNECT {self.station.callsign} {called}")
+        self.send(f"CONNECT {self.mycall} {called}")
 
     def write(self, payload: bytes) -> None:
         """Bytes on the data port, as a program hands the modem its data."""
@@ -601,6 +609,7 @@ class Host:
                 return
             self.note("Data in:", f"{len(chunk)} bytes")
             self.received += len(chunk)
+            self.data_in += chunk
             with self.lock:
                 self.quiet_wall = time.monotonic()
 
@@ -950,9 +959,10 @@ def step(run: Run, text: str) -> bool:
         run.test = call(a.control, "test.status")["result"].get("results") or {}
         return True
     if word == "host":
-        # `host a client` / `host b trimode`: a program attaches to the station's host port
-        who, _, kind = arg.partition(" ")
-        run.hosts[who] = Host(run, run.stations[who], kind or "client")
+        # `host a client` / `host b trimode`: a program attaches to the station's host port;
+        # `host b wle KK4ODA` says MYCALL KK4ODA where the station's own callsign is another
+        who, kind, mycall = [*arg.split(), "", ""][:3]
+        run.hosts[who] = Host(run, run.stations[who], kind or "client", mycall)
         run.wait("host attached", lambda: False, 2, note=False)
         return True
     if word == "host-connect":
@@ -960,7 +970,7 @@ def step(run: Run, text: str) -> bool:
         who = arg or "a"
         ha, hb = run.hosts[who], run.hosts["b"]
         was_a, was_b = ha.heard("CONNECTED"), hb.heard("CONNECTED")
-        ha.dial(b.callsign)
+        ha.dial(hb.mycall)
         run.connected = run.wait(
             "host connected",
             lambda: ha.heard("CONNECTED") > was_a and hb.heard("CONNECTED") > was_b,
@@ -1005,7 +1015,7 @@ def step(run: Run, text: str) -> bool:
         # into a gateway busy with another client's session; `host-wait c` sees it through
         ha = run.hosts[arg]
         ha.calls_from = ha.heard("CONNECTED")
-        ha.dial(b.callsign)
+        ha.dial(run.hosts["b"].mycall)
         return True
     if word == "host-wait":
         ha = run.hosts[arg]
@@ -1025,7 +1035,8 @@ def step(run: Run, text: str) -> bool:
             tx, rx = rx, tx
         before = rx.received
         began = run.air_s()
-        tx.write(incompressible(n, salt=n + len(run.transfers)))
+        run.last_sent = incompressible(n, salt=n + len(run.transfers))
+        tx.write(run.last_sent)
         ok = run.wait(
             f"{word} {n}",
             lambda: rx.received - before >= n,
@@ -1045,6 +1056,56 @@ def step(run: Run, text: str) -> bool:
         run.hosts[who or "a"].write(incompressible(n, salt=n + len(run.transfers)))
         run.transfers.append(f"host-write {n} B")
         return True
+    if word == "host-unanswered":
+        # `host-unanswered CALL [S]`: a's program calls CALL, which no program at b holds, and
+        # hears DISCONNECTED (the call over, unanswered) within S s; b says why, a mismatch
+        # `program`: no external program attached to answer it (report 22 §2)
+        call_to, _, within = arg.partition(" ")
+        ha = run.hosts["a"]
+        was_c, was_d = ha.heard("CONNECTED"), ha.heard("DISCONNECTED")
+        ha.dial(call_to)
+        over = run.wait(
+            f"{call_to} unanswered",
+            lambda: ha.heard("DISCONNECTED") > was_d or ha.heard("CONNECTED") > was_c,
+            float(within or 240),
+        )
+        if not over or ha.heard("CONNECTED") > was_c:
+            run.transfers.append(f"call {call_to} answered" if over else f"call {call_to} hung")
+            return False
+        mismatch = (b.status().get("bandwidth") or {}).get("mismatch") or {}
+        said = mismatch.get("what") == "program" and mismatch.get("called") == call_to
+        run.transfers.append(
+            f"call {call_to} unanswered, b said {mismatch.get('what') or 'nothing'}"
+        )
+        return said
+    if word == "host-abort":
+        # `host-abort [a]`: the program aborts its session; both programs hear DISCONNECTED
+        # within 120 s, and what b's program was handed from then on is counted afresh
+        # (`host-exact`)
+        who = arg or "a"
+        ha, hb = run.hosts[who], run.hosts["b" if who == "a" else "a"]
+        was_a, was_b = ha.heard("DISCONNECTED"), hb.heard("DISCONNECTED")
+        ha.send("ABORT")
+        ended = run.wait(
+            "aborted",
+            lambda: ha.heard("DISCONNECTED") > was_a and hb.heard("DISCONNECTED") > was_b,
+            120,
+        )
+        run.received_mark = {h.station.who: len(h.data_in) for h in run.hosts.values()}
+        run.transfers.append("aborted" if ended else "abort lost")
+        return ended
+    if word == "host-exact":
+        # `host-exact b`: what b's program was handed since the abort is exactly the last
+        # `host-send`'s bytes: nothing of the aborted session's queue came with it (ADR-0052)
+        h = run.hosts[arg or "b"]
+        got = bytes(h.data_in[run.received_mark.get(h.station.who, 0) :])
+        exact = got == run.last_sent
+        run.transfers.append(
+            "exactly the new message"
+            if exact
+            else f"{len(got)} B, not the {len(run.last_sent)} sent"
+        )
+        return exact
     if word == "host-closed":
         # `host-closed [S]`: both programs hear DISCONNECTED within S s (600 unless given)
         ha, hb = run.hosts["a"], run.hosts["b"]

@@ -1,0 +1,32 @@
+name = "40m-wle-program-callsign-2300"
+description = """A Winlink Express P2P call to a station whose own callsign has an SSID and whose
+program answers as the base callsign, before and after the program attaches (report 22 §2,
+2026-11-24: home's Aether was KK4ODA-1, its Winlink Express KK4ODA, and the portable's calls to
+KK4ODA went unanswered while that program was not running). Before: the call is not answered, and
+the station says why, a mismatch `program` naming the host port. After the program attaches with
+MYCALL KK4ODA and listens: the same call connects and carries a message."""
+tags = ["40m", "host", "winlink", "p2p", "quick"]
+bandwidth = 2300
+seconds = 900
+seed = 136
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+[stations.b]
+callsign = "KK4ODA-1"
+host = true
+
+[path]
+profile = "good"
+snr_db = 10.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a wle", "host-unanswered KK4ODA 240", "host b wle KK4ODA", "host-connect", "host-send 3000", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true

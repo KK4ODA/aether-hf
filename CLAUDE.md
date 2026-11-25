@@ -3315,9 +3315,9 @@ not: linear interpolation across the channel's phase slope between pilots 160 Hz
 pilot symbols, takes it out before interpolating and puts it back, each pilot carrier kept exact
 and the SNR reported from the plain interpolation, so the rate controller's SNR does not move;
 `tools/bench_estimate.py` (`bench/baselines/channel_estimate.csv`): +44 % decodes on Poor at both
-airs, +3–7 % on Moderate, no point anywhere more than a frame under. The switch is **off until
-`rx.rs` has it** (ADR-0131 §9: the port, the vectors regenerated with a slope case, the harness
-A/B) — this PC has no Rust. Measured and not built: the estimate's error in the decoder's noise
+airs, +3–7 % on Moderate, no point anywhere more than a frame under. **Ported and on since
+2026-11-25** (ADR-0131 §10: `FrameReceiver::derotate` in `rx.rs`, `OFDM_SLOPE_CASES` in the PHY
+vectors; tests that want the receiver before name `derotate=False`). Measured and not built: the estimate's error in the decoder's noise
 (normalised min-sum ignores a near-uniform scale). The Wiener estimator stays (it wins on AWGN,
 180/180 against 156, and 2 300 Hz NVIS). Also seen with the tool, not yet explained: on report
 18's sessions the mobile's pilot SNR read 3–4 dB over what its data carriers met (not the
