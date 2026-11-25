@@ -911,9 +911,15 @@ function applyRung(metrics) {
   } else if (sending != null) {
     strip.textContent = `Rung ${sending} ↑  ${rungRate(sending)}`;
     strip.title = `Sending at rung ${sending}, ${rungRate(sending)} on the air${answering}`;
-  } else {
+  } else if (inSession) {
     strip.textContent = modeTable[mode] ? `Rung ${mode}  ${rungRate(mode)}` : `Rung ${mode}`;
     strip.title = `No data moving: rung ${mode} is the rung this station would send at next${answering}`;
+  } else {
+    // outside a session there is no rung to show (the Mode tile's dash): the reading leaves
+    // the well, and its hairline with it
+    strip.textContent = "";
+    strip.hidden = true;
+    return;
   }
   strip.hidden = false;
 }

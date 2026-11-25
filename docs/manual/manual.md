@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.26.0 |
+| **Version** | 1.26.1 |
 | **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.177 |
 | **Licence** | CC BY 4.0 |
@@ -277,8 +277,9 @@ attention, and seven **tabs**: Status, Session, Stations, Diagnostics, Setup, Lo
    a narrow window the words shorten; the callsign does not.
 2. **Dial**: the radio's frequency, when the radio can report it (over CAT, rigctld or FLRig).
 3. **Rung**: the rung the data is moving at and its rate on the air. It shows the other station's
-   while you receive (↓), yours while you send (↑), and both when data goes both ways. With no
-   data moving, it shows the rung your station would send at.
+   while you receive (↓), yours while you send (↑), and both when data goes both ways. In a
+   session with no data moving, it shows the rung your station would send at. Outside a session
+   it is not shown.
 4. **SNR**: the signal-to-noise ratio of the last frame heard, in a 3 kHz bandwidth.
 5. **Lamps**: **TX** while the radio is keyed, **RX** while a burst is arriving, **Busy** while
    the channel carries a signal.
@@ -1846,3 +1847,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.24.0 | 2026-11-25 | Banners: the ones that can be put away end in an **×** (it was **Dismiss** or **Not now**), the held disconnect's included, which hides it for that disconnect; every banner but the VarAC offer shows in Compact and Mini, its sentence cut at two lines. |
 | 1.25.0 | 2026-11-25 | The Status tab's **Mode** says **Control** on its Receiving row, with the frames' family, while the other station only answers with control frames; a dash now means nothing heard ([The Status tab](#9-the-status-tab)). |
 | 1.26.0 | 2026-11-25 | A sound card that is unplugged, missing at start or at the wrong rate is opened again by itself when it comes back, with nothing transmitted meanwhile; the same interface in another USB port, renamed by Windows with a number, is found and used, with a banner and **Keep** ([Banners](#banners), [The computer](#the-computer)). |
+| 1.26.1 | 2026-11-25 | [The header](#the-header): the **Rung** is not shown outside a session, as the Status tab's **Mode** shows a dash there. It read *Rung 0* after every session, the rung a station starts from before a call has read the path. |

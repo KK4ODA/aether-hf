@@ -121,7 +121,7 @@ const CHECKS = [
   },
   {
     scene: "status",
-    what: "a session with nothing moving: Sending's next rung in the tile's numerals, no state colour; a dash after it",
+    what: "a session with nothing moving: Sending's next rung in the tile's numerals, no state colour, the header's rung shown; a dash and no header rung after it",
     page: `(async () => {
       const out = [], $ = (id) => document.getElementById(id);
       const look = (id) => {
@@ -148,8 +148,13 @@ const CHECKS = [
       for (const id of ["v-mode-send", "v-mode-send-name"]) {
         if (colours.includes(getComputedStyle($(id)).color)) out.push(id + " is drawn in a state colour");
       }
+      const rung = $("strip-rung");
+      if (rung.hidden || getComputedStyle(rung).display === "none")
+        out.push("in a session, the header's rung is hidden");
       window.__screens.metrics({link: null});
       await new Promise((done) => setTimeout(done, 300));
+      if (!rung.hidden || getComputedStyle(rung).display !== "none")
+        out.push("after the session, the header's rung reads '" + rung.textContent + "'");
       if (cell.textContent.trim() !== "—") out.push("after the session, Sending reads '" + cell.textContent + "'");
       if (name.textContent) out.push("after the session, its name reads '" + name.textContent + "'");
       return out;
@@ -158,7 +163,7 @@ const CHECKS = [
   {
     scene: "status",
     with: {storage: {"aether.theme": "light"}},
-    what: "the light theme, a session with nothing moving: Sending's next rung in the tile's numerals, no state colour; a dash after it",
+    what: "the light theme, a session with nothing moving: Sending's next rung in the tile's numerals, no state colour, the header's rung shown; a dash and no header rung after it",
     page: `(async () => {
       const out = [], $ = (id) => document.getElementById(id);
       const look = (id) => {
@@ -185,8 +190,13 @@ const CHECKS = [
       for (const id of ["v-mode-send", "v-mode-send-name"]) {
         if (colours.includes(getComputedStyle($(id)).color)) out.push(id + " is drawn in a state colour");
       }
+      const rung = $("strip-rung");
+      if (rung.hidden || getComputedStyle(rung).display === "none")
+        out.push("in a session, the header's rung is hidden");
       window.__screens.metrics({link: null});
       await new Promise((done) => setTimeout(done, 300));
+      if (!rung.hidden || getComputedStyle(rung).display !== "none")
+        out.push("after the session, the header's rung reads '" + rung.textContent + "'");
       if (cell.textContent.trim() !== "—") out.push("after the session, Sending reads '" + cell.textContent + "'");
       if (name.textContent) out.push("after the session, its name reads '" + name.textContent + "'");
       return out;

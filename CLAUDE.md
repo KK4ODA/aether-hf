@@ -3577,7 +3577,7 @@ scenes and `openScene`, and runs only when run itself) and asserts on the manual
 headless Chrome; CI's app job runs it on Linux. A new panel behaviour worth holding gets a check
 there; plant a fault to see it fail.
 
-**The idle Mode tile (2026-11-25, after beta.177):** *next: 0* after a session read as a warning; the rung cell now holds only a number or a dash, *next* goes in the name cell (`next · QPSK ½`), and outside a session Sending is a dash — the engine resets its rate controller at a session's end, so `metrics.mode` idle is only `initial_mode` (0), and a session's first rung comes from the call's reading. The header's well still shows *Rung N* idle. `panel_check.mjs` feeds metrics through `__screens.metrics(patch)`.
+**The idle Mode tile (2026-11-25, after beta.177):** *next: 0* after a session read as a warning; the rung cell now holds only a number or a dash, *next* goes in the name cell (`next · QPSK ½`), and outside a session Sending is a dash — the engine resets its rate controller at a session's end, so `metrics.mode` idle is only `initial_mode` (0), and a session's first rung comes from the call's reading. The header's well hides its rung outside a session too (the author's answer). `panel_check.mjs` feeds metrics through `__screens.metrics(patch)`.
 
 **Control frames on the Receiving row (2026-11-25, the author: a dash while the other station
 only answered read as "nothing received").** `metrics.receiving_control` (`"floor"`, `"ordinary"`,
