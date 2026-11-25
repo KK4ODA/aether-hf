@@ -3597,13 +3597,17 @@ at the start) — exactly one, the same model, a codec's two sides at one instan
 never the default — used for the run, not written (the panel's `#audio-moved-banner` with **Keep**
 saves it; the profile's `missing_hardware` suggests it); `ResilientCard` wraps the `SoundCard`, is
 `Silence` while there is none, fails on `DeviceNotAvailable` (`SoundCard::failure`) or `STALL` (3 s
-without audio), and reopens every 2 s, 10 s after a minute (`retry_interval`), the clock and the loss
+without audio), and reopens every 1 s, 10 s after a minute (`retry_interval`), the clock and the loss
 counters carried across. While down `Station::set_audio_down` lets go of the key at once and keys
 nothing, the control API refuses what transmits (`NO_SOUND_CARD`, `methods::transmits` shared with
 the host-keyed refusal), `status.audio_card` and the `audio` event say it, and a host program hears
 `MISSING SOUNDCARD` mid-run. No config key. `panel_check.mjs` checks may define their own scene
 (`define`), with no screenshot, and `screens.mjs` reads `scene.audioCard`/`audioFault`. Owed: the
-author's Windows check with a DigiRig (unplug, replug, another port, 44.1 kHz).
+author's Windows check with a DigiRig (unplug, replug, another port, 44.1 kHz). The author's answers
+(ADR-0137 §6): **Keep** stays an offer; a session is left to its link timeout; Windows' format only
+advised; no resampling; no hardware-ID matching (a DigiRig's codec has no USB serial); no Windows
+device notification — it needs `unsafe` COM and **the workspace forbids `unsafe`**, so the retry
+polls every second instead.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

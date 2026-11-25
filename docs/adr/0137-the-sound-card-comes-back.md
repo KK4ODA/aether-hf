@@ -49,7 +49,7 @@ is `Silence` on the clock, as before, so the station runs on, the panel live. A 
 its stream reports `DeviceNotAvailable` (`SoundCard::failure`; cpal maps WASAPI's
 `AUDCLNT_E_DEVICE_INVALIDATED` and ALSA's `ENODEV` to it) or delivers nothing for `card::STALL`
 (3 s: Windows does not always report a vanished endpoint). It is opened again, by the rule of
-§2.1, every 2 s for the first minute and every 10 s after (`card::retry_interval`): a cable pushed
+§2.1, every second for the first minute and every 10 s after (§6) (`card::retry_interval`): a cable pushed
 back in, the same codec in another port, or a rate fixed in Windows' Sound settings all come back
 without a restart. The playback clock and the loss counters run on across a reopen (the closed
 card's are carried), so the station's account of them never steps back.
@@ -111,3 +111,21 @@ go. `methods.rs`: the refusals and what stays allowed. `host/server.rs`: `MISSIN
 `profile.rs`: the suggestion. `panel_check.mjs`: the moved banner with **Keep**, and the fault
 banner with its tooltip. Windows behaviour (the endpoint's name in another port, the stream's error
 on unplug, the reopen) needs the author's machine: the steps are in the session's report.
+
+## 6. The author's answers (2026-11-25)
+
+Asked one at a time after the first build:
+
+1. **The found name is offered, not saved by itself** (§4 item 1): **Keep** stays.
+2. **A session is left to the link's timeout** when the card goes (§4 item 6): a cable knocked and
+   pushed back within seconds lets it carry on.
+3. **Windows' format is only advised** (§4 item 3), and **no resampling** (§4 item 4).
+4. **Hardware IDs: not built.** A DigiRig's CM108-class codec carries no USB serial number (which
+   is why Windows numbers it again in another port), so the USB IDs would not tell two DigiRigs
+   apart either; what they would add (a device renamed in Sound settings, pairing by Windows'
+   container ID) did not justify the Windows-only code (§4 item 2).
+5. **No device notification; polling every second instead** (§4 item 5). Windows' notification
+   (`IMMNotificationClient`) is COM, every call to it through the `windows` crate is `unsafe`, and
+   the workspace forbids `unsafe` (`core/Cargo.toml`, `unsafe_code = "forbid"`). The retry is every
+   second for the first minute (it was 2 s), then every 10 s: a plug-in is found within about a
+   second, with no platform code.

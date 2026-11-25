@@ -41,13 +41,16 @@ pub const STALL: Duration = Duration::from_secs(3);
 
 /// How long after a failure the card is tried again.
 ///
-/// Every two seconds for the first minute — a cable pushed back in comes back at once — then
-/// every ten, so a card that is gone for good costs the run loop an enumeration only that
-/// often (on Windows a few tens of milliseconds a try).
+/// Every second for the first minute — a cable pushed back in, or the same codec in another
+/// port, comes back within about a second — then every ten, so a card that is gone for good
+/// costs the run loop an enumeration only that often (on Windows a few tens of milliseconds a
+/// try). Windows can say when a device arrives (`IMMNotificationClient`), but only through
+/// `unsafe` COM calls, which the workspace forbids; a second's polling is the author's choice
+/// (ADR-0137 §6).
 #[must_use]
 pub fn retry_interval(since_failure: Duration) -> Duration {
     if since_failure < Duration::from_secs(60) {
-        Duration::from_secs(2)
+        Duration::from_secs(1)
     } else {
         Duration::from_secs(10)
     }
@@ -777,11 +780,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_card_is_tried_every_two_seconds_then_every_ten() {
-        assert_eq!(retry_interval(Duration::ZERO), Duration::from_secs(2));
+    fn a_failed_card_is_tried_every_second_then_every_ten() {
+        assert_eq!(retry_interval(Duration::ZERO), Duration::from_secs(1));
         assert_eq!(
             retry_interval(Duration::from_secs(59)),
-            Duration::from_secs(2)
+            Duration::from_secs(1)
         );
         assert_eq!(
             retry_interval(Duration::from_secs(60)),
