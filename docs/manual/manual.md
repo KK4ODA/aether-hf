@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.22.0 |
-| **Updated** | 2026-11-24 |
+| **Version** | 1.23.0 |
+| **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.175 |
 | **Licence** | CC BY 4.0 |
 
@@ -361,16 +361,17 @@ choice. The waterfall keeps its own colours.
 A banner across every tab tells you about something that needs attention. Each says what to do,
 and most have buttons that do it.
 
-![Two banners under the header: a station called in the other bandwidth, and the receive audio is clipping](screens/banners.png)
+![Three banners under the header: a station called in the other bandwidth; the external program asked to disconnect and the transfer goes on, with Disconnect and Abort; and the receive audio is clipping](screens/banners.png)
 
-*Figure 11. Banners: a bandwidth mismatch, and clipped receive audio.*
+*Figure 11. Banners: a bandwidth mismatch, a disconnect held, and clipped receive audio.*
 
 | Banner | What it means | What to do |
 |---|---|---|
 | Session | Calling, connected, disconnecting, a probe, a Test, a beacon waiting, or how the last session ended. A program's call or session says *for* the program | Nothing; it is there so you see it from any tab |
 | Setup needed | The rules, the control or the licence class is not set, so nothing transmits | **Open Setup**, step 1 |
 | Unsaved changes | Setup has changes the modem is not using yet | **Review in Setup** and save, or **Discard changes** |
-| Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a program's callsign while that program is not running | Follow its buttons: **Setup step 4**, **Check for Updates**, **Answer as it too**, **Call it**, or **Dismiss**. For a program that is not running, start it again |
+| Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a program's callsign while that program is not running, or called this station while the external program that answers for it is not attached | Follow its buttons: **Setup step 4**, **Check for Updates**, **Answer as it too**, **Call it**, or **Dismiss**. For a program that is not running or not attached, start it, or check the port it uses |
+| Disconnect held | The external program asked to disconnect after minutes without writing anything, while its message is still going: Winlink Express does this 5 minutes after it sends a message. The transfer goes on, as it can finish within 15 minutes | Nothing, to let it finish. **Disconnect** closes once what is queued has gone; **Abort** closes now |
 | Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down |
 | VarAC | VarAC is on this computer and not set up for Aether, or a new version of Aether changed what its VarAC profile needs | **Set up** or **Update**, then **Switch to VarAC default** if you want; **Not now** stops this offer ([VarAC in one step](#varac-in-one-step)) |
 | Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2 |
@@ -448,9 +449,15 @@ settings.
   says: what you start from this window (a call, a probe, a Test, a beacon) goes out under it,
   and calls to it are answered when no program is running. A program sets its own callsign:
   RadioPost the callsign it was enrolled with, an external program ([Step 5](#step-5-application-settings))
-  its `MYCALL`. While one does, only the program's callsigns are answered, and the note says
-  which, such as *in use now: N1CALL-10 · RadioPost Gateway*. Yours comes back when the program
-  stops. Set a program's callsign in the program, not here.
+  its `MYCALL`. While one does, only the program's callsigns are answered: the box is greyed,
+  still editable, and the note says which callsign is in use and whose, such as *In use:
+  N1CALL-5 · external program* or *In use: N1CALL-10 · RadioPost Gateway*. Yours comes back when
+  the program stops. Set a program's callsign in the program, not here.
+
+![Setup steps 1 and 4 with an external program attached: the Aether callsign N1CALL greyed, with In use: N1CALL-5 · external program beside it, and the bandwidth 500 Hz greyed, with In use: 2300 Hz · external program beside it](screens/setup-external.png)
+
+*Figure 14. An external program attached: your settings greyed, what is in use beside them.*
+
 - **Rules**: *United States — FCC Part 97*, or *None — I check every transmission myself*. With
   **Radio control** set to *External program* (step 2), the rules fields read **External program**: the external program
   owns the radio's dial, which Aether cannot read, so you check every transmission yourself. None
@@ -473,7 +480,7 @@ refuse, but you remain the control operator.
 
 ![Setup step 2: the preset, the sound card and its transmit level, the radio controlled by CAT command on a Yaesu's Enhanced COM port at 38400 baud, and the Dial line reading Aether, over CAT](screens/setup-radio.png)
 
-*Figure 14. Setup step 2, with a Yaesu keyed and tuned over CAT.*
+*Figure 15. Setup step 2, with a Yaesu keyed and tuned over CAT.*
 
 - **Preset**: picking a known interface (an Icom with USB audio, a Yaesu, a Digirig, a SignaLink,
   a DRA or URI board) fills in the fields below, once. It is not a setting itself: the fields are
@@ -486,7 +493,7 @@ refuse, but you remain the control operator.
 
 ![Six ways to control the radio, each with a small wiring sketch and what it does with the dial: CAT command, serial line, rigctld or FLRig, CM108 interface, external program, VOX](fig/keying.svg)
 
-*Figure 15. The six ways to control the radio, and what each does with the dial.*
+*Figure 16. The six ways to control the radio, and what each does with the dial.*
 
 1. **CAT command**: the radio's own command on its CAT port. It needs no second port, reads the
    dial, which the rules need, and tunes the radio from the Session tab's dial list. Choose the
@@ -524,7 +531,7 @@ refuse, but you remain the control operator.
 
 ![Two panels: the receive level meter with its zones (very quiet, good, almost clipping), and the radio's power out against the transmit level, flat once the ALC acts](fig/levels.svg)
 
-*Figure 16. The two levels: what Aether hears, and what it sends.*
+*Figure 17. The two levels: what Aether hears, and what it sends.*
 
 With the radio on a quiet frequency, turn the radio's audio output (or the sound card's input in
 the computer's sound settings) until the meter says **Good**. Clipping is never acceptable. Too
@@ -534,13 +541,15 @@ quiet leaves the signal inside the sound card's own noise.
 
 ![Setup scrolled to step 4: bandwidth, answer only, fastest mode, compress, call tries, busy channel, turnaround, answer gap, longest key, identify by and band edges](screens/setup-modem.png)
 
-*Figure 17. Setup step 4: the modem's settings.*
+*Figure 18. Setup step 4: the modem's settings.*
 
 - **Bandwidth**: *2300 Hz* for Winlink, Pat and the most data; *500 Hz* for contacts between two
   stations and VarAC. Both stations of a session use the same. A change takes effect once the
   station is idle, with no restart. An external program can move the station to another
-  bandwidth while it is connected (its `BW500` or `BW2300`): the header then names it, *500 Hz ·
-  VarAC*, and your setting comes back when it leaves. While RadioPost listens it runs the station
+  bandwidth while it is connected (its `BW500` or `BW2300`): the header then says *2300 Hz ·
+  external*, the box is greyed, the note beside it says *In use: 2300 Hz · external program*, and
+  your setting comes back when the program leaves. A call in the other bandwidth moves the station
+  the same way for its session (*In use: 500 Hz · answering N2CALL*, or *· calling N2CALL*). While RadioPost listens it runs the station
   at 2300 Hz, because a 2300 Hz station answers 500 Hz calls too: with this set to 500 the header
   says *2300 Hz · listening*, and your setting comes back when RadioPost stops listening or
   closes. An external program's own bandwidth outranks RadioPost's listening.
@@ -680,7 +689,7 @@ The Session tab is where you operate ([Figure 6](#6-the-window-at-a-glance)). It
 
 ![The Radio dial box while RadioPost Gateway scans three dials: the radio on the second](screens/scanning.png)
 
-*Figure 18. The Radio dial box while a program scans: the dial the radio is on, its place in the list, and Stop.*
+*Figure 19. The Radio dial box while a program scans: the dial the radio is on, its place in the list, and Stop.*
 
 Every dial in a scan has to suit your antenna without a tuning cycle: a resonant antenna for each
 band, or a tuner that remembers each band. A station calling one that scans needs more tries than
@@ -729,7 +738,7 @@ Click the box's heading to open it.
 
 ![The Keying and drive box open: Key 1 s, Tuner tone, Set drive, the transmit level slider and the last transmit peak](screens/drive.png)
 
-*Figure 19. Keying and drive, open.*
+*Figure 20. Keying and drive, open.*
 
 - **Key 1 s**: keys the radio for one second with no audio, to check the keying. The Log then says
   whether the radio's receive audio changed while it was keyed. A radio that transmits goes quiet
@@ -740,7 +749,7 @@ Click the box's heading to open it.
 - **Transmit level**: the slider, in dB below full scale. **Last transmit peak** is the modem's
   own headroom.
 
-**How to set the drive** ([Figure 16](#step-3-receive-level), right):
+**How to set the drive** ([Figure 17](#step-3-receive-level), right):
 
 1. Press **Set drive** and watch the radio's ALC meter.
 2. Raise the transmit level until the ALC just begins to move.
@@ -793,14 +802,19 @@ the air should carry ([Reporting a problem](#29-reporting-a-problem)).
 
 ![The Status tab during a session: Link and Channel readings, the History chart with the speed, the Channel and activity chart, and the counters](screens/status.png)
 
-*Figure 20. The Status tab during a session.*
+*Figure 21. The Status tab during a session.*
 
-- **Link**: the rung, the SNR, the throughput and the session (who, and for how long).
+- **Link**: the mode, the SNR, the throughput and the session (who, and for how long). **Mode**
+  has a row each way: **Sending**, the rung and frame of your data, and **Receiving**, the other
+  station's, over the last 30 s, or a dash for a direction where none moved. With nothing moving,
+  Sending shows *next:* and the rung your station would send at.
 - **Channel**: signal above noise, tuning offset, receive level and bytes still queued.
 - **History**: two charts.
   - **Speed** is the session's data rate, both ways added together. Two dashed lines show the rate
     on the air of the rung the data went at: **sending at** (your data, in the transmit colour)
-    and **receiving at** (the other station's, in the receive colour).
+    and **receiving at** (the other station's, in the receive colour). Receiving at follows every
+    frame of the other station's data heard, decoded or not, so a fade does not blank it; each
+    line ends when no data has moved that way for 30 s.
   - **SNR by frame** is every frame heard, what the other station reports hearing you at, and the
     current rung's threshold.
 - **Channel and activity**: the received level, a bar every half second, with the busy periods
@@ -821,7 +835,7 @@ What each reading means is in [What the readings mean](#27-what-the-readings-mea
 
 ![The Stations tab: the stations heard, with their bandwidth, and the sessions with each](screens/stations.png)
 
-*Figure 21. The stations heard, and the sessions.*
+*Figure 22. The stations heard, and the sessions.*
 
 - **Stations heard**: every station whose frame carried a callsign (a beacon, a call, a probe, an
   answer, a KISS frame, or the other end of a session), one line per callsign, the 200 most recent.
@@ -840,7 +854,7 @@ touched.
 
 ![The Diagnostics tab: the constellation, the spectrum with two red lines at the signal's edges, the waterfall, the receiver's readings and the frames table](screens/diagnostics.png)
 
-*Figure 22. Diagnostics: the signal as the receiver sees it.*
+*Figure 23. Diagnostics: the signal as the receiver sees it.*
 
 - **Signal analysis**: the constellation, the spectrum and the waterfall.
   - The **constellation** shows the last OFDM frame's points. A tone frame has none.
@@ -873,7 +887,7 @@ Compact and Mini, the small button after **Tune** does the same.
 
 ![The undocked signal window: constellation, spectrum and waterfall, with a Busy lamp and a Tune button](screens/signal.png)
 
-*Figure 23. The signal window, undocked.*
+*Figure 24. The signal window, undocked.*
 
 - It has its own **Full** (the whole card), **Compact** (the spectrum and the waterfall) and
   **Mini** (the waterfall alone, with a frequency scale, for a corner of the screen while another
@@ -887,7 +901,7 @@ Compact and Mini, the small button after **Tune** does the same.
 
 ![The Log tab: one entry a line, with tags and filters](screens/log.png)
 
-*Figure 24. The Log tab.*
+*Figure 25. The Log tab.*
 
 The **Log** is everything the modem and the window reported since the window opened, newest last,
 one entry a line. Hold the mouse over a line for the whole of it. Filters: *All*, *Problems*,
@@ -911,7 +925,7 @@ nothing you typed in Send or Received is included.
 
 ![The Send files form, set to send my files to the Aether project: which station, how far back, and whether to include the audio](screens/share.png)
 
-*Figure 25. Send files: one zip of your logs and recordings.*
+*Figure 26. Send files: one zip of your logs and recordings.*
 
 Choose what to do:
 
@@ -932,7 +946,7 @@ that offer them: RadioPost and RadioPost Gateway do (`radiopost.log`, `gateway.l
 
 ![The Help tab: About with the version and folders, and short guides](screens/help.png)
 
-*Figure 26. The Help tab.*
+*Figure 27. The Help tab.*
 
 - **About** shows the version, the modem, the update channel and the latest release, and where
   this station keeps its settings, logs and recordings.
@@ -986,7 +1000,7 @@ You do not need this to operate, but it explains what you see on the lamps and i
 
 ![Two lanes over time: N1CALL calls on the tone floor, N2CALL accepts; N1CALL sends a header and data, N2CALL answers in its slot; at the end each says goodbye and the Morse IDs come last](fig/session.svg)
 
-*Figure 27. A session, transmission by transmission.*
+*Figure 28. A session, transmission by transmission.*
 
 - **The call** goes on the tone floor, which gets through the weakest paths. If it is not
   answered, Aether calls again. The called station accepts it.
@@ -1008,7 +1022,7 @@ the fast ones need a clean path.
 
 ![A chart of data rate against the signal each rung needs, for both bandwidths: the tone rungs on the left under the noise, the OFDM rungs climbing to the right](fig/ladder.svg)
 
-*Figure 28. Every rung's data rate against the signal it needs.*
+*Figure 29. Every rung's data rate against the signal it needs.*
 
 - The **SNR it needs** is where nine frames in ten get through on a steady path, in a 3 kHz noise
   bandwidth. A fading path needs several decibels more.
@@ -1076,7 +1090,7 @@ The tables below are made from the modem's own figures every time the manual is 
 
 ![Two strips over the radio's audio from 0 to 3500 Hz: the 2300 Hz signal fills most of a 2.4 kHz SSB filter, the 500 Hz signal sits in its middle](fig/bandwidth.svg)
 
-*Figure 29. Where Aether's two signals sit in the radio's audio.*
+*Figure 30. Where Aether's two signals sit in the radio's audio.*
 
 - **2300 Hz** carries the most data: use it for Winlink and Pat, and whenever both stations can.
   It needs a receive filter 2.4 kHz or wider, centred.
@@ -1109,7 +1123,7 @@ press **Test session**. The other station only has to be listening.
 
 ![Six steps in a row: probe, call, message, file, ladder, disconnect, over a time bar of about five minutes](fig/test.svg)
 
-*Figure 30. The six steps of a Test session.*
+*Figure 31. The six steps of a Test session.*
 
 1. **Probe.** If you probed the same station on the same dial in the last minute and were answered,
    that probe counts and no new one goes.
@@ -1124,7 +1138,7 @@ press **Test session**. The other station only has to be listening.
 
 ![The Session tab during a Test session: the progress bar, the step, and the rung under test](screens/session-test.png)
 
-*Figure 31. A Test session in progress.*
+*Figure 32. A Test session in progress.*
 
 The message and file go first, so the speeds the Test reports are the speeds you would get. It
 takes about five minutes and stops itself at ten. If you wait for a clear channel, the probe and the
@@ -1137,7 +1151,7 @@ bandwidths: the Test then runs at 500 Hz. The result is saved as two files endin
 
 ![A transmission goes to the rules check (licence class, band segment, both edges of the signal, control, its width); legal, the radio is keyed; not allowed, nothing goes out and the badge says why](fig/rules.svg)
 
-*Figure 32. Every transmission is judged against the rules before the radio is keyed.*
+*Figure 33. Every transmission is judged against the rules before the radio is keyed.*
 
 With *United States — FCC Part 97* chosen in Setup step 1, Aether judges every transmission before
 it keys the radio: your licence class, the band segment at the dial, both edges of the signal, the
@@ -1166,7 +1180,7 @@ Programs reach Aether through ports on the same computer. Each kind has its own.
 
 ![Aether's window and RadioPost on the control port 8515; Winlink Express, Pat, VarAC and RMS Trimode on the external programs port 8300 and 8301; packet programs on the KISS port 8100; all into the modem, then the radio](fig/programs.svg)
 
-*Figure 33. The programs that use Aether and the ports they connect to.*
+*Figure 34. The programs that use Aether and the ports they connect to.*
 
 | Port | What it is | Who uses it |
 |---|---|---|
@@ -1207,9 +1221,13 @@ bandwidth; your own come back when the program leaves. Setup always shows your o
   audio while it transmits (the Lab599 TX-500 does) is recognised by that signal, and no warning
   comes.
 - Winlink Express gives up on a peer-to-peer message five minutes after it sends it, whatever the
-  modem says: it asks to disconnect while the message is still going. Aether answers and carries
-  on, and the Log says so (a *host* line). Press **Disconnect** in Winlink Express a second time
-  within a minute, or **Abort**, to end the session.
+  modem says: it asks to disconnect while the message is still going, and its window says
+  *Disconnecting*. When the message can arrive within 15 minutes at the session's speed, Aether
+  answers and carries on, and a banner says so, with **Disconnect** and **Abort**. When it could
+  not, Aether ends the session at once and Winlink Express hears it. Press **Disconnect** in
+  Winlink Express a second time within a minute, or **Abort**, to end the session yourself.
+- On a weak path (the SNR under about +3 dB) choose 500 Hz in Winlink Express's session window:
+  there 500 Hz carries more than 2300. A large file still takes hours on such a path.
 - When a program answers what it was just sent (Winlink Express's `FF` and `FQ`), Aether waits up
   to a third of a second for the answer, so it goes in the next transmission instead of one
   exchange later.
@@ -1229,7 +1247,7 @@ stay as they are, and VARA HF stays one click away.
 
 ![Setup with the offer under the header, VarAC is on this computer, with Set up and Not now; step 5 ends with the VarAC row (its folder, the profile to copy and Set up) and the VarAC profile row, not set up](screens/varac.png)
 
-*Figure 34. The offer to set VarAC up, and Setup step 5's VarAC rows.*
+*Figure 35. The offer to set VarAC up, and Setup step 5's VarAC rows.*
 
 1. Install Aether and do Setup steps 1 to 3 as usual: callsign, sound card, receive level.
 2. A banner says VarAC is on this computer. Press **Set up** (or use Setup step 5, **VarAC**).
@@ -1272,11 +1290,11 @@ says what will change before anything does. Untick the row to go back to VARA.
 
 ![Setup step 5's Winlink programs: Find, Add folder, and a table of four installs. Winlink Express in C:\RMS Express, set up for N1CALL and N2CALL, is ticked: set up for Aether, keyed by Winlink Express. A test copy of Winlink Express in D:\Radio\WLE test pointing at port 8310, and the RMS Trimode gateway N1CALL-1 are not ticked, each with a Keying list naming the program. RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked](screens/hostapps.png)
 
-*Figure 35. Winlink's programs found. Winlink Express in C:\RMS Express is set up for Aether.*
+*Figure 36. Winlink's programs found. Winlink Express in C:\RMS Express is set up for Aether.*
 
 ![The window for the test copy of Winlink Express in D:\Radio\WLE test: an amber warning that Winlink Express's settings in that folder will change and the file is kept as RMS Express.ini.aether.bak; In Winlink Express, Auto Launch Vara True to False; the Aether profile Winlink Express WLE test with its callsign N1CALL, External programs on, bandwidth 2300 Hz, external programs port 8310, keyed by Winlink Express, sideband USB, and two notes; Switch to it now and set the dial to 7.082 MHz, ticked; the buttons Set up, Make a copy first and Cancel; and a line saying a copy goes to D:\Radio\WLE test Aether](screens/hostapps-setup.png)
 
-*Figure 36. What setting up the test copy will change.*
+*Figure 37. What setting up the test copy will change.*
 
 1. Setup step 5, **Winlink programs**. The list fills by itself when the window opens: one row per
    install, with the program, its callsigns (the one in use first), the version, whether it is
@@ -1295,7 +1313,7 @@ says what will change before anything does. Untick the row to go back to VARA.
      its radio is set to *Manual* too, because only one program can hold a port. The program then
      no longer tunes the radio, and a Trimode gateway no longer scans.
    - **as it is**: the program keys by VOX or controls no radio, and Aether's keying is left alone.
-3. Tick the row. A window shows what will happen ([Figure 36](#finding-winlinks-programs)):
+3. Tick the row. A window shows what will happen ([Figure 37](#finding-winlinks-programs)):
    - **In** *the program*: each of its settings Aether will change, as it is and as it will be.
      *Nothing to change* means it reaches Aether as it is.
    - **Aether profile** *name*: what the profile holds. It is named for the program and the
@@ -1339,7 +1357,7 @@ screen by screen.
 
 ![Two rows. Winlink: your station with Winlink Express and Aether, by radio to a gateway with RMS Trimode and Aether, then the Internet to Winlink's servers. RadioPost: your station with RadioPost and Aether, by radio to RadioPost Gateway and Aether, then the Internet to your post office](fig/mail.svg)
 
-*Figure 37. Mail by radio, through a gateway: Winlink above, RadioPost below.*
+*Figure 38. Mail by radio, through a gateway: Winlink above, RadioPost below.*
 
 An Aether gateway runs RMS Trimode beside Aether; a station in the field runs Winlink Express with
 Aether. Set the gateway's Aether to *Automatic* control (Setup step 1) when nobody is at its radio.
@@ -1481,7 +1499,7 @@ is to carry RadioPost's email over FM, simplex and through repeaters.
 
 ![Aether FM as planned: simplex between two FM radios through the voice path or a 9600 data port; the far station measuring your level and telling you; through a repeater, off by default; and packet radio](fig/fm.svg)
 
-*Figure 38. Aether FM as planned.*
+*Figure 39. Aether FM as planned.*
 
 What has been decided:
 
@@ -1585,7 +1603,7 @@ frames at a good SNR, check the receive level, the drive and the receive filter.
 
 ![Three panels: the radio's filter passing all of Aether's signal; a filter moved down that cuts the top; a filter moved up that cuts the bottom, with the knob to turn for each](fig/filter.svg)
 
-*Figure 39. When the radio's receive filter cuts the signal.*
+*Figure 40. When the radio's receive filter cuts the signal.*
 
 **Checking the radio's receive filter.** Open the Diagnostics tab and look at the waterfall. The red lines
 are the edges of Aether's signal, and the band's noise should look even between them. Aether does not
@@ -1796,3 +1814,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.20.0 | 2026-11-23 | *Host programs* are now **External programs** (Setup step 5, the ports, the programs chapter and the glossary), and the box says *leave unchecked for RadioPost* after the tick: RadioPost is not one, and an operator kept taking it for one. [Step 1](#step-1-callsign-and-rules)'s box is the **Aether callsign**, *for Aether standalone use*, and like step 4's **Bandwidth** it always shows your own setting: greyed, the bandwidth had hidden a 500 Hz setting the station ran, and a 2300 Hz call to it went unanswered. The note after the callsign says which callsigns a program uses now. |
 | 1.21.0 | 2026-11-24 | While RadioPost listens, the station runs 2300 Hz, which answers 500 Hz calls too, and your **Bandwidth** comes back when it stops ([Setup step 4](#step-4-modem-settings)); the header's bandwidth chip names the program that moved the station, or says *listening*. A 500 Hz call makes its quick tries only to a station heard running 500 Hz lately ([Call](#call)). After an unanswered call, another SSID is suggested only when it was heard more recently than the callsign called. From the portable's sessions of 2026-11-23: a 2300 Hz call to a station a profile had set to 500 Hz went unanswered, a 500 Hz call's quick tries were lost on a 2300 Hz listener, and the advice said to call the gateway's callsign a minute after the station called had answered. |
 | 1.22.0 | 2026-11-24 | From three Winlink Express P2P sessions the same day: a disconnect whose queue could not go in a minute closes at once ([Call](#call)); Winlink Express's five-minute timeout no longer cuts off a long message, a program's quick answer goes in the next transmission, and a radio that sends its own signal back while keyed is not warned about ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |
+| 1.23.0 | 2026-11-25 | From the 80 m sessions of 2026-11-24: while an external program or a call sets the callsign or the bandwidth, Setup greys your own and says what is in use beside it ([Step 1](#step-1-callsign-and-rules), [Step 4](#step-4-modem-settings)); the header's bandwidth chip says *external*. The Status tab's **Mode** has a row each way, **Sending** and **Receiving**, and *Receiving at* follows frames that did not decode ([The Status tab](#9-the-status-tab)). Winlink Express's five-minute timeout is held only while its message can arrive within 15 minutes, with a banner saying so; a call while the external program is not attached says that ([Banners](#banners), [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |

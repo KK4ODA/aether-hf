@@ -362,6 +362,16 @@ impl DaemonState {
                 "connected": host.connected.load(std::sync::atomic::Ordering::Relaxed),
                 // `CHAT ON`: VARA's leave for the KISS port to transmit while a host is attached
                 "chat": self.host_flags.chat.load(std::sync::atomic::Ordering::Relaxed),
+                // when the program's last DISCONNECT was taken for its inactivity timer and held
+                // in this session, milliseconds since the epoch; null while none is (ADR-0134 §6)
+                "disconnect_held_ms": match self
+                    .host_flags
+                    .disconnect_held_ms
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    0 => Value::Null,
+                    at => json!(at),
+                },
             }),
             None => json!({ "enabled": false, "connected": false }),
         }
@@ -2328,6 +2338,27 @@ fn bandwidth_set<P: Ptt>(
 fn status<P: Ptt>(station: &mut Station<P>) -> Value {
     let frequency_hz = station.frequency_hz();
     let (sent_pending, sent_recent) = station.delivery_status();
+    // the rate this station's data has been acknowledged at since the session came up, bit/s, and
+    // how long what it still has would take at it (ADR-0135); null until some of its data has been
+    // acknowledged for half a minute, and outside a session. An external program's timer
+    // DISCONNECT is held only while that is under 15 minutes (ADR-0134 §6). Set after the object
+    // is built: the macro's recursion runs out on one this long
+    let pace = (
+        station.engine().session_rate().map(|rate| rate * 8.0),
+        station.engine().queue_finish_s(),
+    );
+    let mut status = status_object(station, frequency_hz, sent_pending, sent_recent);
+    status["session_rate_bps"] = json!(pace.0);
+    status["queue_finish_s"] = json!(pace.1);
+    status
+}
+
+fn status_object<P: Ptt>(
+    station: &mut Station<P>,
+    frequency_hz: Option<u64>,
+    sent_pending: Vec<String>,
+    sent_recent: Vec<crate::station::Delivery>,
+) -> Value {
     let engine = station.engine();
     json!({
         "frequency_hz": frequency_hz,

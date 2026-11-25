@@ -3519,6 +3519,31 @@ Winlink-shaped scenarios × 3 draws): 24/24 both, no radiated overlap, air ×0.9
 draw slower on reruns (`40m-winlink-exchange-2300` s1031) lost the reply's first block, now sent
 alone in the answer's room, to a fade, and the rate controller stepped down (its review's).
 
+**Winlink Express P2P on 80 m, with a long file (2026-11-24 22:46–23:48Z, `docs/research/
+link-architecture/22-wle-p2p-80m-beta175.md`; built 2026-11-25, the author's answers to its §9).**
+Seven sessions, portable to home, beta.175 at both ends, both sides with audio; the last carried
+6.4 kB of a 161.6 kB file at 2300 Hz in 13 minutes before the operator aborted. Found and built (no
+wire change): Winlink Express's timer `DISCONNECT` is held only while what is queued could go
+within 15 minutes at the session's rate (ADR-0134 §6: the engine's `session_rate` and
+`queue_finish_s`, model first, in the granted vectors' digests; `status.session_rate_bps` and
+`queue_finish_s`; the adapter's `HOLD_FINISH_S`, 900 s), past that it is acted on and the drain
+gives up; a held one is `status.host.disconnect_held_ms` and the panel's `#held-banner` with
+**Disconnect** and **Abort**. The *KK4ODA-1* at the start was home's Winlink Express not attached:
+a call to another SSID, or to a station its external program keys, while no program is attached is
+now a mismatch `program` naming the host port (`note_no_program`, `StationConfig.external_port`).
+The panel greys what an external program sets instead of hiding it (the author's refinement): step
+1's callsign and step 4's bandwidth keep Aether's values, greyed and dashed, the note beside each
+*In use: KK4ODA · Winlink Express* / *In use: 2300 Hz · external program* (`applyCallsignOwner`,
+`applyBandwidthInUse`, `.in-use-elsewhere`); the chip *2300 Hz · external*. `receiving_rung` follows
+every data frame the engine files, decoded or not (`Station::data_heard` from `last_data()`), and
+the Mode tile is two rows, *Sending* and *Receiving* (idle, Sending says *next: N*). The harness has
+a Winlink Express stand-in (`host a wle`: `DISCONNECT` 300 s after it last wrote or was handed
+anything; `host-write`, `host-closed`; `[expect] wle_timer`, `wle_held`, `wle_closes`) and two
+real-time scenarios, `80m-wle-long-message-500` and `80m-wle-hopeless-file-500`. Open: Winlink
+Express's own log for 23:35–23:49Z, and the rest of report 22 §7's tests. The throughput on that
+path (≈ 67 bit/s of the file at 2300 Hz, a −1 dB median with dips to −12; no decline over the
+session) is the rate review's evidence, not a patch.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

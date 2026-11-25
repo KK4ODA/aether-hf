@@ -77,6 +77,13 @@ STOP_WAIT_S = 30.0
 """How long the runner waits for a daemon, and the channel, to stop before killing it: a daemon
 asked to stop mid-session takes up to its ``WIND_DOWN`` (22 s) to end the session on the air, and
 one killed sooner leaves its log and its recordings cut short."""
+WLE_TIMER_S = 300.0
+"""Winlink Express's P2P inactivity timer (1.8.6.0, report 22 §1): ``DISCONNECT`` 300 s of wall
+clock after it last wrote on the data port or was handed data, whatever the modem says, and again
+every 300 s while it waits. The host port holds it while the transfer can finish within 15
+minutes at the session's rate and acts on it otherwise (ADR-0134 §6), on the wall clock too, so a
+scenario that meets it runs in real time."""
+
 PAT_BUFFER_TIMEOUT_S = 60.0
 """Pat's wait on the modem's count (Pat-Vara 1.2.0, ``vara/conn.go``): its ``Write`` and ``Flush``
 restart a one-minute timer at each ``BUFFER`` line, and give up on the session when it runs out
@@ -421,6 +428,10 @@ class Host:
         self.buffer_count = 0
         self.buffer_wall = time.monotonic()
         self.problems: list[str] = []
+        # Winlink Express's quiet time, on the wall clock (`wle`): since it last wrote or was handed
+        # data; and the air times of the DISCONNECTs its timer sent
+        self.quiet_wall = time.monotonic()
+        self.timer_disconnects: list[float] = []
         self.lock = threading.Lock()
         self.closed = False
         threading.Thread(target=self._read_cmd, daemon=True).start()
@@ -464,6 +475,8 @@ class Host:
             threading.Thread(target=self._scan, daemon=True).start()
         if kind == "pat":
             threading.Thread(target=self._pat_waits, daemon=True).start()
+        if kind == "wle":
+            threading.Thread(target=self._wle_timer, daemon=True).start()
 
     def send(self, line: str) -> None:
         if line.startswith("LISTEN"):
@@ -486,6 +499,7 @@ class Host:
         with self.lock:
             self.buffer_count += len(payload)
             self.buffer_wall = time.monotonic()
+            self.quiet_wall = time.monotonic()
         self.data.sendall(payload)
 
     def note(self, what: str, line: str) -> None:
@@ -533,6 +547,8 @@ class Host:
                         self.buffer_count = int(line.split()[1])
                         self.buffer_wall = time.monotonic()
                 elif line.startswith("CONNECTED"):
+                    with self.lock:
+                        self.quiet_wall = time.monotonic()
                     if self.kind == "pat" and len(line.split()) < 3:
                         self.problems.append(
                             f"{self.station.who}: {line!r} at {self.run.air_s():.1f} s, which Pat "
@@ -585,6 +601,23 @@ class Host:
                 return
             self.note("Data in:", f"{len(chunk)} bytes")
             self.received += len(chunk)
+            with self.lock:
+                self.quiet_wall = time.monotonic()
+
+    def _wle_timer(self) -> None:
+        """Winlink Express's P2P inactivity timer (:data:`WLE_TIMER_S`): connected, and quiet that
+        long since its last write or the last data it was handed, it sends ``DISCONNECT``, and
+        again every :data:`WLE_TIMER_S` while it waits for ``DISCONNECTED``."""
+        while not self.closed:
+            time.sleep(0.25)
+            with self.lock:
+                due = self.connected and time.monotonic() - self.quiet_wall >= WLE_TIMER_S
+                if due:
+                    self.quiet_wall = time.monotonic()
+            if due:
+                self.timer_disconnects.append(self.run.air_s())
+                self.note("Timer:", "P2P session inactivity timeout. Disconnecting.")
+                self.send("DISCONNECT")
 
     def _pat_waits(self) -> None:
         """Pat's wait on the count: connected, with bytes the modem holds, a minute of wall clock
@@ -1004,6 +1037,25 @@ def step(run: Run, text: str) -> bool:
         )
         run.delivered_ok &= ok
         return ok
+    if word == "host-write":
+        # `host-write N [c]`: the client (a unless named) writes a message of N bytes and the
+        # script goes on, whatever becomes of it: Winlink Express writes a message whole
+        size, _, who = arg.partition(" ")
+        n = int(size)
+        run.hosts[who or "a"].write(incompressible(n, salt=n + len(run.transfers)))
+        run.transfers.append(f"host-write {n} B")
+        return True
+    if word == "host-closed":
+        # `host-closed [S]`: both programs hear DISCONNECTED within S s (600 unless given)
+        ha, hb = run.hosts["a"], run.hosts["b"]
+        was_a, was_b = ha.heard("DISCONNECTED"), hb.heard("DISCONNECTED")
+        ok = run.wait(
+            "both programs told DISCONNECTED",
+            lambda: ha.heard("DISCONNECTED") > was_a and hb.heard("DISCONNECTED") > was_b,
+            float(arg or 600),
+        )
+        run.transfers.append(f"closed at {run.air_s():.0f} s" if ok else "not closed")
+        return ok
     if word == "host-disconnect":
         ha, hb = run.hosts[arg or "a"], run.hosts["b"]
         was_a, was_b = ha.heard("DISCONNECTED"), hb.heard("DISCONNECTED")
@@ -1221,6 +1273,25 @@ def judge(run: Run, ends: list[str]) -> dict:
     idle = all(s == "idle" for s in run.final_states)
     # then what this scenario expects of its path, which one unlucky draw can miss
     failures = list(invariants)
+    # Winlink Express's timer (report 22 §1): `wle_timer` — one of the programs' timers fired at
+    # least once, so the run met what it is about (the receiving program's never does while it is
+    # handed data); `wle_held` — no DISCONNECTED reached a program within a minute of any of its
+    # timer DISCONNECTs; `wle_closes` — one did, within two minutes of its first
+    wle = [h for h in run.hosts.values() if h.kind == "wle"]
+    if expect.get("wle_timer") and not any(h.timer_disconnects for h in wle):
+        failures.append("Winlink Express's timer never fired")
+    for host in wle:
+        fired = host.timer_disconnects
+        with host.lock:
+            ended = [t for t, what, line in host.log if what == "In:" and line == "DISCONNECTED"]
+        if expect.get("wle_held") and any(t <= e <= t + 60.0 for t in fired for e in ended):
+            failures.append(f"{host.station.who}: a timer DISCONNECT ended the session")
+        if (
+            expect.get("wle_closes")
+            and fired
+            and not any(fired[0] <= e <= fired[0] + 120.0 for e in ended)
+        ):
+            failures.append(f"{host.station.who}: the hopeless transfer went on after the timer")
     if expect.get("connected") and not run.connected:
         failures.append("did not connect")
     if expect.get("delivered") and not run.delivered_ok:

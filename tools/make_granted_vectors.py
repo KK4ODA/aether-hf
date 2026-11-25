@@ -199,6 +199,9 @@ def digest(e: GrantedEngine) -> dict[str, Any]:
         "current_mode": e.current_mode,
         "tx_pending": e.tx_pending_bytes,
         "tx_undelivered": e.tx_undelivered_bytes,
+        # the session's rate and how long the queue would take at it (ADR-0134 §6, ADR-0135)
+        "session_rate": bits(e.session_rate),
+        "queue_finish_s": bits(e.queue_finish_s),
         "next_deadline": bits(e.next_deadline()),
         "connect_tries": e.connect_tries,
         "probing": e.probing,

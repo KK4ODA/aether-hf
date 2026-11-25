@@ -286,10 +286,15 @@ there too ([the gateway kit](gateway-kit.md)). See ADR-0050.
   timeout"), and on a weak path a burst can wait longer than that for its answer (ADR-0109).
 * **A long message from Winlink Express.** In a P2P session Winlink Express asks to disconnect
   exactly five minutes after it sends a message, whatever the modem says meanwhile ("P2P session
-  inactivity timeout"). A `DISCONNECT` that comes while the program's own data is still going, and
-  after it has written and been handed nothing for four minutes, is answered `OK` and the
-  transfer goes on; the Log says so. A second `DISCONNECT` within a minute, or `ABORT`, ends the
-  session (ADR-0134).
+  inactivity timeout"), and again every five minutes after. A `DISCONNECT` that comes while the
+  program's own data is still going, after it has written and been handed nothing for four
+  minutes, is answered `OK` and the transfer goes on, as long as the rest can arrive within 15
+  minutes at the session's speed: Aether's window shows a banner with **Disconnect** and
+  **Abort**. When it could not, the `DISCONNECT` is acted on and the session closes at once,
+  without the rest. A second `DISCONNECT` within a minute, or `ABORT`, ends the session
+  (ADR-0134).
+* **A weak path.** Under about +3 dB, choose 500 Hz in Winlink Express's session window: there
+  500 Hz carries more than 2300 (report 22).
 * **A program's quick answer.** A program answers what it is handed a fifth to a third of a
   second later (Winlink Express's `FF` and `FQ`). Aether waits for it at each hand-over, so the
   answer goes in the next transmission instead of one exchange later (ADR-0135).

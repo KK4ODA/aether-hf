@@ -442,6 +442,12 @@ body.compact .strip.saying > .strip-state {
   display: none;
 }
 
+/* the bandwidth chip is short ("2300 Hz · external"): in the full view it keeps its words and
+   the programs' chip, the long one, gives way first */
+body:not(.compact) #bw-chip {
+  flex-shrink: 0;
+}
+
 .chip-text {
   min-width: 0;
   overflow: hidden;
@@ -1180,6 +1186,51 @@ main:has(> #session-banner:not([hidden])) .state-strip {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* the Mode tile: a row each way, as tall as the other tiles' value and line under it. The
+   frame's name gives way first in a narrow tile; the tooltip has the whole of it */
+.mode-rows {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  column-gap: 6px;
+  align-items: baseline;
+  margin-top: 1px;
+}
+
+.mode-rows .dir,
+.mode-rows .name {
+  font-size: var(--fs-sm);
+  line-height: 19px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-rows .dir {
+  color: var(--text-2);
+}
+
+.mode-rows .name {
+  color: var(--text-3);
+}
+
+.mode-rows .rung {
+  font: 300 17px / 19px var(--display);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* a setting an external program or a call has replaced for now: kept, shown and editable,
+   greyed, with what is in use beside it */
+.setup .in-use-elsewhere {
+  color: var(--text-3);
+  border-style: dashed;
+}
+
+.setup .in-use-note.in-use {
+  color: var(--text-2);
 }
 
 /* ── panels ─────────────────────────────────────────────────────── */

@@ -8,7 +8,8 @@ inactivity timeout twice, and after 13 minutes and 6.4 kB the operator aborted.
 The author asked for six things to be looked at, in this order: the disconnect messages during
 the long transfer (§1), the callsign `KK4ODA-1` at the start (§2), the indicators of what an
 external program controls (§3), throughput (§4), the *Receiving at* line (§5) and the Mode tile
-(§6). §7 is the regression testing, §8 what is proposed and §9 the questions for the author. Each
+(§6). §7 is the regression testing, §8 what is proposed, §9 the questions for the author and §10 what
+the author decided and what was built. Each
 finding gives the observation, the evidence, the cause and its confidence, a classification, a
 severity, a proposed resolution and how to validate it.
 
@@ -405,3 +406,47 @@ on the author's answer.
    only one direction moves?
 7. §1: is Winlink Express's log for 23:35–23:49Z (the portable, *RMS Express* log of 2026-11-24)
    available, to confirm the two *Disconnecting* lines were its own?
+
+## 10. What the author decided, and what was built (2026-11-25)
+
+The author answered questions 1–6 as proposed. Question 7 (Winlink Express's own log) is still
+open. Nothing below changes the air protocol: beta.175 and the build after it interoperate.
+
+1. **A held `DISCONNECT` is acted on past 15 minutes** (ADR-0134 §6). The engine now states the
+   session's rate and how long what it still has would take at it (`session_rate`,
+   `queue_finish_s`; model first, the vectors' digests compare both). The control API's `status`
+   carries them as `session_rate_bps` and `queue_finish_s`. The adapter holds a timer
+   `DISCONNECT` only while `queue_finish_s` is under `HOLD_FINISH_S` (900 s), or while no rate is
+   known yet. Past that it acts on it, and ADR-0135's drain gives up at once. Adapter tests:
+   held under 15 minutes, acted on past them, held when no rate is known.
+2. **The panel says so**: `status.host.disconnect_held_ms`, and the `#held-banner` across every
+   tab: *The external program asked to disconnect (its inactivity timeout). The transfer goes
+   on.* with **Disconnect** and **Abort**. The banner goes when the session ends.
+3. **The advice when no external program is attached** (§2): a call to another SSID of the
+   station's callsigns, or to a station keyed by its external program, while none is attached, is
+   a mismatch `program` whose sentence names the host port to check and, for an SSID, the
+   callsigns Aether answers as itself (`note_no_program`). Two station tests.
+4. **The settings an external program sets are greyed, not hidden** (§3; the author's refinement:
+   Aether's own setting stays visible, marked inactive, with a legend). Setup step 1's callsign
+   and step 4's bandwidth keep their values, greyed with a dashed edge, and the note beside each
+   reads *In use: KK4ODA · Winlink Express* or *In use: 2300 Hz · external program*. With no
+   program, step 1's note reads *(for Aether standalone use)*. The header's bandwidth chip reads
+   *2300 Hz · external*.
+5. **Receiving at follows every frame heard** (§5): `metrics.receiving_rung` follows each data
+   frame the engine files in the session, decoded or not, so a fade no longer blanks the line.
+   Checked through the vectors' `last_data`, which the station reads.
+6. **The Mode tile is two cells, always** (§6): *Sending* and *Receiving*, each a rung and its
+   name; idle, Sending shows the rung the next transfer starts at (*next: 7*). The tile's tooltip
+   is replaced.
+
+The manual (1.23.0) has the new banner, step 1 and step 4's greyed fields (Figure 14, new), the
+Mode tile and the 15-minute rule; `docs/user/host-programs.md` the rule and a note on weak paths.
+Every new label was checked to fit at 600, 900 and 1440 px and in Compact.
+
+**Tests added for §7.** The harness's Winlink Express stand-in (`host a wle`): it writes a message
+whole, sends `DISCONNECT` 300 s after it last wrote or was handed anything, and every 300 s after;
+steps `host-write N` and `host-closed S`; `[expect]` keys `wle_timer` (its timer fired),
+`wle_held` (the session ran on past it) and `wle_closes` (it closed within two minutes of it).
+Two real-time scenarios: `80m-wle-long-message-500` (a message that takes over five minutes and
+under fifteen: held, delivered, clean end) and `80m-wle-hopeless-file-500` (60 kB on a −2 dB
+path: closed at the first timer). The other rows of §7's table stay to do.

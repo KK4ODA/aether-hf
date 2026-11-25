@@ -108,6 +108,9 @@ pub struct HostFlags {
     /// It said `CWID ON`: its sessions end with the Morse identifier, whatever the station's
     /// own setting (ADR-0075 §2.7).
     pub cw_id: Arc<AtomicBool>,
+    /// When its last `DISCONNECT` was taken for its inactivity timer and held, milliseconds since
+    /// the epoch; 0 while none is held in its session (ADR-0134 §6). The panel says so.
+    pub disconnect_held_ms: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// One client, as the status shows it.

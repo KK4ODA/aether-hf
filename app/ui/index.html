@@ -121,6 +121,13 @@
         <button class="small" id="btn-mismatch-call" title="Call the station heard under the same callsign with another SSID" hidden>Call it</button>
         <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">Dismiss</button>
       </div>
+      <!-- an external program's timer DISCONNECT, held while its transfer goes on (ADR-0134 §6):
+           on every tab, with the two ways to end it here -->
+      <div class="note warn unsaved-banner" id="held-banner" title="The external program connected to Aether asked to disconnect after minutes without writing anything: Winlink Express does this 5 minutes after it sends a message, while the message is still going. Aether keeps sending, since the transfer can finish within 15 minutes at this session's speed. Disconnect closes once what is queued has gone, or after a minute; Abort closes now" role="status" hidden>
+        <span id="held-banner-text" title="Why the session goes on">The external program asked to disconnect (its inactivity timeout). The transfer goes on.</span>
+        <button class="small" id="btn-held-disconnect" title="Close once what is queued has gone, or after a minute at most">Disconnect</button>
+        <button class="small danger" id="btn-held-abort" title="Close now; what is still queued is not sent">Abort</button>
+      </div>
       <!-- the receive audio clips (ADR-0132): on every tab, Compact included -->
       <div class="note warn unsaved-banner" id="clip-banner" title="More than 0.1 % of the audio heard over the last ten seconds reached full scale: the sound card's input is overdriven, and what clips is lost to the receiver" role="alert" hidden>
         <span id="clip-banner-text" title="What is clipping and what to turn">The receive audio is clipping: turn the radio's audio output or the sound card's input down.</span>
@@ -151,13 +158,19 @@
             <!-- 1. the link: what the session is doing -->
             <section class="card console-card tiles-card" id="link-card" aria-labelledby="link-title" title="The session: the mode, the signal, the speed and the other station">
               <div class="card-head">
-                <h2 class="card-title" id="link-title" title="The session: the mode, the signal, the speed and the other station. Mode is the rung the data is moving at, with its name and rate: the other station's while this one receives, this station's while it sends, both when data goes both ways. With no data moving it is the rung this station would send at. SNR is what this receiver measured on the last frame it found, referenced to 3 kHz. Throughput counts application bytes both ways over the last thirty seconds, with the session's total under it. Session is the other station and how long the session has run.">Link</h2>
+                <h2 class="card-title" id="link-title" title="The session: the mode, the signal, the speed and the other station. Mode is the rung the data moves at each way over the last 30 s: Sending, this station's; Receiving, the other station's; a dash for a direction where none moved. With nothing moving, Sending shows the rung this station would send at next. SNR is what this receiver measured on the last frame it found, referenced to 3 kHz. Throughput counts application bytes both ways over the last thirty seconds, with the session's total under it. Session is the other station and how long the session has run.">Link</h2>
               </div>
               <div class="tiles" id="readings-link">
-                <div class="reading tile" title="The rung the data is moving at: the other station's while this one receives, this station's while it sends; with no data moving, the rung this station would send at">
+                <div class="reading tile" id="mode-tile" title="The rung the data moves at, each way, over the last 30 s: this station's own data on Sending, the other station's on Receiving, a dash when none moved. With nothing moving, Sending shows the rung this station would send at next">
                   <div class="label">Mode</div>
-                  <div class="value" id="v-mode">—</div>
-                  <div class="sub" id="v-mode-name"></div>
+                  <div class="mode-rows">
+                    <span class="dir">Sending</span>
+                    <span class="rung" id="v-mode-send">—</span>
+                    <span class="name" id="v-mode-send-name"></span>
+                    <span class="dir">Receiving</span>
+                    <span class="rung" id="v-mode-recv">—</span>
+                    <span class="name" id="v-mode-recv-name"></span>
+                  </div>
                 </div>
                 <div class="reading tile" title="Signal-to-noise ratio of the last frame this receiver found, referenced to 3 kHz">
                   <div class="label">SNR</div>
@@ -732,7 +745,7 @@
               <div class="row">
                 <label for="wz-call" title="This station's own callsign: what Aether answers to and identifies as when no program speaks for it">Aether callsign</label>
                 <input id="wz-call" title="Your callsign: letters, digits, - and /, up to nine characters. An SSID (KK4ODA-1) or a suffix (KK4ODA/P) is fine. What you start from this window goes out as it. While a program answers for the station (an external program's MYCALL, or a RadioPost program's callsign), only the program's callsigns are answered; this one comes back when the program stops" type="text" placeholder="W4ODA" autocomplete="off" spellcheck="false" />
-                <span class="sub" id="wz-call-note" title="This is the callsign Aether uses on its own: your calls, probes, Tests and beacons from this window, and calls answered when no program is running. A program sets its own callsign: RadioPost its enrolled callsign, an external program its MYCALL. While one does, only the program's callsigns are answered">(for Aether standalone use)</span>
+                <span class="sub in-use-note" id="wz-call-note" title="This is the callsign Aether uses on its own: your calls, probes, Tests and beacons from this window, and calls answered when no program is running. A program sets its own callsign: RadioPost its enrolled callsign, an external program its MYCALL. While one does, the box is greyed and this says which callsign is in use: only the program's callsigns are answered">(for Aether standalone use)</span>
               </div>
               <div class="row">
                 <label for="reg-profile" title="The regulations Aether judges every transmission against">Rules</label>
@@ -891,6 +904,7 @@
                   <option value="2300">2300 Hz</option>
                   <option value="500">500 Hz</option>
                 </select>
+                <span class="sub in-use-note" id="radio-bandwidth-note" title="The bandwidth the station runs now, and why, while it is not this setting: an external program asked for it, a listening program, or a call. The setting comes back when that ends" hidden></span>
                 <label class="check" title="Take calls and answer probes; make no call and send no beacon. An unattended station is also Automatic under Control in step 1, and the rules then decide where it may answer (§97.221)"><input id="radio-answer-only" title="Take calls and answer probes; make no call and send no beacon" type="checkbox" /> Answer only</label>
               </div>
               <div class="row">

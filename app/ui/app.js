@@ -627,6 +627,7 @@ async function refreshStatus() {
   $("callsign").textContent = status.callsign || "—";
   applyCallsignOwner();
   renderBandwidth(status.bandwidth);
+  renderHeld(status);
   renderDebug(status.debug);
   // a first run: the configuration still has the placeholder callsign, so the wizard is
   // where this panel should open — once, and only until Setup is saved
@@ -841,52 +842,49 @@ function rungRate(rung) {
   return entry ? `${Math.round(entry.net_bit_rate)} bit/s` : "";
 }
 
-// The Mode tile and the well's rung: the rung the data is moving at — the other station's while
-// this one receives, this station's while it sends, both when both. `metrics.mode` is the rung
-// the other station recommends for this one's data, which moves nothing while this station only
-// answers: KK4ODA-1's tile read tone-36 under data arriving at tone4x100-75 (report 13 §13.3).
-// With no data moving, or from a daemon before 0.2.0-beta.109 that does not say, it is that rung.
+// The Mode tile and the well's rung. The tile has a row each way (the author's choice of
+// 2026-11-25, report 22 §6): Sending, this station's data rung, and Receiving, the other
+// station's, over the last 30 s, a dash for a direction where none moved. With nothing moving,
+// Sending shows the rung this station's own rate controller would send at next (`metrics.mode`).
+// The well keeps its one line: the rung the data moves at, both when both. A daemon before
+// 0.2.0-beta.109 says neither direction: its rung shows as the next.
 function applyRung(metrics) {
   const mode = metrics.mode;
   const told = metrics.sending_rung !== undefined;
   const sending = told ? metrics.sending_rung : null;
   const receiving = told ? metrics.receiving_rung : null;
-  const value = $("v-mode");
-  const sub = $("v-mode-name");
+  if (sending == null && receiving == null && mode === undefined) return;
+  currentMode = receiving ?? sending ?? mode;
+  const row = (rungId, nameId, rung, next) => {
+    const rungCell = $(rungId);
+    const nameCell = $(nameId);
+    if (rung == null) {
+      rungCell.textContent = "—";
+      nameCell.textContent = "";
+      return "none in the last 30 s";
+    }
+    rungCell.textContent = next ? `next: ${rung}` : String(rung);
+    nameCell.textContent = rungName(rung);
+    return `rung ${rung}, ${rungName(rung)}, ${rungRate(rung)} on the air${next ? ", the next this station would send at" : ""}`;
+  };
+  const idle = sending == null && receiving == null;
+  const sent = row("v-mode-send", "v-mode-send-name", idle ? mode : sending, idle);
+  const heard = row("v-mode-recv", "v-mode-recv-name", receiving, false);
+  $("mode-tile").title = `Sending: ${sent}. Receiving: ${heard}`;
   const strip = $("strip-rung");
   if (sending != null && receiving != null) {
-    currentMode = receiving;
-    value.textContent = `${sending} / ${receiving}`;
-    sub.textContent = `sending ${rungName(sending)} · receiving ${rungName(receiving)}`;
-    value.title = `Data both ways: this station sends at rung ${sending} (${rungName(sending)}, ${rungRate(sending)}), the other station at rung ${receiving} (${rungName(receiving)}, ${rungRate(receiving)})`;
     strip.textContent = `Rung ${sending} ↑  ${receiving} ↓`;
     strip.title = `Sending at rung ${sending}, receiving at rung ${receiving}`;
   } else if (receiving != null) {
-    currentMode = receiving;
-    value.textContent = String(receiving);
-    sub.textContent = `receiving · ${rungName(receiving)} · ${rungRate(receiving)}`;
-    value.title = `The other station's data is arriving at rung ${receiving}: ${rungName(receiving)}, ${rungRate(receiving)} on the air`;
     strip.textContent = `Rung ${receiving} ↓  ${rungRate(receiving)}`;
     strip.title = `Receiving at rung ${receiving}, ${rungRate(receiving)} on the air`;
   } else if (sending != null) {
-    currentMode = sending;
-    value.textContent = String(sending);
-    sub.textContent = `sending · ${rungName(sending)} · ${rungRate(sending)}`;
-    value.title = `This station's data is going at rung ${sending}: ${rungName(sending)}, ${rungRate(sending)} on the air`;
     strip.textContent = `Rung ${sending} ↑  ${rungRate(sending)}`;
     strip.title = `Sending at rung ${sending}, ${rungRate(sending)} on the air`;
-  } else if (mode !== undefined) {
-    currentMode = mode;
-    value.textContent = String(mode);
-    const rate = rungRate(mode);
-    sub.textContent = modeTable[mode] ? `${rungName(mode)} · ${rate} · to send at` : "";
-    value.title = `No data moving: rung ${mode} is the rung this station would send at, as the other station last recommended`;
-    strip.textContent = modeTable[mode] ? `Rung ${mode}  ${rate}` : `Rung ${mode}`;
-    strip.title = `No data moving: rung ${mode} is the rung this station would send at`;
   } else {
-    return;
+    strip.textContent = modeTable[mode] ? `Rung ${mode}  ${rungRate(mode)}` : `Rung ${mode}`;
+    strip.title = `No data moving: rung ${mode} is the rung this station would send at next`;
   }
-  sub.title = value.title;
   strip.hidden = false;
 }
 
@@ -4048,20 +4046,55 @@ function programCallsigns(status) {
   };
 }
 
-/// Setup's callsign box is always the station's own, the callsign Aether uses on its own, and the
-/// note after it says so; while a program answers for the station (ADR-0108) the note says
-/// which callsigns are in use now and whose. Greyed, the box had hidden the callsign the station
-/// used whenever no program was there, as the bandwidth's had (2026-11-23).
+/// Setup's callsign box is always the station's own, the callsign Aether uses on its own. While a
+/// program's callsigns are in use — an external program's MYCALL, a RadioPost program's claim
+/// (ADR-0108) — the box is greyed, still editable, and the note says which callsign is in use and
+/// whose (the author's choice of 2026-11-25, report 22 §3). Hidden behind "Host", the box had
+/// hidden the callsign the station used whenever no program was there (2026-11-23).
 function applyCallsignOwner() {
   const note = $("wz-call-note");
   note.dataset.ownTitle ??= note.title;
-  const external = $("host-enabled").checked && lastStatus?.host?.connected === true;
+  const claims = (lastStatus?.claims ?? []).filter((c) => (c.callsigns ?? []).length > 0);
+  const inUse = claims.map((c) => `${c.callsigns.join(", ")} · ${programName(c)}`).join("; ");
+  $("wz-call").classList.toggle("in-use-elsewhere", inUse !== "");
+  note.classList.toggle("in-use", inUse !== "");
+  note.textContent = inUse ? `In use: ${inUse}` : "(for Aether standalone use)";
   const program = programCallsigns(lastStatus);
-  let now = "";
-  if (external) now = "; an external program's MYCALL is in use now";
-  else if (program) now = `; in use now: ${program.text}`;
-  note.textContent = `(for Aether standalone use${now})`;
-  note.title = program && !external ? `${note.dataset.ownTitle}. ${program.title}` : note.dataset.ownTitle;
+  note.title = inUse
+    ? `${note.dataset.ownTitle}. In use now: ${inUse}${program ? `. ${program.title}` : ""}`
+    : note.dataset.ownTitle;
+}
+
+/// Setup's bandwidth while the station runs another for now — an external program's BW, a
+/// listening program, or a call in the other bandwidth: greyed, still editable, and the note says
+/// what is in use and why, as the header's chip does (report 22 §3).
+function applyBandwidthInUse(bandwidth) {
+  const note = $("radio-bandwidth-note");
+  const why = bandwidth?.why;
+  const moved = bandwidth != null && why != null && why !== "configured";
+  $("radio-bandwidth").classList.toggle("in-use-elsewhere", moved);
+  note.hidden = !moved;
+  if (!moved) return;
+  const hz = bandwidth.bandwidth_hz;
+  const source =
+    why === "call"
+      ? `answering ${bandwidth.caller ?? "a call"}`
+      : why === "calling"
+        ? `calling ${bandwidth.callee ?? "a station"}`
+        : why === "listening"
+          ? `${bandwidth.by ? chipName(bandwidth.by) : "a program"} listening`
+          : movedBy(bandwidth);
+  note.textContent = `In use: ${hz} Hz · ${source}`;
+  note.classList.add("in-use");
+  note.title = `${$("bw-chip").title || `The station runs ${hz} Hz for now`}. This setting, ${bandwidth.home_hz} Hz, comes back then`;
+}
+
+/// An external program's DISCONNECT held for its inactivity timer while its transfer goes on
+/// (ADR-0134 §6): a banner on every tab, with Disconnect and Abort, so both programs agree on
+/// what is happening — Winlink Express says "Disconnecting" in its own window.
+function renderHeld(status) {
+  // the adapter clears it when the program's session ends or the program goes
+  $("held-banner").hidden = status.host?.disconnect_held_ms == null;
 }
 
 /// When the external program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
@@ -5282,6 +5315,13 @@ function chipName(name) {
   return name.replace(/\s+v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?$/, "") || name;
 }
 
+/// Who moved the bandwidth, as the header and Setup say it: an external program is "external
+/// program" (the daemon names it "the host program"), anything else its name without a version.
+function movedBy(bandwidth) {
+  const by = bandwidth?.by;
+  return !by || by === "the host program" ? "external program" : chipName(by);
+}
+
 // The bandwidth the station runs, in the header, when it is not its own (ADR-0026): a program
 // asked for it (an external program's BW command, RadioPost listening or calling), or a call in
 // the narrower one moved it.
@@ -5294,6 +5334,7 @@ function renderBandwidth(bandwidth) {
   renderMismatch(bandwidth?.mismatch);
   if (!bandwidth || bandwidth.why === "configured" || bandwidth.bandwidth_hz === bandwidth.home_hz) {
     chip.hidden = true;
+    applyBandwidthInUse(bandwidth);
     return;
   }
   chip.hidden = false;
@@ -5309,10 +5350,12 @@ function renderBandwidth(bandwidth) {
     chip.replaceChildren(chipText(`${hz} Hz · listening`));
     chip.title = `${by} listens in ${hz} Hz, which answers calls in 500 and 2300 Hz alike; the station goes back to its own ${bandwidth.home_hz} Hz when it stops listening`;
   } else {
-    const by = bandwidth.by ? chipName(bandwidth.by) : "an external program";
-    chip.replaceChildren(chipText(`${hz} Hz · ${by}`));
+    // short enough to fit the header beside the apps chip, which says "external program"
+    const by = movedBy(bandwidth);
+    chip.replaceChildren(chipText(`${hz} Hz · ${by === "external program" ? "external" : by}`));
     chip.title = `${by[0].toUpperCase()}${by.slice(1)} asked for ${hz} Hz; the station goes back to its own ${bandwidth.home_hz} Hz when the program goes`;
   }
+  applyBandwidthInUse(bandwidth);
 }
 
 // A call or probe to this station in a bandwidth whose calls it does not answer (ADR-0035):
@@ -6205,6 +6248,10 @@ function wireMismatch() {
     $("radio-bandwidth").focus({ preventScroll: true });
   });
   $("btn-mismatch-dismiss").addEventListener("click", dismissMismatch);
+  $("btn-held-disconnect").addEventListener("click", () =>
+    act(() => call("disconnect"), "closing the session the external program asked to end"),
+  );
+  $("btn-held-abort").addEventListener("click", () => act(() => call("abort"), "aborting the session"));
   $("btn-mismatch-answer").addEventListener("click", async () => {
     const called = $("mismatch-banner").dataset.called;
     if (!called) return;

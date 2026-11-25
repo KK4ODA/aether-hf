@@ -53,6 +53,9 @@ pub struct HostConfig {
     /// taken for its inactivity timer (ADR-0134). Not a setting: [`PROGRAM_IDLE`], which the
     /// tests shorten.
     pub program_idle: Duration,
+    /// How soon after one held for the program's timer a `DISCONNECT` goes through: the operator
+    /// means it (ADR-0134). Not a setting: [`SECOND_DISCONNECT`], which the tests shorten.
+    pub second_disconnect: Duration,
 }
 
 impl Default for HostConfig {
@@ -63,6 +66,7 @@ impl Default for HostConfig {
             trace: false,
             buffer_repeat: BUFFER_REPEAT,
             program_idle: PROGRAM_IDLE,
+            second_disconnect: SECOND_DISCONNECT,
         }
     }
 }
@@ -106,7 +110,14 @@ pub const BUFFER_REPEAT: Duration = Duration::from_secs(50);
 pub const PROGRAM_IDLE: Duration = Duration::from_secs(240);
 /// A `DISCONNECT` that comes within this of one held for the program's timer goes through: an
 /// operator who means it presses Disconnect again (ADR-0134).
-const SECOND_DISCONNECT: Duration = Duration::from_secs(60);
+pub const SECOND_DISCONNECT: Duration = Duration::from_secs(60);
+/// The longest what is queued may take, at the rate the session has delivered, for the
+/// program's timer `DISCONNECT` to be held (ADR-0134 §6, the author's choice of 2026-11-25).
+/// Past it the transfer could not finish in any time an operator waits: on 2026-11-24 a
+/// 161 kB file at 67 bit/s needed about five hours, and Winlink Express said *Disconnecting*
+/// every five minutes while the modem carried on. Acted on, the `DISCONNECT` closes the session
+/// at once (ADR-0135) and the program hears `DISCONNECTED`.
+pub const HOLD_FINISH_S: f64 = 900.0;
 /// How long a read waits for the program before the notification path gets a turn.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -183,6 +194,24 @@ pub struct HostServer {
 pub type Notes = Arc<Mutex<Vec<crate::kiss::Note>>>;
 
 /// Keep a line for the log; the oldest go first if nobody is taking them.
+/// How long what this station has queued would take at the rate its session has delivered, and
+/// that rate in bit/s, when it is longer than [`HOLD_FINISH_S`] (ADR-0134 §6); `None` when it would
+/// go in time, or while the modem cannot say (the session's rate is known only after its data has
+/// been acknowledged for half a minute, ADR-0135).
+fn hopeless_queue(handle: &ControlHandle) -> Option<(f64, f64)> {
+    let status = handle.call(request("status", json!({}))).ok()?.result?;
+    let finish_s = status["queue_finish_s"].as_f64()?;
+    let rate_bps = status["session_rate_bps"].as_f64().unwrap_or(0.0);
+    (finish_s > HOLD_FINISH_S).then_some((finish_s, rate_bps))
+}
+
+/// Milliseconds since the epoch, as the status reports times.
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
 fn note(notes: &Notes, warn: bool, text: impl Into<String>) {
     if let Ok(mut notes) = notes.lock() {
         if notes.len() >= 256 {
@@ -266,6 +295,7 @@ impl HostServer {
                 trace: config.trace,
                 buffer_repeat: config.buffer_repeat,
                 program_idle: config.program_idle,
+                second_disconnect: config.second_disconnect,
             },
         )?;
 
@@ -300,6 +330,7 @@ struct Shared {
     trace: bool,
     buffer_repeat: Duration,
     program_idle: Duration,
+    second_disconnect: Duration,
 }
 
 /// Bind the command port and the data port beside it.
@@ -690,6 +721,7 @@ fn spawn_command_loop(listener: TcpListener, shared: Shared) -> Result<(), HostE
                         flags.chat.store(false, Ordering::SeqCst);
                         flags.ignore_dcd.store(false, Ordering::SeqCst);
                         flags.cw_id.store(false, Ordering::SeqCst);
+                        flags.disconnect_held_ms.store(0, Ordering::SeqCst);
                         flags.attached.store(false, Ordering::SeqCst);
                     });
                 if spawned.is_err() {
@@ -720,10 +752,12 @@ fn serve_commands(
         trace,
         buffer_repeat,
         program_idle,
+        second_disconnect,
     } = shared;
     let trace = *trace;
     let buffer_repeat = *buffer_repeat;
     let program_idle = *program_idle;
+    let second_disconnect = *second_disconnect;
     // This program's own connection to the modem: its requests carry it, the callsigns it
     // claims are held by it, and the sessions they bring up are its own — told it by the
     // `owner` of the state events. When it goes, its claim goes with it (ADR-0106).
@@ -950,9 +984,14 @@ fn serve_commands(
                     && !calling
                     && host.buffer > 0
                     && program_quiet_since.elapsed() >= program_idle
-                    && timer_disconnect_held.is_none_or(|at| at.elapsed() >= SECOND_DISCONNECT);
-                if timer {
+                    && timer_disconnect_held.is_none_or(|at| at.elapsed() >= second_disconnect);
+                // ... unless what is queued could not go within `HOLD_FINISH_S` at the rate the
+                // session has delivered (ADR-0134 §6): then the DISCONNECT is acted on, and the
+                // session closes at once without it (ADR-0135)
+                let hopeless = if timer { hopeless_queue(handle) } else { None };
+                if timer && hopeless.is_none() {
                     timer_disconnect_held = Some(Instant::now());
+                    flags.disconnect_held_ms.store(unix_ms(), Ordering::SeqCst);
                     if trace {
                         eprintln!("host (DISCONNECT held: the program's inactivity timer)");
                     }
@@ -969,6 +1008,26 @@ fn serve_commands(
                         ),
                     );
                 } else {
+                    if let Some((finish_s, rate_bps)) = hopeless {
+                        if trace {
+                            eprintln!("host (DISCONNECT acted on: the transfer could not finish)");
+                        }
+                        note(
+                            notes,
+                            false,
+                            format!(
+                                "the program asked to disconnect {} s after it last wrote or was \
+                                 handed data, with {} bytes of its own still going, which at this \
+                                 session's {rate_bps:.0} bit/s would take about {:.0} min, more \
+                                 than the {:.0} a held DISCONNECT waits for: acted on, and the \
+                                 session closes without them",
+                                program_quiet_since.elapsed().as_secs(),
+                                host.buffer,
+                                finish_s / 60.0,
+                                HOLD_FINISH_S / 60.0
+                            ),
+                        );
+                    }
                     match apply(&outcome.action, own, handle, &mut host, &mut writer, &say) {
                         Applied::Done => {}
                         // Armed as soon as the modem has taken the call. What the modem said
@@ -1107,6 +1166,7 @@ fn serve_commands(
             was_connected = connected_to.is_some();
             program_quiet_since = Instant::now();
             timer_disconnect_held = None;
+            flags.disconnect_held_ms.store(0, Ordering::SeqCst);
         }
         let outbound = if connected_to.is_some() {
             pipe.lock()
@@ -1961,6 +2021,7 @@ mod tests {
                 trace: false,
                 buffer_repeat: BUFFER_REPEAT,
                 program_idle: PROGRAM_IDLE,
+                second_disconnect: SECOND_DISCONNECT,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -2118,6 +2179,7 @@ mod tests {
                 trace: false,
                 buffer_repeat: BUFFER_REPEAT,
                 program_idle: PROGRAM_IDLE,
+                second_disconnect: SECOND_DISCONNECT,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -2868,6 +2930,9 @@ mod tests {
                     trace: false,
                     buffer_repeat,
                     program_idle,
+                    // short in the tests, so a timer DISCONNECT after it is held again; four
+                    // idle times, since the hold asks the modem's status first
+                    second_disconnect: program_idle * 4,
                 },
                 handle,
                 flags.clone(),
@@ -3132,6 +3197,7 @@ mod tests {
                 trace: false,
                 buffer_repeat: BUFFER_REPEAT,
                 program_idle: PROGRAM_IDLE,
+                second_disconnect: SECOND_DISCONNECT,
             },
             handle,
             crate::kiss::HostFlags::default(),
@@ -3674,7 +3740,17 @@ mod tests {
     /// A program in its own session with `queued` bytes of its data going, on a modem whose
     /// adapter takes a quiet program's DISCONNECT for its timer after `idle` (ADR-0134).
     fn session_with_data_going(idle: Duration, queued: u64) -> (Modem, HostServer, Client) {
-        let (modem, server) = Modem::start_with(|_, _| json!({}), BUFFER_REPEAT, idle);
+        session_answering(idle, queued, |_, _| json!({}))
+    }
+
+    /// [`session_with_data_going`] with the modem answering requests as `answer` does: a
+    /// `status` that says how long the queue would take (ADR-0134 §6).
+    fn session_answering(
+        idle: Duration,
+        queued: u64,
+        answer: impl Fn(&str, &ControlChannel) -> serde_json::Value + Send + 'static,
+    ) -> (Modem, HostServer, Client) {
+        let (modem, server) = Modem::start_with(answer, BUFFER_REPEAT, idle);
         let mut client = Client::connect(&server);
         assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
         client.send("MYCALL WD5EMA");
@@ -3747,6 +3823,92 @@ mod tests {
         assert!(
             asked_within(&modem, "disconnect", Duration::from_secs(2)),
             "a second DISCONNECT was held too: {:?}",
+            modem.methods()
+        );
+        drop(client);
+        drop(server);
+    }
+
+    #[test]
+    fn the_timers_disconnect_is_held_each_time_it_fires() {
+        // Winlink Express says its timeout again every 300 s while it waits (23:40:27 and
+        // 23:45:27 on 2026-11-24): each is the timer, not the operator. Here 300 ms stands in for
+        // the 240 s of quiet, and 1.2 s for the minute within which a second DISCONNECT goes
+        // through.
+        let (modem, server, mut client) =
+            session_with_data_going(Duration::from_millis(300), 158_812);
+        std::thread::sleep(Duration::from_millis(400));
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while modem.flags.disconnect_held_ms.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline, "not said as held");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(1400));
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            !asked_within(&modem, "disconnect", Duration::from_millis(400)),
+            "the timer's second DISCONNECT ended the session: {:?}",
+            modem.methods()
+        );
+        // the operator's ABORT ends it, held or not
+        client.send("ABORT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            asked_within(&modem, "abort", Duration::from_secs(2)),
+            "{:?}",
+            modem.methods()
+        );
+        // and the panel's banner goes with the session
+        modem.publish("state", json!({"name": "disconnected", "detail": "aborted"}));
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while modem.flags.disconnect_held_ms.load(Ordering::SeqCst) != 0 {
+            assert!(std::time::Instant::now() < deadline, "still said as held after the session");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(client);
+        drop(server);
+    }
+
+    #[test]
+    fn the_timers_disconnect_is_acted_on_when_the_transfer_could_not_finish() {
+        // The 161 kB file of 2026-11-24 went at 67 bit/s: about five hours. Past
+        // `HOLD_FINISH_S` at the session's rate the DISCONNECT is acted on (ADR-0134 §6), and the
+        // drain closes at once without the rest (ADR-0135).
+        let (modem, server, mut client) =
+            session_answering(Duration::from_millis(300), 158_812, |method, _| match method {
+                "status" => json!({"queue_finish_s": 18_960.0, "session_rate_bps": 67.0}),
+                _ => json!({}),
+            });
+        std::thread::sleep(Duration::from_millis(400));
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            asked_within(&modem, "disconnect", Duration::from_secs(2)),
+            "a transfer that could not finish was held: {:?}",
+            modem.methods()
+        );
+        assert_eq!(modem.flags.disconnect_held_ms.load(Ordering::SeqCst), 0);
+        drop(client);
+        drop(server);
+    }
+
+    #[test]
+    fn the_timers_disconnect_is_held_when_the_transfer_would_finish_in_time() {
+        // ten minutes to go at the session's rate: held, as ADR-0134 has it
+        let (modem, server, mut client) =
+            session_answering(Duration::from_millis(300), 20_000, |method, _| match method {
+                "status" => json!({"queue_finish_s": 600.0, "session_rate_bps": 267.0}),
+                _ => json!({}),
+            });
+        std::thread::sleep(Duration::from_millis(400));
+        client.send("DISCONNECT");
+        assert_eq!(client.expect(|l| l == "OK" || l == "WRONG"), "OK");
+        assert!(
+            !asked_within(&modem, "disconnect", Duration::from_millis(400)),
+            "{:?}",
             modem.methods()
         );
         drop(client);

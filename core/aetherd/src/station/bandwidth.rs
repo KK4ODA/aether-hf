@@ -640,6 +640,17 @@ impl<P: Ptt> Station<P> {
         if !kin && !self.engine.callsigns.contains(&dst) {
             return;
         }
+        // a call the external program would answer, with none attached: the program is the fix,
+        // not another callsign (report 22 §2: the advice named KK4ODA-1 while home's Winlink
+        // Express, which answers for KK4ODA, was not attached)
+        if what == "call" && !self.host_attached() {
+            if let Some(port) = self.config.external_port {
+                if kin || self.config.keyed_by_host {
+                    self.note_no_program(&src, &dst, kin, port, (theirs, ours));
+                    return;
+                }
+            }
+        }
         let bandwidths_agree = theirs == ours || (ours == 2300 && theirs == 500);
         if bandwidths_agree && !kin {
             return;
@@ -721,6 +732,50 @@ impl<P: Ptt> Station<P> {
             "{src} {verb} {dst}, which {app} answered for: {app} is not running now, so \
              nothing answers {dst}. Start {app} again."
         );
+        self.note("mismatch", &sentence);
+        self.bandwidth.mismatch = Some(Mismatch {
+            callsign: src.to_owned(),
+            what: "program",
+            theirs_hz: theirs,
+            ours_hz: ours,
+            at_ms: now_ms,
+            sentence,
+            theirs_protocol: None,
+            ours_protocol: None,
+            called: Some(dst.to_owned()),
+        });
+    }
+
+    /// A call from `src` to `dst` that the station's external program would answer, heard with
+    /// none attached: to one of its kin callsigns (`kin`), or to its own while the program keys
+    /// the radio. Said once a minute per caller, with the fix: start the program, or check its
+    /// port (report 22 §2).
+    pub(super) fn note_no_program(
+        &mut self,
+        src: &str,
+        dst: &str,
+        kin: bool,
+        port: u16,
+        (theirs, ours): (usize, usize),
+    ) {
+        let now_ms = super::beacons::unix_ms();
+        if self.bandwidth.mismatch.as_ref().is_some_and(|m| {
+            m.callsign == src && m.what == "program" && now_ms.saturating_sub(m.at_ms) < 60_000
+        }) {
+            return;
+        }
+        let sentence = if kin {
+            format!(
+                "{src} is calling {dst}: no external program is attached to answer it. Start \
+                 it, or check it uses port {port}. Aether itself answers as {}.",
+                self.engine.callsigns.join(", ")
+            )
+        } else {
+            format!(
+                "{src} is calling {dst}: the external program that keys this radio is not \
+                 attached. Start it, or check it uses port {port}."
+            )
+        };
         self.note("mismatch", &sentence);
         self.bandwidth.mismatch = Some(Mismatch {
             callsign: src.to_owned(),

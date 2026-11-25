@@ -129,6 +129,14 @@ impl<P: Ptt> Station<P> {
             return false;
         };
         self.stats.calls_unanswered += 1;
+        // the external program that keys the radio is not attached: the banner says so, as the
+        // log line alone did not on 2026-11-24 (report 22 §2)
+        if what == "call" && self.config.keyed_by_host && !self.host_attached() {
+            if let Some(port) = self.config.external_port {
+                let hz = self.bandwidth_hz();
+                self.note_no_program(&from, &to, false, port, (hz, hz));
+            }
+        }
         let now = self.now();
         let repeated = self
             .host

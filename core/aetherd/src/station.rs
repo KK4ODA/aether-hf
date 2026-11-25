@@ -139,6 +139,10 @@ pub struct StationConfig {
     /// The host program keys the radio (`[ptt] kind = "host"`, ADR-0025): with none attached,
     /// nothing this station sends reaches the air, which the log says of a closing identifier.
     pub keyed_by_host: bool,
+    /// The port external programs attach to (`[host] enabled`, its `bind`); `None` while the port
+    /// is off. A call this station's external program would answer, heard with none attached,
+    /// says so (report 22 §2).
+    pub external_port: Option<u16>,
     /// Where session recordings go. `None` means recording is refused.
     pub record_dir: Option<std::path::PathBuf>,
     /// Record every session on its own: start when one connects, stop when it ends. For a
@@ -189,6 +193,7 @@ impl Default for StationConfig {
             cw_id_wpm: CwId::default().wpm,
             identify_by: IdentifyBy::Morse,
             keyed_by_host: false,
+            external_port: None,
             record_dir: None,
             record_auto: false,
             record_program_sessions: false,
@@ -1748,7 +1753,8 @@ impl<P: Ptt> Station<P> {
     }
 
     /// The rungs the session's data went at in the throughput's window: this station's last
-    /// data sent and the other station's last decoded, each `None` when none moved that way —
+    /// data sent and the other station's last heard (decoded, or filed by the engine though it
+    /// did not decode), each `None` when none moved that way —
     /// the speed chart's rate lines, one a direction, against a goodput counted both ways.
     #[must_use]
     pub fn data_rungs(&self) -> (Option<usize>, Option<usize>) {
@@ -2292,6 +2298,7 @@ impl<P: Ptt> Station<P> {
         // who keys first: while the host program does, none of the rules settings acts, and
         // nothing is answered with none attached
         self.config.keyed_by_host = matches!(config.ptt, crate::config::PttConfig::Host { .. });
+        self.config.external_port = config.external_port();
         self.set_regulatory(config.regulatory_in_force());
         // the identifier: on, off and its speed, from the next session on
         let tone_hz = self
@@ -4015,6 +4022,10 @@ impl<P: Ptt> Station<P> {
             self.hand_over(&frame, asked, decoded_ok, now);
             if let Some(heard) = self.engine.last_data() {
                 self.engine_heard(heard);
+                // a data frame the engine filed in its session is the other station's, decoded
+                // or not: the speed chart's *Receiving at* follows the data arriving, not only
+                // what got through a fade (report 22 §5, the author's choice of 2026-11-25)
+                self.data_heard = Some((now, rung));
             }
         }
 
@@ -4277,7 +4288,8 @@ impl<P: Ptt> Station<P> {
     }
 
     /// A frame the session's other station sent, decoded: the session's notes for the history,
-    /// and the rung its data came in at for the speed chart.
+    /// and the rung its data came in at for the speed chart (a frame that did not decode moves
+    /// that too, where the engine files it).
     fn note_session_frame(&mut self, report: &FrameReport, rung: usize, now: f64) {
         let Some(notes) = &mut self.session_notes else {
             return;
@@ -11408,6 +11420,47 @@ mod tests {
         air.run(120.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
         assert_eq!(air.b.engine().my_call, "KK4XYZ-1");
+    }
+
+    #[test]
+    fn a_call_for_a_missing_external_program_says_so() {
+        // 2026-11-24 22:41Z: WD5EMA called KK4ODA, which home's Winlink Express answers for,
+        // while it was not attached; the advice named the station's own KK4ODA-1 instead
+        // (report 22 §2). With the external programs port on and nothing attached, the banner
+        // names the program and its port
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.config.external_port = Some(8700);
+        air.a.connect("KK4XYZ-1").expect("idle");
+        air.run(60.0, |_, b| b.mismatch().is_some());
+        let mismatch = air.b.mismatch().expect("the call was noticed").clone();
+        assert_eq!(
+            (mismatch.callsign.as_str(), mismatch.what, mismatch.called.as_deref()),
+            ("W4ODA", "program", Some("KK4XYZ-1"))
+        );
+        assert_eq!(
+            mismatch.sentence,
+            "W4ODA is calling KK4XYZ-1: no external program is attached to answer it. Start it, \
+             or check it uses port 8700. Aether itself answers as KK4XYZ."
+        );
+    }
+
+    #[test]
+    fn a_call_to_a_station_keyed_by_a_missing_program_says_so() {
+        // 22:43:27Z the same evening: the call to the station's own callsign went unanswered,
+        // "the host program keys the radio, and none is attached", in the log alone
+        let mut air = Air::new(1.0, 0.0005);
+        air.b.config.external_port = Some(8300);
+        air.b.config.keyed_by_host = true;
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(60.0, |_, b| b.mismatch().is_some());
+        assert!(!air.b.connected());
+        let mismatch = air.b.mismatch().expect("the call was noticed").clone();
+        assert_eq!(mismatch.what, "program");
+        assert_eq!(
+            mismatch.sentence,
+            "W4ODA is calling KK4XYZ: the external program that keys this radio is not \
+             attached. Start it, or check it uses port 8300."
+        );
     }
 
     #[test]

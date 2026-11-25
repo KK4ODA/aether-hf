@@ -626,6 +626,7 @@ fn station_config(
         cw_id_wpm: config.radio.cw_id_wpm,
         identify_by: config.radio.identify_by.link(),
         keyed_by_host: matches!(config.ptt, PttConfig::Host { .. }),
+        external_port: config.external_port(),
         operator: config.operator.clone(),
         regulatory: regulatory_settings(config, simulated),
         // a host program keys the radio when it hears PTT ON, and the audio waits for it

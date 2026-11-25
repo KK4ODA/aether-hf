@@ -1538,6 +1538,18 @@ impl Config {
         }
     }
 
+    /// The port external programs attach to, while that port is on (`[host]`).
+    #[must_use]
+    pub fn external_port(&self) -> Option<u16> {
+        if !self.host.enabled {
+            return None;
+        }
+        self.host
+            .bind
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse().ok())
+    }
+
     /// Host-interface settings in the form the adapter wants.
     #[must_use]
     pub fn host_config(&self) -> crate::host::HostConfig {
@@ -1547,6 +1559,7 @@ impl Config {
             trace: self.host.trace,
             buffer_repeat: crate::host::BUFFER_REPEAT,
             program_idle: crate::host::PROGRAM_IDLE,
+            second_disconnect: crate::host::SECOND_DISCONNECT,
         }
     }
 

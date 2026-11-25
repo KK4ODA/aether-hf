@@ -435,6 +435,16 @@ fn check_digest(e: &GrantedEngine, want: &Value, at: &str) {
         e.tx_undelivered_bytes().to_string(),
     );
     check(
+        "session_rate",
+        close_opt(e.session_rate(), opt(&want["session_rate"])),
+        format!("{:?}", e.session_rate()),
+    );
+    check(
+        "queue_finish_s",
+        close_opt(e.queue_finish_s(), opt(&want["queue_finish_s"])),
+        format!("{:?}", e.queue_finish_s()),
+    );
+    check(
         "next_deadline",
         close_opt(e.next_deadline(), opt(&want["next_deadline"])),
         format!("{:?}", e.next_deadline()),

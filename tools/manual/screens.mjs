@@ -101,6 +101,8 @@ const kHz = (hz) => `${(hz / 1000).toFixed(3)} kHz`;
 
 const ME = "N1CALL";
 const PEER = "N2CALL";
+/// An external program's MYCALL, other than the station's own (report 22 §3).
+const EXTERNAL_CALL = "N1CALL-5";
 const DIAL = 7_101_000;
 const SEND_RUNG = 11;
 const RECEIVE_RUNG = 12;
@@ -750,7 +752,11 @@ function world(scene) {
     callsign,
     callsigns: [callsign],
     own_callsigns: [callsign],
-    claims: [],
+    // an external program attached, its MYCALL in use (report 22 §3)
+    claims: scene.external
+      ? [{id: 4, app: "the host program", kind: "host", callsigns: [EXTERNAL_CALL], listening: true,
+          since_ms: NOW - 900 * MS}]
+      : [],
     programs: configured ? [RADIOPOST] : [],
     owner: null,
     mode: SEND_RUNG,
@@ -804,12 +810,21 @@ function world(scene) {
          calls_unanswered: 0, probes_sent: 1, probes_answered: 2, probe_replies: 1,
          frames_reencoded: 0, frames_split: 0},
     recordings_dir: `${DATA_DIR}\\recordings`,
-    bandwidth: {bandwidth_hz: bandwidth, home_hz: bandwidth, host_hz: null, why: "configured",
-                caller: null, callee: null, moves: 0, mismatch},
+    // an external program asked for 2300 Hz over the station's own 500 (report 22 §3)
+    bandwidth: scene.external
+      ? {bandwidth_hz: 2300, home_hz: bandwidth, host_hz: 2300, listening: false, by: null,
+         why: "host", caller: null, callee: null, moves: 1, mismatch}
+      : {bandwidth_hz: bandwidth, home_hz: bandwidth, host_hz: null, why: "configured",
+         caller: null, callee: null, moves: 0, mismatch},
     answering: true,
     not_answering: null,
     supervised: true,
-    host: {enabled: false, connected: false},
+    host: scene.external || scene.held
+      ? {enabled: true, command_address: "127.0.0.1:8300", data_address: "127.0.0.1:8301",
+         connected: true, chat: false,
+         // Winlink Express's timer DISCONNECT, held while its message goes on (ADR-0134 §6)
+         disconnect_held_ms: scene.held ? NOW - 40 * MS : null}
+      : {enabled: false, connected: false},
     kiss: {listening: false, address: null, error: null, clients: [], enabled: false,
            bind: "127.0.0.1:8100", rung: 1, wait_for_clear: true, ignore_dcd: false},
     audio_fault: null,
@@ -1176,9 +1191,15 @@ const SCENES = {
   light: {storage: {"aether.theme": "light"}, after: [tab("session")]},
   signal: {page: "signal.html", width: 860, height: 640, settle: 52000, hold: "rx"},
   scanning: {timeline: "idle", scan: true, after: [tab("session")], clip: ["#op-card"]},
-  banners: {timeline: "idle", bandwidth: 500, mismatch: true, signal: false,
+  banners: {timeline: "idle", bandwidth: 500, mismatch: true, signal: false, held: true,
             clipping: {share: 0.0042, clips: true},
-            clip: ["#mismatch-banner", "#clip-banner"]},
+            clip: ["#mismatch-banner", "#held-banner", "#clip-banner"]},
+  // steps 1 and 4 while an external program is attached: the station's own callsign and
+  // bandwidth greyed, what is in use beside them (report 22 §3)
+  "setup-external": {timeline: "idle", bandwidth: 500, external: true, after: [tab("setup"),
+    "hideEndedBanner()",
+    `for (const s of document.querySelectorAll(".steps > .step")) s.hidden = !["1", "4"].includes(s.dataset.step)`],
+                     clip: ['.step[data-step="1"]', '.step[data-step="4"]']},
   // step 5 alone, under the offer: the other steps are taken out rather than scrolled past,
   // since a clip starts at the top of the page
   varac: {timeline: "idle", varac: VARAC, after: [tab("setup"),

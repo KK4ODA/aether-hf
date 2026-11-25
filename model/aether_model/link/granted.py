@@ -1083,16 +1083,12 @@ class GrantedEngine:
         program writes before it asks to leave — still goes first, as ADR-0072 has it; so does
         any queue before the session's rate is known (:data:`RATE_KNOWN_AFTER_S`). The bytes stay
         counted as undelivered, so a program is not told its message went."""
-        if self.state is not State.CONNECTED or self._abandoned or self._up_since is None:
+        if self._abandoned:
             return
         left = self.tx_undelivered_bytes
-        if not left or self._first_ack_at is None:
-            return
-        if self.now - self._first_ack_at < RATE_KNOWN_AFTER_S:
-            return
-        rate = self._acked_bytes / max(1e-9, self.now - self._up_since)
-        need = left / rate
-        if need <= self._leave_drain_s:
+        rate = self.session_rate
+        need = self.queue_finish_s
+        if not left or rate is None or need is None or need <= self._leave_drain_s:
             return
         drain = self._leave_drain_s
         self._abandoned = True
@@ -1263,6 +1259,28 @@ class GrantedEngine:
     @property
     def tx_undelivered_bytes(self) -> int:
         return len(self._tx_queue) + sum(len(r.body) for r in self._records.values())
+
+    @property
+    def session_rate(self) -> float | None:
+        """The bytes a second this station's data has been acknowledged at since the session
+        came up, once some has been acknowledged for :data:`RATE_KNOWN_AFTER_S` (ADR-0135);
+        ``None`` before, and outside a session. The measure a disconnect's drain and an external
+        program's held ``DISCONNECT`` (ADR-0134 §6) judge what is queued by."""
+        if self.state is not State.CONNECTED or self._up_since is None:
+            return None
+        if self._first_ack_at is None or self.now - self._first_ack_at < RATE_KNOWN_AFTER_S:
+            return None
+        return self._acked_bytes / max(1e-9, self.now - self._up_since)
+
+    @property
+    def queue_finish_s(self) -> float | None:
+        """How long what this station has not yet had acknowledged would take at
+        :attr:`session_rate`: 0 with nothing queued, ``None`` while the rate is not known."""
+        rate = self.session_rate
+        if rate is None:
+            return None
+        left = self.tx_undelivered_bytes
+        return left / rate if left else 0.0
 
     @property
     def probing(self) -> bool:

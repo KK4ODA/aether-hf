@@ -196,6 +196,24 @@ def test_a_drain_that_cannot_finish_closes_at_once() -> None:
     assert len(sim.delivered(1)) < 20480
 
 
+def test_the_sessions_rate_is_known_after_half_a_minute_of_acknowledgements() -> None:
+    """ADR-0134 §6: an external program's timer DISCONNECT is held only while what is queued
+    could go within 15 minutes at the session's rate, the same measure ADR-0135's drain uses."""
+    a, b = _pair(NARROW)
+    sim = TwoStationSim(a, b, snr_db=6.0, seed=7)
+    assert a.session_rate is None and a.queue_finish_s is None
+    _connect(sim, a, b)
+    a.send(bytes(range(256)) * 80)
+    sim.run(until=sim.t + 10.0)
+    assert a.session_rate is None, "a rate read before half a minute of acknowledgements"
+    sim.run(until=sim.t + 90.0)
+    rate = a.session_rate
+    assert rate is not None and rate > 0
+    left = a.tx_undelivered_bytes
+    assert a.queue_finish_s == left / rate
+    assert b.session_rate is None, "the station that sent nothing has no rate"
+
+
 def test_a_queue_that_would_go_in_time_still_drains() -> None:
     """The FQ a program writes before it asks to leave still goes first (ADR-0072)."""
     a, b = _pair(NARROW)

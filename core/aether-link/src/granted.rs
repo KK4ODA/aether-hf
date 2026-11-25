@@ -1633,6 +1633,34 @@ impl GrantedEngine {
         self.tx_queue.len() + self.records.values().map(|r| r.body.len()).sum::<usize>()
     }
 
+    /// The bytes a second this station's data has been acknowledged at since the session came
+    /// up, once some has been acknowledged for [`RATE_KNOWN_AFTER_S`] (ADR-0135); `None` before,
+    /// and outside a session. The measure a disconnect's drain and an external program's held
+    /// `DISCONNECT` (ADR-0134 §6) judge what is queued by.
+    #[must_use]
+    pub fn session_rate(&self) -> Option<f64> {
+        if self.state != State::Connected {
+            return None;
+        }
+        let up = self.up_since?;
+        let first = self.first_ack_at?;
+        if self.now - first < RATE_KNOWN_AFTER_S {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        Some(self.acked_bytes as f64 / (self.now - up).max(1e-9))
+    }
+
+    /// How long what this station has not yet had acknowledged would take at
+    /// [`Self::session_rate`]: 0 with nothing queued, `None` while the rate is not known.
+    #[must_use]
+    pub fn queue_finish_s(&self) -> Option<f64> {
+        let rate = self.session_rate()?;
+        let left = self.tx_undelivered_bytes();
+        #[allow(clippy::cast_precision_loss)]
+        Some(if left == 0 { 0.0 } else { left as f64 / rate })
+    }
+
     /// Whether everything this station was given has been acknowledged.
     #[must_use]
     pub fn all_acknowledged(&self) -> bool {
@@ -1913,24 +1941,14 @@ impl GrantedEngine {
     /// before the session's rate is known ([`RATE_KNOWN_AFTER_S`]). The bytes stay counted as
     /// undelivered, so a program is not told its message went.
     fn give_up_if_hopeless(&mut self) {
-        if self.state != State::Connected || self.abandoned {
+        if self.abandoned {
             return;
         }
-        let Some(up) = self.up_since else {
-            return;
-        };
         let left = self.tx_undelivered_bytes();
-        let Some(first) = self.first_ack_at else {
+        let (Some(rate), Some(need)) = (self.session_rate(), self.queue_finish_s()) else {
             return;
         };
-        if left == 0 || self.now - first < RATE_KNOWN_AFTER_S {
-            return;
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let rate = self.acked_bytes as f64 / (self.now - up).max(1e-9);
-        #[allow(clippy::cast_precision_loss)]
-        let need = left as f64 / rate;
-        if need <= self.leave_drain_s {
+        if left == 0 || need <= self.leave_drain_s {
             return;
         }
         let drain = self.leave_drain_s;

@@ -1,0 +1,35 @@
+name = "80m-wle-long-message-500"
+description = """Winlink Express P2P on 80 m at 500 Hz, held to the wall clock: a message that takes
+longer than five minutes to cross and less than fifteen. Winlink Express sends DISCONNECT 300 s
+after it writes the message, and every 300 s after, whatever the modem says (report 22 §1). The
+host port holds it while the transfer can finish within 15 minutes at the session's rate
+(ADR-0134 §6), so the message arrives whole and no DISCONNECTED reaches the program early."""
+tags = ["80m", "host", "winlink", "realtime"]
+bandwidth = 500
+seconds = 1200
+seed = 134
+realtime = true
+transfer_s = 960
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+
+[path]
+profile = "moderate"
+snr_db = 3.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a wle", "host b wle", "host-connect", "host-send 12000", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+wle_timer = true
+wle_held = true

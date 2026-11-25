@@ -1,0 +1,33 @@
+name = "80m-wle-hopeless-file-500"
+description = """Winlink Express P2P on 80 m at 500 Hz, held to the wall clock: a 60 kB file on a weak
+path, hours at the session's rate (2026-11-24's 161 kB at 67 bit/s, report 22 §1). Winlink Express
+sends DISCONNECT 300 s after it writes it; the transfer could not finish within 15 minutes, so the
+host port acts on it (ADR-0134 §6), the drain gives up at once (ADR-0135), and both programs hear
+DISCONNECTED within two minutes."""
+tags = ["80m", "host", "winlink", "realtime"]
+bandwidth = 500
+seconds = 720
+seed = 135
+realtime = true
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+[stations.b]
+callsign = "KK4ODA"
+host = true
+
+[path]
+profile = "moderate"
+snr_db = -2.0
+cfo_hz = 2.0
+
+[script]
+steps = ["host a wle", "host b wle", "host-connect", "host-write 60000", "host-closed 540"]
+
+[expect]
+connected = true
+clean_end = true
+idle = true
+wle_timer = true
+wle_closes = true
