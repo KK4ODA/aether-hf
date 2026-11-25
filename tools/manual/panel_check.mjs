@@ -93,8 +93,81 @@ const CHECKS = [
     })()`,
   },
   {
+    scene: "status",
+    what: "a session with nothing moving: Sending's next rung in the tile's numerals, no state colour; a dash after it",
+    page: `(async () => {
+      const out = [], $ = (id) => document.getElementById(id);
+      const look = (id) => {
+        const c = getComputedStyle($(id));
+        return [c.fontFamily, c.fontWeight, c.fontSize, c.fontStyle, c.fontVariantNumeric, c.color].join(" | ");
+      };
+      const sending = look("v-mode-send");
+      window.__screens.metrics({sending_rung: null, receiving_rung: null, mode: 3});
+      await new Promise((done) => setTimeout(done, 300));
+      const cell = $("v-mode-send"), name = $("v-mode-send-name");
+      if (cell.textContent.trim() !== "3") out.push("in a session, Sending reads '" + cell.textContent + "', not the rung alone");
+      if (!name.textContent.startsWith("next · ")) out.push("its name reads '" + name.textContent + "'");
+      if (look("v-mode-send") !== sending)
+        out.push("the next rung is drawn '" + look("v-mode-send") + "', the sending rung '" + sending + "'");
+      const style = getComputedStyle(document.body);
+      const probe = document.createElement("span");
+      document.body.append(probe);
+      const colours = ["--status-tx", "--status-rx", "--status-busy", "--status-warning", "--status-error", "--status-link"]
+        .map((t) => style.getPropertyValue(t).trim()).filter(Boolean).map((v) => {
+          probe.style.color = v;
+          return getComputedStyle(probe).color;
+        });
+      probe.remove();
+      for (const id of ["v-mode-send", "v-mode-send-name"]) {
+        if (colours.includes(getComputedStyle($(id)).color)) out.push(id + " is drawn in a state colour");
+      }
+      window.__screens.metrics({link: null});
+      await new Promise((done) => setTimeout(done, 300));
+      if (cell.textContent.trim() !== "—") out.push("after the session, Sending reads '" + cell.textContent + "'");
+      if (name.textContent) out.push("after the session, its name reads '" + name.textContent + "'");
+      return out;
+    })()`,
+  },
+  {
+    scene: "status",
+    with: {storage: {"aether.theme": "light"}},
+    what: "the light theme, a session with nothing moving: Sending's next rung in the tile's numerals, no state colour; a dash after it",
+    page: `(async () => {
+      const out = [], $ = (id) => document.getElementById(id);
+      const look = (id) => {
+        const c = getComputedStyle($(id));
+        return [c.fontFamily, c.fontWeight, c.fontSize, c.fontStyle, c.fontVariantNumeric, c.color].join(" | ");
+      };
+      const sending = look("v-mode-send");
+      window.__screens.metrics({sending_rung: null, receiving_rung: null, mode: 3});
+      await new Promise((done) => setTimeout(done, 300));
+      const cell = $("v-mode-send"), name = $("v-mode-send-name");
+      if (cell.textContent.trim() !== "3") out.push("in a session, Sending reads '" + cell.textContent + "', not the rung alone");
+      if (!name.textContent.startsWith("next · ")) out.push("its name reads '" + name.textContent + "'");
+      if (look("v-mode-send") !== sending)
+        out.push("the next rung is drawn '" + look("v-mode-send") + "', the sending rung '" + sending + "'");
+      const style = getComputedStyle(document.body);
+      const probe = document.createElement("span");
+      document.body.append(probe);
+      const colours = ["--status-tx", "--status-rx", "--status-busy", "--status-warning", "--status-error", "--status-link"]
+        .map((t) => style.getPropertyValue(t).trim()).filter(Boolean).map((v) => {
+          probe.style.color = v;
+          return getComputedStyle(probe).color;
+        });
+      probe.remove();
+      for (const id of ["v-mode-send", "v-mode-send-name"]) {
+        if (colours.includes(getComputedStyle($(id)).color)) out.push(id + " is drawn in a state colour");
+      }
+      window.__screens.metrics({link: null});
+      await new Promise((done) => setTimeout(done, 300));
+      if (cell.textContent.trim() !== "—") out.push("after the session, Sending reads '" + cell.textContent + "'");
+      if (name.textContent) out.push("after the session, its name reads '" + name.textContent + "'");
+      return out;
+    })()`,
+  },
+  {
     scene: "banners",
-    what: "idle after a held DISCONNECT: the banner with its two buttons, and the next rung",
+    what: "idle after a held DISCONNECT: the banner with its two buttons, and no next rung outside a session",
     page: `(() => {
       const out = [], $ = (id) => document.getElementById(id);
       const held = $("held-banner");
@@ -104,7 +177,7 @@ const CHECKS = [
         const button = $(id);
         if (!button || button.textContent.trim() !== word) out.push("no " + word + " button in it");
       }
-      if (!/^next: \\d+$/.test($("v-mode-send").textContent.trim()))
+      if ($("v-mode-send").textContent.trim() !== "—")
         out.push("idle, Sending reads '" + $("v-mode-send").textContent + "'");
       return out;
     })()`,
@@ -120,7 +193,7 @@ async function main() {
   let failed = 0;
   try {
     for (const check of CHECKS) {
-      const scene = SCENES[check.scene];
+      const scene = {...SCENES[check.scene], ...check.with};
       const opened = await openScene(cdp, origin, check.scene, scene);
       await sleep(scene.settle ?? 1500);
       const found = await opened.evaluate(check.page);

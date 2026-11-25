@@ -1125,6 +1125,11 @@ function pageWorld(D) {
   const push = (event, data) => {
     for (const socket of sockets) socket.deliver({event, data});
   };
+  // for panel_check.mjs: change what the station reports from now on, as a metrics event would
+  S.metrics = (patch) => {
+    lastMetrics = {...lastMetrics, ...patch};
+    push("metrics", lastMetrics);
+  };
 
   // the minutes before the shot, at once: the panel draws them as it would have live
   function begin() {

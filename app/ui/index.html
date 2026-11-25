@@ -158,10 +158,10 @@
             <!-- 1. the link: what the session is doing -->
             <section class="card console-card tiles-card" id="link-card" aria-labelledby="link-title" title="The session: the mode, the signal, the speed and the other station">
               <div class="card-head">
-                <h2 class="card-title" id="link-title" title="The session: the mode, the signal, the speed and the other station. Mode is the rung the data moves at each way over the last 30 s: Sending, this station's; Receiving, the other station's; a dash for a direction where none moved. With nothing moving, Sending shows the rung this station would send at next. SNR is what this receiver measured on the last frame it found, referenced to 3 kHz. Throughput counts application bytes both ways over the last thirty seconds, with the session's total under it. Session is the other station and how long the session has run.">Link</h2>
+                <h2 class="card-title" id="link-title" title="The session: the mode, the signal, the speed and the other station. Mode is the rung the data moves at each way over the last 30 s: Sending, this station's; Receiving, the other station's; a dash for a direction where none moved. In a session with nothing moving, Sending shows the rung this station would send at next, its name marked next; outside a session, a dash. SNR is what this receiver measured on the last frame it found, referenced to 3 kHz. Throughput counts application bytes both ways over the last thirty seconds, with the session's total under it. Session is the other station and how long the session has run.">Link</h2>
               </div>
               <div class="tiles" id="readings-link">
-                <div class="reading tile" id="mode-tile" title="The rung the data moves at, each way, over the last 30 s: this station's own data on Sending, the other station's on Receiving, a dash when none moved. With nothing moving, Sending shows the rung this station would send at next">
+                <div class="reading tile" id="mode-tile" title="The rung the data moves at, each way, over the last 30 s: this station's own data on Sending, the other station's on Receiving, a dash when none moved. In a session with nothing moving, Sending shows the rung this station would send at next, its name marked next; outside a session, a dash">
                   <div class="label">Mode</div>
                   <div class="mode-rows">
                     <span class="dir">Sending</span>

@@ -855,6 +855,11 @@ function applyRung(metrics) {
   const receiving = told ? metrics.receiving_rung : null;
   if (sending == null && receiving == null && mode === undefined) return;
   currentMode = receiving ?? sending ?? mode;
+  // the rung cell holds a number or a dash, nothing else, so it reads in the tile's numerals
+  // whatever the state; "next" is a quiet word in the name cell (beta.177 drew "next: 0" in
+  // the display face and it read as a warning). Outside a session there is no next: the
+  // engine starts its controller afresh, and the next session's first rung comes from what
+  // the call and its acceptance read, so the configured initial rung (0) is not shown
   const row = (rungId, nameId, rung, next) => {
     const rungCell = $(rungId);
     const nameCell = $(nameId);
@@ -863,12 +868,17 @@ function applyRung(metrics) {
       nameCell.textContent = "";
       return "none in the last 30 s";
     }
-    rungCell.textContent = next ? `next: ${rung}` : String(rung);
-    nameCell.textContent = rungName(rung);
+    rungCell.textContent = String(rung);
+    nameCell.textContent = next ? `next · ${rungName(rung)}` : rungName(rung);
     return `rung ${rung}, ${rungName(rung)}, ${rungRate(rung)} on the air${next ? ", the next this station would send at" : ""}`;
   };
   const idle = sending == null && receiving == null;
-  const sent = row("v-mode-send", "v-mode-send-name", idle ? mode : sending, idle);
+  // a daemon that does not say (no `link` in its metrics) is taken as in a session, as before
+  const inSession = metrics.link !== null;
+  let sent = row("v-mode-send", "v-mode-send-name", idle ? (inSession ? mode : null) : sending, idle);
+  if (idle && !inSession) {
+    sent = "no session; the first rung of the next one is chosen from what the call reads";
+  }
   const heard = row("v-mode-recv", "v-mode-recv-name", receiving, false);
   $("mode-tile").title = `Sending: ${sent}. Receiving: ${heard}`;
   const strip = $("strip-rung");

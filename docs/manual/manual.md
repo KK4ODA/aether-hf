@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.23.0 |
+| **Version** | 1.23.1 |
 | **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.177 |
 | **Licence** | CC BY 4.0 |
@@ -806,8 +806,10 @@ the air should carry ([Reporting a problem](#29-reporting-a-problem)).
 
 - **Link**: the mode, the SNR, the throughput and the session (who, and for how long). **Mode**
   has a row each way: **Sending**, the rung and frame of your data, and **Receiving**, the other
-  station's, over the last 30 s, or a dash for a direction where none moved. With nothing moving,
-  Sending shows *next:* and the rung your station would send at.
+  station's, over the last 30 s, or a dash for a direction where none moved. In a session with
+  nothing moving, Sending shows the rung your station would send at, its name marked *next*.
+  Outside a session it shows a dash: the next session's first rung is chosen from what the call
+  reads.
 - **Channel**: signal above noise, tuning offset, receive level and bytes still queued.
 - **History**: two charts.
   - **Speed** is the session's data rate, both ways added together. Two dashed lines show the rate
@@ -1815,3 +1817,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.21.0 | 2026-11-24 | While RadioPost listens, the station runs 2300 Hz, which answers 500 Hz calls too, and your **Bandwidth** comes back when it stops ([Setup step 4](#step-4-modem-settings)); the header's bandwidth chip names the program that moved the station, or says *listening*. A 500 Hz call makes its quick tries only to a station heard running 500 Hz lately ([Call](#call)). After an unanswered call, another SSID is suggested only when it was heard more recently than the callsign called. From the portable's sessions of 2026-11-23: a 2300 Hz call to a station a profile had set to 500 Hz went unanswered, a 500 Hz call's quick tries were lost on a 2300 Hz listener, and the advice said to call the gateway's callsign a minute after the station called had answered. |
 | 1.22.0 | 2026-11-24 | From three Winlink Express P2P sessions the same day: a disconnect whose queue could not go in a minute closes at once ([Call](#call)); Winlink Express's five-minute timeout no longer cuts off a long message, a program's quick answer goes in the next transmission, and a radio that sends its own signal back while keyed is not warned about ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |
 | 1.23.0 | 2026-11-25 | From the 80 m sessions of 2026-11-24: while an external program or a call sets the callsign or the bandwidth, Setup greys your own and says what is in use beside it ([Step 1](#step-1-callsign-and-rules), [Step 4](#step-4-modem-settings)); the header's bandwidth chip says *external*. The Status tab's **Mode** has a row each way, **Sending** and **Receiving**, and *Receiving at* follows frames that did not decode ([The Status tab](#9-the-status-tab)). Winlink Express's five-minute timeout is held only while its message can arrive within 15 minutes, with a banner saying so; a call while the external program is not attached says that ([Banners](#banners), [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |
+| 1.23.1 | 2026-11-25 | [The Status tab](#9-the-status-tab): **Mode**'s next rung is a plain number with *next* in its name, and outside a session Sending shows a dash. *next: 0* after a session read as a warning, and 0 was only the rung a station starts from before a call has read the path. |
