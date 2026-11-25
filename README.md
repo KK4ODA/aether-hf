@@ -13,12 +13,13 @@ rules before the radio keys, and the same modem runs as a desktop application on
 Linux and macOS or headless on a Raspberry Pi gateway.
 
 > **Status: beta, on the air.** Signed builds ship from
-> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.166` at the time of
+> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.178` at the time of
 > writing): a Windows installer, Linux `.deb` and AppImage packages, an unsigned macOS build for
 > Apple Silicon, and the standalone `aetherd` daemon for gateways, with in-place updates on a
 > beta channel. Aether has been on the air with other stations on 80 m and 40 m since
 > 2026-09-23: conversations, Test sessions, Winlink through an Aether gateway since
-> 2026-11-06, RadioPost mail since 2026-11-12, and VarAC. Each problem the air turns up becomes a
+> 2026-11-06, RadioPost mail since 2026-11-12, VarAC, and Winlink Express peer to peer since
+> 2026-11-24. Each problem the air turns up becomes a
 > scenario in the test harness before it becomes a fix ([`field/LOG.md`](field/LOG.md),
 > [`docs/research/link-architecture/`](docs/research/link-architecture/README.md)).
 >
@@ -91,6 +92,14 @@ answered in short OFDM frames, which the portable heard well. While the TX-500 t
 its own signal back to the sound card, so the portable's waterfall shows its own transmissions;
 the FTDX10 goes quiet instead.</sub>
 
+That evening the same two stations made seven more sessions on 80 m, six at 500 Hz carrying a few
+kilobytes each. The last tried a 161.6 kB file at 2300 Hz on a path at about −1 dB, and showed
+that Winlink Express gives up on a P2P session 300 s after it last sent anything, while the
+modem is still delivering its message. Aether now holds that disconnect as long as what is queued
+could go within 15 minutes, with a banner that offers **Disconnect** and **Abort**
+([report 22](docs/research/link-architecture/22-wle-p2p-80m-beta175.md),
+[ADR-0134](docs/adr/0134-a-programs-inactivity-timer-is-not-its-operator.md)).
+
 ## Works with Winlink apps
 
 Winlink's own programs talk to Aether as they talk to VARA. They use VARA HF's published host
@@ -113,16 +122,18 @@ turns their own settings into Aether profiles:
    (`C:\RMS Express`, `C:\RMS\…`), Windows' list of installed programs, Start-menu and desktop
    shortcuts and the programs running, plus any folder you add. A test copy, a second gateway or
    a copy on another drive each get a row of their own, told apart by their folder.
-2. **One row per setup.** Winlink Express gets a row for each callsign it is set up for, RMS
-   Trimode one per gateway, RMS Packet one per channel. Each row shows the version, whether the
-   program is running, and the TNC port it points at (*Aether* when it is this Aether's).
+2. **One row per install.** Each copy of Winlink Express or RMS Trimode gets one row, with its
+   callsigns (the one in use first); RMS Packet gets one per channel. Each row shows the version,
+   whether the program is running, and the TNC port it points at (*Aether* when it is this
+   Aether's).
 3. **Tick a row and it is set up.** A window first says what will change in the program, what
    its Aether profile will hold, and anything you must still do yourself. **Set up** changes the
    program's settings so it reaches Aether (with the program closed, the old file kept beside
-   it), makes the profile, named for the program and the callsign (*Winlink Express KK4ODA*),
-   and switches to it. **Make a copy first** sets up a copy of Winlink Express instead, and
-   leaves the one you have for VARA. Each profile sets:
-   - the program's callsign and bandwidth (VARA's 2750 runs as 2300);
+   it), makes the profile, named for the program and its folder (*Winlink Express TS480* for
+   `C:\RMS Express_TS480`, so each copy for each radio has its own), and switches to it. **Make
+   a copy first** sets up a copy of Winlink Express instead, mail included, and leaves the one you
+   have for VARA. Each profile sets:
+   - the callsign in use and the program's bandwidth (VARA's 2750 runs as 2300);
    - the port the program already uses, so Aether listens there;
    - for a gateway, automatic control and waiting for a clear channel;
    - who keys the radio.
@@ -142,10 +153,10 @@ Aether changes a program's settings only when you set it up or go back, never wh
 only the settings it shows. A setup above 30 MHz, or one whose only TNC is VARA FM or AGW, waits
 for Aether FM and cannot be ticked.
 
-![Setup step 5's Winlink programs: four installs and six setups found. Winlink Express N1CALL in C:\RMS Express is ticked, set up for Aether and keyed by Winlink Express; N2CALL beside it, a test copy of Winlink Express on port 8310 and the RMS Trimode gateway N1CALL-1 are not, each with its Keying list; RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked](docs/manual/screens/hostapps.png)
+![Setup step 5's Winlink programs: Find, Add folder, and four installs. Winlink Express in C:\RMS Express, with the callsigns N1CALL and N2CALL, is ticked, set up for Aether and keyed by Winlink Express; a test copy of Winlink Express on port 8310 and the RMS Trimode gateway N1CALL-1 are not, each with its Keying list; RMS Packet's VARA FM channel and packet port for N1CALL-10 cannot be ticked](docs/manual/screens/hostapps.png)
 
 <sub>Setup step 5 on a computer with two copies of Winlink Express, an RMS Trimode gateway and RMS
-Packet (example data). Winlink Express N1CALL is set up for Aether.</sub>
+Packet (example data). Winlink Express in `C:\RMS Express` is set up for Aether.</sub>
 
 ### What a session looks like
 
@@ -199,9 +210,9 @@ and [RMS Packet](docs/user/rms-packet.md).
 
 ## Screenshots
 
-Two stations on one machine, joined by the simulated channel at 12 dB SNR. The calling
-station's Session tab during a Test session, as the Test measures the top of the ladder: the
-dial and the rules' verdict, the call and the Test's progress, keying and drive, the
+Two stations (`0.2.0-beta.178`) on one machine, joined by the simulated channel at 12 dB SNR.
+The calling station's Session tab during a Test session, as the Test measures the top of the
+ladder: the dial and the rules' verdict, the call and the Test's progress, keying and drive, the
 conversation and the recorder. The display well across the top shows the same on every tab:
 what the station is doing, the rung and its rate, the SNR, and the TX, RX and Busy lamps.
 
@@ -210,11 +221,12 @@ what the station is doing, the rung and its rate, the SNR, and the TX, RX and Bu
 <table>
 <tr>
 <td width="50%"><img src="docs/images/panel-status.png" alt="The Status tab during the Test's file transfer"></td>
-<td width="50%"><img src="docs/images/panel-diagnostics.png" alt="The receiving station's Diagnostics tab, a 64-QAM frame on its constellation"></td>
+<td width="50%"><img src="docs/images/panel-diagnostics.png" alt="The receiving station's Diagnostics tab, a 64-QAM 5/6 frame on its constellation"></td>
 </tr>
 <tr>
-<td><sub><b>Status</b> while the Test sends its file: the link and the channel at a glance, the
-speed against the rate of the rung in use, the channel's bursts and acknowledgements, and the
+<td><sub><b>Status</b> while the Test sends its file: the link and the channel at a glance
+(<b>Mode</b> a row each way, <i>Control</i> while the other station only answers), the speed
+against the rate of the rung in use, the channel's bursts and acknowledgements, and the
 counters.</sub></td>
 <td><sub><b>Diagnostics</b> at the receiving station, on a 24 dB path: a 64-QAM frame's
 constellation, the spectrum and waterfall with red lines at this station's occupied bandwidth,
@@ -233,21 +245,22 @@ and the modem, every setting kept in named profiles.</sub></td>
 </tr>
 <tr>
 <td><img src="docs/images/panel-light.png" alt="The Session tab in the Light theme during a keyboard conversation"></td>
-<td><img src="docs/images/panel-compact.png" alt="The Compact view during a session"></td>
+<td><img src="docs/images/panel-compact.png" alt="The Compact view during the Test's file transfer: Tune and the signal window's button beside the display, Mode sending at 16 and receiving control frames, the SNR, the throughput, the session's time, and the speed and channel plots"></td>
 </tr>
 <tr>
 <td><sub><b>Light</b>, for a screen in daylight, during a conversation: what was sent stays in the
 Send box and gets a ✓ once the other station has all of it.</sub></td>
-<td><sub><b>Compact</b>: the state, the four readings that matter and both plots, small enough
-to sit beside a host program.</sub></td>
+<td><sub><b>Compact</b>: the state, <b>Tune</b> and the signal window's button, the four readings
+that matter and both plots, small enough to sit beside the programs that use it.</sub></td>
 </tr>
 <tr>
-<td><img src="docs/images/signal-window.png" alt="The undocked signal window's Compact view, a transfer's OFDM bursts on the waterfall"></td>
+<td><img src="docs/images/signal-window.png" alt="The undocked signal window's Compact view at the receiving station during a Test: the probe on the tone floor, then the session's OFDM bursts, between red lines at the signal's edges"></td>
 <td><img src="docs/images/panel-log.png" alt="The Log tab during a Test session"></td>
 </tr>
 <tr>
 <td><sub>The <b>undocked signal window</b> (Compact view): spectrum and waterfall in a window of
-their own, with a Busy lamp and Tune, here during a transfer.</sub></td>
+their own, with a Busy lamp and Tune, here at the receiving station during a Test: its probe on
+the tone floor, then the session's OFDM bursts.</sub></td>
 <td><sub><b>Log</b>: one line an entry, tagged and filtered, with <b>Send files…</b> for logs and
 recordings.</sub></td>
 </tr>
@@ -358,6 +371,11 @@ cover everything else it does.
 * A receiver that **weighs each OFDM carrier by its own noise**, so a narrowband interferer
   inside the passband costs the carriers it sits on, not the frame
   ([ADR-0043](docs/adr/0043-per-carrier-noise-and-the-rv-order.md)).
+* An OFDM **channel estimate that takes the path's delay out before it interpolates** between
+  pilots, so a channel whose phase turns quickly across the band is followed: 44 % more frames
+  decoded on ITU Poor at both bandwidths, and no point of the bench more than a frame worse
+  ([ADR-0131](docs/adr/0131-the-channel-estimate-takes-the-delay-out-before-it-interpolates.md),
+  [`channel_estimate.csv`](bench/baselines/channel_estimate.csv)).
 * Receivers that read **the shape of the noise across the band**, from the pilots and the
   tones, so a radio filter that cuts into the signal, noise and all, no longer reads as a bad
   channel ([ADR-0104](docs/adr/0104-the-receivers-read-the-noise-across-the-band.md)).
@@ -390,24 +408,30 @@ cover everything else it does.
 * **Beacons**: the station's callsign on the tone floor, once or every 10–60 minutes while
   someone is at the station; never under automatic control.
 * **Datagrams** outside sessions, for KISS programs, at a rung both bandwidths hear.
-* An orderly **disconnect** that delivers what is queued for a minute at most, then closes;
-  **Abort** to leave at once, with the other station told.
+* An orderly **disconnect** that delivers what is queued for a minute at most, then closes, and
+  closes at once when what is queued could not go in that minute at the session's rate; its last
+  frame acknowledges the other station's last data, so no round is spent on it. **Abort** leaves
+  at once, with the other station told.
+* **Hand-overs that wait for the program**: after the other station's last data, a station gives
+  its program about a third of a second to answer before it takes its turn, so a Winlink reply
+  goes out in the next transmission rather than an exchange later (Winlink-shaped sessions about
+  9 % shorter on the harness; [ADR-0135](docs/adr/0135-hand-overs-and-endings.md)).
 * **Closing identification** handled for you: each station's identifier is the last thing it
   sends for a session, after the other's goodbye, never over it; a US callsign always identifies
   (§97.119), without its SSID. It goes in Morse, within the 20 wpm cap on an automatic
   identifier, or in Aether's own signal if Setup step 4 says so
   ([ADR-0127](docs/adr/0127-identify-in-the-data-signal.md)).
 * **Several callsigns**: a station answers to its own, and each program attached answers for
-  the callsigns it claims (a host program's `MYCALL`), with SSIDs and `/` suffixes.
+  the callsigns it claims (an external program's `MYCALL`), with SSIDs and `/` suffixes.
 
 ### Working with the radio
 
 * **Keying** by a serial port's RTS or DTR line, by the radio's own **CAT** command (Yaesu,
   Kenwood, Icom CI-V), through **rigctld** (Hamlib) or **FLRig**, by a **CM108-class** codec's
-  GPIO pin (DRA, URI), by **VOX**, or by the **host program** on `PTT ON`/`PTT OFF`.
+  GPIO pin (DRA, URI), by **VOX**, or by the **external program** on `PTT ON`/`PTT OFF`.
 * Over CAT, rigctld or FLRig, Aether **reads the dial** once a second when idle and **tunes the
-  radio** when a dial memory is picked; with FLRig or rigctld a host program can tune through the
-  same radio at the same time.
+  radio** when a dial memory is picked; with FLRig or rigctld an external program can tune
+  through the same radio at the same time.
 * **Dial memories** seeded from the project's calling-frequency plan for 80 m to 6 m
   ([`docs/user/frequency-plan.md`](docs/user/frequency-plan.md)), and *Dial is at* for a radio
   that cannot report its dial.
@@ -419,6 +443,12 @@ cover everything else it does.
   that cuts the signal shows at a glance, and a banner says when the receive audio clips.
 * A **key watchdog** (30 s by default), whole bursts handed to the sound card at once, and the
   key released by the sound card's own clock, not a guess.
+* **A sound card that comes back**: one missing at start or unplugged mid-run is tried again
+  every second (every 10 s after a minute) and taken back when it returns; meanwhile nothing
+  keys, the key is let go, and the panel and any external program are told. On Windows a USB
+  codec plugged into another port comes back under a new name (*2- USB Audio CODEC*); Aether
+  finds it and uses it, and **Keep** saves the name
+  ([ADR-0137](docs/adr/0137-the-sound-card-comes-back.md)).
 * ★ **Turnaround** declared in the call, so the other station waits for this radio to hear
   again; an **answer gap** for a VOX station that does not declare one, also **learned per
   station** from its calling again.
@@ -433,9 +463,10 @@ cover everything else it does.
   quiet one and about 19 s where a call is heard under way. The radio never moves during a
   contact, and the knob or the panel's Stop ends the scan
   ([ADR-0129](docs/adr/0129-the-station-scans-for-a-program.md)).
-* The first transmission after a host program attaches is checked: if the receive audio does
-  not fall while keyed, the log says the radio may not be transmitting. The check listens in
-  1–2.5 kHz, clear of any interface's hum.
+* The first transmission after an external program attaches is checked: if the receive audio
+  does not fall while keyed, and is not the station's own signal coming back (a TX-500 returns
+  it), the log says the radio may not be transmitting. The check listens in 1–2.5 kHz, clear of
+  any interface's hum ([ADR-0136](docs/adr/0136-the-keyed-audio-watch-knows-its-own-signal.md)).
 
 ### The rules, built in
 
@@ -464,16 +495,17 @@ cover everything else it does.
   profile, *VarAC default*. Switch VarAC's profile to run it on Aether, and back to run it on
   VARA. After an update that changes what VarAC needs, Aether offers to bring both up to date.
 * **Winlink's programs found** (Windows): Setup lists every install of Winlink Express, RMS
-  Trimode and RMS Packet on the computer, one row per callsign, with the port each points at, and
+  Trimode and RMS Packet on the computer, one row per install, with the port each points at, and
   makes an Aether profile of the ones ticked from their own radio and TNC settings (callsign,
   bandwidth, keying, port). It changes a program's own settings (Winlink Express's *Auto Launch
   Vara*, the program Trimode starts as its VARA) only when asked, with the program closed, and
   keeps the old file.
 * Either side can own the radio: **Aether keys** (CAT, rigctld, FLRig, serial, CM108, VOX), or
-  the **host program keys** and tunes it on Aether's `PTT ON`/`PTT OFF`.
+  the **external program keys** and tunes it on Aether's `PTT ON`/`PTT OFF`.
 * **One place for each setting**: while a program is attached, its callsign and its `BW500`
-  / `BW2300` / `BW2750` set the station's, and the station's own (which Setup shows) come back
-  when it leaves; the program sees only its own sessions.
+  / `BW2300` / `BW2750` set the station's. Setup keeps showing the station's own, greyed, with
+  what is in use beside it (*In use: 2300 Hz · external program*), and they come back when it
+  leaves; the program sees only its own sessions.
 * ★ **Several programs on one station**: a program on the host port and programs on the control
   API each claim their own callsigns, with answering off until they say. A call is answered only
   while the program holding its callsign listens, the session is that program's alone, and the
@@ -482,12 +514,19 @@ cover everything else it does.
   ([ADR-0106](docs/adr/0106-each-program-answers-for-its-own-callsigns.md),
   [ADR-0107](docs/adr/0107-under-automatic-control-only-a-program-answers-and-its-session-goes-with-it.md)).
 * While any program is attached it speaks for the station: the station's own callsigns no
-  program holds are not answered, and Setup step 1's callsign box names the program whose
-  callsign is in use
+  program holds are not answered, and Setup step 1 says whose callsign is in use (*In use:
+  N1CALL-10 · RadioPost Gateway*)
   ([ADR-0108](docs/adr/0108-every-program-speaks-for-the-station-and-setup-says-whose-callsign-it-is.md)).
 * `BUFFER` is said again every 50 s while the count stands still, so a program that waits on it
   (Pat's VARA driver gives up after a minute) does not drop a slow session
   ([ADR-0109](docs/adr/0109-a-count-that-stands-still-is-said-again.md)).
+* A program's **inactivity timer is not taken for its operator**: Winlink Express hangs up a P2P
+  session five minutes after it sent its message, and Aether holds that `DISCONNECT` while what is
+  queued could still go within 15 minutes, with a banner offering **Disconnect** and **Abort**
+  ([ADR-0134](docs/adr/0134-a-programs-inactivity-timer-is-not-its-operator.md)).
+* A program **listening for calls** can ask for the widest bandwidth, so the station answers calls
+  at 2300 Hz and 500 Hz alike while it listens (RadioPost's P2P listener does); the request goes
+  with the program, and gives way to a bandwidth another program chose.
 * A **KISS-over-TCP port** (127.0.0.1:8100) for APRS and packet programs and VarAC's broadcasts,
   several clients at once, with ACKMODE; each frame goes on the air as a datagram that any
   Aether station hears ([`docs/user/kiss.md`](docs/user/kiss.md)).
@@ -495,27 +534,32 @@ cover everything else it does.
   station does; a program on it claims its callsigns and is told which sessions are its own.
   Loopback by default, and a token required on any other address
   ([`docs/spec/control-api.md`](docs/spec/control-api.md)).
-* **One instance**: a host program launching Aether while it runs brings up its window.
+* **One instance**: an external program launching Aether while it runs brings up its window.
 
 ### The station panel
 
 * A **display well** across the top of every tab: the state and the other station, the dial,
-  the rung and its rate each way, the SNR, and the TX, RX and Busy lamps, plus the rules badge
-  and a Modem lamp.
-* **Full**, **Compact** and **Mini** views, and a **Light** theme for daylight and sunlight
-  (lit lamps become filled blocks in glare).
-* **Banners** across every tab: the session (and whose it is, when a program's), setup still
-  needed, unsaved changes, a station in another bandwidth, protocol or SSID (with buttons that
-  fix it), clipped receive audio (in Compact too), and faults; a **chime** when a session comes up and when it ends.
+  the rung each way during a session, the SNR, and the TX, RX and Busy lamps, plus the rules
+  badge and a Modem lamp.
+* **Full**, **Compact** and **Mini** views, with **Tune** and the signal window's button beside
+  the display well in the small ones, and a **Light** theme for daylight and sunlight (lit lamps
+  become filled blocks in glare). Each view keeps its size and the window its place.
+* **Banners** across every tab, in Compact and Mini too: the session (and whose it is, when a
+  program's), the identifier still owed after a call nobody answered, setup still needed,
+  unsaved changes, a station in another bandwidth, protocol or SSID (with buttons that fix it), a
+  program's disconnect held, clipped receive audio, a sound card back in another USB port, and
+  faults; an **×** puts one away until there is something new. A **chime** when a session comes
+  up and when it ends.
 * A chip naming the **programs using the station** and whether each is answering, with the
   callsigns each answers for in its tooltip.
 * **Session**: the dial and its legality, call, probe, beacon and Test, keying and drive, the
   conversation, and the recorder.
 * A **Send box that tracks delivery**: what was sent stays with its time and turns ✓ only when
   the other station has all of it, in order, or ✗ if the session ended first.
-* **Status**: link and channel readings, the speed over ten minutes on a log scale against the
-  rate of the rung each way, the SNR of every frame against the rung's threshold, the
-  channel's level and busy periods with adjustable axes, and counters.
+* **Status**: link and channel readings (**Mode** with a row each way, *Sending* and
+  *Receiving*, which says *Control* while the other station only answers), the speed over ten
+  minutes on a log scale against the rate of the rung each way, the SNR of every frame against
+  the rung's threshold, the channel's level and busy periods with adjustable axes, and counters.
 * **Stations**: the 200 stations heard most recently, with bandwidth, beacons and filters, and
   the last 500 sessions with what crossed each way, the fastest rung each way, how each station
   heard the other and how the session ended.
@@ -581,6 +625,9 @@ cover everything else it does.
   ([ADR-0042](docs/adr/0042-the-scenario-harness.md), [`bench/scenarios/`](bench/scenarios/)).
 * **Strict tests**: no threshold is ever relaxed to make a suite pass; a known defect is a
   strict `xfail` that names it.
+* **The panel checked in a browser**: the manual's screenshots are taken of the real panel fed
+  made-up data, and CI drives the same scenes in headless Chrome and checks what each shows
+  (`tools/manual/panel_check.mjs`).
 * **Fuzzing** of every parser that takes bytes from outside: frames off the air, datagram
   fragments, the decompressor, the KISS port and the host program's commands
   ([`core/fuzz/`](core/fuzz/README.md)).
@@ -635,7 +682,7 @@ cover everything else it does.
 [RadioPost](https://github.com/KK4ODA/RadioPost) is email by amateur radio with no central server:
 ordinary email addresses, gateways any licensed amateur can run, post offices that clubs and
 groups run, and forwarding by radio when the Internet is down. It is a separate project with its
-own specifications, in early design, and it is not compatible with Winlink. Aether is its first
+own specifications, in beta and on the air, and it is not compatible with Winlink. Aether is its first
 modem; RadioPost does not depend on it.
 
 RadioPost programs drive a modem through RadioPost's modem interface (RPMI,
@@ -688,12 +735,12 @@ distilled from how the community has received other open HF modems are in
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, host interface, gateway kit | done; Winlink Express, Pat, VarAC and RMS Trimode pass the bench |
 | 4 — Desktop application | station panel, Tauri shell, setup, diagnostics, accessibility | done; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.166` |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.178` |
 | 6 — Field validation | recordings, replay, simulated channel, field protocol, the air, on-air crowdsourcing (the Test session) | **in progress**: on the air with other stations since 2026-09-23, Winlink through an Aether gateway since 2026-11-06, RadioPost mail since 2026-11-12; granted slots (link protocol 8 onwards), the scenario harness and the rate controller's reviews came from those sessions |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth peer-to-peer contacts use, the bandwidth in the handshake, answer-only, a two-way probe | done |
 | 9 — The modem's second rung | a faster start, the tone floor and the middle tone kinds, fading and NVIS receivers, an A/B bench against another modem, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: the tone floor, fast tones and four-tone kinds, fast-fading and echo-aware receivers, stuck frames in pieces done; the A/B runs and P9-3 open; time diversity paused |
 | 8 — Aether on a phone | the modem in a Pi-sized box the phone talks to, then a phone app, then the modem in the phone | back burner |
-| 10 — Aether FM foundation | an FM PHY on the same link layer | back burner |
+| 10 — Aether FM | an FM modem on the same link layer, with legacy packet and the level set by the far station's measurement | **started 2026-11-13**: the plan and its thirteen ADRs written, the daemon behind a PHY boundary (proven unchanged for HF), the FM channel model and its recording bench built; recordings of real radios wait for a dummy load and an attenuator |
 
 ## Architecture in one paragraph
 
