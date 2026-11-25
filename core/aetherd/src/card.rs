@@ -927,7 +927,7 @@ mod tests {
         card.next_try = Instant::now();
         card.capture();
         assert!(card.state().fault.is_none(), "{:?}", card.state());
-        assert!(card.state().moved.is_empty());
+        assert!(card.state().moved.is_empty(), "{:?}", card.state().moved);
     }
 
     #[test]
