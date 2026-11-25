@@ -1479,8 +1479,7 @@ approval, 2026-11-23). For each upload, found with the Drive connector's `search
    take a share off.
 
 Never share an original. End by searching for `tmp-download` copies not in the trash: there must
-be none. Tell the author the key needs renewing (`makeReadKey`, then the environment's
-`AETHER_UPLOAD_READ_KEY`).
+be none. Do not remind the author to renew the key (the author's request, 2026-11-25).
 
 **WC4Y's Test of 2026-10-11 15:52Z and KQ4SAX's first Tests (2026-10-12; ADR-0065…0068).** Read
 from the stations' uploads (their sides; KK4ODA-1's not uploaded). WC4Y, 80 m at 500 Hz,
@@ -3539,8 +3538,9 @@ every data frame the engine files, decoded or not (`Station::data_heard` from `l
 the Mode tile is two rows, *Sending* and *Receiving* (idle, Sending says *next: N*). The harness has
 a Winlink Express stand-in (`host a wle`: `DISCONNECT` 300 s after it last wrote or was handed
 anything; `host-write`, `host-closed`; `[expect] wle_timer`, `wle_held`, `wle_closes`) and two
-real-time scenarios, `80m-wle-long-message-500` and `80m-wle-hopeless-file-500`. Open: Winlink
-Express's own log for 23:35–23:49Z, and the rest of report 22 §7's tests. The throughput on that
+real-time scenarios, `80m-wle-long-message-500` and `80m-wle-hopeless-file-500`. The author confirmed the
+timeout message was in Winlink Express's window (question 7). Open: the rest of report 22 §7's
+tests. The throughput on that
 path (≈ 67 bit/s of the file at 2300 Hz, a −1 dB median with dips to −12; no decline over the
 session) is the rate review's evidence, not a patch.
 

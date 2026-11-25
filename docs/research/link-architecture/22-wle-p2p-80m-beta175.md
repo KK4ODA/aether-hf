@@ -409,8 +409,8 @@ on the author's answer.
 
 ## 10. What the author decided, and what was built (2026-11-25)
 
-The author answered questions 1–6 as proposed. Question 7 (Winlink Express's own log) is still
-open. Nothing below changes the air protocol: beta.175 and the build after it interoperate.
+The author answered questions 1–6 as proposed, and question 7 on 2026-11-25: the timeout message
+was in Winlink Express's window, so the two *Disconnecting* lines were its own, as §1 read them. Nothing below changes the air protocol: beta.175 and the build after it interoperate.
 
 1. **A held `DISCONNECT` is acted on past 15 minutes** (ADR-0134 §6). The engine now states the
    session's rate and how long what it still has would take at it (`session_rate`,
