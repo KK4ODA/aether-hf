@@ -1163,6 +1163,12 @@ fn diagnostics<P: Ptt>(
                 "capture_padded_ms": (daemon.capture_skips.padded_s * 10_000.0).round() / 10.0,
                 "capture_repeats": daemon.capture_skips.repeated,
                 "capture_repeated_ms": (daemon.capture_skips.repeated_s * 10_000.0).round() / 10.0,
+                // the jumps under 10 ms added up with their signs, and over the time they
+                // covered: jitter cancels, a clock off its rate reads tens of ppm, audio lost
+                // in small pieces more (report 19 §6; counted, never put back)
+                "capture_small_net_ms": (daemon.capture_skips.small_s * 10_000.0).round() / 10.0,
+                "capture_small_ppm": daemon.capture_skips.small_ppm().round(),
+                "capture_span_s": daemon.capture_skips.span_s.round(),
                 // inside transmissions, by the playback stream's own timestamps: a report only
                 "playback_skips": daemon.playback_skips.skipped,
                 "playback_skipped_ms": (daemon.playback_skips.skipped_s * 10_000.0).round() / 10.0,

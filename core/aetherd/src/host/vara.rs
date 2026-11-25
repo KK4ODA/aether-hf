@@ -40,11 +40,12 @@ pub fn version_string() -> String {
 
 /// The version as `VERSION` says it: a stable release's plain number with `-stable` glued on.
 ///
-/// VarAC 15.0.18 reads a plain number as a VARA version and refuses one under 4.8.8 ("Please
+/// `VarAC` 15.0.18 reads a plain number as a VARA version and refuses one under 4.8.8 ("Please
 /// update VARA"): it refused `0.2.0` and `1.0.0` on the bench and accepted anything glued to the
 /// number (`0.2.0-beta.161`, `0.2.0-stable`), which it cannot parse. A beta's `-beta.N` already
 /// is such a suffix; a stable release gets `-stable` (the author's decision, 2026-11-25). The
 /// release itself keeps its plain number.
+#[must_use]
 pub fn reported_version(package: &str) -> String {
     if package.contains('-') || package.contains('+') {
         package.to_string()

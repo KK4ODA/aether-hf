@@ -201,6 +201,16 @@ pub struct CaptureSkips {
     pub repeated: usize,
     /// What they came to, in seconds.
     pub repeated_s: f64,
+    /// The time the timestamps covered between callbacks, in seconds: what [`Self::small_s`]
+    /// is measured against.
+    pub span_s: f64,
+    /// The jumps under [`SKIP_MIN_S`] each way, added up with their signs, in seconds: audio the
+    /// clock moved past in pieces too small to tell from jitter (report 19 §6). Jitter cancels
+    /// over time, a late callback followed by an early one; losses do not, so a steady rise is
+    /// audio missing. A sound card's clock off its nominal rate rises steadily too, by its
+    /// error: tens of parts per million, where the house's 153 ms in five minutes was 500.
+    /// Counted only, never put back.
+    pub small_s: f64,
 }
 
 impl CaptureSkips {
@@ -212,6 +222,7 @@ impl CaptureSkips {
             return 0;
         }
         let jump = elapsed_s - frames as f64 / rate;
+        self.span_s += elapsed_s.max(0.0);
         if jump >= SKIP_MIN_S {
             self.lost += 1;
             self.lost_s += jump;
@@ -225,8 +236,21 @@ impl CaptureSkips {
         } else if jump <= -SKIP_MIN_S {
             self.repeated += 1;
             self.repeated_s -= jump;
+        } else {
+            self.small_s += jump;
         }
         0
+    }
+
+    /// [`Self::small_s`] in parts per million of the time covered: what a sound card's clock
+    /// error would read as, so a steady few tens is the clock and hundreds are audio lost.
+    #[must_use]
+    pub fn small_ppm(&self) -> f64 {
+        if self.span_s > 0.0 {
+            self.small_s / self.span_s * 1e6
+        } else {
+            0.0
+        }
     }
 }
 
@@ -988,7 +1012,15 @@ mod tests {
         for elapsed in [0.010, 0.0103, 0.0097, 0.012, 0.008] {
             skips.note(elapsed, 480, rate);
         }
-        assert_eq!(skips, CaptureSkips::default(), "jitter counted");
+        assert_eq!(
+            (skips.lost, skips.repeated),
+            (0, 0),
+            "jitter counted: {skips:?}"
+        );
+        assert!(
+            skips.small_s.abs() < 1e-9,
+            "jitter that cancels left {skips:?}"
+        );
         skips.note(0.045, 480, rate);
         skips.note(0.050, 480, rate);
         assert_eq!(skips.lost, 2);
@@ -1006,6 +1038,33 @@ mod tests {
         assert_eq!(skips.padded, 2);
         assert_eq!(skips.note(1.01, 480, rate), 0);
         assert_eq!((skips.lost, skips.padded), (3, 2));
+    }
+
+    #[test]
+    fn small_losses_add_up_where_jitter_cancels() {
+        // report 19 §6: the house's recording came out 153 ms short of the five minutes it
+        // covered, in pieces under 10 ms that were neither reported nor put back
+        let rate = 48_000.0;
+        let mut jitter = CaptureSkips::default();
+        let mut losing = CaptureSkips::default();
+        for i in 0..30_000 {
+            // 10 ms callbacks, their timestamps a millisecond either way
+            let wobble = if i % 2 == 0 { 0.001 } else { -0.001 };
+            jitter.note(0.010 + wobble, 480, rate);
+            // and every 1000th callback 5 ms of audio missing: 150 ms in five minutes
+            let lost = if i % 1000 == 0 { 0.005 } else { 0.0 };
+            losing.note(0.010 + wobble + lost, 480, rate);
+        }
+        assert_eq!(
+            (jitter.lost, losing.lost),
+            (0, 0),
+            "a small piece counted as a skip"
+        );
+        assert!(jitter.small_s.abs() < 1e-6, "{jitter:?}");
+        assert!(jitter.small_ppm().abs() < 1.0, "{}", jitter.small_ppm());
+        assert!((losing.small_s - 0.150).abs() < 1e-6, "{losing:?}");
+        assert!(losing.small_ppm() > 400.0, "{}", losing.small_ppm());
+        assert_eq!(losing.padded, 0, "a small piece was put back");
     }
 
     #[test]

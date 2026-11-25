@@ -42,6 +42,9 @@ use serde_json::json;
 const LOOP_STALL_MS: f64 = 250.0;
 /// How often at most a slow pass is logged, so a slow machine does not fill its own log.
 const LOOP_STALL_LOG_INTERVAL: Duration = Duration::from_secs(10);
+/// How far the capture's small pieces (under the skip threshold, net) must move before a
+/// recording is told: 5 ms, a quarter of the smallest skip that has cost a frame (report 19 §6).
+const SMALL_SAID_S: f64 = 0.005;
 /// How long the [`Heartbeat`] sleeps at a time.
 const HEARTBEAT: Duration = Duration::from_millis(20);
 
@@ -967,6 +970,9 @@ struct AudioLosses {
     /// jitter past the threshold would otherwise write a line every pass.
     skips_said: aetherd::audio::CaptureSkips,
     skips_said_at: Option<std::time::Instant>,
+    /// The small pieces' net and the time covered as the recording was last told them: a
+    /// `capture_small` event goes in each time the net has moved `SMALL_SAID_S` since.
+    small_said: (f64, f64),
     /// The playback skips inside transmissions, as last reported and as the log last said them.
     played: aetherd::audio::PlaybackSkips,
     played_said: aetherd::audio::PlaybackSkips,
@@ -1027,6 +1033,18 @@ fn note_audio_losses(
         let repeated = skips.repeated_s - reported.skips.repeated_s;
         station.record_event("capture_skip", &format!("repeated {repeated:.3}"));
     }
+    // the pieces under the skip threshold, net (report 19 §6): to the recording each time they
+    // have added up to `SMALL_SAID_S` either way, with the time they built up over
+    let (small_said, span_said) = reported.small_said;
+    if (skips.small_s - small_said).abs() >= SMALL_SAID_S {
+        let net_ms = (skips.small_s - small_said) * 1000.0;
+        let over_s = skips.span_s - span_said;
+        station.record_event(
+            "capture_small",
+            &format!("net {net_ms:+.1} ms over {over_s:.1} s"),
+        );
+        reported.small_said = (skips.small_s, skips.span_s);
+    }
     reported.skips = skips;
     daemon.capture_skips = skips;
     note_playback_skips(daemon, audio, station, reported);
@@ -1034,7 +1052,7 @@ fn note_audio_losses(
     let due = reported
         .skips_said_at
         .is_none_or(|at| at.elapsed() >= LOOP_STALL_LOG_INTERVAL);
-    if skips == said || !due {
+    if (skips.lost, skips.repeated) == (said.lost, said.repeated) || !due {
         return;
     }
     reported.skips_said = skips;

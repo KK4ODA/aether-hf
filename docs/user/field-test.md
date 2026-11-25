@@ -130,7 +130,12 @@ air's; a frame across the gap has lost those milliseconds and may still fail. A 
 second is taken for the card's clock, not lost audio, and is not put back; the line says so. The
 bundle's `audio` counts these (`capture_padded_ms`: how much was put back), and the recording
 marks each one (`capture_skip`, `lost` and `padded`) and holds the silence. A recording made with both stations' audio, read with `tools/two_sides.py`,
-shows such a loss as a step in the offset between the two recordings.
+shows such a loss as a step in the offset between the two recordings. Pieces under 10 ms are too
+small to tell from the timestamps' own jitter, so they are only counted: added up with their
+signs, jitter cancels and lost audio does not. The bundle's `audio` has `capture_small_net_ms` and
+`capture_small_ppm` (that net over the time covered: a card's clock off its rate reads a few
+tens, audio lost in small pieces hundreds), and the recording marks each 5 ms they add up to
+(`capture_small`).
 
 ## 3. What a session should be
 
