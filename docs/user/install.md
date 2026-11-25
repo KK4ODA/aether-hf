@@ -55,6 +55,17 @@ save bar at the foot of the tab names what is not saved, and every other tab sho
 card, any radio control setting, External programs, compression, the update channel or the callsign
 restarts the modem, which takes a few seconds.
 
+**A sound card unplugged, or in another USB port.** Aether keeps running without it, says so in
+a banner, transmits nothing, and opens it again by itself when it comes back: no restart. A
+radio interface plugged into another USB port is a new device to Windows, which names it again
+with a number (`Speakers (USB Audio CODEC)` becomes `Speakers (2- USB Audio CODEC)`). Aether
+finds it under that name when there is exactly one such device, uses it, and shows a banner
+with **Keep** to save the new name in Setup; with two of the same model plugged in it does not
+guess, and Setup step 2 names the one to use. Windows gives the new device its own settings: in
+*Settings › System › Sound*, open it and set its format to *48000 Hz*, its input level as
+before, and turn off *Audio enhancements* and, under *Advanced*, *Allow applications to take
+exclusive control*. Aether opens it again within a few seconds of the change.
+
 **Keying, and the dial.** Setup step 2's *Radio control* keys the radio through a serial line
 (RTS or DTR), the radio's own *CAT command*, a CM108-class interface's GPIO pin, `rigctld` or
 FLRig; or it leaves the radio to the *External program* (VarAC or Winlink Express keys and tunes the

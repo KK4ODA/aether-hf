@@ -1102,6 +1102,8 @@ pub struct Station<P: Ptt> {
     /// Whether what is playing is a tune tone, which `tune_stop` may cut short — and
     /// nothing else may: a burst cut short is a session broken.
     playing_test: bool,
+    /// Why there is no sound card, while there is none (ADR-0137): nothing is keyed.
+    audio_down: Option<String>,
     /// The busy state as last observed, so a change of it is logged exactly once.
     was_busy: bool,
     /// Largest sample magnitude handed to the sound card during the transmission now
@@ -1366,6 +1368,7 @@ impl<P: Ptt> Station<P> {
             audio_seen: 0,
             transmitting: false,
             playing_test: false,
+            audio_down: None,
             was_busy: false,
             tx_peak_running: 0.0,
             tx_tag: None,
@@ -2209,6 +2212,42 @@ impl<P: Ptt> Station<P> {
         // is cheap and the sidecar gets the counters
         self.stop_recording();
         self.ptt.unkey(self.now())
+    }
+
+    /// The sound card has gone (`Some(why)`) or come back (`None`), ADR-0137.
+    ///
+    /// While it is gone nothing is keyed: the audio would go nowhere, and a station keyed with
+    /// nothing behind it, or one that came back on a device the operator did not choose, is
+    /// what this rule exists to prevent. A transmission on the air or waiting is let go.
+    ///
+    /// # Errors
+    /// If the radio will not release.
+    pub fn set_audio_down(&mut self, why: Option<String>) -> Result<(), PttError> {
+        let went = why.is_some() && self.audio_down.is_none();
+        self.audio_down = why;
+        if went && (self.transmitting || self.keying.is_some() || !self.pending.is_empty()) {
+            // what was on the air, or waiting for it, cannot be played: let the key go now
+            // rather than at the stall release
+            return self.abandon_tx();
+        }
+        Ok(())
+    }
+
+    /// Drop what waits to be keyed when there is no sound card, saying so; whether it did.
+    fn dropped_for_audio(&mut self) -> Result<bool, PttError> {
+        if self.audio_down.is_none() {
+            return Ok(false);
+        }
+        self.events
+            .push("error:audio: no sound card; the transmission was dropped".to_owned());
+        self.abandon_tx()?;
+        Ok(true)
+    }
+
+    /// Why there is no sound card, while there is none.
+    #[must_use]
+    pub fn audio_down(&self) -> Option<&str> {
+        self.audio_down.as_deref()
     }
 
     /// Give up on the transmission in progress: drop what is queued and what the sound card
@@ -3373,7 +3412,8 @@ impl<P: Ptt> Station<P> {
             return Ok(0);
         }
 
-        if !self.transmitting && !self.within_window(now) {
+        // with no sound card nothing is keyed, and what was to go is let go (ADR-0137)
+        if !self.transmitting && (!self.within_window(now) || self.dropped_for_audio()?) {
             return Ok(0);
         }
         if !self.transmitting {
@@ -12826,6 +12866,42 @@ mod tests {
             station.air.sense().settled(),
             "it did not listen again after the move"
         );
+    }
+
+    #[test]
+    fn nothing_is_keyed_while_the_sound_card_is_gone_and_a_transmission_on_the_air_is_let_go() {
+        // ADR-0137
+        let config = || StationConfig {
+            callsign: "W4ODA".to_owned(),
+            wait_for_clear: false,
+            ..StationConfig::default()
+        };
+        let mut out = vec![0.0f32; 4096];
+        // gone before: the tone is dropped unkeyed
+        let mut station = Station::new(config(), NullPtt::default(), 1);
+        station
+            .set_audio_down(Some("the playback device went away".into()))
+            .expect("down");
+        station.tune(2.0).expect("queued");
+        for _ in 0..10 {
+            assert_eq!(station.playback(&mut out).expect("playback"), 0);
+            assert!(!station.transmitting(), "keyed with no sound card");
+            station.capture(&vec![0.0f32; 4096]).expect("capture");
+        }
+        // gone during: the key is let go at once and nothing more is played
+        let mut station = Station::new(config(), NullPtt::default(), 1);
+        station.tune(2.0).expect("idle");
+        assert!(station.playback(&mut out).expect("playback") > 0);
+        assert!(station.transmitting());
+        station
+            .set_audio_down(Some("the playback device went away".into()))
+            .expect("down");
+        assert!(!station.transmitting(), "still keyed after the card went");
+        assert_eq!(station.playback(&mut out).expect("playback"), 0);
+        // back: the station transmits again
+        station.set_audio_down(None).expect("up");
+        station.tune(1.0).expect("idle");
+        assert!(station.playback(&mut out).expect("playback") > 0);
     }
 
     #[test]

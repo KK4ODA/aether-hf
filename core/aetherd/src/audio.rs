@@ -119,6 +119,11 @@ pub trait AudioIo {
     /// collision can be put down to its two transmissions (ADR-0069 §5). A sound card has
     /// nowhere to put it.
     fn annotate(&mut self, _tag: &str) {}
+
+    /// What a card that can go and come back is doing (ADR-0137): `None` for one that cannot.
+    fn card_state(&self) -> Option<crate::card::CardState> {
+        None
+    }
 }
 
 /// Anything that went wrong with a sound card.
@@ -571,6 +576,48 @@ pub fn list_devices() -> Result<Vec<DeviceInfo>, AudioError> {
         .collect())
 }
 
+/// The machine's capture and playback device names, without their rates: what
+/// [`crate::card::ResilientCard`] asks at every try, cheaply.
+///
+/// # Errors
+/// If the audio host cannot be queried at all.
+pub fn device_names() -> Result<(Vec<String>, Vec<String>), AudioError> {
+    let host = cpal::default_host();
+    let devices = host
+        .devices()
+        .map_err(|e| AudioError::Stream(format!("cannot enumerate devices: {e}")))?;
+    let (mut inputs, mut outputs) = (Vec::new(), Vec::new());
+    for device in devices {
+        let Ok(name) = device.name() else { continue };
+        if device.default_input_config().is_ok() {
+            inputs.push(name.clone());
+        }
+        if device.default_output_config().is_ok() {
+            outputs.push(name);
+        }
+    }
+    Ok((inputs, outputs))
+}
+
+/// Why a stream stopped, as its error callback said: set from the audio threads.
+type Failure = Arc<Mutex<Option<String>>>;
+
+/// A stream's error, kept when it means the device has gone.
+///
+/// cpal reports a device that went away as `DeviceNotAvailable` (WASAPI's
+/// `AUDCLNT_E_DEVICE_INVALIDATED`, ALSA's `ENODEV`). Other errors are said on standard error
+/// as before: a card that has really stopped after one also stops delivering audio, which
+/// [`crate::card::STALL`] catches.
+fn note_stream_error(failure: &Failure, side: &str, error: &cpal::StreamError) {
+    eprintln!("aetherd: {side} stream: {error}");
+    if matches!(error, cpal::StreamError::DeviceNotAvailable)
+        && let Ok(mut failed) = failure.lock()
+        && failed.is_none()
+    {
+        *failed = Some(format!("the {side} device went away ({error})"));
+    }
+}
+
 /// A pair of live sound-card streams.
 ///
 /// The streams stop when this is dropped.
@@ -588,6 +635,8 @@ pub struct SoundCard {
     _output: cpal::Stream,
     /// What the streams are, for a log line.
     pub description: String,
+    /// Why a stream stopped, when its device went away.
+    failure: Failure,
 }
 
 impl std::fmt::Debug for SoundCard {
@@ -627,6 +676,8 @@ impl SoundCard {
 
         let captured: Queue = Arc::new(Mutex::new(Shared::default()));
         let to_play: Queue = Arc::new(Mutex::new(Shared::default()));
+        let failure: Failure = Arc::new(Mutex::new(None));
+        let (in_failure, out_failure) = (Arc::clone(&failure), Arc::clone(&failure));
 
         let capture_queue = Arc::clone(&captured);
         let in_rate = f64::from(in_config.sample_rate.0);
@@ -647,7 +698,7 @@ impl SoundCard {
                     last = Some((captured_at, mono.len()));
                     capture_into(&mut shared, &mono, since_last, in_rate, limit);
                 },
-                |error| eprintln!("aetherd: capture stream: {error}"),
+                move |error| note_stream_error(&in_failure, "capture", &error),
                 None,
             )
             .map_err(|e| AudioError::Stream(format!("input: {e}")))?;
@@ -681,7 +732,7 @@ impl SoundCard {
                     note_playback(&mut shared, since_last, out_rate);
                     fill_playback(&mut shared, data, out_channels, first_leaves, out_rate);
                 },
-                |error| eprintln!("aetherd: playback stream: {error}"),
+                move |error| note_stream_error(&out_failure, "playback", &error),
                 None,
             )
             .map_err(|e| AudioError::Stream(format!("output: {e}")))?;
@@ -706,7 +757,14 @@ impl SoundCard {
                  {} Hz",
                 config.sample_rate
             ),
+            failure,
         })
+    }
+
+    /// Why the card has stopped, when a stream has said its device went away.
+    #[must_use]
+    pub fn failure(&self) -> Option<String> {
+        self.failure.lock().ok().and_then(|failed| failed.clone())
     }
 }
 

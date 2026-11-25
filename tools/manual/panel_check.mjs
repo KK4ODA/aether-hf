@@ -240,6 +240,49 @@ const CHECKS = [
     what: "Mini during a held DISCONNECT: the banner shows over the readings, the header whole",
     page: HELD_COMPACT,
   },
+  {
+    // a scene of the check's own, not a screenshot (ADR-0137)
+    scene: "sound card in another port",
+    define: {timeline: "idle", audioCard: {
+      fault: null, description: "in Microphone (2- USB Audio CODEC) (1 ch), out Speakers (2- USB Audio CODEC) (2 ch), 48000 Hz",
+      input: "Microphone (2- USB Audio CODEC)", output: "Speakers (2- USB Audio CODEC)", tries: 0,
+      moved: [
+        {direction: "input", configured: "Microphone (USB Audio CODEC)", found: "Microphone (2- USB Audio CODEC)"},
+        {direction: "output", configured: "Speakers (USB Audio CODEC)", found: "Speakers (2- USB Audio CODEC)"},
+      ]}},
+    what: "a codec found under Windows' new number: the banner names it, with Keep",
+    page: `(() => {
+      const out = [], $ = (id) => document.getElementById(id);
+      const banner = $("audio-moved-banner");
+      if (banner.hidden) out.push("the banner is hidden");
+      const text = $("audio-moved-text").textContent;
+      if (!text.includes("Speakers (2- USB Audio CODEC) in place of Speakers (USB Audio CODEC)"))
+        out.push("the banner reads '" + text + "'");
+      if ($("btn-audio-keep").textContent.trim() !== "Keep") out.push("no Keep button");
+      if (!$("btn-audio-moved-dismiss")) out.push("no × to put it away");
+      if (!$("btn-audio-keep").title) out.push("Keep has no tooltip");
+      if (!$("fault-banner").hidden) out.push("a fault is shown with the card open");
+      return out;
+    })()`,
+  },
+  {
+    scene: "sound card gone",
+    define: {timeline: "idle",
+      audioFault: "the playback device went away (The requested device is no longer available)",
+      audioCard: {fault: "the playback device went away", description: "", input: null,
+                  output: null, moved: [], tries: 3}},
+    what: "no sound card: the fault banner says so, its tooltip says what to do, no moved banner",
+    page: `(() => {
+      const out = [], $ = (id) => document.getElementById(id);
+      const fault = $("fault-banner");
+      if (fault.hidden) out.push("the fault banner is hidden");
+      if (!fault.textContent.startsWith("Sound card unavailable"))
+        out.push("the fault banner reads '" + fault.textContent + "'");
+      if (!fault.title.includes("48000 Hz")) out.push("its tooltip does not name Windows' format");
+      if (!$("audio-moved-banner").hidden) out.push("the moved banner shows with no card");
+      return out;
+    })()`,
+  },
 ];
 
 async function main() {

@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.25.0 |
+| **Version** | 1.26.0 |
 | **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.177 |
 | **Licence** | CC BY 4.0 |
@@ -375,7 +375,8 @@ hides it until there is something new to say.
 | Disconnect held | The external program asked to disconnect after minutes without writing anything, while its message is still going: Winlink Express does this 5 minutes after it sends a message. The transfer goes on, as it can finish within 15 minutes | Nothing, to let it finish. **Disconnect** closes once what is queued has gone; **Abort** closes now; **×** hides it for this disconnect (the session banner still shows the session) |
 | Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down. **×** hides it until the audio stops clipping and clips again |
 | VarAC | VarAC is on this computer and not set up for Aether, or a new version of Aether changed what its VarAC profile needs | **Set up** or **Update**, then **Switch to VarAC default** if you want; **×** stops this offer ([VarAC in one step](#varac-in-one-step)) |
-| Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2 |
+| Sound card in another USB port | The radio interface is in another USB port, where Windows names it again with a number, and Aether is using it under that name | **Keep** saves the new name in Setup step 2 (the modem restarts); **×** hides it until the sound card changes. Check the device's settings in Windows ([The computer](#the-computer)) |
+| Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2. A missing sound card is tried again every few seconds: plug it back in |
 
 Every banner shows in Compact and Mini too, except the VarAC offer, which waits for Full. There
 a banner's sentence is cut at two lines; point at it to read the whole of it. Aether tells an
@@ -1650,6 +1651,19 @@ of (from the dial list, or read over CAT, rigctld or FLRig) costs nothing.
 
 ### The computer
 
+**The radio interface was unplugged, or is in another USB port.** Aether keeps running, transmits
+nothing, and shows *Sound card unavailable*. It tries the card again every few seconds, so plugging
+it back in is enough: no restart. In another USB port Windows names it again with a number, such as
+*Speakers (2- USB Audio CODEC)*. Aether uses it when exactly one device has that name, and shows a
+banner with **Keep** to save the new name. With two interfaces of the same model plugged in it does
+not guess: choose the right one in Setup step 2.
+
+Windows gives a device in a new port its own settings. In *Settings › System › Sound*, open the
+device's input and output and set the format to *48000 Hz*, set the input level as you had it, and
+turn off *Audio enhancements* and *Allow applications to take exclusive control*. If the banner says
+the device *runs at 44100 Hz*, that format is the cause; Aether opens it within a few seconds of the
+change. Plugging the interface into the same port every time avoids all of this.
+
 **The Log says the sound card's capture skipped some milliseconds.** Your computer or its USB audio lost a
 moment of what the radio sent. Aether puts silence in its place, so everything after the gap stays in
 time; a frame across the gap may not decode and is sent again. Once in a session is nothing. If it happens
@@ -1831,3 +1845,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.23.1 | 2026-11-25 | [The Status tab](#9-the-status-tab): **Mode**'s next rung is a plain number with *next* in its name, and outside a session Sending shows a dash. *next: 0* after a session read as a warning, and 0 was only the rung a station starts from before a call has read the path. |
 | 1.24.0 | 2026-11-25 | Banners: the ones that can be put away end in an **×** (it was **Dismiss** or **Not now**), the held disconnect's included, which hides it for that disconnect; every banner but the VarAC offer shows in Compact and Mini, its sentence cut at two lines. |
 | 1.25.0 | 2026-11-25 | The Status tab's **Mode** says **Control** on its Receiving row, with the frames' family, while the other station only answers with control frames; a dash now means nothing heard ([The Status tab](#9-the-status-tab)). |
+| 1.26.0 | 2026-11-25 | A sound card that is unplugged, missing at start or at the wrong rate is opened again by itself when it comes back, with nothing transmitted meanwhile; the same interface in another USB port, renamed by Windows with a number, is found and used, with a banner and **Keep** ([Banners](#banners), [The computer](#the-computer)). |

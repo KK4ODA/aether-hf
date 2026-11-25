@@ -3587,6 +3587,24 @@ when no data arrives; a dash now means nothing heard. No rate is shown and the s
 no *receiving at* line for it: control frames carry no data. `panel_check.mjs`'s `answering` scene,
 manual figure 22.
 
+**The sound card comes back (2026-11-25, ADR-0137; the author's DigiRig in another USB-C port).**
+Before: a card missing at start ran the station on `Silence` until a restart; a card unplugged
+mid-run was only an `eprintln!` (the panel froze, `audio_fault` stayed null); nothing refused a
+transmission with no card; Windows' renamed endpoint (`Speakers (2- USB Audio CODEC)`) was just
+*missing*. Now `card.rs`: `resolve` takes a configured name that is absent as the one device whose
+name differs only by Windows' `N- ` instance prefix (`instance_of`, inside the last parentheses or
+at the start) — exactly one, the same model, a codec's two sides at one instance (`device_part`),
+never the default — used for the run, not written (the panel's `#audio-moved-banner` with **Keep**
+saves it; the profile's `missing_hardware` suggests it); `ResilientCard` wraps the `SoundCard`, is
+`Silence` while there is none, fails on `DeviceNotAvailable` (`SoundCard::failure`) or `STALL` (3 s
+without audio), and reopens every 2 s, 10 s after a minute (`retry_interval`), the clock and the loss
+counters carried across. While down `Station::set_audio_down` lets go of the key at once and keys
+nothing, the control API refuses what transmits (`NO_SOUND_CARD`, `methods::transmits` shared with
+the host-keyed refusal), `status.audio_card` and the `audio` event say it, and a host program hears
+`MISSING SOUNDCARD` mid-run. No config key. `panel_check.mjs` checks may define their own scene
+(`define`), with no screenshot, and `screens.mjs` reads `scene.audioCard`/`audioFault`. Owed: the
+author's Windows check with a DigiRig (unplug, replug, another port, 44.1 kHz).
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

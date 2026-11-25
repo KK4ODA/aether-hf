@@ -839,7 +839,9 @@ function world(scene) {
       : {enabled: false, connected: false},
     kiss: {listening: false, address: null, error: null, clients: [], enabled: false,
            bind: "127.0.0.1:8100", rung: 1, wait_for_clear: true, ignore_dcd: false},
-    audio_fault: null,
+    // the sound card's state (ADR-0137): a check's own scene sets these, no screenshot does
+    audio_fault: scene.audioFault ?? null,
+    audio_card: scene.audioCard ?? null,
     config_note: null,
     upload: {state: "idle", name: null, sent: 0, total: 0, error: null, link: null, to: null},
     debug: {on: true, answered: !scene.debugAsk, ask: Boolean(scene.debugAsk), waiting: [],

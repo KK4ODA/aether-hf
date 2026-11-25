@@ -13,6 +13,7 @@ pub mod air;
 pub mod audio;
 pub mod busy;
 pub mod busy_trace;
+pub mod card;
 pub mod channel_link;
 pub mod clipping;
 pub mod compress;

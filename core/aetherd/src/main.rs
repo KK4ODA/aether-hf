@@ -22,7 +22,7 @@ use std::{
 
 use aether_link::GrantConfig;
 use aetherd::{
-    audio::{AudioIo, DEVICE_LATENCY_S, Loopback, SoundCard, list_devices},
+    audio::{AudioIo, DEVICE_LATENCY_S, Loopback, list_devices},
     config::{Config, EXAMPLE, PttConfig},
     control::{
         ControlServer, channel,
@@ -1454,6 +1454,7 @@ fn serve(
         if gap > 0 {
             station.skip_captured(gap);
         }
+        watch_card(station, audio, control, daemon, &mut last_ptt_fault);
         let idle = captured.is_empty();
         if !idle {
             last_audio = std::time::Instant::now();
@@ -2322,27 +2323,98 @@ fn sound(
         daemon.audio.clone_from(&link.description);
         return Ok(Box::new(link));
     }
-    Ok(match SoundCard::open(&config.audio_config()) {
-        Ok(card) => {
-            daemon.audio.clone_from(&card.description);
-            Box::new(card)
+    // a card that is missing, at the wrong rate or unplugged later is tried again until it
+    // opens, and a codec in another USB port is found under its new name (ADR-0137)
+    let card = aetherd::card::ResilientCard::system(config.audio_config());
+    let state = card.state().clone();
+    apply_card_state(daemon, &state);
+    Ok(Box::new(card))
+}
+
+/// A card that went or came back (ADR-0137): the daemon, the station and the clients told.
+/// Nothing is keyed while it is gone — from the first pass for a card that did not open at
+/// start.
+fn watch_card(
+    station: &mut Station<Box<dyn Ptt>>,
+    audio: &dyn AudioIo,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+    last_ptt_fault: &mut Option<std::time::Instant>,
+) {
+    let changed = audio
+        .card_state()
+        .is_some_and(|state| apply_card_state(daemon, &state));
+    if changed || station.audio_down() != daemon.audio_fault.as_deref() {
+        if let Err(error) = station.set_audio_down(daemon.audio_fault.clone()) {
+            note_ptt_failure(daemon, station, &error, last_ptt_fault);
         }
-        Err(error) => {
-            let reason = error.to_string();
+    }
+    if changed {
+        control.publish(&Event::new("audio", audio_event(daemon)));
+    }
+}
+
+/// The `audio` event: the card's state as `status` has it.
+fn audio_event(daemon: &DaemonState) -> serde_json::Value {
+    json!({ "fault": daemon.audio_fault, "card": daemon.audio_card })
+}
+
+/// Take a sound card's new state into the daemon, and say what changed.
+///
+/// Returns whether anything did: the run loop then tells the station and the clients.
+fn apply_card_state(daemon: &mut DaemonState, state: &aetherd::card::CardState) -> bool {
+    if daemon
+        .audio_card
+        .as_ref()
+        .is_some_and(|seen| seen.generation == state.generation)
+    {
+        return false;
+    }
+    let was_down = daemon.audio_fault.is_some();
+    if let Some(reason) = &state.fault {
+        let message = if daemon.audio_card.is_some() && !was_down {
+            format!(
+                "{reason} — the modem is running without audio and will not transmit; \
+                     it opens the card again when it comes back"
+            )
+        } else {
+            format!(
+                "{reason} — the modem is running without audio and can neither hear nor \
+                     transmit; it tries the card again every few seconds, and Setup, step 2, \
+                     names the devices"
+            )
+        };
+        daemon.log.record(Level::Error, "audio", &message, "Idle");
+        daemon.audio = format!("unavailable — {reason}");
+        daemon.audio_fault = Some(reason.clone());
+    } else {
+        if was_down {
             daemon.log.record(
-                Level::Error,
+                Level::Info,
+                "audio",
+                &format!("the sound card is back: {}", state.description),
+                "Idle",
+            );
+        }
+        for moved in &state.moved {
+            daemon.log.record(
+                Level::Warn,
                 "audio",
                 &format!(
-                    "{reason} — the modem is running without audio and can neither hear \
-                     nor transmit; set the modem devices in Setup"
+                    "{:?} is not on this computer; using {:?}, the same device under \
+                         another number (Windows names a codec again in another USB port). \
+                         Check its level and format in Windows' Sound settings, and save it in \
+                         Setup, step 2, to keep it",
+                    moved.configured, moved.found
                 ),
                 "Idle",
             );
-            daemon.audio = format!("unavailable — {reason}");
-            daemon.audio_fault = Some(reason);
-            Box::new(aetherd::audio::Silence::new(config.audio.sample_rate))
         }
-    })
+        daemon.audio.clone_from(&state.description);
+        daemon.audio_fault = None;
+    }
+    daemon.audio_card = Some(state.clone());
+    true
 }
 
 fn open_ptt(config: &PttConfig) -> Result<Box<dyn Ptt>, PttError> {

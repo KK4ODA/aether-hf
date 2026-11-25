@@ -100,6 +100,12 @@
     <main>
       <!-- why the modem cannot hear or transmit, on whichever tab is open -->
       <p class="note warn" id="fault-banner" title="Why the modem cannot hear or transmit, or which settings it had to start from, and what to do" role="alert" hidden></p>
+      <!-- the sound card found under another Windows name, in use for this run (ADR-0137) -->
+      <div class="note warn unsaved-banner" id="audio-moved-banner" title="The radio interface is in another USB port, where Windows names it again with a number. The modem is using it: it is the same device, found by its name. Windows gives a new device its own settings, so check its level, its format (48000 Hz) and exclusive mode in Windows' Sound settings" role="status" hidden>
+        <span id="audio-moved-text" title="The device in use, and the name in Setup"></span>
+        <button class="small" id="btn-audio-keep" title="Save the device in use in Setup step 2, so the modem opens it by this name from now on (the modem restarts)">Keep</button>
+        <button type="button" class="banner-x" id="btn-audio-moved-dismiss" aria-label="Dismiss" title="Dismiss: hide this notice; the modem goes on using the device, and says so again if the sound card changes">×</button>
+      </div>
       <!-- what the rules still need before this station may transmit -->
       <div class="note warn reg-banner" id="reg-banner" title="What Aether needs to know before this station transmits: the rules it operates under, how it is controlled, and the license class" role="alert" hidden>
         <span id="reg-banner-text" title="What is missing"></span>

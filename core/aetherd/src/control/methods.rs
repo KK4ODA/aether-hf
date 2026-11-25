@@ -150,6 +150,9 @@ pub struct DaemonState {
     /// Why the sound card could not be opened, when it could not. The station runs on
     /// silence until the devices are corrected, and the panel says so.
     pub audio_fault: Option<String>,
+    /// What the sound card is doing, when it can go and come back (ADR-0137): the devices in
+    /// use, those found under another name, the tries since it failed.
+    pub audio_card: Option<crate::card::CardState>,
     /// How the configuration had to be read to start: from the copy kept before a newer
     /// version brought it forward, when that version's file is one this cannot read.
     pub config_note: Option<String>,
@@ -263,6 +266,7 @@ impl DaemonState {
             loop_scan_restarts: 0,
             loop_scan_restart_slowest_ms: 0.0,
             audio_fault: None,
+            audio_card: None,
             config_note: None,
             devices: device_inventory,
             upload: crate::upload::Upload::default(),
@@ -536,10 +540,9 @@ pub fn dispatch_with<P: Ptt>(
         }
         _ => {}
     }
-    if let Some(refusal) = daemon
-        .as_deref()
-        .and_then(|daemon| unkeyed_without_a_host(daemon, request))
-    {
+    if let Some(refusal) = daemon.as_deref().and_then(|daemon| {
+        unkeyed_without_audio(daemon, request).or_else(|| unkeyed_without_a_host(daemon, request))
+    }) {
         return refusal;
     }
     dispatch_station(station, request)
@@ -550,6 +553,36 @@ pub fn dispatch_with<P: Ptt>(
 pub const NO_HOST_TO_KEY: &str = "This station is keyed by the host program, and none is \
     attached: nothing would reach the air. Start the host program (VarAC, Winlink Express), \
     or choose another way to key the radio in Setup, step 2.";
+
+/// Why nothing transmits while the sound card is gone (ADR-0137).
+pub const NO_SOUND_CARD: &str = "There is no sound card: nothing would reach the air. The modem \
+    opens it again when it comes back; Setup, step 2, names the devices.";
+
+/// Whether a request would put something on the air: what the panel's and the KISS
+/// programs' requests start. Zero is "stop", for a tone, drive bursts and a repeating
+/// beacon, and is always allowed.
+fn transmits(request: &Request) -> bool {
+    let params = &request.params;
+    let stopping = |key: &str| params.get(key).and_then(Value::as_f64) == Some(0.0);
+    match request.method.as_str() {
+        "connect" | "beacon" | "probe" | "test.start" | "ptt.test" | "datagram.send" => true,
+        "tune" => !stopping("duration_s"),
+        "drive.set" => !stopping("bursts"),
+        "beacon.every" => !stopping("minutes") && !params["minutes"].is_null(),
+        _ => false,
+    }
+}
+
+/// A station without its sound card starts nothing that transmits: the radio would be keyed
+/// with nothing behind it (ADR-0137). The station refuses to key as well; this says why.
+fn unkeyed_without_audio(daemon: &DaemonState, request: &Request) -> Option<Response> {
+    (daemon.audio_fault.is_some() && transmits(request)).then(|| {
+        Response::failed(
+            request.id.clone(),
+            ApiError::new("refused", NO_SOUND_CARD, true),
+        )
+    })
+}
 
 /// A station keyed by its host program transmits only while one is attached: with none,
 /// the audio would go to a radio nobody keys. What the host program itself asks for comes
@@ -562,17 +595,7 @@ fn unkeyed_without_a_host(daemon: &DaemonState, request: &Request) -> Option<Res
         .host
         .as_ref()
         .is_some_and(|host| host.connected.load(std::sync::atomic::Ordering::Relaxed));
-    let params = &request.params;
-    // zero is "stop", for a tone, drive bursts and a repeating beacon: always allowed
-    let stopping = |key: &str| params.get(key).and_then(Value::as_f64) == Some(0.0);
-    let transmits = match request.method.as_str() {
-        "connect" | "beacon" | "probe" | "test.start" | "ptt.test" | "datagram.send" => true,
-        "tune" => !stopping("duration_s"),
-        "drive.set" => !stopping("bursts"),
-        "beacon.every" => !stopping("minutes") && !params["minutes"].is_null(),
-        _ => false,
-    };
-    (transmits && !attached).then(|| {
+    (transmits(request) && !attached).then(|| {
         Response::failed(
             request.id.clone(),
             ApiError::new("refused", NO_HOST_TO_KEY, true),
@@ -598,6 +621,7 @@ fn daemon_status<P: Ptt>(station: &mut Station<P>, daemon: Option<&DaemonState>)
     );
     result["kiss"] = kiss_status(daemon);
     result["audio_fault"] = json!(daemon.and_then(|d| d.audio_fault.clone()));
+    result["audio_card"] = json!(daemon.and_then(|d| d.audio_card.clone()));
     result["config_note"] = json!(daemon.and_then(|d| d.config_note.clone()));
     result["upload"] = json!(daemon.map(|d| d.upload.progress()));
     // debug mode (ADR-0050): whether it is on, what waits, what went, and whether the
@@ -4186,6 +4210,53 @@ mod tests {
                 .take_events()
                 .iter()
                 .any(|e| e == "claims:RadioPost has gone"),
+        );
+    }
+
+    #[test]
+    fn a_station_without_its_sound_card_starts_nothing_that_transmits() {
+        // ADR-0137: the radio would be keyed with nothing behind it
+        let mut station = station();
+        let mut daemon = daemon();
+        daemon.audio_fault = Some("the playback device went away".into());
+        let request = |method: &str, params: Value| Request {
+            id: Some("1".into()),
+            method: method.to_owned(),
+            params,
+            connection: None,
+        };
+        for (method, params) in [
+            ("connect", json!({"remote": "KK4XYZ"})),
+            ("beacon", json!({})),
+            ("probe", json!({"remote": "KK4XYZ"})),
+            ("tune", json!({"duration_s": 3.0})),
+            ("ptt.test", json!({})),
+            ("test.start", json!({"remote": "KK4XYZ"})),
+        ] {
+            let response = dispatch_with(&mut station, Some(&mut daemon), &request(method, params));
+            let error = response.error.expect("refused");
+            assert_eq!(error.message, NO_SOUND_CARD, "{method}");
+        }
+        for (method, params) in [("tune", json!({"duration_s": 0.0})), ("status", json!({}))] {
+            let response = dispatch_with(&mut station, Some(&mut daemon), &request(method, params));
+            assert!(
+                response
+                    .error
+                    .is_none_or(|error| error.message != NO_SOUND_CARD),
+                "{method} was refused for want of a sound card"
+            );
+        }
+        // the card back, the same request goes through to the station
+        daemon.audio_fault = None;
+        let response = dispatch_with(
+            &mut station,
+            Some(&mut daemon),
+            &request("beacon", json!({})),
+        );
+        assert!(
+            response
+                .error
+                .is_none_or(|error| error.message != NO_SOUND_CARD)
         );
     }
 

@@ -610,13 +610,29 @@ impl Profile {
             return Vec::new();
         };
         let mut missing = Vec::new();
+        // the same codec under another Windows instance number, by the rule the modem opens
+        // it by (ADR-0137): one candidate, the same model, both sides of one codec together
+        let moved = crate::card::resolve(
+            config.audio.input.as_deref(),
+            config.audio.output.as_deref(),
+            &inventory.inputs,
+            &inventory.outputs,
+        )
+        .map(|resolved| resolved.moved)
+        .unwrap_or_default();
+        let found_for = |direction: crate::card::Direction| {
+            moved
+                .iter()
+                .find(|m| m.direction == direction)
+                .map(|m| m.found.clone())
+        };
         if let Some(name) = &config.audio.input
             && !inventory.inputs.contains(name)
         {
             missing.push(MissingHardware {
                 key: "audio.input".into(),
                 name: name.clone(),
-                suggestion: None,
+                suggestion: found_for(crate::card::Direction::Input),
             });
         }
         if let Some(name) = &config.audio.output
@@ -625,7 +641,7 @@ impl Profile {
             missing.push(MissingHardware {
                 key: "audio.output".into(),
                 name: name.clone(),
-                suggestion: None,
+                suggestion: found_for(crate::card::Direction::Output),
             });
         }
         // a port with the same thing behind it is offered, when there is exactly one:
@@ -1506,6 +1522,40 @@ mod tests {
             applied.missing_hardware.is_empty(),
             "{:?}",
             applied.missing_hardware
+        );
+    }
+
+    #[test]
+    fn a_missing_codec_is_reported_with_the_same_codec_under_another_windows_number() {
+        // ADR-0137: a DigiRig in another USB port is `2- USB Audio CODEC` to Windows
+        let mut config = station();
+        config.audio.input = Some("Microphone (USB Audio CODEC)".into());
+        config.audio.output = Some("Speakers (USB Audio CODEC)".into());
+        let profile = Profile::capture("Home", &config, &[], Some(&inventory()), &now());
+        let moved = Inventory::from_json(&serde_json::json!({
+            "devices": [
+                {"name": "Microphone (2- USB Audio CODEC)", "input": true, "output": false},
+                {"name": "Speakers (2- USB Audio CODEC)", "input": false, "output": true},
+            ],
+        }));
+        let applied = profile.apply(&config, Some(&moved)).expect("apply");
+        let suggestions: Vec<Option<&str>> = applied
+            .missing_hardware
+            .iter()
+            .filter(|m| m.key.starts_with("audio."))
+            .map(|m| m.suggestion.as_deref())
+            .collect();
+        assert_eq!(
+            suggestions,
+            vec![
+                Some("Microphone (2- USB Audio CODEC)"),
+                Some("Speakers (2- USB Audio CODEC)")
+            ]
+        );
+        // offered, not taken
+        assert_eq!(
+            applied.config.audio.output.as_deref(),
+            Some("Speakers (USB Audio CODEC)")
         );
     }
 

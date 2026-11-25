@@ -226,6 +226,10 @@ function onEvent(frame) {
       // (ADR-0035): said where the operator looks, not only in the log
       renderMismatch(data);
       break;
+    case "audio":
+      // the sound card went or came back, or was found under another name (ADR-0137)
+      refreshStatus();
+      break;
     case "devices":
       // the daemon listed the devices again, off its loop, and found one plugged in or taken
       // away: the lists follow, keeping what is chosen
@@ -6297,6 +6301,11 @@ function wireMismatch() {
     $("radio-bandwidth").focus({ preventScroll: true });
   });
   $("btn-mismatch-dismiss").addEventListener("click", dismissMismatch);
+  $("btn-audio-keep").addEventListener("click", keepMovedAudio);
+  $("btn-audio-moved-dismiss").addEventListener("click", () => {
+    audioMovedDismissed = $("btn-audio-keep").dataset.moved ?? null;
+    $("audio-moved-banner").hidden = true;
+  });
   $("btn-held-disconnect").addEventListener("click", () =>
     act(() => call("disconnect"), "closing the session the external program asked to end"),
   );
@@ -8177,13 +8186,52 @@ function applyFaults(status) {
     faults.push(`Keying is unavailable — ${status.ptt_fault}. The modem is receiving only and will not transmit: choose the radio interface in Setup, step 2.`);
   }
   if (status.audio_fault) {
-    faults.push(`The sound card is unavailable — ${status.audio_fault}. The modem can neither hear nor transmit: choose the modem devices in Setup, step 2.`);
+    faults.push(`Sound card unavailable — ${status.audio_fault}.`);
   }
   if (status.config_note) {
     faults.push(`Settings from a backup — ${status.config_note}`);
   }
   banner.textContent = faults.join(" ");
   banner.hidden = faults.length === 0;
+  banner.title = status.audio_fault
+    ? AUDIO_FAULT_TITLE
+    : "Why the modem cannot hear or transmit, or which settings it had to start from, and what to do";
+  applyAudioMoved(status.audio_card ?? null);
+}
+
+// what the fault banner says of a missing sound card, behind its tooltip
+const AUDIO_FAULT_TITLE =
+  "The modem has no sound card: it hears nothing and transmits nothing. It tries the card again every few seconds, so plugging it back in is enough, with no restart. " +
+  "A radio interface in another USB port is a new device to Windows: the modem finds it when its name differs only by Windows' number (2- …), and otherwise Setup step 2 names it. " +
+  "Windows gives a new device its own settings: in Sound settings set its format to 48000 Hz, set its input level, and turn off exclusive mode and audio enhancements.";
+
+// the moved devices the operator put away with ×: shown again when they change
+let audioMovedDismissed = null;
+
+/// The configured devices in use under another name (ADR-0137): said, with Keep to save them.
+function applyAudioMoved(card) {
+  const moved = card?.fault ? [] : card?.moved ?? [];
+  const banner = $("audio-moved-banner");
+  banner.hidden = moved.length === 0 || JSON.stringify(moved) === audioMovedDismissed;
+  if (moved.length === 0) return;
+  $("audio-moved-text").textContent = `Sound card in another USB port: ${moved
+    .map((m) => `${m.found} in place of ${m.configured}`)
+    .join(", ")}`;
+  $("btn-audio-keep").dataset.moved = JSON.stringify(moved);
+}
+
+/// Save the devices found under another name, as Setup step 2 would.
+async function keepMovedAudio() {
+  const moved = JSON.parse($("btn-audio-keep").dataset.moved ?? "[]");
+  const changes = {};
+  for (const m of moved) changes[m.direction === "input" ? "audio.input" : "audio.output"] = m.found;
+  if (Object.keys(changes).length === 0) return;
+  try {
+    const answer = await call("config.set", changes);
+    log(`sound card saved: ${moved.map((m) => m.found).join(", ")}. ${await applied(answer)}`);
+  } catch (error) {
+    log(error.message, true);
+  }
 }
 
 let recordingsDir = null;

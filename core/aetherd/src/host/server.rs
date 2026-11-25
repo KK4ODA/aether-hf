@@ -1401,6 +1401,13 @@ fn serve_commands(
                         return;
                     }
                 }
+                // the sound card went (ADR-0137): VARA's word for it, as at attach; a gateway's
+                // host acts on it. Its return has no word in VARA's command set
+                "audio" if !event.data["fault"].is_null() => {
+                    if !say(&mut writer, &Notification::MissingSoundcard.line()) {
+                        return;
+                    }
+                }
                 // the station moved to the other bandwidth (ADR-0026): CONNECTED says the one
                 // it runs, and BITRATE reads the new ladder's rates
                 "bandwidth" => {
@@ -3616,6 +3623,30 @@ mod tests {
         });
         let mut client = Client::connect(&server);
         assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        assert_eq!(
+            client.expect(|l| l.starts_with("MISSING")),
+            "MISSING SOUNDCARD"
+        );
+    }
+
+    #[test]
+    fn a_host_hears_missing_soundcard_when_the_card_goes_mid_run() {
+        // ADR-0137: a card unplugged while the program is attached is said as at attach
+        let (modem, server) = Modem::start(|method, _| {
+            if method == "status" {
+                json!({"state": "idle", "audio_fault": null})
+            } else {
+                json!({})
+            }
+        });
+        let mut client = Client::connect(&server);
+        assert_eq!(client.expect(|l| l.starts_with("BUFFER")), "BUFFER 0");
+        // the card comes back: nothing to say
+        modem.publish("audio", json!({"fault": null, "card": {}}));
+        modem.publish(
+            "audio",
+            json!({"fault": "the playback device went away", "card": {}}),
+        );
         assert_eq!(
             client.expect(|l| l.starts_with("MISSING")),
             "MISSING SOUNDCARD"
