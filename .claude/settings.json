@@ -6,5 +6,6 @@
       "Bash(gh run rerun *)",
       "Bash(gh api *dispatches*)"
     ]
-  }
+  },
+  "outputStyle": "Plain"
 }
