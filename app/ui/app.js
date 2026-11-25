@@ -3943,6 +3943,8 @@ function showUnsaved() {
   $("unsaved-banner-text").textContent = any
     ? `Setup has changes that are not saved — ${listed} — so the modem is not using them.`
     : "";
+  // the small views cut a banner's sentence at two lines: its tooltip has the whole of it
+  $("unsaved-banner-text").title = $("unsaved-banner-text").textContent || "What was changed and not saved";
 }
 
 /// Put the form back to what the modem runs: nothing is written.
@@ -4102,9 +4104,27 @@ function applyBandwidthInUse(bandwidth) {
 /// An external program's DISCONNECT held for its inactivity timer while its transfer goes on
 /// (ADR-0134 §6): a banner on every tab, with Disconnect and Abort, so both programs agree on
 /// what is happening — Winlink Express says "Disconnecting" in its own window.
+// The held DISCONNECT the operator dismissed, by the time the adapter held it: the next one
+// (another session's, or the same program's again) has another time and shows. The session's
+// own state stays on the session banner.
+const HELD_DISMISSED_KEY = "aether.heldDismissed";
+let heldShown = null;
+// when storage is refused (a private window), dismissed for the page's life
+let heldDismissedHere = null;
+
 function renderHeld(status) {
   // the adapter clears it when the program's session ends or the program goes
-  $("held-banner").hidden = status.host?.disconnect_held_ms == null;
+  heldShown = status.host?.disconnect_held_ms ?? null;
+  const dismissed = heldDismissedHere ?? readStored(HELD_DISMISSED_KEY);
+  $("held-banner").hidden = heldShown == null || String(heldShown) === dismissed;
+}
+
+function dismissHeld() {
+  if (heldShown != null) {
+    heldDismissedHere = String(heldShown);
+    writeStored(HELD_DISMISSED_KEY, heldDismissedHere);
+  }
+  $("held-banner").hidden = true;
 }
 
 /// When the external program owns the radio (ADR-0025) it tunes it too: the dial list's Tune has
@@ -5389,6 +5409,7 @@ function renderMismatch(mismatch) {
     return;
   }
   $("mismatch-banner-text").textContent = mismatch.sentence;
+  $("mismatch-banner-text").title = mismatch.sentence;
   banner.dataset.at = String(mismatch.at_ms);
   // a station on another link protocol (ADR-0041): the fix is an update, not the bandwidth
   const version = mismatch.what === "version";
@@ -5620,7 +5641,7 @@ function renderVarac(status) {
   $("btn-varac-banner-go").hidden = false;
   $("btn-varac-banner-go").textContent = status.offer === "setup" ? "Set up" : "Update";
   $("btn-varac-banner-switch").hidden = true;
-  $("btn-varac-banner-later").textContent = "Not now";
+  $("btn-varac-banner-later").title = "Dismiss: do not offer this again; Setup step 5 still does it";
 }
 
 async function setUpVarac() {
@@ -5639,7 +5660,7 @@ async function setUpVarac() {
     varacDone = true;
     $("varac-banner-text").textContent = `VarAC_Aether.ini ${ini}, Aether profile VarAC default ${profile}. In VarAC: Switch profile, VarAC_Aether.`;
     $("btn-varac-banner-go").hidden = true;
-    $("btn-varac-banner-later").textContent = "Close";
+    $("btn-varac-banner-later").title = "Dismiss: close this note";
     $("varac-banner").hidden = false;
     renderVarac(answer.varac);
   } catch (error) {
@@ -6262,6 +6283,7 @@ function wireMismatch() {
     act(() => call("disconnect"), "closing the session the external program asked to end"),
   );
   $("btn-held-abort").addEventListener("click", () => act(() => call("abort"), "aborting the session"));
+  $("btn-held-dismiss").addEventListener("click", dismissHeld);
   $("btn-mismatch-answer").addEventListener("click", async () => {
     const called = $("mismatch-banner").dataset.called;
     if (!called) return;
@@ -6656,6 +6678,7 @@ function applyRegulatory(reg) {
   const needs = regNeeds(regulatory);
   $("reg-banner").hidden = !needs;
   $("reg-banner-text").textContent = needs;
+  $("reg-banner-text").title = needs || "What is missing";
   $("btn-reg-banner-setup").hidden = regulatory?.indicator?.code === "no_dial";
 
   $("reg-detail").style.setProperty("--tone", tone ? `var(--status-${tone === "legal" ? "link" : tone === "blocked" ? "error" : "warning"})` : "var(--border-strong)");

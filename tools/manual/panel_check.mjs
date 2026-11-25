@@ -13,6 +13,33 @@
 import {EXTERNAL_CALL, ME, SCENES, Cdp, launch, openScene, serve, sleep} from "./screens.mjs";
 import {rm} from "node:fs/promises";
 
+/// The held DISCONNECT in a small view (KK4ODA, 2026-11-25: not seen in Compact): shown, on
+/// screen and under the header's display, not over it; its × hides it, and a new held
+/// DISCONNECT (another time) shows it again. The status is read every 5 s, so it waits 6.
+const HELD_COMPACT = `(async () => {
+  const out = [], $ = (id) => document.getElementById(id);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const held = $("held-banner"), x = $("btn-held-dismiss");
+  if (!document.body.classList.contains("compact")) out.push("the page is not in a small view");
+  const box = held.getBoundingClientRect();
+  if (held.hidden || box.height === 0) out.push("the held banner is hidden");
+  if (box.bottom > innerHeight) out.push("the held banner ends at " + Math.round(box.bottom) + " px, under the window's " + innerHeight);
+  const well = document.querySelector(".well-row").getBoundingClientRect();
+  if (box.top < well.bottom - 1) out.push("the held banner starts at " + Math.round(box.top) + " px, over the display well ending at " + Math.round(well.bottom));
+  if (!x || x.tagName !== "BUTTON") return out.concat(["the held banner has no dismiss button"]);
+  if (x.getAttribute("aria-label") !== "Dismiss" || !x.title) out.push("its × has no name or tooltip");
+  const xb = x.getBoundingClientRect();
+  if (xb.width === 0 || xb.right > innerWidth) out.push("its × is not on screen");
+  x.click();
+  await sleep(6000);
+  if (!held.hidden) out.push("the held banner came back after its × for the same disconnect");
+  if ($("session-banner").hidden) out.push("the session banner went with it");
+  window.__screens.held = Date.now();
+  await sleep(6000);
+  if (held.hidden) out.push("a new held disconnect does not show after the last one was dismissed");
+  return out;
+})()`;
+
 /// Problems found by an expression run in the page: each returns a list of sentences.
 const CHECKS = [
   {
@@ -182,6 +209,21 @@ const CHECKS = [
       return out;
     })()`,
   },
+  {
+    scene: "compact-held",
+    // a window shorter than its content, as an operator's own Compact can be once a banner
+    // comes: the header kept whole, the banner under it
+    define: {held: true, storage: {"aether.view": "compact"}, view: "compact"},
+    squeeze: 200,
+    what: "Compact during a held DISCONNECT: the banner shows, its × hides it, a new one shows again",
+    page: HELD_COMPACT,
+  },
+  {
+    scene: "mini-held",
+    define: {held: true, storage: {"aether.view": "mini"}, view: "mini"},
+    what: "Mini during a held DISCONNECT: the banner shows over the readings, the header whole",
+    page: HELD_COMPACT,
+  },
 ];
 
 async function main() {
@@ -193,8 +235,13 @@ async function main() {
   let failed = 0;
   try {
     for (const check of CHECKS) {
-      const scene = {...SCENES[check.scene], ...check.with};
+      // a check's own scene, where the manual has no picture of it
+      const scene = check.define ?? {...SCENES[check.scene], ...check.with};
       const opened = await openScene(cdp, origin, check.scene, scene);
+      if (check.squeeze) {
+        await opened.send("Emulation.setDeviceMetricsOverride", {width: 640,
+          height: check.squeeze, deviceScaleFactor: 1, mobile: false});
+      }
       await sleep(scene.settle ?? 1500);
       const found = await opened.evaluate(check.page);
       const errors = await opened.evaluate("window.__screens.errors");

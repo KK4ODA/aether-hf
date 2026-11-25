@@ -3546,6 +3546,19 @@ tests. The throughput on that
 path (≈ 67 bit/s of the file at 2300 Hz, a −1 dB median with dips to −12; no decline over the
 session) is the rate review's evidence, not a patch.
 
+**Banners in the small views, and one dismiss (2026-11-25, the author: a held DISCONNECT went
+unseen in Compact, and wanted an X).** No rule hid `#held-banner` in Compact. In a window sized
+before the banners came, the body's column shrank the header and the banners slid up over the
+display well. Now the header and banners never shrink there (`flex: none`), a banner's sentence is
+two lines at most with the whole of it in its tooltip, and `overflow-anchor: none` keeps a new
+banner from opening above a scrolled page. Every banner shows in Compact and Mini except the VarAC
+offer (`#varac-banner`, which waits for Full). Every banner that can be put away ends in one
+`button.banner-x` (×, `aria-label="Dismiss"`, the tooltip says until when): mismatch, clipping,
+the VarAC offer (was *Not now*) and the held DISCONNECT, which is dismissed for that
+`disconnect_held_ms` only (`aether.heldDismissed`). `panel_check.mjs` has `compact-held` (a
+200 px window) and `mini-held`, with scenes of their own (`define`, `squeeze`), and the stand-in
+takes `window.__screens.held`.
+
 **The first stable release, and twelve questions settled (2026-11-25, the author's answers, asked
 one at a time).** The first stable is `v0.2.0` (ROADMAP P5-7 has the checklist): cut once the air
 protocol has not changed for four weeks (protocol 13 since 2026-11-16) and two to three weeks of

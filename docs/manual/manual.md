@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.23.1 |
+| **Version** | 1.24.0 |
 | **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.177 |
 | **Licence** | CC BY 4.0 |
@@ -359,9 +359,10 @@ choice. The waterfall keeps its own colours.
 ### Banners
 
 A banner across every tab tells you about something that needs attention. Each says what to do,
-and most have buttons that do it.
+and most have buttons that do it. A banner with an **×** at its end can be put away: the **×**
+hides it until there is something new to say.
 
-![Three banners under the header: a station called in the other bandwidth; the external program asked to disconnect and the transfer goes on, with Disconnect and Abort; and the receive audio is clipping](screens/banners.png)
+![Three banners under the header, each with an × at its end: a station called in the other bandwidth; the external program asked to disconnect and the transfer goes on, with Disconnect and Abort; and the receive audio is clipping](screens/banners.png)
 
 *Figure 11. Banners: a bandwidth mismatch, a disconnect held, and clipped receive audio.*
 
@@ -370,13 +371,15 @@ and most have buttons that do it.
 | Session | Calling, connected, disconnecting, a probe, a Test, a beacon waiting, or how the last session ended. A program's call or session says *for* the program | Nothing; it is there so you see it from any tab |
 | Setup needed | The rules, the control or the licence class is not set, so nothing transmits | **Open Setup**, step 1 |
 | Unsaved changes | Setup has changes the modem is not using yet | **Review in Setup** and save, or **Discard changes** |
-| Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a program's callsign while that program is not running, or called this station while the external program that answers for it is not attached | Follow its buttons: **Setup step 4**, **Check for Updates**, **Answer as it too**, **Call it**, or **Dismiss**. For a program that is not running or not attached, start it, or check the port it uses |
-| Disconnect held | The external program asked to disconnect after minutes without writing anything, while its message is still going: Winlink Express does this 5 minutes after it sends a message. The transfer goes on, as it can finish within 15 minutes | Nothing, to let it finish. **Disconnect** closes once what is queued has gone; **Abort** closes now |
-| Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down |
-| VarAC | VarAC is on this computer and not set up for Aether, or a new version of Aether changed what its VarAC profile needs | **Set up** or **Update**, then **Switch to VarAC default** if you want; **Not now** stops this offer ([VarAC in one step](#varac-in-one-step)) |
+| Mismatch | A station called or probed in the other bandwidth, under another of your callsigns, or in another protocol version; or your call went unanswered while the operator was heard under another SSID; or a station called a program's callsign while that program is not running, or called this station while the external program that answers for it is not attached | Follow its buttons: **Setup step 4**, **Check for Updates**, **Answer as it too**, **Call it**, or **×** to hide it until the next one. For a program that is not running or not attached, start it, or check the port it uses |
+| Disconnect held | The external program asked to disconnect after minutes without writing anything, while its message is still going: Winlink Express does this 5 minutes after it sends a message. The transfer goes on, as it can finish within 15 minutes | Nothing, to let it finish. **Disconnect** closes once what is queued has gone; **Abort** closes now; **×** hides it for this disconnect (the session banner still shows the session) |
+| Clipping | More than 0.1 % of the audio heard over the last ten seconds reached full scale | Turn the radio's audio output or the sound card's input down. **×** hides it until the audio stops clipping and clips again |
+| VarAC | VarAC is on this computer and not set up for Aether, or a new version of Aether changed what its VarAC profile needs | **Set up** or **Update**, then **Switch to VarAC default** if you want; **×** stops this offer ([VarAC in one step](#varac-in-one-step)) |
 | Fault | The modem cannot hear or transmit (no sound card, a port it cannot open), or it had to start from older settings | Read what it says. Usually Setup step 2 |
 
-The clipping banner shows in Compact too. Aether tells an external program nothing of it.
+Every banner shows in Compact and Mini too, except the VarAC offer, which waits for Full. There
+a banner's sentence is cut at two lines; point at it to read the whole of it. Aether tells an
+external program nothing of the clipping banner.
 
 ### Arranging the windows
 
@@ -1247,7 +1250,7 @@ bandwidth; your own come back when the program leaves. Setup always shows your o
 On a computer where VarAC is installed, Aether sets VarAC up for you. Your own VarAC settings
 stay as they are, and VARA HF stays one click away.
 
-![Setup with the offer under the header, VarAC is on this computer, with Set up and Not now; step 5 ends with the VarAC row (its folder, the profile to copy and Set up) and the VarAC profile row, not set up](screens/varac.png)
+![Setup with the offer under the header, VarAC is on this computer, with Set up and ×; step 5 ends with the VarAC row (its folder, the profile to copy and Set up) and the VarAC profile row, not set up](screens/varac.png)
 
 *Figure 35. The offer to set VarAC up, and Setup step 5's VarAC rows.*
 
@@ -1281,7 +1284,7 @@ levels in *VarAC default* are kept too.
   VarAC's, and Aether ignores it.
 - If VarAC is not in `C:\VarAC`, type its folder in step 5. A folder under Program Files needs an
   administrator to write in, and Aether says so.
-- **Not now** stops the offer. A later version's change is offered again.
+- The **×** at the end of the offer stops it. A later version's change is offered again.
 
 ### Finding Winlink's programs
 
@@ -1818,3 +1821,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.22.0 | 2026-11-24 | From three Winlink Express P2P sessions the same day: a disconnect whose queue could not go in a minute closes at once ([Call](#call)); Winlink Express's five-minute timeout no longer cuts off a long message, a program's quick answer goes in the next transmission, and a radio that sends its own signal back while keyed is not warned about ([Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |
 | 1.23.0 | 2026-11-25 | From the 80 m sessions of 2026-11-24: while an external program or a call sets the callsign or the bandwidth, Setup greys your own and says what is in use beside it ([Step 1](#step-1-callsign-and-rules), [Step 4](#step-4-modem-settings)); the header's bandwidth chip says *external*. The Status tab's **Mode** has a row each way, **Sending** and **Receiving**, and *Receiving at* follows frames that did not decode ([The Status tab](#9-the-status-tab)). Winlink Express's five-minute timeout is held only while its message can arrive within 15 minutes, with a banner saying so; a call while the external program is not attached says that ([Banners](#banners), [Winlink Express, Pat and VarAC](#21-winlink-express-pat-and-varac)). |
 | 1.23.1 | 2026-11-25 | [The Status tab](#9-the-status-tab): **Mode**'s next rung is a plain number with *next* in its name, and outside a session Sending shows a dash. *next: 0* after a session read as a warning, and 0 was only the rung a station starts from before a call has read the path. |
+| 1.24.0 | 2026-11-25 | Banners: the ones that can be put away end in an **×** (it was **Dismiss** or **Not now**), the held disconnect's included, which hides it for that disconnect; every banner but the VarAC offer shows in Compact and Mini, its sentence cut at two lines. |

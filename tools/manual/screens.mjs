@@ -984,6 +984,8 @@ function pageWorld(D) {
       out.queued_bytes = 0;
     }
     out.uptime_s = 2200 + S.t;
+    // a check may hold another DISCONNECT (panel_check.mjs): the next session's, with its time
+    if (S.held !== undefined && out.host) out.host.disconnect_held_ms = S.held;
     return out;
   }
 

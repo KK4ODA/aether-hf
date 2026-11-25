@@ -119,26 +119,28 @@
         <button class="small" id="btn-mismatch-update" title="Check for a newer version of Aether HF: this station's is the older one" hidden>Check for Updates</button>
         <button class="small" id="btn-mismatch-answer" title="Answer calls to this callsign too, from now until the modem restarts or an external program names its own callsigns; to keep it, add it in Setup step 1" hidden>Answer as it too</button>
         <button class="small" id="btn-mismatch-call" title="Call the station heard under the same callsign with another SSID" hidden>Call it</button>
-        <button class="small quiet" id="btn-mismatch-dismiss" title="Hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">Dismiss</button>
+        <button type="button" class="banner-x" id="btn-mismatch-dismiss" aria-label="Dismiss" title="Dismiss: hide this warning until a station calls or probes in another bandwidth, or calls in another version, again">×</button>
       </div>
       <!-- an external program's timer DISCONNECT, held while its transfer goes on (ADR-0134 §6):
            on every tab, with the two ways to end it here -->
       <div class="note warn unsaved-banner" id="held-banner" title="The external program connected to Aether asked to disconnect after minutes without writing anything: Winlink Express does this 5 minutes after it sends a message, while the message is still going. Aether keeps sending, since the transfer can finish within 15 minutes at this session's speed. Disconnect closes once what is queued has gone, or after a minute; Abort closes now" role="status" hidden>
-        <span id="held-banner-text" title="Why the session goes on">The external program asked to disconnect (its inactivity timeout). The transfer goes on.</span>
+        <span id="held-banner-text" title="The external program asked to disconnect (its inactivity timeout). The transfer goes on">The external program asked to disconnect (its inactivity timeout). The transfer goes on.</span>
         <button class="small" id="btn-held-disconnect" title="Close once what is queued has gone, or after a minute at most">Disconnect</button>
         <button class="small danger" id="btn-held-abort" title="Close now; what is still queued is not sent">Abort</button>
+        <button type="button" class="banner-x" id="btn-held-dismiss" aria-label="Dismiss" title="Dismiss: hide this notice for this disconnect; the session goes on, and the session banner still says so">×</button>
       </div>
       <!-- the receive audio clips (ADR-0132): on every tab, Compact included -->
       <div class="note warn unsaved-banner" id="clip-banner" title="More than 0.1 % of the audio heard over the last ten seconds reached full scale: the sound card's input is overdriven, and what clips is lost to the receiver" role="alert" hidden>
         <span id="clip-banner-text" title="What is clipping and what to turn">The receive audio is clipping: turn the radio's audio output or the sound card's input down.</span>
-        <button class="small quiet" id="btn-clip-dismiss" title="Hide this warning until the audio stops clipping and starts again">Dismiss</button>
+        <button type="button" class="banner-x" id="btn-clip-dismiss" aria-label="Dismiss" title="Dismiss: hide this warning until the audio stops clipping and starts again">×</button>
       </div>
-      <!-- VarAC in one step: offered when VarAC is found, and again when a new version changes what it needs -->
+      <!-- VarAC in one step: offered when VarAC is found, and again when a new version changes what it needs;
+           an offer, so Full only: the small views keep their room for what needs acting on now -->
       <div class="note unsaved-banner" id="varac-banner" title="VarAC is on this computer: Aether can add a VarAC profile that runs on Aether, and an Aether profile for VarAC. Setup step 5 does the same" role="status" hidden>
         <span id="varac-banner-text" title="Set up writes VarAC_Aether.ini in VarAC's folder, a copy of your VarAC profile that starts and talks to Aether, and saves the Aether profile VarAC default. In VarAC, Switch profile to VarAC_Aether runs it on Aether; switching back to VarAC runs it on VARA again"></span>
         <button class="small" id="btn-varac-banner-go" title="Write VarAC_Aether.ini and the Aether profile VarAC default">Set up</button>
         <button class="small" id="btn-varac-banner-switch" title="Switch this station to the Aether profile VarAC default" hidden>Switch to VarAC default</button>
-        <button class="small quiet" id="btn-varac-banner-later" title="Do not offer this again; Setup step 5 still does it">Not now</button>
+        <button type="button" class="banner-x" id="btn-varac-banner-later" aria-label="Dismiss" title="Dismiss: do not offer this again; Setup step 5 still does it">×</button>
       </div>
       <!-- the session, in large type on every tab: up, being called, or how the last one ended -->
       <div class="session-banner" id="session-banner" title="What the station is doing: calling, connected, disconnecting, probing, a Test, a beacon waiting, an identifier still owed or a transmission — or how the last session ended" role="status" aria-live="assertive" hidden>

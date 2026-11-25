@@ -2956,6 +2956,29 @@ details.fold-card > summary:hover .card-title {
   flex: 1 1 320px;
 }
 
+/* A banner's dismiss: one × for every banner that can be put away, last in its row, as the
+   profile list's × is. Quiet until the pointer or the keyboard is on it; its name and what it
+   does are in its label and tooltip. Small enough for Compact's one line (KK4ODA, 2026-11-25). */
+button.banner-x {
+  flex: none;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  min-height: 0;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: 17px;
+  line-height: 1;
+}
+
+button.banner-x:hover:not(:disabled),
+button.banner-x:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
 /* the files for another operator: a form row over the log */
 .share-form {
   border-bottom: 1px solid var(--border);
@@ -4388,6 +4411,54 @@ body.compact .reg-banner {
   font-size: var(--fs-sm);
   margin-top: 0;
   margin-bottom: var(--s2);
+}
+
+/* Every banner meant for every tab shows in the small views too, kept to what a small window
+ * has room for (KK4ODA, 2026-11-25: a held DISCONNECT went unseen in Compact). The header and
+ * the banners never shrink: in a window sized before the banners came, the body's column
+ * squeezed the header and the banners slid up over the display well. A banner's sentence is
+ * two lines at most, the whole of it in its tooltip, its buttons beside it (a fault is said
+ * whole: the modem cannot hear or transmit until it is fixed); a new banner
+ * pushes the readings down rather than opening above a scrolled page. The VarAC offer waits
+ * for Full: it is an offer, not something to act on now, and Setup step 5 makes it too. */
+body.compact {
+  overflow-anchor: none;
+}
+
+body.compact header.bar,
+body.compact main > .note,
+body.compact main > .unsaved-banner,
+body.compact .session-banner {
+  flex: none;
+}
+
+body.compact .unsaved-banner,
+body.compact .reg-banner {
+  gap: var(--s1) var(--s2);
+  flex-wrap: nowrap;
+}
+
+body.compact .unsaved-banner > span,
+body.compact .reg-banner > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+body.compact .unsaved-banner > span,
+body.compact .reg-banner > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+body.compact .unsaved-banner > button:not(.banner-x),
+body.compact .reg-banner > button {
+  flex: none;
+}
+
+body.compact #varac-banner {
+  display: none;
 }
 
 body.compact .status-body {
