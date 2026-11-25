@@ -412,7 +412,8 @@ a scanning gateway on a good path 72, 55 and 43 % of the time with 2, 3 and 4 di
 long enough to cover the pause (26–29 s) would make that 98–100, 83–85 and 63–64 %, and `scan_s`
 15–20 s longer, with every false notice costing as much more. RadioPost's client calls for
 `scan_s`; the VARA port's hosts and the panel's Connect cannot ask for a call's length. Not
-changed.
+changed: the author's answer (2026-11-25) is to keep the linger as it is, since the calls that
+matter to a scanning gateway are RadioPost's, which last the whole scan.
 
 ## 13. Amended: a move the radio did not answer keeps its dial (2026-11-17)
 

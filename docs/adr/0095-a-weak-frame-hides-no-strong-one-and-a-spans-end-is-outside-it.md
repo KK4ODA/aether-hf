@@ -127,7 +127,8 @@ Two draws of all 60 scenarios (`--seeds 2`) on each daemon, before (`760c161`) a
   each daemon did not repeat it. The frames before it had already said the transmission ran at
   least to its true end. A rule that never takes an end earlier than such a bound would have kept
   the slot here. That is a protocol rule (R2 in `docs/research/link-architecture/04-formal-spec.md`),
-  so it is left to the author.
+  so it was left to the author, who decided (2026-11-25) to leave it: one overlap in about ten
+  thousand counts, none seen on the air.
 
 ## 6. Consequences
 

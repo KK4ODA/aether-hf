@@ -3210,7 +3210,8 @@ type-1 frame `<SMP>` to the addressee, 10 s after the beacon; the addressee's Va
 relay notification* and lights RELAY, connects, and the relay hands the VMail over unasked. So it
 needs *KISS programs* at both stations. VarAC 15.0.18 refuses a `VERSION` it can parse as under
 4.8.8 (a stand-in saying `Aether HF 0.2.0` drew *Please update VARA*); the beta form fails to parse
-and passes. A release without `-beta` would be refused: the author's call (the `VERSION` rule).
+and passes. A release without `-beta` says `-stable` after its number (the author's decision,
+2026-11-25; `host::vara::reported_version`).
 **The bench on a second
 PC of the author's (user folder `C:\Users\User`)** is not the one above: `C:\Dev\AetherBench\` there
 has `varac-a`/`varac-b` (VarAC's program files copied from `C:\VarAC`, never its INI or DB),
@@ -3258,7 +3259,7 @@ Enable KISS=1`, the two ports); the scratch VarAC hung on close whether or not t
 **The `VERSION` gate** (`C:\Dev\AetherBench\stub-modem\version_probe.ps1`): VarAC refuses `Aether HF
 0.2.0`, `v0.2.0`, `0.2.0 (Aether)`, `1.0.0` and `0.2.0.1` (*Please update VARA … 4.8.8 or higher*)
 and accepts `0.2.0-beta.161`, `0.2.0-stable`, `0.2.0+f1ee736` and a bare `Aether HF`: anything glued
-to the number. The first release without `-beta` needs the author's decision before it ships.
+to the number. A stable release answers `Aether HF 0.2.0-stable` (decided 2026-11-25).
 
 **RadioPost mail on 40 m to the scanning gateway (2026-11-17, `docs/research/link-architecture/
 18-radiopost-40m-beta162.md`).** Nine sessions at 2300 Hz from the mobile (station `KK4ODA-2`,
@@ -3543,6 +3544,20 @@ timeout message was in Winlink Express's window (question 7). Open: the rest of 
 tests. The throughput on that
 path (≈ 67 bit/s of the file at 2300 Hz, a −1 dB median with dips to −12; no decline over the
 session) is the rate review's evidence, not a patch.
+
+**The first stable release, and twelve questions settled (2026-11-25, the author's answers, asked
+one at a time).** The first stable is `v0.2.0` (ROADMAP P5-7 has the checklist): cut once the air
+protocol has not changed for four weeks (protocol 13 since 2026-11-16) and two to three weeks of
+ordinary on-air use found nothing needing a code change (rate-review speed findings excepted); the
+strangers' install test is not a condition. A stable build's `VERSION` says `-stable` after its
+number (`host::vara::reported_version`), since VarAC refuses a plain one. Windows: the author
+applies to SignPath Foundation's free OSS signing, and the release does not wait for it. macOS
+ships, marked unsigned and untried with a radio. After it, an air-protocol change ships to stable
+and beta together, never to betas alone. Engineering: ADR-0131's de-rotation is ported now;
+ADR-0095's count-bound rule is left (one overlap in ~10 000 counts); ADR-0129 §12's linger stays
+as it is; report 19's capture skips under 10 ms are counted (a measurement, no handling change);
+its fast-tone bench under partial-band QRM is left for more on-air evidence; report 22 §7's
+fast-clock scenarios and the panel tests are built, its further real-time scenarios not.
 
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and

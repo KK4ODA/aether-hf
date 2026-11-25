@@ -512,9 +512,9 @@ RadioPost.
 | 1 | A session's or a setup's identifier names the callsign it went as (the engine's `id_call`, the setup's `setup_call`), and the gate accepts that callsign after the program has left; Morse and data alike | Aether, `station.rs` (`foreign_identifier`, `link_identifier`, `render_link_identifier`) | **done** (§12; ADR-0075 §7, ADR-0127 §11) |
 | 2 | The RadioPost client listens again after a P2P session ends | RadioPost | in hand in another session |
 | 3 | A repeated call teaches a gap only when it began after the acceptance went on the air | Aether, `station/gaps.rs` | **done** (§12; ADR-0054 §5) |
-| 4 | Bench the fast tone kinds (2300 Hz rungs 2–5) under a partial-band interferer, with and without per-tone noise, and on NVIS | `tools/bench_cut.py`-style bench | the author's |
+| 4 | Bench the fast tone kinds (2300 Hz rungs 2–5) under a partial-band interferer, with and without per-tone noise, and on NVIS | `tools/bench_cut.py`-style bench | left for now (the author, 2026-11-25): wait for more on-air evidence |
 | 5 | The scan's restart pass is not logged as a slow pass, or is made cheaper | Aether, the run loop's pass report or `Air::listen_after_silence` | **done**: counted apart (§12) |
-| 6 | The house's capture losses under 10 ms: count them (the samples a callback delivers against its timestamps) before deciding anything | Aether, `audio::CaptureSkips` | the author's; low |
+| 6 | The house's capture losses under 10 ms: count them (the samples a callback delivers against its timestamps) before deciding anything | Aether, `audio::CaptureSkips` | **go** (the author, 2026-11-25): count only |
 | 7 | Debug mode keeps a zip it could not send and tries it again when the Internet is back, not only twice | Aether, `debug.rs` | **done** (§12; ADR-0050 §6) |
 | 8 | The mobile keys by Kenwood CAT on COM9 (report 18's change 3), and the two VarAC copies get different callsigns | the mobile's Setup, VarAC | the author |
 

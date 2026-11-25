@@ -35,7 +35,22 @@ pub fn version_string() -> String {
     // Three words, like the published reply's shape — <product> <band> <version> — so a
     // host that takes the version from the fourth token of the line finds one. VarAC does,
     // and "Aether-HF-0.2.0" put an exception in its log. The name is still this modem's.
-    format!("Aether HF {}", env!("CARGO_PKG_VERSION"))
+    format!("Aether HF {}", reported_version(env!("CARGO_PKG_VERSION")))
+}
+
+/// The version as `VERSION` says it: a stable release's plain number with `-stable` glued on.
+///
+/// VarAC 15.0.18 reads a plain number as a VARA version and refuses one under 4.8.8 ("Please
+/// update VARA"): it refused `0.2.0` and `1.0.0` on the bench and accepted anything glued to the
+/// number (`0.2.0-beta.161`, `0.2.0-stable`), which it cannot parse. A beta's `-beta.N` already
+/// is such a suffix; a stable release gets `-stable` (the author's decision, 2026-11-25). The
+/// release itself keeps its plain number.
+pub fn reported_version(package: &str) -> String {
+    if package.contains('-') || package.contains('+') {
+        package.to_string()
+    } else {
+        format!("{package}-stable")
+    }
 }
 
 /// The bandwidth assumed, in hertz, until the modem's `capabilities` say which one the
@@ -724,6 +739,21 @@ mod tests {
         assert!(
             !reply.to_ascii_uppercase().contains("VARA"),
             "the modem claimed to be VARA: {reply}"
+        );
+    }
+
+    #[test]
+    fn a_stable_release_says_its_number_with_a_suffix_varac_cannot_parse() {
+        // VarAC refuses a plain number it reads as a VARA older than 4.8.8
+        assert_eq!(reported_version("0.2.0"), "0.2.0-stable");
+        assert_eq!(reported_version("1.0.0"), "1.0.0-stable");
+        assert_eq!(reported_version("0.2.0-beta.176"), "0.2.0-beta.176");
+        assert_eq!(reported_version("0.2.0+f1ee736"), "0.2.0+f1ee736");
+        let said = version_string();
+        let number = said.rsplit(' ').next().unwrap_or_default();
+        assert!(
+            number.contains('-') || number.contains('+'),
+            "VERSION would say a plain number VarAC refuses: {said}"
         );
     }
 

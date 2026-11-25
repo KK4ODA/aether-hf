@@ -27,7 +27,9 @@ layer and nothing more:
   than guessed at where their meaning is not evident.
 * **The modem never claims to be VARA.** `VERSION` answers `VERSION Aether HF <version>` —
   three words, the shape of the published reply, so a host that takes the version from the
-  fourth token finds one (VarAC does); the name is this modem's.
+  fourth token finds one (VarAC does); the name is this modem's. A stable release says its
+  number with `-stable` glued on (`Aether HF 0.2.0-stable`), a beta its own `-beta.N`: VarAC
+  reads a plain number as a VARA version and refuses one under 4.8.8 (§7).
 
 That last point is a decision, not an oversight. `COMMUNITY-CONCERNS.md` §1 is that a new mode
 lives or dies by how many working gateways it has; §13 is the corollary — a gateway listed as
@@ -96,7 +98,7 @@ Every command is answered with `OK` or `WRONG` unless a specific reply is listed
 | `TUNE <level>` / `TUNE OFF` | `TUNE <level>` keys and plays a steady 1500 Hz tone at the transmit level, for an antenna tuner, for 10 s, the longest tone the modem plays; `TUNE OFF` cuts it short. Drive is set with real bursts (the panel's *Set drive*, the control API's `drive.set`): the waveform's peaks stand 6–7 dB above the tone's | VarAC's TUNE button (16.1.8, on the air 2026-11-19, §7): it sends back the level `TUNE ?` gave it — `TUNE -16`, or `TUNE 0` from a station at full scale — and `TUNE OFF` to stop. Any number is a level and starts the tone. The level is recorded, not acted on, as `DRIVELEVEL`'s is: the tone plays at the operator's transmit level. The tone's keying reaches the program as `PTT ON` and `PTT OFF`, as every keying outside a session does, so a program that keys the radio keys it for the tone. `OK` once understood: a tone the modem refuses — in a session, on a busy channel, or by the rules — is not sent, and nothing more is said (the daemon's log says why). Up to beta.166 the adapter read a number as seconds (0–30) and answered VarAC's level `WRONG`; that form and `TUNE ON`, guesses no program was seen to send, are refused |
 | `TUNE ?` | → `TUNE <dB>`: the transmit level, in decibels below full scale (`20 log₁₀ audio.tx_level`) | VarAC asks after every connection, to keep a level per band, and sends it back with its TUNE button. The scale VARA answers on is not published; decibels below full scale is the one a sine amplitude has an honest reading on |
 | `DRIVELEVEL <n>` | The transmit level a host would set | Recorded, not acted on: the scale is not published, and a wrong guess would change the operator's drive. Setting the drive is the operator's, in Setup. VarAC 16.1.8 says `DRIVELEVEL -6` after every connection, after `TUNE ?` (§7) |
-| `VERSION` | → `VERSION Aether HF <version>` | |
+| `VERSION` | → `VERSION Aether HF <version>` | a stable release's number with `-stable` glued on |
 | `BUFFER` | → `BUFFER <bytes>` | Payload bytes still to send: the program's own bytes, before compression, not yet acknowledged by the other station |
 
 Anything else is answered `WRONG`. A client that got silence could not tell a missing feature
@@ -340,5 +342,6 @@ belongs only on a network the operator controls.
   through the control API. Open from the bench: the scale of VARA's `DRIVELEVEL` and of the level VarAC sends with
   `TUNE`, and a
   `VERSION` form VarAC can parse without a VARA version number in it. VarAC 15.0.18 refuses a
-  version it parses as under 4.8.8 (2026-11-18, §7), and a release without `-beta` would answer
-  `VERSION Aether HF 0.2.0`, which it parses and refuses; the beta form fails to parse and passes.
+  version it parses as under 4.8.8 (2026-11-18, §7); a release without `-beta` answers
+  `VERSION Aether HF 0.2.0-stable` (the author's decision, 2026-11-25), which, like the beta
+  form, it fails to parse and passes.
