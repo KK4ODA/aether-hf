@@ -1276,7 +1276,8 @@ def judge(run: Run, ends: list[str]) -> dict:
     # Winlink Express's timer (report 22 §1): `wle_timer` — one of the programs' timers fired at
     # least once, so the run met what it is about (the receiving program's never does while it is
     # handed data); `wle_held` — no DISCONNECTED reached a program within a minute of any of its
-    # timer DISCONNECTs; `wle_closes` — one did, within two minutes of its first
+    # timer DISCONNECTs, unless the script's own DISCONNECT came between; `wle_closes` — one did,
+    # within two minutes of its first
     wle = [h for h in run.hosts.values() if h.kind == "wle"]
     if expect.get("wle_timer") and not any(h.timer_disconnects for h in wle):
         failures.append("Winlink Express's timer never fired")
@@ -1284,7 +1285,11 @@ def judge(run: Run, ends: list[str]) -> dict:
         fired = host.timer_disconnects
         with host.lock:
             ended = [t for t, what, line in host.log if what == "In:" and line == "DISCONNECTED"]
-        if expect.get("wle_held") and any(t <= e <= t + 60.0 for t in fired for e in ended):
+            asked = [t for t, what, line in host.log if what == "Out:" and line == "DISCONNECT"]
+        own = [d for d in asked if all(abs(d - t) > 0.5 for t in fired)]
+        if expect.get("wle_held") and any(
+            t <= e <= t + 60.0 and not any(t <= d <= e for d in own) for t in fired for e in ended
+        ):
             failures.append(f"{host.station.who}: a timer DISCONNECT ended the session")
         if (
             expect.get("wle_closes")

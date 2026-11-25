@@ -3,7 +3,9 @@ description = """Winlink Express P2P on 80 m at 500 Hz, held to the wall clock: 
 longer than five minutes to cross and less than fifteen. Winlink Express sends DISCONNECT 300 s
 after it writes the message, and every 300 s after, whatever the modem says (report 22 §1). The
 host port holds it while the transfer can finish within 15 minutes at the session's rate
-(ADR-0134 §6), so the message arrives whole and no DISCONNECTED reaches the program early."""
+(ADR-0134 §6), so the message arrives whole and no DISCONNECTED reaches the program early. The
+sender hangs up once the modem says the last of it is sent, as a B2F program does after its
+exchange."""
 tags = ["80m", "host", "winlink", "realtime"]
 bandwidth = 500
 seconds = 1200
@@ -24,7 +26,7 @@ snr_db = 3.0
 cfo_hz = 2.0
 
 [script]
-steps = ["host a wle", "host b wle", "host-connect", "host-send 12000", "host-disconnect"]
+steps = ["host a wle", "host b wle", "host-connect", "host-send 12000", "host-hangup a"]
 
 [expect]
 connected = true
