@@ -119,6 +119,12 @@ In **VarAC**, *Settings*:
 With no host program attached, Aether refuses to start anything (the Session tab says why):
 nobody would key the radio.
 
+VarAC's **Frequency Scanner** moves the radio between the frequencies of its plan without a word
+to Aether. If you use it, tick **Scans channels** in Setup step 5: Aether tells VarAC `PENDING` as
+soon as a frame that may be a call starts to arrive, VarAC's scanner stays on that frequency while
+the `PENDING` stands, and Aether says `CANCELPENDING` if it was not a call for you (ADR-0138 §8).
+Clear, a call that arrives as the scanner moves can be answered on the other band.
+
 VarAC's **TUNE** button plays Aether's tuner tone: a steady tone for ten seconds at most, which
 VarAC keys the radio for (`PTT ON`) and can stop sooner (`TUNE OFF`). The tone plays at Aether's
 transmit level. The level VarAC sends with it, and its drive level (`DRIVELEVEL`), change nothing

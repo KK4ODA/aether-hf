@@ -1,0 +1,36 @@
+name = "40m-varac-scanner-500"
+description = """VarAC 15.0.18's Frequency Scanner as the bench found it
+(docs/research/varac-scanner/01-results.md): it changes frequency without a word to the modem, a
+PENDING or a session holds it and it moves 1.2 s after, a BUSY ON lengthens one stay by its
+Busy hold time (10 s), and its 5 s setting stays 6.1 s. It scans 7.105 and 14.105 MHz and keys its own radio, with Scans
+channels on; the caller, on 7.105 MHz, makes ten calls. The station tells the scanner PENDING as
+soon as a call starts to arrive, and every answer must go on the caller's dial (ADR-0138 §8)."""
+tags = ["40m", "host", "varac", "scan"]
+bandwidth = 500
+seconds = 1800
+seed = 83
+max_speed = 3
+connect_within_s = 120
+
+[stations.a]
+callsign = "KK4ODA"
+host = true
+dial_hz = 7105000
+[stations.b]
+callsign = "WD5EMA"
+host = true
+ptt = "host"
+host_scans = true
+dial_hz = 7105000
+
+[path]
+profile = "good"
+snr_db = 6.0
+cfo_hz = 3.0
+
+[script]
+steps = ["host a varac", "host b varac dials=7105000,14105000 dwell=6.1 moves=silent holds=pending busy_hold=10 after_hold=1.2", "wait 5", "host-calls 10"]
+
+[expect]
+connected = true
+idle = true

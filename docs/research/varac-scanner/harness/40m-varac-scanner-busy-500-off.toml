@@ -1,0 +1,38 @@
+name = "40m-varac-scanner-busy-500-off"
+description = """VarAC's Frequency Scanner as the bench found it, scanning 7.105 and 14.105 MHz,
+while another Aether pair runs a long transfer on 14.105 MHz; the caller on 7.105 MHz makes ten
+calls. Scans channels off."""
+tags = ["40m", "host", "varac", "scan"]
+bandwidth = 500
+seconds = 1800
+seed = 84
+max_speed = 3
+connect_within_s = 120
+
+[stations.a]
+callsign = "KK4ODA"
+host = true
+dial_hz = 7105000
+[stations.b]
+callsign = "WD5EMA"
+host = true
+ptt = "host"
+host_scans = false
+dial_hz = 7105000
+[stations.c]
+callsign = "N4CAA"
+dial_hz = 14105000
+[stations.d]
+callsign = "WC4Y"
+dial_hz = 14105000
+
+[path]
+profile = "good"
+snr_db = 6.0
+cfo_hz = 3.0
+
+[script]
+steps = ["host a varac", "host b varac dials=7105000,14105000 dwell=6.1 moves=silent holds=pending busy_hold=10 after_hold=1.2", "call c WC4Y", "wait 30", "send c 60000", "wait 5", "host-calls 10"]
+
+[expect]
+connected = true

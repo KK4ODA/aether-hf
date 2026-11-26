@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.29.1 |
+| **Version** | 1.30.0 |
 | **Updated** | 2026-11-26 |
 | **Describes** | Aether HF 0.2.0-beta.181 |
 | **Licence** | CC BY 4.0 |
@@ -636,11 +636,11 @@ quiet leaves the signal inside the sound card's own noise.
   - Never give it 8515, or 8514 (whose data port would be 8515). That is Aether's control port,
     which this window and RadioPost use. Setup refuses a port number that another of the
     station's ports uses, and so does Aether at start.
-- **Scans channels**: tick it when RMS Trimode scans more than one channel, as the words after
-  the box say. Aether then keeps Trimode on the channel a call is arriving on, and does not answer
-  a call it heard partly on another ([A Winlink gateway](#22-a-winlink-gateway)). Leave it
-  unchecked for Trimode on one channel, and for VarAC: it does nothing for VarAC's scanner.
-  Greyed while **External programs** is off.
+- **Scans channels**: tick it when RMS Trimode scans more than one channel, or when VarAC's
+  Frequency Scanner is on, as the words after the box say. Aether then keeps the program on the
+  channel a call is arriving on, and does not answer a call it heard partly on another
+  ([A Winlink gateway](#22-a-winlink-gateway), [VarAC's Frequency Scanner](#varacs-frequency-scanner)).
+  Leave it unchecked for a program on one channel. Greyed while **External programs** is off.
 - **KISS programs**: opens a KISS-over-TCP port for APRS and packet programs, and for VarAC's
   broadcasts and relay notifications ([KISS programs](#24-kiss-programs)).
 - **VarAC**: VarAC's folder (found by itself at `C:\VarAC`), the VarAC profile to copy, and
@@ -1301,6 +1301,23 @@ levels in *VarAC default* are kept too.
   administrator to write in, and Aether says so.
 - The **×** at the end of the offer stops it. A later version's change is offered again.
 
+### VarAC's Frequency Scanner
+
+VarAC's Frequency Scanner moves the radio between the frequencies of its plan without telling
+Aether. A call can start on one frequency and be answered after VarAC has moved to the next, so
+Aether transmits where nobody called. If you use the scanner, tick **Scans channels** in Setup
+step 5. Aether then tells VarAC a call may be coming as soon as one starts to arrive, and VarAC
+stays on that frequency until the call is answered or turns out not to be for you. Each time,
+VarAC adds a row to its chat pane and writes *INCOMING CONNECTION REQUEST* in its traffic log, then
+*NO LUCK* when it was not a call for you.
+
+In the scenario harness, with the box ticked, 84 of 90 calls to a scanning VarAC were answered, all
+on the caller's frequency. With it clear, 79 of 90 were, and one answer went out on the other band.
+Other Aether stations busy on one of the scanner's frequencies cost the box calls: each of their
+frames holds VarAC there for a few seconds, about 57 times in 13 minutes, and 11 of 30 calls on the
+other frequency were answered (17 of 30 with the box clear, and one answer on the wrong band). Signals
+of other modes do not hold the scanner.
+
 ### Finding Winlink's programs
 
 On Windows, Aether finds Winlink Express, RMS Trimode and RMS Packet. Tick a program's row and it
@@ -1868,3 +1885,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.28.0 | 2026-11-25 | [A Winlink gateway](#22-a-winlink-gateway): a Trimode that scans several channels is told a call may be coming as soon as one starts to arrive, and stays on its channel; a call heard partly while Trimode was not listening is not answered (ADR-0138). |
 | 1.29.0 | 2026-11-26 | Setup step 5's **Scans channels**: tick it for an external program that moves the radio between channels as it scans, such as RMS Trimode with more than one channel. Only then does Aether hold the program for a call arriving and refuse a call heard across one of its steps ([A Winlink gateway](#22-a-winlink-gateway)); a Trimode on one channel answers as before 1.28.0. Leave it clear for VarAC's Frequency Scanner. |
 | 1.29.1 | 2026-11-26 | Setup step 5's **Scans channels** says on screen what it is for: *On (RMS Trimode with more than one channel; leave unchecked for VarAC)*. VarAC's scanner was tried on the bench, and the box does nothing for it. |
+| 1.30.0 | 2026-11-26 | Setup step 5's **Scans channels** is for VarAC's Frequency Scanner too: *On (RMS Trimode with more than one channel, or VarAC's scanner)*. Ticked, Aether tells VarAC a call may be coming as soon as one starts to arrive, and VarAC's scanner stays on that frequency ([VarAC's Frequency Scanner](#varacs-frequency-scanner)). |

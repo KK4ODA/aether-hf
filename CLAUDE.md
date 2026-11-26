@@ -3710,15 +3710,27 @@ and `host-calls N` makes N calls at drawn gaps. Two stations at 500 Hz, 30 s a f
 case: the box off answered 29–30 of 30 when VarAC holds for `PENDING` or `BUSY ON`, and 22–24 with 3
 wrong-band answers when it holds only for a session (a both-ways try is taken at its OFDM part and
 its acceptance keys 5.4 s later); the box on answered 14 of 30 (the beat taken as unknown after a
-`PENDING` that came to nothing, until a `LISTEN ON` a 30 s scanner sends only at its next step). So
-the box is for Trimode, and stays clear for VarAC until the bench says what VarAC does. The
+`PENDING` that came to nothing, until a `LISTEN ON` a 30 s scanner sends only at its next step). The
 bench is `docs/research/varac-scanner/00-bench.md` (seven runs on the second PC: the stay, `BUSY
 ON`, `PENDING`, a `PENDING` left open, a session, the modem keying, beacons) with
 `tools/varac_scan_bench.py`: a stand-in modem on 8300/8301 that answers as the adapter does an idle
 program (`IAMALIVE` every 10 s, left out of the log), and a pass-through on 4532 to `rigctld -m 1`
 on 4533 that marks each frequency change a `move`, one `timeline.log`, plans of `moveN +S LINE`,
 `inject.txt`, and `report` (the stay, VarAC's lines within 3 s of a change, the changes inside each
-hold).
+hold). **What it found** (`01-results.md`, 2026-11-26): VarAC moves silently, a `PENDING` holds it as
+long as it stands, a `BUSY ON` adds one Busy hold time (10 s) to a stay, it retunes while keyed
+outside a `PENDING` or a session, and stays 6.1/11.2 s at its 5/10 s settings: the stand-in's
+`moves=silent holds=pending busy_hold=10`. **§8 (the author's go):** with the box on, a program that
+has listened without a break since its first `LISTEN ON` (`host_listens_steadily`) is told `PENDING`
+at once when a frame that may be a call arrives. With the stand-in's `after_hold=1.2` (VarAC moves
+1.2 s after a hold ends), on a quiet band box clear answered 79 of 90 calls with 1 on the wrong band,
+box on 84 of 90 with none; with another Aether pair busy on one of its frequencies, 17 of 30 against
+11 of 30 (171 holds in three draws), the cost the author accepted; Trimode's scenarios 14/14. Not
+built: no early `PENDING` for a few seconds after another session's frame decodes. The scenarios are
+in `docs/research/varac-scanner/harness/`. The panel says *On (RMS Trimode with more than one
+channel, or VarAC's scanner)*; `40m-varac-scanner-500` is the tree scenario; the runner's
+`send c N` queues at any station. `dial_faults` had taken a try keyed 20 ms after the caller's
+identifier to end with it (two false faults; it now takes the latest-starting span).
 Owed: the real Trimode told `PENDING` for frames that are not calls, many times an evening, and
 scanning channels on the air. Open: a gateway accepting a fourth 2300 Hz try after the caller has
 moved its next to 500 Hz (ADR-0058) sits in an empty session until its link timeout.

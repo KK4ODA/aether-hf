@@ -3,7 +3,8 @@
 **Status:** accepted, 2026-11-25 (the author's go after KK4ODA-1's sessions of that evening). The
 station and the VARA adapter: **no wire change.** Amended 2026-11-26 (§6, the author's go): the
 rules apply only with `[host] scans` on, a configuration key (schema 16); §7 is a scanning VarAC on
-the harness.
+the harness. Amended again the same day (§8, the author's go): with the box on, a program that
+listens without a break, as VarAC's Frequency Scanner does, is told `PENDING` at once.
 
 ## 1. Context
 
@@ -275,3 +276,76 @@ What would settle it is on the bench: a scratch VarAC whose rig control is Hamli
 lines to the modem and its frequency changes share one timeline, and a plan injects `PENDING`,
 `BUSY ON`, a session or `PTT ON` just before a change; `docs/research/varac-scanner/00-bench.md`
 is the procedure, seven runs on the second bench PC.
+
+## 8. A scanning VarAC is told `PENDING` at once (2026-11-26)
+
+The bench answered §7's question (`docs/research/varac-scanner/01-results.md`, VarAC 15.0.18,
+Hamlib's dummy rig). VarAC's Frequency Scanner says nothing to the modem when it changes frequency.
+A `PENDING` holds it for as long as the `PENDING` stands (260 s, until the modem ended it), and so
+does a session. A `BUSY ON` lengthens one stay by the scanner's Busy hold time (10 s), and the
+modem's `PTT ON` holds nothing: VarAC retuned the radio twice while keyed. Its stays measured
+6.1 s at its 5 s setting and 11.2 s at 10 s; the harness takes 31.1 s for 30 s, the same 1.1 s
+more, unmeasured. It moved 1.2 s after a `CANCELPENDING` and 1.3 s after a `DISCONNECTED` whose
+stay had run out while it was held. The harness's stand-in takes all of that as `moves=silent
+holds=pending busy_hold=10 after_hold=1.2` with those stays (§7's cases stayed a whole dwell after
+a hold), and the channel server reports every change of a station's dial inside one of its keyed
+spans (`keyed_moves`: none in any run below).
+
+With **Scans channels** clear, the station said `PENDING` to such a VarAC only once it had decoded
+the call. A both-ways try (ADR-0126) is decoded at its OFDM part, and the acceptance keys after its
+tone part, 5.4 s later: a scanner that stays 6 s can move in between. The author's go: with
+`[host] scans` on, a program with no beat, one that has listened without a break since its first
+`LISTEN ON`, is told `PENDING` at once when a frame that may be a call starts to arrive, once it
+has listened 0.3 s (`host_listens_steadily` in `claims.rs`, `advance_call_arriving` in `host.rs`).
+Nothing says when such a program moves next, so there is no window end to keep clear of, and the
+`PENDING` holds it. `CANCELPENDING` follows as in §2.2 when nothing came of it. A program that steps
+on `LISTEN`, as Trimode does, has turned `LISTEN` off by its first step and keeps §2.2's timing;
+§2.1's and §2.3's refusals need a beat and never apply to a steady listener. With the box clear
+nothing changes.
+
+Measured on the harness, three draws of ten calls a case, the same seeds in both arms: VarAC on
+7.105 and 14.105 MHz at 500 Hz on Good at 6 dB, the caller on 7.105 MHz. The busy case adds another
+Aether pair on 14.105 MHz running a 60 kB transfer for most of the run (12 to 17 minutes). The
+scenarios are in `docs/research/varac-scanner/harness/`.
+
+| Case | Clear: answered | Clear: on the wrong band | On: answered | On: on the wrong band |
+|---|---|---|---|---|
+| 6.1 s stays (5 s set) | 28 of 30 | 0 | 30 of 30 | 0 |
+| 11.2 s stays (10 s set) | 23 of 30 | 0 | 24 of 30 | 0 |
+| 31.1 s stays (30 s set) | 28 of 30 | 1 | 30 of 30 | 0 |
+| the three, quiet band | 79 of 90 | 1 | 84 of 90 | 0 |
+| 6.1 s stays, another pair busy on 14.105 MHz | 17 of 30 | 1 | 11 of 30 | 0 |
+
+On the quiet band, 17 `PENDING`s came to nothing, each a real try the station heard only the end
+of, having reached the caller's dial mid-try; each held the scanner 5.7 to 7.5 s (median 5.8 s).
+The calls left unanswered are ones whose tries all fell while the scanner was on the other
+frequency. On the busy band every frame of the other pair's transfer is a frame that may be a call:
+171 `PENDING`s came to nothing in the three draws, holding the scanner 1.7 to 11.5 s each (median
+7.1 s), and the box answered 6 calls fewer, in every draw (4, 5 and 2 of 10 against 6, 4 and 7).
+VarAC's share of time on the busy frequency overlapped between the arms (54 to 73 % on, 54 to 74 %
+clear: its own busy rule adds 10 s to a stay there), so the cost is the holds' timing more than
+their length. VarAC writes *INCOMING CONNECTION REQUEST* and *NO LUCK* in its traffic log for each,
+about 57 pairs in 13 minutes. With the box clear, one busy draw keyed an acceptance on 14.105 MHz
+with no call there, during the other pair's session, and one quiet draw did the same. Only Aether frames
+hold the scanner: other modes never reach the confidence a hold needs (ADR-0129 §11, §17), so the
+busy cost grows only as other Aether stations use a VarAC operator's frequencies. The author chose
+the box on for VarAC's scanner with that cost, since an acceptance on a band where nobody called
+transmits over whoever is there (2026-11-26). Not built: leaving out the early `PENDING` for a few
+seconds after the station decodes another session's frame, which would likely recover the busy
+case.
+
+A first count of these cases, before the stand-in took `after_hold`, read 2 wrong-band answers in
+the 11.2 s case in each arm. Both were the judge's: the caller's identifier ended 20 ms before its
+next try began, `dial_faults` took the try to end with the identifier, and the scanner's return to
+the caller's dial mid-try, which is right, counted as a move after the call. The judge now takes
+the latest-starting keyed span that holds the try (`channel_server.py`, a test); the 81 other kept
+runs with faults judge as before.
+
+Trimode is unchanged: the six scenarios whose Trimode scans several channels and
+`80m-trimode-one-band-host-keyed-2300`, two draws each on this build, passed 14 of 14 with no
+acceptance on a dial with no call.
+
+This removes §7's advice to leave the box clear for VarAC. The panel's box now reads *On (RMS
+Trimode with more than one channel, or VarAC's scanner)*, and `40m-varac-scanner-500` (the 6.1 s
+case, box on) is a tree scenario. Not checked: VarAC on the air, VarAC versions other than 15.0.18,
+and how often a real band puts frames as long as a call in front of a scanning VarAC.

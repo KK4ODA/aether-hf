@@ -489,11 +489,12 @@ pub struct HostSection {
     /// client nobody has tried yet.
     #[serde(default)]
     pub trace: bool,
-    /// The program moves the radio between channels in its `LISTEN` steps, as RMS Trimode
-    /// does with several channels (ADR-0138 §6). On, a scanning program is told `PENDING` when
-    /// a frame that may be a call starts arriving, and a call heard across one of its steps is
-    /// not answered. Off by default: a program on one channel loses nothing to either, and a
-    /// call read late in one of its windows is answered as before.
+    /// The program moves the radio between channels as it scans: RMS Trimode with several
+    /// channels in its `LISTEN` steps, `VarAC`'s Frequency Scanner without a word (ADR-0138 §6,
+    /// §8). On, a scanning program is told `PENDING` when a frame that may be a call starts
+    /// arriving, and a call heard across one of its steps is not answered. Off by default: a
+    /// program on one channel loses nothing to either, and a call read late in one of its
+    /// windows is answered as before.
     #[serde(default)]
     pub scans: bool,
 }
@@ -1985,8 +1986,9 @@ bind = "127.0.0.1:8300"
 # Print every line exchanged with the host program, for the first run against a new one.
 trace = false
 # The program moves the radio between channels as it scans (RMS Trimode with several
-# channels). On, it is told PENDING when a frame that may be a call starts arriving, and a
-# call heard across one of its steps is not answered (ADR-0138). Takes effect at once.
+# channels, or VarAC's Frequency Scanner). On, it is told PENDING when a frame that may be a
+# call starts arriving, and a call heard across one of its steps is not answered (ADR-0138).
+# Takes effect at once.
 scans = false
 
 [kiss]
