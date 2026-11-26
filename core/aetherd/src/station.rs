@@ -12230,7 +12230,7 @@ mod tests {
         claim_for_host(&mut air.b, &["KK4XYZ"], true);
         air.a.connect("N0ONE").expect("idle");
         air.run(20.0, |_, _| false);
-        assert!(air.b.take_arrival_news().is_empty());
+        assert_eq!(air.b.take_arrival_news(), Vec::<bool>::new());
         air.a.abort();
         air.run(30.0, |a, _| a.state() == State::Idle);
 
@@ -12244,7 +12244,7 @@ mod tests {
         air.a.send(&[0x55; 2000]);
         air.run(20.0, |_, _| false);
         assert!(air.b.connected());
-        assert!(air.b.take_arrival_news().is_empty());
+        assert_eq!(air.b.take_arrival_news(), Vec::<bool>::new());
     }
 
     #[test]
@@ -12296,7 +12296,7 @@ mod tests {
         advance(&mut station, on + 2.3);
         station.note_call_arriving(&arrival(on + 2.25));
         advance(&mut station, on + 2.4);
-        assert!(station.take_arrival_news().is_empty());
+        assert_eq!(station.take_arrival_news(), Vec::<bool>::new());
         let why = station
             .answered_before_its_step("KK4XYZ")
             .expect_err("about to step");
@@ -12319,7 +12319,7 @@ mod tests {
         let on = station.now();
         station.note_call_arriving(&arrival(on + 0.05));
         advance(&mut station, on + 0.1);
-        assert!(station.take_arrival_news().is_empty());
+        assert_eq!(station.take_arrival_news(), Vec::<bool>::new());
         advance(&mut station, on + 0.4);
         assert_eq!(station.take_arrival_news(), [true]);
         // held, it does not step: late in its window a call is answered all the same
@@ -12337,7 +12337,7 @@ mod tests {
         let now = station.now();
         station.note_call_arriving(&arrival(now));
         advance(&mut station, now + 0.4);
-        assert!(station.take_arrival_news().is_empty());
+        assert_eq!(station.take_arrival_news(), Vec::<bool>::new());
         let why = station
             .answered_before_its_step("KK4XYZ")
             .expect_err("restarted");
