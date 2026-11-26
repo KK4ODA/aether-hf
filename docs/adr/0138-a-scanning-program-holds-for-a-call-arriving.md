@@ -1,7 +1,8 @@
 # ADR-0138: A scanning program holds for a call arriving, and a call heard across its deaf step is not answered
 
 **Status:** accepted, 2026-11-25 (the author's go after KK4ODA-1's sessions of that evening). The
-station and the VARA adapter: **no wire change, no configuration key, no schema bump.**
+station and the VARA adapter: **no wire change.** Amended 2026-11-26 (§6, the author's go): the
+rules apply only with `[host] scans` on, a configuration key (schema 16).
 
 ## 1. Context
 
@@ -192,9 +193,36 @@ Four builds failed the harness before this one held, each for a reason now in §
   2300 Hz after the caller has moved its next to 500 Hz; the caller does not hear the
   acceptance, and the gateway waits in a session nobody is in until its link timeout (one draw of
   `80m-trimode-scans-two-bands-2300`). The rule is ADR-0058's; it is not changed here.
-* **A one-channel Trimode** pays for §2.1 and §2.3 with a try now and then (§4): the station
-  cannot tell a step that moves the radio from one that does not. A setting saying that the
-  external program scans several channels (filled in by the program finder from Trimode's channel
-  table, ADR-0133) would keep a one-channel gateway as it was; it needs a configuration key and so a
-  schema bump, and is the author's call.
+* **A one-channel Trimode** paid for §2.1 and §2.3 with a try now and then (§4): the station
+  cannot tell a step that moves the radio from one that does not. §6 makes the rules a setting.
 
+## 6. Scans channels (2026-11-26)
+
+The author's go: the rules of §2 apply only to a program the operator says moves the radio between
+channels as it scans. `[host] scans` (Setup step 5's **Scans channels**, off by default, live, a
+portable setting, so in profiles) is the station's `program_scans`. Off, no frame arriving is told
+(`note_call_arriving` returns at once), and a call is neither refused for having begun before the
+program's last `LISTEN ON` nor for coming late in one of its windows (`heard_on_its_channel` asks
+§2.1 and §2.3 only when it is on): a program cycling `LISTEN` on one channel is treated as it was
+before this ADR. The beat is still learned either way; it costs nothing. Configuration schema 16
+(`scanning_program`, a step that changes nothing; fixture `0.2.0-beta.179-trimode.toml`); the
+shell's schema history names beta.180. The harness writes `[host] scans` from a scenario station's
+`host_scans` for a schema-16 daemon; the six scenarios whose Trimode scans several channels set it.
+
+Off by default: the operator knows how many channels Trimode scans, and nothing on the VARA
+interface says it, so a one-channel gateway keeps its calls as they were. A gateway
+that scans several channels with the box clear is answered on the wrong band as before this ADR,
+which is what the two-channel scenario with the box clear measures below. The program finder
+(ADR-0133) could tick it from Trimode's channel list; Trimode's file for that has not been read.
+
+Measured on this build, the switch's runs (`--seeds`, three or more draws by seed):
+
+| Scenario | Scans channels | Passed | Notes |
+|---|---|---|---|
+| the six that scan several channels (two, two at 500 Hz, two on busy bands, three, four, four with 80 m twice), 4 draws each | on | 24 of 24 | no acceptance on a dial with no call |
+| `80m-trimode-scans-two-bands-2300` | off | 0 of 4 | every draw accepted on 7101 kHz with no call there, as beta.178 |
+| `80m-trimode-one-band-host-keyed-2300` with the client's two tries, 8 draws | off | 8 of 8 | first calls 8.1–11.1 s, as beta.178 (§4: 2 of 8 took 44 s with the rules on) |
+| `40m-gateway-busy-when-called-2300` and `80m-trimode-one-band-host-keyed-2300`, 3 draws each | off | 6 of 6 | the draw §4 lost passes |
+
+The station tests run both ways: `a_program_on_one_channel_answers_a_call_heard_across_its_step`
+(off) fails when the switch is taken out of `heard_on_its_channel`; the §2 tests set it on.
