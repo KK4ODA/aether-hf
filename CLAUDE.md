@@ -3711,8 +3711,14 @@ case: the box off answered 29–30 of 30 when VarAC holds for `PENDING` or `BUSY
 wrong-band answers when it holds only for a session (a both-ways try is taken at its OFDM part and
 its acceptance keys 5.4 s later); the box on answered 14 of 30 (the beat taken as unknown after a
 `PENDING` that came to nothing, until a `LISTEN ON` a 30 s scanner sends only at its next step). So
-the box is for Trimode, and stays clear for VarAC until the bench says what VarAC does (§7: a
-scratch VarAC on Hamlib's dummy rig and the logging stand-in).
+the box is for Trimode, and stays clear for VarAC until the bench says what VarAC does. The
+bench is `docs/research/varac-scanner/00-bench.md` (seven runs on the second PC: the stay, `BUSY
+ON`, `PENDING`, a `PENDING` left open, a session, the modem keying, beacons) with
+`tools/varac_scan_bench.py`: a stand-in modem on 8300/8301 that answers as the adapter does an idle
+program (`IAMALIVE` every 10 s, left out of the log), and a pass-through on 4532 to `rigctld -m 1`
+on 4533 that marks each frequency change a `move`, one `timeline.log`, plans of `moveN +S LINE`,
+`inject.txt`, and `report` (the stay, VarAC's lines within 3 s of a change, the changes inside each
+hold).
 Owed: the real Trimode told `PENDING` for frames that are not calls, many times an evening, and
 scanning channels on the air. Open: a gateway accepting a fourth 2300 Hz try after the caller has
 moved its next to 500 Hz (ADR-0058) sits in an empty session until its link timeout.

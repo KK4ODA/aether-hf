@@ -270,6 +270,8 @@ for `PENDING` or `BUSY ON` lost nothing here, and one that holds only for a sess
 the wrong band in 3 of 30 calls.
 
 What would settle it is on the bench: a scratch VarAC whose rig control is Hamlib's dummy rig
-(`rigctld -m 1`) and whose modem is the stand-in that logs every line (`vara_standin.py`), with a
-scanning plan of two frequencies. The two logs side by side say whether VarAC tells the modem
-anything when it moves; an injected `PENDING` or `BUSY ON` before a move says whether either keeps it.
+(`rigctld -m 1`) and whose modem is a stand-in, with a scanning plan of two frequencies.
+`tools/varac_scan_bench.py` is both the stand-in and a pass-through to the dummy rig, so VarAC's
+lines to the modem and its frequency changes share one timeline, and a plan injects `PENDING`,
+`BUSY ON`, a session or `PTT ON` just before a change; `docs/research/varac-scanner/00-bench.md`
+is the procedure, seven runs on the second bench PC.
