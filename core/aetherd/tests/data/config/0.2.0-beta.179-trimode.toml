@@ -1,0 +1,38 @@
+# As beta.179 wrote a gateway's file whose RMS Trimode keys the radio: schema 15, the last before
+# `host.scans` (ADR-0138 §6: the external program moves the radio between channels as it scans).
+schema_version = 15
+callsign = "KK4ODA-1"
+
+[operator]
+grid = "EM73tv"
+rig = "FTDX10"
+power_w = 50.0
+
+[audio]
+input = "USB Audio CODEC"
+output = "USB Audio CODEC"
+tx_level = 0.2
+
+[ptt]
+kind = "host"
+lead_ms = 150
+
+[radio]
+bandwidth = 2300
+max_mode = 19
+wait_for_clear = true
+answer_gap_ms = 0
+turnaround_ms = 0
+call_tries = 2
+identify_by = "morse"
+compress = false
+cw_id = true
+cw_id_wpm = 20.0
+
+[host]
+enabled = true
+bind = "127.0.0.1:8300"
+trace = true
+
+[regulatory]
+profile = "none"

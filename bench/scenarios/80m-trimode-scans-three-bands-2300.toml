@@ -20,6 +20,8 @@ dial_hz = 3590000
 callsign = "KK4ODA-1"
 host = true
 ptt = "host"
+# Trimode moves the radio between channels: Setup step 5's Scans channels (ADR-0138 §6)
+host_scans = true
 dial_hz = 3590000
 
 [path]

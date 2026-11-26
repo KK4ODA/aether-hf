@@ -65,7 +65,9 @@ A profile made this way sets:
   now and set the dial to …** is ticked, and its rules check stays on. Switch to the profile later
   from the Profile bar, or move the program to another channel, and set *Dial is at* on the
   Session tab. A gateway that scans several channels leaves the rules check off, as with VARA:
-  Aether cannot tell which channel it is on. The other choice, **Aether**, keys the radio the way
+  Aether cannot tell which channel it is on. Tick **Scans channels** in Setup step 5 for it, so
+  Aether holds Trimode on the channel a call is arriving on and never answers a call it heard
+  partly on another (ADR-0138). The other choice, **Aether**, keys the radio the way
   the program did (CAT on its port, speed and make, or its RTS/DTR line) and keeps the rules
   check on; Aether turns the program's PTT off (Winlink Express's PTT port *External*) and,
   when its radio control is on the same port, sets its radio to *Manual*, because only one

@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.28.0 |
-| **Updated** | 2026-11-25 |
+| **Version** | 1.29.0 |
+| **Updated** | 2026-11-26 |
 | **Describes** | Aether HF 0.2.0-beta.179 |
 | **Licence** | CC BY 4.0 |
 
@@ -636,6 +636,11 @@ quiet leaves the signal inside the sound card's own noise.
   - Never give it 8515, or 8514 (whose data port would be 8515). That is Aether's control port,
     which this window and RadioPost use. Setup refuses a port number that another of the
     station's ports uses, and so does Aether at start.
+- **Scans channels**: tick it when the external program moves the radio between channels as it
+  scans, as RMS Trimode does with more than one channel. Aether then holds the program on a channel
+  while a call comes in there, and does not answer a call it heard partly on another channel
+  ([A Winlink gateway](#22-a-winlink-gateway)). Leave it clear for a program on one channel. Greyed
+  while **External programs** is off.
 - **KISS programs**: opens a KISS-over-TCP port for APRS and packet programs, and for VarAC's
   broadcasts and relay notifications ([KISS programs](#24-kiss-programs)).
 - **VarAC**: VarAC's folder (found by itself at `C:\VarAC`), the VarAC profile to copy, and
@@ -1386,11 +1391,13 @@ starts listening. If Trimode stops listening just as it is told of a call, Aethe
 back and tells it again a second or two later, once it listens.
 
 A Trimode that scans several channels moves the radio in that half second, and a call takes longer
-than Trimode stays on a channel. So Aether tells Trimode a call may be coming as soon as one starts
-to arrive, and Trimode stays on that channel until the call is answered or turns out not to be for
-the gateway. Aether does not answer a call it heard partly while Trimode was not listening, nor one
-it hears just as Trimode is about to move on: the radio may move, and the answer would go out on the
-other band. The caller's next try comes.
+than Trimode stays on a channel. Tick **Scans channels** in Setup step 5 for such a Trimode. Aether
+then tells Trimode a call may be coming as soon as one starts to arrive, and Trimode stays on that
+channel until the call is answered or turns out not to be for the gateway. Aether does not answer a
+call it heard partly while Trimode was not listening, nor one it hears just as Trimode is about to
+move on: the radio may move, and the answer would go out on the other band. The caller's next try
+comes. Leave the box clear for a Trimode on one channel: the radio stays put, and a call heard
+across one of its half seconds is answered.
 
 RMS Trimode starts its modem itself, and closes what it started to restart it. When Trimode starts
 Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no longer closes
@@ -1859,3 +1866,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.26.1 | 2026-11-25 | [The header](#the-header): the **Rung** is not shown outside a session, as the Status tab's **Mode** shows a dash there. It read *Rung 0* after every session, the rung a station starts from before a call has read the path. |
 | 1.27.0 | 2026-11-25 | [Where to read more](#where-to-read-more): two one-page guides to print, Aether with VarAC and Aether with Winlink Express, each as Markdown and as a PDF (`tools/manual/onepage.py`). Setup's last button is **Save**, as the window says; the manual had called it *Save these settings*. |
 | 1.28.0 | 2026-11-25 | [A Winlink gateway](#22-a-winlink-gateway): a Trimode that scans several channels is told a call may be coming as soon as one starts to arrive, and stays on its channel; a call heard partly while Trimode was not listening is not answered (ADR-0138). |
+| 1.29.0 | 2026-11-26 | Setup step 5's **Scans channels**: tick it for an external program that moves the radio between channels as it scans, such as RMS Trimode with more than one channel. Only then does Aether hold the program for a call arriving and refuse a call heard across one of its steps ([A Winlink gateway](#22-a-winlink-gateway)); a Trimode on one channel answers as before 1.28.0. |

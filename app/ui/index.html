@@ -1005,6 +1005,10 @@
                 <label class="check" title="Let an external program (Winlink Express, Pat, VarAC, RMS Trimode) use this station over the VARA-compatible interface; while it is attached it sets the callsign and may move the bandwidth. RadioPost does not need it: leave it unchecked for RadioPost"><input id="host-enabled" title="Let an external program use this station over the VARA-compatible interface; leave it unchecked for RadioPost" type="checkbox" /> On (leave unchecked for RadioPost)</label>
               </div>
               <div class="row">
+                <label for="host-scans" title="Whether the external program moves the radio between channels as it scans: RMS Trimode with more than one channel">Scans channels</label>
+                <label class="check" title="Tick when the external program moves the radio between channels as it scans (RMS Trimode with more than one channel). Aether then tells it PENDING as a call starts arriving, so it stays on that channel, and does not answer a call heard across one of its steps, which would be answered on the next channel. Leave it clear for a program on one channel: it would only cost some calls a try"><input id="host-scans" title="The external program moves the radio between channels as it scans" type="checkbox" /> On</label>
+              </div>
+              <div class="row">
                 <label for="kiss-enabled" title="APRS and packet programs on the KISS port">KISS programs</label>
                 <input id="kiss-host" title="The address the KISS port listens on: 127.0.0.1 lets only programs on this computer in" type="text" class="address" value="127.0.0.1" spellcheck="false" aria-label="KISS listen address" />
                 <input id="kiss-port" title="The KISS port: 8100 is VARA HF's, so a program set up for VARA needs no change" type="text" inputmode="numeric" class="port" value="8100" aria-label="KISS port" />

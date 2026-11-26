@@ -3836,6 +3836,7 @@ async function loadConfig() {
   $("record-send").checked = liveConfig.record?.send_to_project !== false;
   $("record-standing").value = liveConfig.record?.notes ?? "";
   $("host-enabled").checked = liveConfig.host?.enabled === true;
+  $("host-scans").checked = liveConfig.host?.scans === true;
   applyHostOwned();
   $("host-port").value = String(portOf(liveConfig.host?.bind) ?? 8300);
   const kiss = liveConfig.kiss ?? {};
@@ -3904,6 +3905,7 @@ const SETTING_NAMES = {
   "record.send_to_project": "debug mode",
   "host.enabled": "External programs",
   "host.bind": "external programs port",
+  "host.scans": "scans channels",
   "kiss.enabled": "KISS programs",
   "kiss.bind": "KISS address",
   "kiss.rung": "KISS rung",
@@ -4062,6 +4064,8 @@ function applyHostOwned() {
     $(`${id}-host`).hidden = !owned;
   };
   applyCallsignOwner();
+  // only an external program scans channels: greyed while the interface is off
+  $("host-scans").disabled = !$("host-enabled").checked;
   // a profile made from a program's setup keeps the rules with the program keying, at its
   // declared dial (ADR-0133 §7): the fields are shown whenever the rules are on
   const rulesOff = $("reg-profile").value === "none";
@@ -4322,6 +4326,7 @@ function formChanges() {
   changes["record.notes"] = $("record-standing").value.trim();
   changes["audio.tx_level"] = txLevel();
   changes["host.enabled"] = $("host-enabled").checked;
+  changes["host.scans"] = $("host-scans").checked;
   // the Interface is a panel choice, not a modem setting; it is kept so the dropdown
   // comes back to what the operator picked instead of being re-guessed from the devices
   const chosen = PROFILES[Number($("wz-profile").value)];
@@ -7556,7 +7561,7 @@ function wire() {
   for (const id of ["radio-busy-db", "radio-max-key", "radio-answer-gap", "radio-turnaround", "radio-cwid", "radio-cwid-wpm"]) {
     $(id).addEventListener("input", checkModemSettings);
   }
-  for (const id of ["host-port", "update-channel", "host-enabled", "kiss-enabled", "kiss-host", "kiss-port"]) {
+  for (const id of ["host-port", "update-channel", "host-enabled", "host-scans", "kiss-enabled", "kiss-host", "kiss-port"]) {
     $(id).addEventListener("input", checkAppSettings);
   }
   $("btn-kiss-disconnect").addEventListener("click", () => kissDisconnect(null));

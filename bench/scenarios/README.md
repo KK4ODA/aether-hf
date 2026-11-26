@@ -48,6 +48,9 @@ rx_gain_db = 0.0            # the codec driven this much hot, clipping at full s
 cw_id = false               # [radio] cw_id; a US callsign identifies whatever it says
                             # (ADR-0075), and an older build reads cw_id_interval_s
 host = false                # a host (VARA-compatible) port, for the host-* steps
+ptt = "none"                # [ptt] kind: "host" for a station whose host program keys
+host_scans = false          # [host] scans (schema 16): its host program moves the radio
+                            # between channels, as `host b trimode dials=…` does (ADR-0138 §6)
 
 [stations.b]                # the called station, the same keys
 callsign = "KK4XYZ"

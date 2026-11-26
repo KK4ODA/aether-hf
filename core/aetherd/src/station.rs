@@ -143,6 +143,11 @@ pub struct StationConfig {
     /// is off. A call this station's external program would answer, heard with none attached,
     /// says so (report 22 §2).
     pub external_port: Option<u16>,
+    /// The host program moves the radio between channels as it scans (`[host] scans`,
+    /// ADR-0138 §6): it is told of a frame that may be a call, and a call heard across one of
+    /// its steps is not answered. Off, a program cycling `LISTEN` on one channel is treated as
+    /// any other.
+    pub program_scans: bool,
     /// Where session recordings go. `None` means recording is refused.
     pub record_dir: Option<std::path::PathBuf>,
     /// Record every session on its own: start when one connects, stop when it ends. For a
@@ -194,6 +199,7 @@ impl Default for StationConfig {
             identify_by: IdentifyBy::Morse,
             keyed_by_host: false,
             external_port: None,
+            program_scans: false,
             record_dir: None,
             record_auto: false,
             record_program_sessions: false,
@@ -2356,6 +2362,7 @@ impl<P: Ptt> Station<P> {
         // nothing is answered with none attached
         self.config.keyed_by_host = matches!(config.ptt, crate::config::PttConfig::Host { .. });
         self.config.external_port = config.external_port();
+        self.config.program_scans = config.host.scans;
         self.set_regulatory(config.regulatory_in_force());
         // the identifier: on, off and its speed, from the next session on
         let tone_hz = self
@@ -12171,6 +12178,7 @@ mod tests {
         // throughout, is.
         let mut air = Air::new(1.0, 0.0005);
         claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        air.b.config.program_scans = true;
         let _ = air.b.take_events();
         air.a.connect("KK4XYZ").expect("idle");
         // the first try begins to arrive while the program listens
@@ -12195,6 +12203,28 @@ mod tests {
         assert_eq!(air.b.owner(), Some(HOST_PROGRAM));
     }
 
+    #[test]
+    fn a_program_on_one_channel_answers_a_call_heard_across_its_step() {
+        // ADR-0138 §6: with `[host] scans` off, a program that turns its answering off and on
+        // (RMS Trimode does on one channel too) moves no radio, so the try heard across its step
+        // is answered, as before ADR-0138, and the program is told nothing while it arrives.
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        assert!(!air.b.config.program_scans);
+        let _ = air.b.take_events();
+        air.a.connect("KK4XYZ").expect("idle");
+        // the first try begins to arrive, and the program steps while it does
+        air.run(30.0, |_, b| b.rx_until > b.now());
+        assert!(air.b.rx_until > air.b.now());
+        air.run(0.4, |_, _| false);
+        air.b.listen_for(HOST_PROGRAM, false).expect("claimed");
+        air.b.listen_for(HOST_PROGRAM, true).expect("claimed");
+        air.run(30.0, |_, b| b.stats.calls_unanswered >= 1 || b.connected());
+        assert!(air.b.connected(), "{:?}", air.b.take_events());
+        assert_eq!(air.b.stats.calls_unanswered, 0);
+        assert_eq!(air.b.take_arrival_news(), Vec::<bool>::new());
+    }
+
     /// Turn a station's host program's answering off and on like RMS Trimode's scan: windows
     /// of three seconds, half a second deaf, `windows` times.
     fn scan_like_trimode(air: &mut Air, windows: usize) {
@@ -12214,6 +12244,7 @@ mod tests {
         // taken. The program holds meanwhile (it turns nothing off here).
         let mut air = Air::new(1.0, 0.0005);
         claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        air.b.config.program_scans = true;
         scan_like_trimode(&mut air, 3);
         air.run(0.5, |_, _| false);
         air.a.connect("N0ONE").expect("idle");
@@ -12228,6 +12259,18 @@ mod tests {
         // a program that does not scan is told nothing: it moves no radio
         let mut air = Air::new(1.0, 0.0005);
         claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        air.b.config.program_scans = true;
+        air.a.connect("N0ONE").expect("idle");
+        air.run(20.0, |_, _| false);
+        assert_eq!(air.b.take_arrival_news(), Vec::<bool>::new());
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+
+        // nor one that steps its answering with `[host] scans` off (§6): it stays on its channel
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        scan_like_trimode(&mut air, 3);
+        air.run(0.5, |_, _| false);
         air.a.connect("N0ONE").expect("idle");
         air.run(20.0, |_, _| false);
         assert_eq!(air.b.take_arrival_news(), Vec::<bool>::new());
@@ -12237,6 +12280,7 @@ mod tests {
         // nor while a session is up: the session's own frames are not calls
         let mut air = Air::new(1.0, 0.0005);
         claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        air.b.config.program_scans = true;
         scan_like_trimode(&mut air, 3);
         air.a.connect("KK4XYZ").expect("idle");
         air.run(90.0, |a, b| a.connected() && b.connected());
@@ -12256,6 +12300,7 @@ mod tests {
         // the harness's two-band gateway answered such a call after Trimode had moved the radio.
         let mut station = idle_station();
         claim_for_host(&mut station, &["KK4XYZ"], true);
+        station.config.program_scans = true;
         // small blocks: the steps checked are a tenth of a second
         let mut out = vec![0.0f32; 480];
         let mut seed = 0;

@@ -216,6 +216,12 @@ pub const RULES: &[Rule] = &[
               weak or busy station longer (ADR-0126)",
         ..rule("radio.call_tries")
     },
+    Rule {
+        why: "a program that moves the radio between channels as it scans must hold its scan \
+              for a call arriving, and a call heard across one of its steps would be answered \
+              on the next channel (ADR-0138)",
+        ..rule("host.scans")
+    },
     // ── this installation ──────────────────────────────────────────────────────────
     Rule {
         scope: Scope::Machine,

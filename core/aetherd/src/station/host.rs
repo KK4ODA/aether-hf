@@ -145,8 +145,7 @@ impl<P: Ptt> Station<P> {
         } else {
             self.answers_for(&to)
         }
-        .and_then(|()| self.listened_throughout(&to, decoded.start_s))
-        .and_then(|()| self.answered_before_its_step(&to));
+        .and_then(|()| self.heard_on_its_channel(&to, decoded.start_s));
         let Err(why) = answered else {
             return false;
         };
@@ -183,7 +182,8 @@ impl<P: Ptt> Station<P> {
     /// longer than Trimode's 4.4 s on a channel), and the `PENDING` that went only once the
     /// call was taken came after Trimode had moved the radio (KK4ODA-1, 2026-11-25).
     pub(super) fn note_call_arriving(&mut self, arrival: &crate::air::Arrival) {
-        if self.engine.state() != State::Idle
+        if !self.config.program_scans
+            || self.engine.state() != State::Idle
             || arrival.detect_confidence < super::scan::NOTICE_CONFIDENCE
         {
             return;
@@ -274,6 +274,19 @@ impl<P: Ptt> Station<P> {
             )),
             _ => Ok(()),
         }
+    }
+
+    /// Whether a call or probe to `call`, begun at `start_s`, was heard on the channel its
+    /// answer goes out on, or why not (ADR-0138). Asked only of a program that scans channels
+    /// (`[host] scans`, §6): one on a single channel answers on the channel it heard the call
+    /// on, whatever its `LISTEN` steps, and refusing a try read late in one of its windows
+    /// only cost it a try.
+    fn heard_on_its_channel(&self, call: &str, start_s: f64) -> Result<(), String> {
+        if !self.config.program_scans {
+            return Ok(());
+        }
+        self.listened_throughout(call, start_s)
+            .and_then(|()| self.answered_before_its_step(call))
     }
 
     /// What the host program is to hear of frames that may be calls (ADR-0138), oldest first.

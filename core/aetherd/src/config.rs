@@ -489,6 +489,13 @@ pub struct HostSection {
     /// client nobody has tried yet.
     #[serde(default)]
     pub trace: bool,
+    /// The program moves the radio between channels in its `LISTEN` steps, as RMS Trimode
+    /// does with several channels (ADR-0138 §6). On, a scanning program is told `PENDING` when
+    /// a frame that may be a call starts arriving, and a call heard across one of its steps is
+    /// not answered. Off by default: a program on one channel loses nothing to either, and a
+    /// call read late in one of its windows is answered as before.
+    #[serde(default)]
+    pub scans: bool,
 }
 
 fn default_host_bind() -> String {
@@ -796,6 +803,7 @@ impl Default for HostSection {
             enabled: false,
             bind: default_host_bind(),
             trace: false,
+            scans: false,
         }
     }
 }
@@ -959,7 +967,7 @@ pub struct Config {
 /// step that changes nothing) so that version starts from the copy kept before the file was
 /// brought forward, and the shell's restore puts that copy back (beta.57), rather than the
 /// station refusing to start.
-pub const SCHEMA_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 16;
 
 /// The version a file is when it does not say: the first one shipped.
 pub(crate) const fn first_schema() -> u32 {
@@ -986,6 +994,7 @@ pub const MIGRATIONS: &[Migration] = &[
     identifier_at_the_end,
     call_tries,
     identify_by,
+    scanning_program,
 ];
 
 /// Schema 1 → 2, the tone floor (ADR-0013): `radio.max_mode` numbers the rungs of the air's
@@ -1149,6 +1158,11 @@ fn call_tries(_table: &mut toml::Table) {}
 /// key whose default is the Morse identifier every earlier version sends, and the step is for
 /// going back (`<name>.bak-v14`).
 fn identify_by(_table: &mut toml::Table) {}
+
+/// Schema 15 → 16, the scanning program (ADR-0138 §6): nothing moves — `host.scans` is a new
+/// key whose default is the one-channel program every earlier version assumed, and the step is
+/// for going back (`<name>.bak-v15`).
+fn scanning_program(_table: &mut toml::Table) {}
 
 /// Whether a callsign is one the FCC assigns: a prefix of one or two letters (K, N, W, or
 /// AA–AL), a digit, and one to three letters; an SSID or a `/` indicator after it is ignored.
@@ -1649,6 +1663,8 @@ pub const LIVE_KEYS: &[&str] = &[
     "radio.cw_id_wpm",
     // declared in the next call or acceptance, as the identifier's length is
     "radio.identify_by",
+    // read at the next frame that may be a call
+    "host.scans",
     "record.auto",
     "record.notes",
     "record.send_to_project",
@@ -1854,7 +1870,7 @@ pub const EXAMPLE: &str = r#"# Aether HF station configuration.
 # station on the default sound card, which is a good way to listen before transmitting.
 
 # The shape of this file. Leave it: a newer aetherd uses it to bring the file forward.
-schema_version = 15
+schema_version = 16
 
 # Up to nine characters of letters, digits, - and /: an SSID (KK4ODA-1) or a suffix
 # (KK4ODA/P) is part of it. A host program that names its own callsign is answered to too.
@@ -1968,6 +1984,10 @@ enabled = false
 bind = "127.0.0.1:8300"
 # Print every line exchanged with the host program, for the first run against a new one.
 trace = false
+# The program moves the radio between channels as it scans (RMS Trimode with several
+# channels). On, it is told PENDING when a frame that may be a call starts arriving, and a
+# call heard across one of its steps is not answered (ADR-0138). Takes effect at once.
+scans = false
 
 [kiss]
 # The KISS TCP port, for APRS programs, VarAC's broadcasts and packet programs that use VARA's
