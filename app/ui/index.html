@@ -1005,8 +1005,8 @@
                 <label class="check" title="Let an external program (Winlink Express, Pat, VarAC, RMS Trimode) use this station over the VARA-compatible interface; while it is attached it sets the callsign and may move the bandwidth. RadioPost does not need it: leave it unchecked for RadioPost"><input id="host-enabled" title="Let an external program use this station over the VARA-compatible interface; leave it unchecked for RadioPost" type="checkbox" /> On (leave unchecked for RadioPost)</label>
               </div>
               <div class="row">
-                <label for="host-scans" title="Whether the external program moves the radio between channels as it scans: RMS Trimode with more than one channel">Scans channels</label>
-                <label class="check" title="Tick when the external program moves the radio between channels as it scans (RMS Trimode with more than one channel). Aether then tells it PENDING as a call starts arriving, so it stays on that channel, and does not answer a call heard across one of its steps, which would be answered on the next channel. Leave it clear for a program on one channel, and for VarAC's Frequency Scanner: it would only cost calls"><input id="host-scans" title="The external program moves the radio between channels as it scans" type="checkbox" /> On</label>
+                <label for="host-scans" title="For RMS Trimode set to scan more than one channel">Scans channels</label>
+                <label class="check" title="Tick when RMS Trimode scans more than one channel: Aether keeps Trimode on the channel a call is arriving on, and never answers a call it heard partly on another. Leave it unchecked for Trimode on one channel, and for VarAC: it does nothing for VarAC's scanner"><input id="host-scans" title="RMS Trimode scans more than one channel" type="checkbox" /> On (RMS Trimode with more than one channel; leave unchecked for VarAC)</label>
               </div>
               <div class="row">
                 <label for="kiss-enabled" title="APRS and packet programs on the KISS port">KISS programs</label>
