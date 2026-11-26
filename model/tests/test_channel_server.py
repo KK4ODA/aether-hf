@@ -232,6 +232,21 @@ def test_a_radio_moved_by_another_program_is_not_told_to_its_daemon() -> None:
     assert envelope(b.heard).max() < 0.01
 
 
+def test_a_dial_changed_while_keyed_is_reported() -> None:
+    # VarAC 15.0.18's scanner retunes the radio while the modem has it keyed (the bench's R5):
+    # the report names each such change; one made while the station is unkeyed is not one
+    report = {
+        "stations": {
+            "b": {
+                "keyed": [[10.0, 15.0], [30.0, 31.0]],
+                "dials": [[0.0, 7105000], [12.0, 14105000], [20.0, 7105000], [31.0, 14105000]],
+            },
+            "a": {"keyed": [[12.0, 13.0]], "dials": [[0.0, 7105000]]},
+        }
+    }
+    assert cs.keyed_moves(report) == ["b moved to 14105000 at 12.0 s while keyed"]
+
+
 def test_the_level_follows_its_schedule_and_holds_its_ends() -> None:
     t = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
     got = cs.level_at([[5.0, 0.0], [15.0, -20.0]], t)

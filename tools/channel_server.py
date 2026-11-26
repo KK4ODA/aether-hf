@@ -915,6 +915,7 @@ class Server:
     def report(self) -> dict:
         out = self._report()
         out["dial_faults"] = dial_faults(out)
+        out["keyed_moves"] = keyed_moves(out)
         return out
 
     def _report(self) -> dict:
@@ -937,6 +938,7 @@ class Server:
                 for st in self.stations.values()
             },
             "dial_faults": [],
+            "keyed_moves": [],
             "both_keyed_s": round(self.both_keyed / AUDIO_RATE, 3),
             "overlap_s": {k: seconds(v) for k, v in self.overlap.items()},
             "collisions": [[round(x, 3) for x in iv] for iv in self.collisions],
@@ -980,6 +982,20 @@ def dial_faults(report: dict) -> list[str]:
             if any(ended < t <= at for t in moves):
                 faults.append(f"{name} accepted at {at:.1f} s after moving since the call ended")
     return faults
+
+
+def keyed_moves(report: dict) -> list[str]:
+    """Every change of a station's dial while it was keyed: a program that scans retuning a
+    transmitter on the air. VarAC 15.0.18's Frequency Scanner does it whenever the modem keys
+    the radio outside a ``PENDING`` or a session (``docs/research/varac-scanner/01-results.md``,
+    R5). Reported, not judged: the station cannot stop the program."""
+    found = []
+    for name, st in report.get("stations", {}).items():
+        spans = st.get("keyed", [])
+        for at, hz in st.get("dials", [])[1:]:
+            if any(a < at < b for a, b in spans):
+                found.append(f"{name} moved to {hz} at {at:.1f} s while keyed")
+    return found
 
 
 def command(server: Server, on_air: dict[str, Station], line: str) -> None:

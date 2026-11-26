@@ -401,7 +401,12 @@ class Host:
     ``moves=listen`` turns ``LISTEN`` off for the half second it moves, as Trimode does;
     ``holds=none`` stays only while connected, ``holds=pending`` also from a ``PENDING`` to its
     ``CONNECTED`` or ``CANCELPENDING``, ``holds=busy`` also while the modem says ``BUSY ON``. A
-    hold over, it stays a whole dwell more."""
+    hold over, it stays a whole dwell more. ``busy_hold=S`` is VarAC 15.0.18's own busy rule, as
+    the bench found it (``docs/research/varac-scanner/01-results.md``, R1): each ``BUSY ON``
+    lengthens the stay it falls in by S seconds, once, and the scan goes on while the channel
+    stays busy. VarAC 15.0.18 is ``moves=silent holds=pending busy_hold=10``, its stays 6.1 s at its
+    5 s setting and 11.2 s at 10 s; it retunes while the modem keys outside a ``PENDING`` or a
+    session (R5), as the stand-in does."""
 
     def __init__(
         self,
@@ -413,12 +418,16 @@ class Host:
         dwell_s: float = 3.0,
         moves: str = "listen",
         holds: str = "pending",
+        busy_hold_s: float = 0.0,
     ) -> None:
         self.run, self.station, self.kind = run, station, kind
         # how a VarAC scanner (`varac dials=…`) tells the modem of a move, and what holds it
         self.moves, self.holds = moves, holds
         # the modem's last BUSY line: a VarAC scanner with `holds=busy` stays while it is ON
         self.busy = False
+        # VarAC's own busy rule (`busy_hold=`): each BUSY ON lengthens the stay it falls in, once
+        self.busy_hold_s = busy_hold_s
+        self.busy_detections = 0
         # Trimode's channels (`dials=`): each deaf step moves the radio to the next, as
         # KK4ODA-1's moved its FTDX10 between 3590.0 and 7101.0 kHz every 4.4 s (2026-11-25),
         # over a CAT link of its own the station cannot read (`move` in the channel server).
@@ -588,6 +597,8 @@ class Host:
                         # "Pending Vara connection cancelled. Restarting scanner"
                         self.restart_at = self.run.air_s() + 1.5
                 elif line in ("BUSY ON", "BUSY OFF"):
+                    if line == "BUSY ON" and not self.busy:
+                        self.busy_detections += 1
                     self.busy = line == "BUSY ON"
                 elif line.startswith("BUFFER"):
                     with self.lock, contextlib.suppress(ValueError):
@@ -780,7 +791,13 @@ class Host:
         stay = random.Random(seed).uniform(0.0, self.dwell_s)
         while not self.closed:
             began = self.run.air_s()
+            seen = self.busy_detections
             while not self.closed and self.run.air_s() < began + stay:
+                if self.busy_hold_s and self.busy_detections > seen:
+                    # "Extending hold time by 10 as the frequency was busy"
+                    seen = self.busy_detections
+                    stay += self.busy_hold_s
+                    self.note("Scan:", f"busy: the stay {self.busy_hold_s:g} s longer")
                 time.sleep(POLL_S)
             stay = self.dwell_s
             if self.closed:
@@ -1085,6 +1102,7 @@ def step(run: Run, text: str) -> bool:
             dwell_s=float(options.get("dwell", 3.0)),
             moves=options.get("moves", "listen"),
             holds=options.get("holds", "pending"),
+            busy_hold_s=float(options.get("busy_hold", 0.0)),
         )
         run.wait("host attached", lambda: False, 2, note=False)
         return True
