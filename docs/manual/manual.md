@@ -639,8 +639,9 @@ quiet leaves the signal inside the sound card's own noise.
 - **Scans channels**: tick it when the external program moves the radio between channels as it
   scans, as RMS Trimode does with more than one channel. Aether then holds the program on a channel
   while a call comes in there, and does not answer a call it heard partly on another channel
-  ([A Winlink gateway](#22-a-winlink-gateway)). Leave it clear for a program on one channel. Greyed
-  while **External programs** is off.
+  ([A Winlink gateway](#22-a-winlink-gateway)). Leave it clear for a program on one channel, and
+  for VarAC's Frequency Scanner: in Aether's simulated tests of it, the box only cost calls.
+  Greyed while **External programs** is off.
 - **KISS programs**: opens a KISS-over-TCP port for APRS and packet programs, and for VarAC's
   broadcasts and relay notifications ([KISS programs](#24-kiss-programs)).
 - **VarAC**: VarAC's folder (found by itself at `C:\VarAC`), the VarAC profile to copy, and
@@ -1866,4 +1867,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.26.1 | 2026-11-25 | [The header](#the-header): the **Rung** is not shown outside a session, as the Status tab's **Mode** shows a dash there. It read *Rung 0* after every session, the rung a station starts from before a call has read the path. |
 | 1.27.0 | 2026-11-25 | [Where to read more](#where-to-read-more): two one-page guides to print, Aether with VarAC and Aether with Winlink Express, each as Markdown and as a PDF (`tools/manual/onepage.py`). Setup's last button is **Save**, as the window says; the manual had called it *Save these settings*. |
 | 1.28.0 | 2026-11-25 | [A Winlink gateway](#22-a-winlink-gateway): a Trimode that scans several channels is told a call may be coming as soon as one starts to arrive, and stays on its channel; a call heard partly while Trimode was not listening is not answered (ADR-0138). |
-| 1.29.0 | 2026-11-26 | Setup step 5's **Scans channels**: tick it for an external program that moves the radio between channels as it scans, such as RMS Trimode with more than one channel. Only then does Aether hold the program for a call arriving and refuse a call heard across one of its steps ([A Winlink gateway](#22-a-winlink-gateway)); a Trimode on one channel answers as before 1.28.0. |
+| 1.29.0 | 2026-11-26 | Setup step 5's **Scans channels**: tick it for an external program that moves the radio between channels as it scans, such as RMS Trimode with more than one channel. Only then does Aether hold the program for a call arriving and refuse a call heard across one of its steps ([A Winlink gateway](#22-a-winlink-gateway)); a Trimode on one channel answers as before 1.28.0. Leave it clear for VarAC's Frequency Scanner. |

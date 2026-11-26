@@ -2,7 +2,8 @@
 
 **Status:** accepted, 2026-11-25 (the author's go after KK4ODA-1's sessions of that evening). The
 station and the VARA adapter: **no wire change.** Amended 2026-11-26 (§6, the author's go): the
-rules apply only with `[host] scans` on, a configuration key (schema 16).
+rules apply only with `[host] scans` on, a configuration key (schema 16); §7 is a scanning VarAC on
+the harness.
 
 ## 1. Context
 
@@ -226,3 +227,49 @@ Measured on this build, the switch's runs (`--seeds`, three or more draws by see
 
 The station tests run both ways: `a_program_on_one_channel_answers_a_call_heard_across_its_step`
 (off) fails when the switch is taken out of `heard_on_its_channel`; the §2 tests set it on.
+
+## 7. A scanning VarAC, on the harness only (2026-11-26)
+
+VarAC 15.0.18 added a Frequency Scanner: a plan holds, for each frequency, how long to stay, during
+which hours, whether to beacon and whether to tune, and VarAC moves the radio over its own CAT. Its
+release notes and announcement say nothing of what it tells the modem when it moves, or what keeps
+it on a frequency. The harness's VarAC stand-in takes both as options (`session_matrix.py`'s `Host`):
+`moves=silent` (nothing said) or `moves=listen` (`LISTEN` off for the half second it moves, as
+Trimode), and `holds=none` (only a session), `pending` (a `PENDING` until its `CONNECTED` or
+`CANCELPENDING`) or `busy` (while the modem says `BUSY ON`). The step `host-calls N` makes N calls,
+each 5–40 s after the last is over, the gap drawn from the seed.
+
+Seven cases, three draws each, on this build: two VarAC stations at 500 Hz on Good at 6 dB, one
+scanning 7.105 and 14.105 MHz with 30 s on each and keying its own radio, the other on 7.105 MHz
+making ten calls; 30 calls a case.
+
+| VarAC moves | VarAC holds for | Scans channels | Answered | Answered on the wrong band |
+|---|---|---|---|---|
+| silently | a session only | off | 22 of 30 | 3 |
+| silently | `PENDING` | off | 30 of 30 | 0 |
+| silently | `BUSY ON` | off | 29 of 30 | 0 |
+| with `LISTEN` | a session only | off | 24 of 30 | 3 |
+| with `LISTEN` | a session only | on | 14 of 30 | 0 |
+| with `LISTEN` | `PENDING` | off | 29 of 30 | 0 |
+| with `LISTEN` | `PENDING` | on | 14 of 30 | 0 |
+
+A silent mover gives the station no beat, so the box changes nothing for it, and those cases ran
+with it off. Every wrong-band answer was the same: the call's first try was both ways (ADR-0126),
+the station took it at its OFDM part and said `PENDING`, and the acceptance keyed only after the
+5.4 s tone part ended; a VarAC that does not hold for `PENDING` moved in those seconds (draw
+`s1081` of the silent case: `PENDING` at 61.5 s, the move at 65.7 s, `PTT ON` at 69.1 s).
+
+The box costs a VarAC-like scanner half its calls because two of §2's rules fit Trimode and not a
+long stay. After a `PENDING` that came to nothing the station takes the next step as unknown until
+the program's next `LISTEN ON`; Trimode restarts its scan 1.5 s after `CANCELPENDING`, a scanner on
+a 30 s timer steps up to 30 s later, and every call meanwhile is refused (22 of the 28 refusal
+lines in the six runs with the box on; the log says one a minute for a caller). And the last quarter of a 30 s window is 7.5 s of refusals where an answer
+needs about a second. Neither is changed: VarAC's behaviour is not known, and Trimode's is measured.
+For VarAC the box stays clear (the manual and the panel say so); with it clear, a VarAC that holds
+for `PENDING` or `BUSY ON` lost nothing here, and one that holds only for a session was answered on
+the wrong band in 3 of 30 calls.
+
+What would settle it is on the bench: a scratch VarAC whose rig control is Hamlib's dummy rig
+(`rigctld -m 1`) and whose modem is the stand-in that logs every line (`vara_standin.py`), with a
+scanning plan of two frequencies. The two logs side by side say whether VarAC tells the modem
+anything when it moves; an injected `PENDING` or `BUSY ON` before a move says whether either keeps it.

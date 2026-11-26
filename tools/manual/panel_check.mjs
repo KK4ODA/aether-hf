@@ -43,6 +43,27 @@ const HELD_COMPACT = `(async () => {
 /// Problems found by an expression run in the page: each returns a list of sentences.
 const CHECKS = [
   {
+    scene: "varac",
+    what: "Scans channels: greyed while External programs is off, and a tick is a change to save",
+    page: `(async () => {
+      const out = [], $ = (id) => document.getElementById(id);
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const on = $("host-enabled"), scans = $("host-scans");
+      if (!scans) return ["Setup step 5 has no Scans channels box"];
+      if (on.checked) out.push("the scene has External programs on");
+      if (!scans.disabled) out.push("Scans channels is not greyed while External programs is off");
+      if (!scans.title || !scans.closest("label").title) out.push("Scans channels has no tooltip");
+      on.click();
+      await sleep(300);
+      if (scans.disabled) out.push("Scans channels stays greyed with External programs on");
+      scans.click();
+      await sleep(300);
+      const note = $("setup-unsaved").textContent;
+      if (!note.includes("scans channels")) out.push("the unsaved note reads '" + note + "'");
+      return out;
+    })()`,
+  },
+  {
     scene: "setup-external",
     what: "an external program's callsign and bandwidth: Aether's own greyed, what is in use beside them",
     page: `(() => {

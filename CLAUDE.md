@@ -3695,8 +3695,24 @@ with no call 30 before, 0 after; two channels 2/12 then 10/12 passed, three 0/8 
 listed twice 0/8 then 8/8, one channel 12/12 then 11/11 (one draw lost to a port collision at
 start). The cost on one channel: a try read late in a window or across a step is refused, so
 some calls take one more try (2 of 8 first calls 44 s, not 11, with two tries; one regression
-draw of `40m-gateway-busy-when-called-2300` failed where beta.178 passes); a setting saying the
-external program scans several channels would remove it, and is the author's call (a config key).
+draw of `40m-gateway-busy-when-called-2300` failed where beta.178 passes). **Scans channels**
+(2026-11-26, ADR-0138 §6, the author's go; beta.180): `[host] scans` (off by default, live, in
+profiles; schema 16, `scanning_program`; Setup step 5 under External programs, greyed while it is
+off) is the station's `program_scans`, and only with it on does `note_call_arriving` tell anything
+or `heard_on_its_channel` ask §2.1 and §2.3; off, a program cycling `LISTEN` is treated as before
+ADR-0138. The harness writes it from a scenario station's `host_scans` (schema 16 and up); the six
+multi-channel Trimode scenarios set it. Measured: on, those six 24/24 with no wrong-dial answer;
+off, two channels 0/4 (answered on 40 m), one channel with two tries 8/8 at 8–11 s, the
+gateway-busy draw passes. **A scanning VarAC** (§7, harness only): VarAC 15.0.18's Frequency
+Scanner moves the radio over its own CAT, and its notes say neither what it tells the modem nor what
+holds it; the VarAC stand-in takes `dials=`, `dwell=`, `moves=silent|listen`, `holds=none|pending|busy`,
+and `host-calls N` makes N calls at drawn gaps. Two stations at 500 Hz, 30 s a frequency, 30 calls a
+case: the box off answered 29–30 of 30 when VarAC holds for `PENDING` or `BUSY ON`, and 22–24 with 3
+wrong-band answers when it holds only for a session (a both-ways try is taken at its OFDM part and
+its acceptance keys 5.4 s later); the box on answered 14 of 30 (the beat taken as unknown after a
+`PENDING` that came to nothing, until a `LISTEN ON` a 30 s scanner sends only at its next step). So
+the box is for Trimode, and stays clear for VarAC until the bench says what VarAC does (§7: a
+scratch VarAC on Hamlib's dummy rig and the logging stand-in).
 Owed: the real Trimode told `PENDING` for frames that are not calls, many times an evening, and
 scanning channels on the air. Open: a gateway accepting a fourth 2300 Hz try after the caller has
 moved its next to 500 Hz (ADR-0058) sits in an empty session until its link timeout.
