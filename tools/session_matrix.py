@@ -180,7 +180,7 @@ cw_id = {cw_id}{cw_id_interval}{identify_by}
 [host]
 enabled = {host}
 bind = "127.0.0.1:{host_port}"
-trace = true
+trace = true{host_scans}
 
 [control]
 enabled = true
@@ -392,7 +392,16 @@ class Host:
     called), says the call's bandwidth and ``WINLINK SESSION`` before each ``CONNECT``, and waits on
     the modem's count as Pat does (:data:`PAT_BUFFER_TIMEOUT_S`): connected with bytes the modem
     holds and no ``BUFFER`` line for a minute of wall clock is a fault, and it hangs up as Pat
-    does then. A ``CONNECTED`` without both callsigns is a fault too: Pat panics on one."""
+    does then. A ``CONNECTED`` without both callsigns is a fault too: Pat panics on one.
+
+    ``varac`` with ``dials=`` scans as VarAC's Frequency Scanner (15.0.18) may: a ``dwell`` on each
+    channel, moving the radio over its own CAT. VarAC's notes say what a plan holds (a stay per
+    frequency, hours, a beacon, a tune) and not what it tells the modem or what stops it, so both
+    are options until the bench says: ``moves=silent`` moves the radio and tells the modem nothing,
+    ``moves=listen`` turns ``LISTEN`` off for the half second it moves, as Trimode does;
+    ``holds=none`` stays only while connected, ``holds=pending`` also from a ``PENDING`` to its
+    ``CONNECTED`` or ``CANCELPENDING``, ``holds=busy`` also while the modem says ``BUSY ON``. A
+    hold over, it stays a whole dwell more."""
 
     def __init__(
         self,
@@ -402,8 +411,14 @@ class Host:
         mycall: str = "",
         dials: tuple[int, ...] = (),
         dwell_s: float = 3.0,
+        moves: str = "listen",
+        holds: str = "pending",
     ) -> None:
         self.run, self.station, self.kind = run, station, kind
+        # how a VarAC scanner (`varac dials=…`) tells the modem of a move, and what holds it
+        self.moves, self.holds = moves, holds
+        # the modem's last BUSY line: a VarAC scanner with `holds=busy` stays while it is ON
+        self.busy = False
         # Trimode's channels (`dials=`): each deaf step moves the radio to the next, as
         # KK4ODA-1's moved its FTDX10 between 3590.0 and 7101.0 kHz every 4.4 s (2026-11-25),
         # over a CAT link of its own the station cannot read (`move` in the channel server).
@@ -500,6 +515,8 @@ class Host:
             self.send(line)
         if kind == "trimode":
             threading.Thread(target=self._scan, daemon=True).start()
+        if kind == "varac" and len(self.dials) > 1:
+            threading.Thread(target=self._varac_scan, daemon=True).start()
         if kind == "pat":
             threading.Thread(target=self._pat_waits, daemon=True).start()
         if kind == "wle":
@@ -570,6 +587,8 @@ class Host:
                     if self.held_deaf:
                         # "Pending Vara connection cancelled. Restarting scanner"
                         self.restart_at = self.run.air_s() + 1.5
+                elif line in ("BUSY ON", "BUSY OFF"):
+                    self.busy = line == "BUSY ON"
                 elif line.startswith("BUFFER"):
                     with self.lock, contextlib.suppress(ValueError):
                         self.buffer_count = int(line.split()[1])
@@ -742,6 +761,49 @@ class Host:
                 # held for the call with its LISTEN off: deaf until CANCELPENDING
                 self.held_deaf = True
 
+    def _varac_held(self) -> bool:
+        """What keeps a VarAC scanner on its channel (``holds=``): a session always, and a
+        ``PENDING`` or ``BUSY ON`` when asked."""
+        if self.connected:
+            return True
+        if self.holds == "pending":
+            return self._holding()
+        if self.holds == "busy":
+            return self.busy
+        return False
+
+    def _varac_scan(self) -> None:
+        """VarAC's Frequency Scanner as the options say (the class's note): a dwell on each
+        channel in air time, its first drawn from the seed, then a move; held, it stays, and
+        stays a whole dwell more once the hold is over."""
+        seed = f"{self.run.scenario.get('seed', 1)}:{self.station.who}:varac-scan"
+        stay = random.Random(seed).uniform(0.0, self.dwell_s)
+        while not self.closed:
+            began = self.run.air_s()
+            while not self.closed and self.run.air_s() < began + stay:
+                time.sleep(POLL_S)
+            stay = self.dwell_s
+            if self.closed:
+                return
+            if self._varac_held():
+                while not self.closed and self._varac_held():
+                    time.sleep(POLL_S)
+                continue
+            self.dial_index = (self.dial_index + 1) % len(self.dials)
+            dial = self.dials[self.dial_index]
+            if self.moves == "listen":
+                self.send("LISTEN OFF")
+                self.deaf = True
+            self.note("Move:", f"radio to {dial} Hz")
+            self.run.command(f"move {self.station.who} {dial}")
+            if self.moves == "listen":
+                began = self.run.air_s()
+                while not self.closed and self.run.air_s() < began + 0.5:
+                    time.sleep(POLL_S)
+                self.deaf = False
+                if not self.closed:
+                    self.send("LISTEN ON")
+
     def heard(self, prefix: str) -> int:
         with self.lock:
             return sum(1 for line in self.lines if line.startswith(prefix))
@@ -800,6 +862,11 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         # how it identifies (schema 15, ADR-0127): the scenario's, or --identify-by for all
         method = cfg.get("identify_by", IDENTIFY_BY or "morse")
         identify_by = f'\nidentify_by = "{method}"' if schema >= 15 else ""
+        # the external program moves the radio between channels as it scans (schema 16,
+        # ADR-0138 §6): RMS Trimode with several channels; an older build assumes it does
+        host_scans = (
+            f"\nscans = {str(bool(cfg.get('host_scans', False))).lower()}" if schema >= 16 else ""
+        )
         # the Morse identifier's interval, gone with schema 13 (ADR-0075): an older build reads
         # it, and a scenario may set it for one
         cw_id_interval = (
@@ -809,8 +876,9 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
         )
         config.write_text(
             STATION_TOML.format(
-                schema=min(schema, 15),
+                schema=min(schema, 16),
                 turnaround=turnaround,
+                host_scans=host_scans,
                 call_tries=call_tries,
                 identify_by=identify_by,
                 cw_id_interval=cw_id_interval,
@@ -1005,6 +1073,8 @@ def step(run: Run, text: str) -> bool:
         words = arg.split()
         options = dict(w.split("=", 1) for w in words if "=" in w)
         who, kind, mycall = [*(w for w in words if "=" not in w), "", ""][:3]
+        # `host b varac dials=7105000,14105000 dwell=30 moves=silent holds=pending`: VarAC's
+        # Frequency Scanner, its unknowns as options (Host's note)
         dials = tuple(int(d) for d in options.get("dials", "").split(",") if d)
         run.hosts[who] = Host(
             run,
@@ -1013,6 +1083,8 @@ def step(run: Run, text: str) -> bool:
             mycall,
             dials=dials,
             dwell_s=float(options.get("dwell", 3.0)),
+            moves=options.get("moves", "listen"),
+            holds=options.get("holds", "pending"),
         )
         run.wait("host attached", lambda: False, 2, note=False)
         return True
@@ -1061,6 +1133,47 @@ def step(run: Run, text: str) -> bool:
         run.transfers.append(f"ping {took:.0f} s" if ok and ended else "ping lost")
         run.delivered_ok &= ok
         return ok and ended
+    if word == "host-calls":
+        # `host-calls N [c]`: the client (a unless named) calls b N times, each at a moment drawn
+        # from the seed, 5–40 s after the last call is over, so the calls fall at every point of
+        # a scanning program's cycle. Each answered call is a ping's session (the report, then the
+        # caller's DISCONNECT); each is told in `transfers` ("calls 7 of 10 answered") and how
+        # long the answered ones took (`call a 12.0 s`). A call answered on the wrong channel is
+        # the channel server's to count (the dial invariant)
+        n_text, _, who = arg.partition(" ")
+        who = who or "a"
+        ha, hb = run.hosts[who], run.hosts["b"]
+        draw = random.Random(f"{run.scenario.get('seed', 1)}:{who}:calls")
+        calls_answered = 0
+        for _ in range(int(n_text)):
+            run.wait("between calls", lambda: False, draw.uniform(5.0, 40.0), note=False)
+            was = [h.heard(w) for h in (ha, hb) for w in ("CONNECTED", "DISCONNECTED")]
+            ha.dial(hb.mycall)
+            run.wait(
+                "call over",
+                lambda was=was: ha.heard("CONNECTED") > was[0] or ha.heard("DISCONNECTED") > was[1],
+                float(run.scenario.get("connect_within_s", 180)),
+                note=False,
+            )
+            if ha.heard("CONNECTED") > was[0]:
+                calls_answered += 1
+                run.transfers.append(f"call {who} {ha.connected_at - ha.dialled_at:.1f} s")
+                run.wait("both up", lambda was=was: hb.heard("CONNECTED") > was[2], 30, note=False)
+                hb.write(b"Report: -03 dB")
+                run.wait("report", lambda: False, 10, note=False)
+                ha.send("DISCONNECT")
+            # over on both sides, the gateway's session too, if it took one alone
+            run.wait(
+                "calls ended",
+                lambda was=was: (
+                    ha.heard("DISCONNECTED") > was[1]
+                    and (hb.heard("CONNECTED") == was[2] or hb.heard("DISCONNECTED") > was[3])
+                ),
+                240,
+            )
+        run.transfers.append(f"calls {calls_answered} of {n_text} answered")
+        run.connected = calls_answered > 0
+        return True
     if word == "host-call":
         # `host-call c`: the client calls the gateway and the script goes on — a call made
         # into a gateway busy with another client's session; `host-wait c` sees it through
