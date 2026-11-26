@@ -1,0 +1,3 @@
+# D = 6 s (R0). Each line is the procedure's offset for this D plus one stay, so none falls before move2.
+move2 +2 PENDING
+move2 +32 CANCELPENDING

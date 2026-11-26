@@ -1,0 +1,9 @@
+C:\Dev\AetherBench\varac-scan\r1: 33 events, 6 frequency changes
+stay between changes: median 6.1 s, from 6.1 to 16.1 s
+
+what VarAC said to the modem within 3 s of each change:
+  change 1 at 40.9 s: BW500 (-1.3 s), CHAT ON (-1.3 s), LISTEN ON (-1.3 s), IGNOREKISSDCD ON (-1.3 s), LISTEN CQ (-1.3 s), VERSION (-1.3 s), MYCALL KK4ODA KK4ODA-T (-1.3 s)
+  nothing around 5 of 6 changes
+
+the modem's holds, and the changes inside them:
+  BUSY ON 49.0-79.0 s (30.0 s): 3 changes inside; next change 2.4 s after it ended
