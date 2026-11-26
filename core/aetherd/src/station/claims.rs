@@ -767,6 +767,20 @@ impl<P: Ptt> Station<P> {
             .map(|claim| claim.listening_since)
     }
 
+    /// Whether the host program attached listens without a break, and has for long enough to
+    /// take a `PENDING`: it has never turned `LISTEN` off since it first turned it on. `VarAC`
+    /// 15.0.18 says `LISTEN ON` once and its Frequency Scanner moves the radio without a word to
+    /// the modem (`docs/research/varac-scanner/01-results.md`); a program that scans on its
+    /// `LISTEN` steps, as RMS Trimode does, has turned it off by its first step (ADR-0138 §8).
+    pub(super) fn host_listens_steadily(&self, now: f64) -> bool {
+        self.claims.list.iter().any(|claim| {
+            claim.connection.kind == ConnectionKind::Host
+                && claim.listening
+                && !claim.first_window_closed
+                && now - claim.listening_since >= ScanBeat::SETTLE_S
+        })
+    }
+
     /// The host program's scan, if it listens now and scans (ADR-0138).
     pub(super) fn host_scan(&self) -> Option<ScanBeat> {
         self.claims

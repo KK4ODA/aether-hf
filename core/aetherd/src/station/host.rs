@@ -211,8 +211,10 @@ impl<P: Ptt> Station<P> {
 
     /// Tell a scanning program of a frame that may be a call once it can take it, and that
     /// nothing came of the frames once they are over and reported (ADR-0138). A program that
-    /// does not scan never moves the radio and is told nothing; one about to step its scan is
-    /// not told either, since the `PENDING` would meet the `LISTEN OFF` its scan has decided.
+    /// steps its scan on `LISTEN` is told once it has listened a moment, and not when about to
+    /// step, since the `PENDING` would meet the `LISTEN OFF` its scan has decided; one that
+    /// listens without a break while it scans (`VarAC`) is told at once (§8). Only with
+    /// `[host] scans` on: a program on one channel moves no radio and is told nothing.
     pub(super) fn advance_call_arriving(&mut self, now: f64) {
         // turned off, or off and on again: whatever it held for is over
         if let Some(held) = self.host.held_since
@@ -231,6 +233,14 @@ impl<P: Ptt> Station<P> {
                     self.host.arrival_news.push(true);
                 }
                 Some(_) => {}
+                // a program that scans without a word to the modem (VarAC's Frequency Scanner):
+                // told at once, since nothing says when it will move next, and a PENDING holds
+                // it on the channel the call is arriving on (ADR-0138 §8)
+                None if self.host_listens_steadily(now) => {
+                    self.host.arrival_wanted = false;
+                    self.host.held_since = Some(now);
+                    self.host.arrival_news.push(true);
+                }
                 None => self.host.arrival_wanted = false,
             }
         }

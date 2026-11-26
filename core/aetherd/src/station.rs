@@ -12256,10 +12256,22 @@ mod tests {
         air.a.abort();
         air.run(30.0, |a, _| a.state() == State::Idle);
 
-        // a program that does not scan is told nothing: it moves no radio
+        // a program that listens without a break while it scans (VarAC's Frequency Scanner,
+        // §8) is told at once, and told when nothing came of it
         let mut air = Air::new(1.0, 0.0005);
         claim_for_host(&mut air.b, &["KK4XYZ"], true);
         air.b.config.program_scans = true;
+        air.a.connect("N0ONE").expect("idle");
+        air.run(30.0, |_, b| b.host.arrival_news.contains(&false));
+        let news = air.b.take_arrival_news();
+        assert_eq!(news.first(), Some(&true), "{news:?}");
+        assert_eq!(news.last(), Some(&false), "{news:?}");
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+
+        // with `[host] scans` off it is told nothing: a program on one channel moves no radio
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
         air.a.connect("N0ONE").expect("idle");
         air.run(20.0, |_, _| false);
         assert_eq!(air.b.take_arrival_news(), Vec::<bool>::new());
