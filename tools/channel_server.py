@@ -955,16 +955,16 @@ def dial_faults(report: dict) -> list[str]:
     own dial, and its station has not moved since that call ended. A station that reaches the
     caller's dial during a try hears the rest of it — a both-ways try's floor part — and answers
     it rightly; one that heard a call and moved before answering it did not. A call's end is the
-    end of its caller's keyed span that holds its start."""
+    end of its caller's keyed span that holds its start: the latest-starting one, since a caller
+    can key a try 20 ms after the end of its identifier, inside the tolerance of both spans."""
     stations = report.get("stations", {})
     calls = []
     for name, st in stations.items():
         for tx in st.get("transmissions", []):
             if any(f.get("kind") == "ConnectReq" for f in tx.get("frames", [])):
                 start = tx["air_s"]
-                end = next(
-                    (b for a, b in st.get("keyed", []) if a - 0.05 <= start <= b + 0.05), start
-                )
+                holding = [(a, b) for a, b in st.get("keyed", []) if a - 0.05 <= start <= b + 0.05]
+                end = max(holding)[1] if holding else start
                 calls.append((start, end, tx.get("dial"), name))
     calls.sort()
     faults = []

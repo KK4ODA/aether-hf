@@ -247,6 +247,37 @@ def test_a_dial_changed_while_keyed_is_reported() -> None:
     assert cs.keyed_moves(report) == ["b moved to 14105000 at 12.0 s while keyed"]
 
 
+def test_a_try_keyed_just_after_an_identifier_ends_with_its_own_span() -> None:
+    # draw 83 of the 10 s VarAC scanner: the caller's identifier ended 20 ms before its second
+    # try began, and the try was taken to end with the identifier; the scanner came back to the
+    # caller's dial mid-try, heard its tone part and answered it there, which is right
+    def call(at: float) -> dict:
+        return {"air_s": at, "dial": 7105000, "frames": [{"kind": "ConnectReq"}]}
+
+    report = {
+        "stations": {
+            "a": {
+                "keyed": [[190.45, 194.87], [194.89, 201.724]],
+                "transmissions": [
+                    {"air_s": 190.45, "dial": 7105000, "frames": []},
+                    call(194.89),
+                ],
+            },
+            "b": {
+                "keyed": [[201.99, 205.659]],
+                "dials": [[0.0, 7105000], [185.3, 14105000], [196.5, 7105000]],
+                "transmissions": [
+                    {"air_s": 201.99, "dial": 7105000, "frames": [{"kind": "Accept"}]}
+                ],
+            },
+        }
+    }
+    assert cs.dial_faults(report) == []
+    # moved away after the try ended, and back: the answer went where the call was not heard
+    report["stations"]["b"]["dials"] = [[0.0, 7105000], [201.8, 14105000], [201.9, 7105000]]
+    assert cs.dial_faults(report) == ["b accepted at 202.0 s after moving since the call ended"]
+
+
 def test_the_level_follows_its_schedule_and_holds_its_ends() -> None:
     t = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
     got = cs.level_at([[5.0, 0.0], [15.0, -20.0]], t)

@@ -401,12 +401,14 @@ class Host:
     ``moves=listen`` turns ``LISTEN`` off for the half second it moves, as Trimode does;
     ``holds=none`` stays only while connected, ``holds=pending`` also from a ``PENDING`` to its
     ``CONNECTED`` or ``CANCELPENDING``, ``holds=busy`` also while the modem says ``BUSY ON``. A
-    hold over, it stays a whole dwell more. ``busy_hold=S`` is VarAC 15.0.18's own busy rule, as
-    the bench found it (``docs/research/varac-scanner/01-results.md``, R1): each ``BUSY ON``
-    lengthens the stay it falls in by S seconds, once, and the scan goes on while the channel
-    stays busy. VarAC 15.0.18 is ``moves=silent holds=pending busy_hold=10``, its stays 6.1 s at its
-    5 s setting and 11.2 s at 10 s; it retunes while the modem keys outside a ``PENDING`` or a
-    session (R5), as the stand-in does."""
+    hold over, it stays a whole dwell more, or ``after_hold=S`` seconds: VarAC 15.0.18 moved 1.2 s
+    after a ``CANCELPENDING`` (R2, R3) and 1.3 s after a ``DISCONNECTED`` (R4) whose stay had run
+    out while it was held. ``busy_hold=S`` is VarAC 15.0.18's own busy rule, as the bench found it
+    (``docs/research/varac-scanner/01-results.md``, R1): each ``BUSY ON`` lengthens the stay it
+    falls in by S seconds, once, and the scan goes on while the channel stays busy. VarAC 15.0.18
+    is ``moves=silent holds=pending busy_hold=10 after_hold=1.2``, its stays 6.1 s at its 5 s
+    setting and 11.2 s at 10 s (the harness takes 31.1 s for 30 s); it retunes while the modem keys outside a
+    ``PENDING`` or a session (R5), as the stand-in does."""
 
     def __init__(
         self,
@@ -419,6 +421,7 @@ class Host:
         moves: str = "listen",
         holds: str = "pending",
         busy_hold_s: float = 0.0,
+        after_hold_s: float | None = None,
     ) -> None:
         self.run, self.station, self.kind = run, station, kind
         # how a VarAC scanner (`varac dials=…`) tells the modem of a move, and what holds it
@@ -428,6 +431,8 @@ class Host:
         # VarAC's own busy rule (`busy_hold=`): each BUSY ON lengthens the stay it falls in, once
         self.busy_hold_s = busy_hold_s
         self.busy_detections = 0
+        # how long a VarAC scanner stays once a hold is over (`after_hold=`): a whole dwell unset
+        self.after_hold_s = after_hold_s
         # Trimode's channels (`dials=`): each deaf step moves the radio to the next, as
         # KK4ODA-1's moved its FTDX10 between 3590.0 and 7101.0 kHz every 4.4 s (2026-11-25),
         # over a CAT link of its own the station cannot read (`move` in the channel server).
@@ -805,6 +810,8 @@ class Host:
             if self._varac_held():
                 while not self.closed and self._varac_held():
                     time.sleep(POLL_S)
+                if self.after_hold_s is not None:
+                    stay = self.after_hold_s
                 continue
             self.dial_index = (self.dial_index + 1) % len(self.dials)
             dial = self.dials[self.dial_index]
@@ -1103,6 +1110,7 @@ def step(run: Run, text: str) -> bool:
             moves=options.get("moves", "listen"),
             holds=options.get("holds", "pending"),
             busy_hold_s=float(options.get("busy_hold", 0.0)),
+            after_hold_s=float(options["after_hold"]) if "after_hold" in options else None,
         )
         run.wait("host attached", lambda: False, 2, note=False)
         return True
@@ -1335,9 +1343,9 @@ def step(run: Run, text: str) -> bool:
         return ended
     if word == "send":
         # queued and left to go: what happens to it is for the steps after to see; `send b N`
-        # queues it at the called station
+        # queues it at the called station, `send c N` at station c (a third pair's session)
         who, _, n = arg.rpartition(" ")
-        sender = b if who == "b" else a
+        sender = run.stations.get(who, a)
         call(sender.control, "send", {"data": base64.b64encode(incompressible(int(n), 7)).decode()})
         return True
     if word == "message?":
