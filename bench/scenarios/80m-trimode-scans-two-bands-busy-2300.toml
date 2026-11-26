@@ -1,0 +1,68 @@
+name = "80m-trimode-scans-two-bands-busy-2300"
+description = """80m-trimode-scans-two-bands-2300 on busy bands: a third Aether station on the 40 m
+dial keeps calling a station that is not there, and RTTY and a VARA-class ARQ signal sit at the
+gateway. Each of the third station's tries the gateway hears while on 40 m is a frame that may be
+a call: Trimode is told PENDING and holds its scan, then CANCELPENDING when it was not for it
+(ADR-0138). The client on 80 m must still get through, and no acceptance may go out on 40 m."""
+tags = ["80m", "host", "gateway", "trimode", "scan"]
+bandwidth = 2300
+seconds = 900
+seed = 50
+# a Trimode stand-in scans in air time and the host port's short waits are wall-clock:
+# held to three times real time, a listening window stays a second of wall clock
+max_speed = 3
+connect_within_s = 240
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+call_tries = 6
+dial_hz = 3590000
+[stations.c]
+callsign = "N4CAA"
+dial_hz = 7101000
+call_tries = 6
+[stations.b]
+callsign = "KK4ODA-1"
+host = true
+ptt = "host"
+dial_hz = 3590000
+
+[path]
+profile = "good"
+snr_db = 6.0
+cfo_hz = 2.0
+# the gateway read the truck at 0 to +4 dB, the truck read it at +9 to +11
+[path.a_to_b]
+snr_db = 2.0
+[path.b_to_a]
+snr_db = 9.0
+
+[[qrm]]
+kind = "rtty"
+at = "b"
+audio_hz = 2400
+power_db = -4.0
+profile = "good"
+
+[[qrm]]
+kind = "ofdm-arq"
+at = "b"
+audio_hz = 1500
+power_db = -6.0
+partner_db = -9.0
+profile = "moderate"
+
+[script]
+# then again, as the mobile did at 22:02 after the 22:00 session: it has heard the gateway now,
+# and its call opens with three short OFDM tries
+# the third station calls for 120 s before each of the client's calls; the script waits for
+# every station only at the end, when its last call is over
+steps = ["host a client", "host b trimode dials=3590000,7101000 dwell=3.9", "call c N0NE call_s=120", "wait 6", "host-connect", "host-reply 300", "host-send 120", "host-reply 40", "host-disconnect", "wait 40", "call c N0NE call_s=120", "wait 6", "host-connect", "host-reply 300", "host-send 80", "host-disconnect", "wait_idle 240"]
+
+# the client's calls heard and its messages carried, and no acceptance on a dial with no call
+# (the dial invariant, judged on every run); the third station calls nobody and never ends a
+# session, so neither its end nor its keying beside the others is judged
+[expect]
+connected = true
+delivered = true

@@ -834,6 +834,12 @@ fn serve_commands(
     let mut pending_on_listen = false;
     // when the program last turned LISTEN on: it is told of a held call `LISTEN_ON_SETTLE` after
     let mut listen_on_at: Option<Instant> = None;
+    // A PENDING said for a frame that may be a call while it arrives, before it is decoded
+    // (ADR-0138): a scanning program holds its scan, and the radio stays on the dial the call
+    // is coming in on. It becomes the call's PENDING if the call is taken; if not, the program
+    // hears CANCELPENDING and scans on.
+    let mut arrival_pending = false;
+
     // Since when the program, in its own session, has written nothing on the data port and been
     // handed nothing (from the CONNECTED it was told), and when a DISCONNECT of its was last
     // taken for its inactivity timer and not acted on (ADR-0134)
@@ -972,6 +978,27 @@ fn serve_commands(
                     pending_at = None;
                     held_for_listen = true;
                     untold = true;
+                }
+                // A LISTEN OFF after the PENDING said for a frame still arriving: the program's
+                // scan had decided its deaf step, and a program scanning its channels moves the
+                // radio in it. CANCELPENDING restarts its scan; a call in that frame is not
+                // answered (`Station::listened_throughout`), and the caller's next try comes
+                // (ADR-0138).
+                if was_listening && !host.listening && arrival_pending {
+                    arrival_pending = false;
+                    if pending_connected.is_none() && connected_to.is_none() {
+                        if trace {
+                            eprintln!(
+                                "host (CANCELPENDING: LISTEN OFF crossed the PENDING of a frame \
+                                 still arriving)"
+                            );
+                        }
+                        if !say(&mut writer, &Notification::CancelPending.line()) {
+                            return;
+                        }
+                        pending_said = false;
+                        pending_at = None;
+                    }
                 }
                 let own = connected_to.is_some() || calling;
                 // Winlink Express's P2P inactivity timer (ADR-0134): a DISCONNECT from a program
@@ -1209,6 +1236,45 @@ fn serve_commands(
                         }
                     }
                 }
+                // A frame that may be a call began to arrive while the program listened, or the
+                // frames came to nothing (ADR-0138). The station tells only a program that scans,
+                // once it has listened long enough to take a line and when it is not about to
+                // step (`Station::advance_call_arriving`); it hears PENDING and holds its scan:
+                // KK4ODA-1's
+                // RMS Trimode moved its radio between 80 and 40 m every 4.4 s, and a call decoded
+                // from the part of a tone try heard on 80 m was answered on 40 m once the PENDING
+                // that went with its acceptance came after the move (2026-11-25). Nothing came of
+                // it: CANCELPENDING, and the program scans on.
+                "arriving" => {
+                    let on = event.data["on"].as_bool().unwrap_or(false);
+                    let quiet = connected_to.is_none() && !calling && pending_connected.is_none();
+                    if on && quiet && !pending_said && host.listening {
+                        if trace {
+                            eprintln!("host (PENDING: a frame that may be a call is arriving)");
+                        }
+                        if !say(&mut writer, &Notification::Pending.line()) {
+                            return;
+                        }
+                        pending_said = true;
+                        pending_at = Some(Instant::now());
+                        arrival_pending = true;
+                    }
+                    if !on && arrival_pending {
+                        arrival_pending = false;
+                        if pending_connected.is_none() {
+                            if connected_to.is_none() && !calling {
+                                if trace {
+                                    eprintln!("host (CANCELPENDING: no call came of the frame)");
+                                }
+                                if !say(&mut writer, &Notification::CancelPending.line()) {
+                                    return;
+                                }
+                            }
+                            pending_said = false;
+                            pending_at = None;
+                        }
+                    }
+                }
                 // the program hears the payload of its own sessions only
                 "data" if connected_to.is_some() => {
                     program_quiet_since = Instant::now();
@@ -1239,6 +1305,8 @@ fn serve_commands(
                     // behind it waits `PENDING_SETTLE`, not for a LISTEN the holding program
                     // will not send (ADR-0100).
                     if name == "connected" && called && owned {
+                        // a PENDING said while the call arrived is the call's now
+                        arrival_pending = false;
                         // a DISCONNECTED still held for the last session's identifier first
                         if disconnect_held.take().is_some()
                             && !say(&mut writer, &Notification::Disconnected.line())
@@ -2350,6 +2418,127 @@ mod tests {
         assert_eq!(client.expect(|l| l.starts_with("PTT")), "PTT OFF");
         let notes: Vec<String> = server.take_notes().into_iter().map(|n| n.text).collect();
         assert!(notes.iter().any(|n| n.contains("held")), "{notes:?}");
+    }
+
+    /// What the program hears of a call's PENDING and CANCELPENDING, or of `VERSION` sent to
+    /// mark where nothing else came.
+    fn pending_or_version(client: &mut Client) -> String {
+        client.expect(|l| {
+            l == "PENDING"
+                || l == "CANCELPENDING"
+                || l.starts_with("CONNECTED")
+                || l.starts_with("PTT")
+                || l.starts_with("VERSION")
+        })
+    }
+
+    #[test]
+    fn a_scanning_program_hears_pending_while_a_frame_that_may_be_a_call_arrives() {
+        // KK4ODA-1, 2026-11-25 22:02:54: RMS Trimode moved its radio between 80 and 40 m every
+        // 4.4 s, and a tone try (5.4 s) was decoded from the part heard on 80 m after Trimode
+        // had moved to 40 m; the PENDING that went with the call came too late to hold it, and
+        // the acceptance went out on 40 m. Now the program hears PENDING as the frame begins to
+        // arrive, holds its scan, and hears CANCELPENDING when nothing came of it (ADR-0138).
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        // the station tells it once the program can take it (`Station::advance_call_arriving`)
+        modem.publish("arriving", json!({"on": true}));
+        assert_eq!(pending_or_version(&mut client), "PENDING");
+        // more of the call's frames arriving say nothing more
+        modem.publish("arriving", json!({"on": true}));
+        modem.publish("arriving", json!({"on": false}));
+        assert_eq!(pending_or_version(&mut client), "CANCELPENDING");
+        client.send("VERSION");
+        assert!(pending_or_version(&mut client).starts_with("VERSION"));
+        drop(server);
+    }
+
+    #[test]
+    fn the_pending_of_a_frame_arriving_becomes_the_calls() {
+        // ADR-0138: the frame was a call, and the station took it. The program holding its
+        // scan for it hears the acceptance's keying and then CONNECTED (ADR-0103), with no
+        // second PENDING and no CANCELPENDING when the station's account of the frame ends.
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        modem.publish("arriving", json!({"on": true}));
+        assert_eq!(pending_or_version(&mut client), "PENDING");
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": true}));
+        assert_eq!(pending_or_version(&mut client), "PTT ON");
+        assert_eq!(
+            pending_or_version(&mut client),
+            "CONNECTED KK4XYZ W4ODA 2300"
+        );
+        modem.publish("arriving", json!({"on": false}));
+        modem.publish("ptt", json!({"on": false, "host_keys": true}));
+        assert_eq!(pending_or_version(&mut client), "PTT OFF");
+        client.send("VERSION");
+        assert!(pending_or_version(&mut client).starts_with("VERSION"));
+        drop(server);
+    }
+
+    #[test]
+    fn a_listen_off_crossing_the_pending_of_a_frame_arriving_cancels_it() {
+        // ADR-0138: Trimode's scan had decided its deaf step before the PENDING arrived, and a
+        // Trimode scanning channels moves the radio in it. CANCELPENDING restarts its scan; the
+        // station does not answer a call in that frame (`Station::listened_throughout`).
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        scan_like_trimode(&mut client, Duration::from_secs(1));
+        modem.publish("arriving", json!({"on": true}));
+        assert_eq!(pending_or_version(&mut client), "PENDING");
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        assert_eq!(pending_or_version(&mut client), "CANCELPENDING");
+        // the frame's end says nothing more
+        modem.publish("arriving", json!({"on": false}));
+        client.send("VERSION");
+        assert!(pending_or_version(&mut client).starts_with("VERSION"));
+        drop(server);
+    }
+
+    #[test]
+    fn a_frame_arriving_is_not_told_to_a_program_not_listening_or_in_a_session() {
+        // ADR-0138: a program with LISTEN off is answered for nothing, and the frames of a
+        // session up are not calls
+        let (modem, server) = Modem::start(|_, _| json!({}));
+        let mut client = Client::connect(&server);
+        client.send("MYCALL W4ODA");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        client.send("LISTEN OFF");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        modem.publish("arriving", json!({"on": true}));
+        modem.publish("arriving", json!({"on": false}));
+        client.send("VERSION");
+        assert!(pending_or_version(&mut client).starts_with("VERSION"));
+        // in its session: nothing either
+        client.send("LISTEN ON");
+        assert_eq!(client.expect(|l| l == "OK"), "OK");
+        std::thread::sleep(LISTEN_ON_SETTLE + Duration::from_millis(100));
+        modem.publish(
+            "state",
+            json!({"name": "connected", "detail": "KK4XYZ (slave)", "callsign": "W4ODA"}),
+        );
+        modem.publish("ptt", json!({"on": true, "host_keys": true}));
+        assert_eq!(pending_or_version(&mut client), "PENDING");
+        assert_eq!(pending_or_version(&mut client), "PTT ON");
+        assert!(pending_or_version(&mut client).starts_with("CONNECTED"));
+        modem.publish("arriving", json!({"on": true}));
+        modem.publish("arriving", json!({"on": false}));
+        client.send("VERSION");
+        assert!(pending_or_version(&mut client).starts_with("VERSION"));
+        drop(server);
     }
 
     #[test]

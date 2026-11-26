@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.27.0 |
+| **Version** | 1.28.0 |
 | **Updated** | 2026-11-25 |
 | **Describes** | Aether HF 0.2.0-beta.178 |
 | **Licence** | CC BY 4.0 |
@@ -1385,6 +1385,13 @@ Trimode has been listening again for a moment: Trimode ignores a call it is told
 starts listening. If Trimode stops listening just as it is told of a call, Aether takes the news
 back and tells it again a second or two later, once it listens.
 
+A Trimode that scans several channels moves the radio in that half second, and a call takes longer
+than Trimode stays on a channel. So Aether tells Trimode a call may be coming as soon as one starts
+to arrive, and Trimode stays on that channel until the call is answered or turns out not to be for
+the gateway. Aether does not answer a call it heard partly while Trimode was not listening, nor one
+it hears just as Trimode is about to move on: the radio may move, and the answer would go out on the
+other band. The caller's next try comes.
+
 RMS Trimode starts its modem itself, and closes what it started to restart it. When Trimode starts
 Aether, Aether runs a small helper with no window for Trimode to watch, so a restart no longer closes
 Aether's window.
@@ -1851,3 +1858,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.26.0 | 2026-11-25 | A sound card that is unplugged, missing at start or at the wrong rate is opened again by itself when it comes back, with nothing transmitted meanwhile; the same interface in another USB port, renamed by Windows with a number, is found and used, with a banner and **Keep** ([Banners](#banners), [The computer](#the-computer)). |
 | 1.26.1 | 2026-11-25 | [The header](#the-header): the **Rung** is not shown outside a session, as the Status tab's **Mode** shows a dash there. It read *Rung 0* after every session, the rung a station starts from before a call has read the path. |
 | 1.27.0 | 2026-11-25 | [Where to read more](#where-to-read-more): two one-page guides to print, Aether with VarAC and Aether with Winlink Express, each as Markdown and as a PDF (`tools/manual/onepage.py`). Setup's last button is **Save**, as the window says; the manual had called it *Save these settings*. |
+| 1.28.0 | 2026-11-25 | [A Winlink gateway](#22-a-winlink-gateway): a Trimode that scans several channels is told a call may be coming as soon as one starts to arrive, and stays on its channel; a call heard partly while Trimode was not listening is not answered (ADR-0138). |

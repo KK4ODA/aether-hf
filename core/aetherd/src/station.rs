@@ -4088,6 +4088,7 @@ impl<P: Ptt> Station<P> {
         }
 
         self.heed_preambles(&arrivals, now);
+        self.advance_call_arriving(now);
         self.pump();
     }
 
@@ -5356,6 +5357,10 @@ impl<P: Ptt> Station<P> {
                     &format!("{:?}", self.engine.state()),
                 );
             }
+            // a call coming in, perhaps: a scanning host program is asked to hold (ADR-0138). At
+            // a scan's notice, not the acquisition gate: an OFDM try announced at 1.1–1.3 that
+            // goes on to decode is a call heard late in the program's window otherwise
+            self.note_call_arriving(pending);
             if !trusted {
                 continue;
             }
@@ -12155,6 +12160,196 @@ mod tests {
         air.run(90.0, |a, b| a.connected() && b.connected());
         assert!(air.a.connected() && air.b.connected());
         assert_eq!(air.b.owner(), Some(HOST_PROGRAM));
+    }
+
+    #[test]
+    fn a_call_heard_across_the_programs_deaf_step_is_not_answered() {
+        // ADR-0138: KK4ODA-1's RMS Trimode, scanning 80 and 40 m, moved the radio in the half
+        // second it was deaf while a tone try arrived; the station decoded the call from the
+        // part heard on 80 m and answered it on 40 m (2026-11-25 22:02:54). A frame heard
+        // across the program's deaf step is not answered; the next, heard while it listened
+        // throughout, is.
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        let _ = air.b.take_events();
+        air.a.connect("KK4XYZ").expect("idle");
+        // the first try begins to arrive while the program listens
+        air.run(30.0, |_, b| b.host.arriving_until.is_some());
+        assert!(air.b.host.arriving_until.is_some());
+        // the program steps its scan while it arrives: deaf, and listening again
+        air.run(0.4, |_, _| false);
+        air.b.listen_for(HOST_PROGRAM, false).expect("claimed");
+        air.b.listen_for(HOST_PROGRAM, true).expect("claimed");
+        air.run(30.0, |_, b| b.stats.calls_unanswered >= 1 || b.connected());
+        assert!(!air.b.connected());
+        let events = air.b.take_events();
+        assert!(
+            events.iter().any(|e| e
+                == "listen:a call from W4ODA to KK4XYZ not answered: the host program stopped \
+                    listening while it arrived, and may have moved the radio"),
+            "{events:?}"
+        );
+        // listening throughout, a later frame of the call is answered
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        assert!(air.a.connected() && air.b.connected());
+        assert_eq!(air.b.owner(), Some(HOST_PROGRAM));
+    }
+
+    /// Turn a station's host program's answering off and on like RMS Trimode's scan: windows
+    /// of three seconds, half a second deaf, `windows` times.
+    fn scan_like_trimode(air: &mut Air, windows: usize) {
+        for _ in 0..windows {
+            air.run(3.0, |_, _| false);
+            air.b.listen_for(HOST_PROGRAM, false).expect("claimed");
+            air.run(0.5, |_, _| false);
+            air.b.listen_for(HOST_PROGRAM, true).expect("claimed");
+        }
+    }
+
+    #[test]
+    fn a_frame_that_may_be_a_call_is_told_and_so_is_its_coming_to_nothing() {
+        // ADR-0138: the host adapter says PENDING to a scanning program while a frame that may
+        // be a call arrives, and CANCELPENDING when nothing came of it. A call to a callsign
+        // nobody here holds is such a frame: told as it begins, and as it ends with no call
+        // taken. The program holds meanwhile (it turns nothing off here).
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        scan_like_trimode(&mut air, 3);
+        air.run(0.5, |_, _| false);
+        air.a.connect("N0ONE").expect("idle");
+        air.run(30.0, |_, b| b.host.arrival_news.contains(&false));
+        let news = air.b.take_arrival_news();
+        assert_eq!(news.first(), Some(&true), "{news:?}");
+        assert_eq!(news.last(), Some(&false), "{news:?}");
+        assert!(!air.b.connected());
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+
+        // a program that does not scan is told nothing: it moves no radio
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        air.a.connect("N0ONE").expect("idle");
+        air.run(20.0, |_, _| false);
+        assert!(air.b.take_arrival_news().is_empty());
+        air.a.abort();
+        air.run(30.0, |a, _| a.state() == State::Idle);
+
+        // nor while a session is up: the session's own frames are not calls
+        let mut air = Air::new(1.0, 0.0005);
+        claim_for_host(&mut air.b, &["KK4XYZ"], true);
+        scan_like_trimode(&mut air, 3);
+        air.a.connect("KK4XYZ").expect("idle");
+        air.run(90.0, |a, b| a.connected() && b.connected());
+        let _ = air.b.take_arrival_news();
+        air.a.send(&[0x55; 2000]);
+        air.run(20.0, |_, _| false);
+        assert!(air.b.connected());
+        assert!(air.b.take_arrival_news().is_empty());
+    }
+
+    #[test]
+    fn a_scanning_program_is_told_of_a_call_only_when_it_can_hold_for_it() {
+        // ADR-0138, on the station's clock: windows of 3 s and half a second deaf. A frame that
+        // may be a call is told once the program has listened 0.3 s, never in the last quarter
+        // of a window or the quarter second before it (the PENDING would meet the LISTEN OFF
+        // its scan has decided), and a call to it decoded there with no hold is not answered:
+        // the harness's two-band gateway answered such a call after Trimode had moved the radio.
+        let mut station = idle_station();
+        claim_for_host(&mut station, &["KK4XYZ"], true);
+        // small blocks: the steps checked are a tenth of a second
+        let mut out = vec![0.0f32; 480];
+        let mut seed = 0;
+        let mut advance = |station: &mut Station<NullPtt>, to: f64| {
+            while station.now() < to {
+                station.playback(&mut out).expect("playback");
+                station.capture(&quiet_block(seed)[..480]).expect("capture");
+                seed += 1;
+            }
+        };
+        // the first window, partial, is not the program's beat: one of a second, then two of 3 s
+        // (one would do)
+        let t = station.now();
+        advance(&mut station, t + 1.0);
+        station.listen_for(HOST_PROGRAM, false).expect("claimed");
+        let t = station.now();
+        advance(&mut station, t + 0.5);
+        station.listen_for(HOST_PROGRAM, true).expect("claimed");
+        for _ in 0..2 {
+            let t = station.now();
+            advance(&mut station, t + 3.0);
+            station.listen_for(HOST_PROGRAM, false).expect("claimed");
+            let t = station.now();
+            advance(&mut station, t + 0.5);
+            station.listen_for(HOST_PROGRAM, true).expect("claimed");
+        }
+        let on = station.now();
+        let data_s = station.air.info().data_frame_s;
+        let arrival = |start_s: f64| crate::air::Arrival {
+            start_s,
+            end_s: start_s + data_s,
+            length_s: data_s,
+            floor: false,
+            detect_confidence: 1.5,
+        };
+        // late in the window (the last quarter, and the quarter second before it): not told,
+        // and a call there is not answered
+        advance(&mut station, on + 2.3);
+        station.note_call_arriving(&arrival(on + 2.25));
+        advance(&mut station, on + 2.4);
+        assert!(station.take_arrival_news().is_empty());
+        let why = station
+            .answered_before_its_step("KK4XYZ")
+            .expect_err("about to step");
+        assert_eq!(
+            why,
+            "the host program is about to step its scan, and may move the radio before the \
+             answer goes"
+        );
+        let scan = station.holder_scan("KK4XYZ").expect("scans").0;
+        assert!(scan.steps_soon(on + 2.05) && !scan.steps_soon(on + 1.95));
+        // a callsign no program holds is the station's own, and nothing moves its radio
+        assert!(station.answered_before_its_step("N0ONE").is_ok());
+
+        // the next window: a frame arriving 0.05 s into it is told once the program has
+        // listened 0.3 s, and the program holds
+        station.listen_for(HOST_PROGRAM, false).expect("claimed");
+        let t = station.now();
+        advance(&mut station, t + 0.5);
+        station.listen_for(HOST_PROGRAM, true).expect("claimed");
+        let on = station.now();
+        station.note_call_arriving(&arrival(on + 0.05));
+        advance(&mut station, on + 0.1);
+        assert!(station.take_arrival_news().is_empty());
+        advance(&mut station, on + 0.4);
+        assert_eq!(station.take_arrival_news(), [true]);
+        // held, it does not step: late in its window a call is answered all the same
+        advance(&mut station, on + 1.9);
+        let scan = station.holder_scan("KK4XYZ").expect("scans").0;
+        assert!(scan.steps_soon(station.now()));
+        assert!(station.answered_before_its_step("KK4XYZ").is_ok());
+        // over: nothing came of it
+        advance(&mut station, on + 0.05 + data_s + 1.1);
+        assert_eq!(station.take_arrival_news(), [false]);
+
+        // the hold has ended: the program restarts its scan, and its next step is not known
+        // until it turns its answering off and on again: nothing is told meanwhile, nor taken
+        // unheld
+        let now = station.now();
+        station.note_call_arriving(&arrival(now));
+        advance(&mut station, now + 0.4);
+        assert!(station.take_arrival_news().is_empty());
+        let why = station
+            .answered_before_its_step("KK4XYZ")
+            .expect_err("restarted");
+        assert!(why.contains("has just restarted its scan"), "{why}");
+        // its next window is its beat again
+        station.listen_for(HOST_PROGRAM, false).expect("claimed");
+        let t = station.now();
+        advance(&mut station, t + 0.5);
+        station.listen_for(HOST_PROGRAM, true).expect("claimed");
+        let t = station.now();
+        advance(&mut station, t + 0.4);
+        assert!(station.answered_before_its_step("KK4XYZ").is_ok());
     }
 
     #[test]

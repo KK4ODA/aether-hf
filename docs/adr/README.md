@@ -142,3 +142,4 @@ context → decision → alternatives considered → consequences.
 | [0135](0135-hand-overs-and-endings.md) | Hand-overs wait for the program's reply, and a session ends in one exchange: exact wants, a DISC that acknowledges, a drain that gives up | accepted, beta.175; no protocol bump |
 | [0136](0136-the-keyed-audio-watch-knows-its-own-signal.md) | The keyed-audio watch knows the station's own signal coming back | accepted, beta.175 |
 | [0137](0137-the-sound-card-comes-back.md) | The sound card comes back by itself, and the same codec in another USB port is found under its new Windows name | accepted |
+| [0138](0138-a-scanning-program-holds-for-a-call-arriving.md) | A scanning program holds for a call arriving, and a call heard across its deaf step is not answered | accepted |

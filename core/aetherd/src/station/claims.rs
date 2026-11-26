@@ -37,6 +37,64 @@ use crate::ptt::Ptt;
 /// and a line at each turn was 9 448 lines of one night's log at KK4ODA-1 (2026-10-25).
 const LISTEN_QUIET_S: f64 = 60.0;
 
+/// How late a program's `LISTEN ON` may reach the station and a frame still count as heard
+/// while it listened: the host adapter tells the station on its next pass, a block or two after
+/// the program said it (ADR-0138).
+pub(super) const LISTEN_SLACK_S: f64 = 0.25;
+
+/// A program's scan as the station sees it from its `LISTEN` turns (ADR-0138): RMS Trimode turns
+/// its answering off for the half second it steps its scan (and, scanning channels, moves the
+/// radio then), and on again for a window of three to four seconds. The host adapter keeps the
+/// same beat on its own clock (`host::server::Scan`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ScanBeat {
+    /// When its present listening window began.
+    pub(super) since: f64,
+    /// Its shortest recent window.
+    pub(super) window: f64,
+}
+
+impl ScanBeat {
+    /// How many windows are kept, and how many make a beat: one whole window, after the first
+    /// that is not, is a program that has turned its answering off twice. Two had let the
+    /// harness's Trimode take a call in its third window before the station knew it scanned.
+    const KEEP: usize = 4;
+    const BEAT: usize = 1;
+    /// How long the program must have listened to take a line said to it: RMS Trimode ignores
+    /// what comes just after its own `LISTEN ON` (`host::server::LISTEN_ON_SETTLE`).
+    pub(super) const SETTLE_S: f64 = 0.3;
+    /// How much before the last quarter of its window a program is taken to be about to step.
+    const STEP_MARGIN_S: f64 = 0.25;
+
+    fn of(claim: &Claim) -> Option<Self> {
+        if claim.windows.len() < Self::BEAT || !claim.listening_since.is_finite() {
+            return None;
+        }
+        let window = claim.windows.iter().copied().fold(f64::INFINITY, f64::min);
+        Some(Self {
+            since: claim.listening_since,
+            window,
+        })
+    }
+
+    /// Whether the program will step its scan soon: `now` lies in the last quarter of a window
+    /// (at least 50 ms), where a `PENDING` meets the `LISTEN OFF` its scan has decided
+    /// (ADR-0100 §4), or within `STEP_MARGIN_S` before it: a `LISTEN OFF` already said reaches
+    /// the station a pass later, and a call taken meanwhile was answered on the harness after the
+    /// program had moved the radio. A window run well past the beat is a program that has
+    /// stopped stepping.
+    pub(super) fn steps_soon(&self, now: f64) -> bool {
+        let open = now - self.since;
+        let guard = (self.window / 4.0).max(0.05) + Self::STEP_MARGIN_S;
+        open + guard >= self.window && open < 2.0 * self.window
+    }
+
+    /// Whether the program has listened long enough to take a `PENDING`.
+    pub(super) fn settled(&self, now: f64) -> bool {
+        now - self.since >= Self::SETTLE_S
+    }
+}
+
 /// One program's claim on callsigns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Claim {
@@ -48,6 +106,16 @@ pub struct Claim {
     pub callsigns: Vec<String>,
     /// Whether calls to them are answered.
     pub listening: bool,
+    /// When its answering last came on, on the station's clock; never, until it does. A call
+    /// whose frame began before it was heard partly while the program did not listen, and a
+    /// program that scans moves the radio then (ADR-0138).
+    pub listening_since: f64,
+    /// Its last few listening windows, `LISTEN ON` to `LISTEN OFF`, seconds: a program that
+    /// turns its answering off and on again on a beat scans (ADR-0138). Not its first, which
+    /// began where the program's scan happened to be when it said `LISTEN ON`.
+    windows: Vec<f64>,
+    /// Its first window has closed.
+    first_window_closed: bool,
     /// When it was made, milliseconds since the epoch.
     pub since_ms: u64,
     /// When the log last said whether its calls are answered, and the turns since.
@@ -374,6 +442,9 @@ impl<P: Ptt> Station<P> {
                 app,
                 callsigns: taken.clone(),
                 listening: false,
+                listening_since: f64::INFINITY,
+                windows: Vec::new(),
+                first_window_closed: false,
                 since_ms: super::beacons::unix_ms(),
                 said_at: None,
                 turns: 0,
@@ -441,6 +512,16 @@ impl<P: Ptt> Station<P> {
         claim.listening = on;
         if changed {
             claim.turns += 1;
+            if on {
+                claim.listening_since = now;
+            } else if !claim.first_window_closed {
+                claim.first_window_closed = true;
+            } else if claim.listening_since.is_finite() {
+                claim.windows.push(now - claim.listening_since);
+                if claim.windows.len() > ScanBeat::KEEP {
+                    claim.windows.remove(0);
+                }
+            }
         }
         // what answering comes to, at once when it changes, then at most once a minute
         if claim.turns > 0 && claim.said_at.is_none_or(|at| now - at >= LISTEN_QUIET_S) {
@@ -657,6 +738,49 @@ impl<P: Ptt> Station<P> {
             ));
         }
         Ok(())
+    }
+
+    /// Whether the program holding `call` listened through the whole of a frame that began at
+    /// `start_s`, or why not (ADR-0138). A program that turned its answering off and on again
+    /// while the frame arrived was deaf for part of it, and RMS Trimode, scanning its channels,
+    /// moves the radio in that half second: KK4ODA-1 decoded a call from the 2.6 s of a tone
+    /// try it heard on 80 m, Trimode had moved the radio to 40 m meanwhile, and the acceptance
+    /// went out there (2026-11-25 22:02:54). The station cannot read a dial the program sets
+    /// over its own CAT link, so a frame heard across a deaf step is not answered: the caller's
+    /// next try comes. A callsign no program holds is the station's, and nothing moves it.
+    pub(super) fn listened_throughout(&self, call: &str, start_s: f64) -> Result<(), String> {
+        match self.claims.holder(call) {
+            Some(claim) if claim.listening_since > start_s + LISTEN_SLACK_S => Err(format!(
+                "{} stopped listening while it arrived, and may have moved the radio",
+                claim.app
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Since when the host program attached has listened, if it is listening now (ADR-0138).
+    pub(super) fn host_listening_since(&self) -> Option<f64> {
+        self.claims
+            .list
+            .iter()
+            .find(|claim| claim.connection.kind == ConnectionKind::Host && claim.listening)
+            .map(|claim| claim.listening_since)
+    }
+
+    /// The host program's scan, if it listens now and scans (ADR-0138).
+    pub(super) fn host_scan(&self) -> Option<ScanBeat> {
+        self.claims
+            .list
+            .iter()
+            .find(|claim| claim.connection.kind == ConnectionKind::Host && claim.listening)
+            .and_then(ScanBeat::of)
+    }
+
+    /// The scan of the program holding `call`, and its name, if it listens now and scans
+    /// (ADR-0138).
+    pub(super) fn holder_scan(&self, call: &str) -> Option<(ScanBeat, String)> {
+        let claim = self.claims.holder(call).filter(|claim| claim.listening)?;
+        ScanBeat::of(claim).map(|scan| (scan, claim.app.clone()))
     }
 
     /// Whether calls to the station's first callsign are answered now: what the panel shows.

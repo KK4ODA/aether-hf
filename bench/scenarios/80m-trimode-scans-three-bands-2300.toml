@@ -1,0 +1,45 @@
+name = "80m-trimode-scans-three-bands-2300"
+description = """80m-trimode-scans-two-bands-2300 with Trimode scanning three channels (80, 40 and 20 m, 4.4 s
+each): the gateway is on the client's 80 m dial a third of the time, and a try heard there must
+hold it there until the acceptance has gone (ADR-0138)."""
+tags = ["80m", "host", "gateway", "trimode", "scan"]
+bandwidth = 2300
+seconds = 900
+seed = 51
+# a Trimode stand-in scans in air time and the host port's short waits are wall-clock:
+# held to three times real time, a listening window stays a second of wall clock
+max_speed = 3
+connect_within_s = 240
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+call_tries = 6
+dial_hz = 3590000
+[stations.b]
+callsign = "KK4ODA-1"
+host = true
+ptt = "host"
+dial_hz = 3590000
+
+[path]
+profile = "good"
+snr_db = 6.0
+cfo_hz = 2.0
+# the gateway read the truck at 0 to +4 dB, the truck read it at +9 to +11
+[path.a_to_b]
+snr_db = 2.0
+[path.b_to_a]
+snr_db = 9.0
+
+[script]
+# then again, as the mobile did at 22:02 after the 22:00 session: it has heard the gateway now,
+# and its call opens with three short OFDM tries
+steps = ["host a client", "host b trimode dials=3590000,7101000,14107000 dwell=3.9", "wait 6", "host-connect", "host-reply 300", "host-send 120", "host-reply 40", "host-disconnect", "wait_idle 120", "wait 20", "host-connect", "host-reply 300", "host-send 80", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 3

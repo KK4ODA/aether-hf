@@ -1712,6 +1712,12 @@ fn publish_station(
             }),
         ));
     }
+    // a frame that may be a call arriving, and its coming to nothing: the host adapter's
+    // `PENDING` and `CANCELPENDING` for a program that scans (ADR-0138). Not logged: on a busy
+    // band they come every few seconds, and the program's own log says what it did
+    for on in station.take_arrival_news() {
+        control.publish(&Event::new("arriving", json!({ "on": on })));
+    }
     for delivery in station.take_deliveries() {
         // how much, and whether it arrived: never the text itself
         let said = if delivery.delivered {

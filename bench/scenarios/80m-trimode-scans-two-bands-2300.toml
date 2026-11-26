@@ -1,0 +1,49 @@
+name = "80m-trimode-scans-two-bands-2300"
+description = """KK4ODA-1 on 2026-11-25: an RMS Trimode gateway that keys its own radio and scans
+two channels, moving it between 3590.0 and 7101.0 kHz (dial) in each half second it is deaf, every
+4.4 s, over a CAT link the station cannot read. A Winlink Express client on 80 m calls with six
+tries. That evening the gateway decoded a tone try from the 2.6 s it heard on 80 m, Trimode had
+moved the radio to 40 m meanwhile, and the acceptance went out there: Trimode held its scanner on
+40 m, connected to nobody, and the client gave up (ADR-0138). Every acceptance must answer a call
+on its own dial (the channel server's dial invariant), and the client must get through."""
+tags = ["80m", "host", "gateway", "trimode", "scan"]
+bandwidth = 2300
+seconds = 900
+seed = 47
+# a Trimode stand-in scans in air time and the host port's short waits are wall-clock:
+# held to three times real time, a listening window stays a second of wall clock
+max_speed = 3
+connect_within_s = 240
+
+[stations.a]
+callsign = "WD5EMA"
+host = true
+call_tries = 6
+dial_hz = 3590000
+[stations.b]
+callsign = "KK4ODA-1"
+host = true
+ptt = "host"
+dial_hz = 3590000
+
+[path]
+profile = "good"
+snr_db = 6.0
+cfo_hz = 2.0
+# the gateway read the truck at 0 to +4 dB, the truck read it at +9 to +11
+[path.a_to_b]
+snr_db = 2.0
+[path.b_to_a]
+snr_db = 9.0
+
+[script]
+# then again, as the mobile did at 22:02 after the 22:00 session: it has heard the gateway now,
+# and its call opens with three short OFDM tries
+steps = ["host a client", "host b trimode dials=3590000,7101000 dwell=3.9", "wait 6", "host-connect", "host-reply 300", "host-send 120", "host-reply 40", "host-disconnect", "wait_idle 120", "wait 20", "host-connect", "host-reply 300", "host-send 80", "host-disconnect"]
+
+[expect]
+connected = true
+delivered = true
+clean_end = true
+idle = true
+max_collisions = 3

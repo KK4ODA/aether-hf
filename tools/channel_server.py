@@ -982,6 +982,29 @@ def dial_faults(report: dict) -> list[str]:
     return faults
 
 
+def command(server: Server, on_air: dict[str, Station], line: str) -> None:
+    """Act on one line of the command file, at the air time it was read."""
+    word, _, arg = line.partition(" ")
+    if word == "stall":
+        who, _, length = arg.partition(" ")
+        if who in on_air:
+            on_air[who].stall(server.t, round(float(length) * AUDIO_RATE))
+    if word == "knob":
+        who, _, hz = arg.partition(" ")
+        if who in on_air:
+            on_air[who].dial = int(hz)
+    if word == "move":
+        # another program moved the radio over a CAT link of its own: RMS Trimode scanning
+        # its channels while it keys the radio itself (`[ptt] kind = "host"`), where the
+        # station reads no dial. The daemon is not told: it hears the new dial and answers on it
+        who, _, hz = arg.partition(" ")
+        if who in on_air:
+            on_air[who].dial = on_air[who].dial_told = int(hz)
+    if word == "outage":
+        server.outage_until = server.t + round(float(arg) * AUDIO_RATE)
+        server.outages.append([server.t / AUDIO_RATE, server.outage_until / AUDIO_RATE])
+
+
 MACHINE_SEED = 7919
 """Offset of the stalls' seeds from the scenario's: the channel's draws stay as they were."""
 
@@ -1098,9 +1121,10 @@ def main() -> int:
         "--command-file",
         type=Path,
         help=(
-            "read every second of air for new lines: `outage S` cuts the path both ways for "
-            "S s, `stall WHO S` stops a station's loop for S s, `knob WHO HZ` turns a station's "
-            "dial at its radio"
+            "read every tenth of a second of air for new lines: `outage S` cuts the path both "
+            "ways for S s, `stall WHO S` stops a station's loop for S s, `knob WHO HZ` turns a "
+            "station's dial at its radio, `move WHO HZ` moves it as another program does over a "
+            "CAT link of its own (the daemon is not told)"
         ),
     )
     args = ap.parse_args()
@@ -1134,6 +1158,7 @@ def main() -> int:
     max_speed = 1.0 if realtime else float(scenario.get("max_speed", 0) or 0)
     began = time.monotonic()
     commands_done = 0
+    commands_size = -1
     threading.Thread(target=watchdog, args=(server,), daemon=True).start()
     # a runner that gives up on a stalled air stops the server: the account of the air up to
     # the stall is still written (the `finally` below), for the run that failed; a server run
@@ -1154,24 +1179,23 @@ def main() -> int:
                 args.progress_file.write_text(f"{server.t / AUDIO_RATE:.2f}", encoding="utf-8")
             if server.t % AUDIO_RATE < TICK:
                 faulthandler.dump_traceback_later(2 * STALL_REPORT_S, file=sys.stdout)
-                if args.command_file and args.command_file.exists():
-                    lines = args.command_file.read_text(encoding="utf-8").splitlines()
-                    for line in lines[commands_done:]:
-                        word, _, arg = line.partition(" ")
-                        if word == "stall":
-                            who, _, length = arg.partition(" ")
-                            if who in on_air:
-                                on_air[who].stall(server.t, round(float(length) * AUDIO_RATE))
-                        if word == "knob":
-                            who, _, hz = arg.partition(" ")
-                            if who in on_air:
-                                on_air[who].dial = int(hz)
-                        if word == "outage":
-                            server.outage_until = server.t + round(float(arg) * AUDIO_RATE)
-                            server.outages.append(
-                                [server.t / AUDIO_RATE, server.outage_until / AUDIO_RATE]
-                            )
-                    commands_done = len(lines)
+            # Commands every tenth of a second of air: RMS Trimode moves its radio in the half
+            # second it is deaf between scan steps (KK4ODA-1, 2026-11-25), and a move read up
+            # to a second late was a move into the next listening window. Read only when the
+            # file grew.
+            if server.t % PROGRESS_EVERY < TICK and args.command_file:
+                with contextlib.suppress(OSError):
+                    size = args.command_file.stat().st_size
+                    if size != commands_size:
+                        text = args.command_file.read_text(encoding="utf-8")
+                        # a line the runner is still writing waits for the next read
+                        whole = text[: text.rfind("\n") + 1]
+                        if whole == text:
+                            commands_size = size
+                        lines = whole.splitlines()
+                        for line in lines[commands_done:]:
+                            command(server, on_air, line)
+                        commands_done = len(lines)
     except (ConnectionError, OSError):
         pass
     finally:

@@ -13,6 +13,11 @@ use crate::ptt::Ptt;
 /// one line is enough to tell the operator why nothing answered.
 const UNANSWERED_QUIET_S: f64 = 60.0;
 
+/// How long after a frame that may be a call has ended the station waits for its report before
+/// it says that nothing came of it (ADR-0138): the receiver hands a tone frame over up to
+/// 0.72 s after its end, once nothing still to come can claim its span.
+const ARRIVAL_REPORT_S: f64 = 1.0;
+
 /// What the host program attached now said that is not about calls: whether it is there,
 /// its `CHAT ON` and its `CWID ON`. Which calls are answered is its claim's business
 /// (ADR-0106, `claims.rs`): `MYCALL` and `LISTEN` reach the station as the control API's
@@ -39,6 +44,21 @@ pub(super) struct Host {
     /// The daemon is stopping (`Station::stop_answering`): no call or probe is answered while
     /// its last session's end leaves the air.
     pub(super) stopping: bool,
+    /// A frame that may be a call is on the air, and until when its report is waited for
+    /// (ADR-0138).
+    pub(super) arriving_until: Option<f64>,
+    /// What the host program is to hear of it: `true` a frame that may be a call began to
+    /// arrive while it listened, `false` the frames have come to nothing.
+    pub(super) arrival_news: Vec<bool>,
+    /// Such a frame is arriving and the program has not been told yet: it waits for the program
+    /// to have listened long enough to take it.
+    pub(super) arrival_wanted: bool,
+    /// The program was told, and holds its scan; since when, on the station's clock. It holds
+    /// until it hears that nothing came of the frames, or turns its answering off.
+    pub(super) held_since: Option<f64>,
+    /// When its last hold ended with `CANCELPENDING`: it restarts its scan then, and when it
+    /// steps next is not known until it turns its answering off and on again.
+    pub(super) hold_ended: Option<f64>,
 }
 
 impl<P: Ptt> Station<P> {
@@ -124,7 +144,9 @@ impl<P: Ptt> Station<P> {
             self.answers_call_for(&to)
         } else {
             self.answers_for(&to)
-        };
+        }
+        .and_then(|()| self.listened_throughout(&to, decoded.start_s))
+        .and_then(|()| self.answered_before_its_step(&to));
         let Err(why) = answered else {
             return false;
         };
@@ -151,5 +173,111 @@ impl<P: Ptt> Station<P> {
             self.host.said = Some((from, now));
         }
         true
+    }
+
+    /// A frame announced while the station is idle that may be a call or a probe: a DATA
+    /// frame's length, at the confidence a scan takes for a try under way (ADR-0129), begun
+    /// while the host program listened. The program hears it as `PENDING` from the host adapter
+    /// when it scans (ADR-0138): RMS Trimode holds its scanner then, and the radio stays on the
+    /// dial the call is coming in on. Decoding takes the whole frame (a tone try is 5.4 s,
+    /// longer than Trimode's 4.4 s on a channel), and the `PENDING` that went only once the
+    /// call was taken came after Trimode had moved the radio (KK4ODA-1, 2026-11-25).
+    pub(super) fn note_call_arriving(&mut self, arrival: &crate::air::Arrival) {
+        if self.engine.state() != State::Idle
+            || arrival.detect_confidence < super::scan::NOTICE_CONFIDENCE
+        {
+            return;
+        }
+        let Some(since) = self.host_listening_since() else {
+            return;
+        };
+        if since > arrival.start_s + super::claims::LISTEN_SLACK_S {
+            return;
+        }
+        // a call and a probe are DATA frames; a header, an answer or an acceptance is shorter
+        let timing = self.air.timing();
+        let data_s = if arrival.floor {
+            timing.floor_data_frame_s.unwrap_or(f64::INFINITY)
+        } else {
+            timing.data_frame_s
+        };
+        if arrival.length_s + 0.05 < data_s {
+            return;
+        }
+        self.host.arrival_wanted = true;
+        let until = arrival.end_s + ARRIVAL_REPORT_S;
+        self.host.arriving_until = Some(self.host.arriving_until.map_or(until, |u| u.max(until)));
+    }
+
+    /// Tell a scanning program of a frame that may be a call once it can take it, and that
+    /// nothing came of the frames once they are over and reported (ADR-0138). A program that
+    /// does not scan never moves the radio and is told nothing; one about to step its scan is
+    /// not told either, since the `PENDING` would meet the `LISTEN OFF` its scan has decided.
+    pub(super) fn advance_call_arriving(&mut self, now: f64) {
+        // turned off, or off and on again: whatever it held for is over
+        if let Some(held) = self.host.held_since
+            && self.host_listening_since().is_none_or(|since| since > held)
+        {
+            self.host.held_since = None;
+        }
+        if self.host.arrival_wanted && self.host.held_since.is_none() {
+            match self.host_scan() {
+                Some(scan) if !self.beat_known(scan) || scan.steps_soon(now) => {
+                    self.host.arrival_wanted = false;
+                }
+                Some(scan) if scan.settled(now) => {
+                    self.host.arrival_wanted = false;
+                    self.host.held_since = Some(now);
+                    self.host.arrival_news.push(true);
+                }
+                Some(_) => {}
+                None => self.host.arrival_wanted = false,
+            }
+        }
+        if self.host.arriving_until.is_some_and(|until| now >= until) {
+            self.host.arriving_until = None;
+            self.host.arrival_wanted = false;
+            if self.host.held_since.take().is_some() {
+                self.host.arrival_news.push(false);
+                self.host.hold_ended = Some(now);
+            }
+        }
+    }
+
+    /// Whether the program's next step can be told from its beat: not between the end of a
+    /// hold and its next `LISTEN ON`. RMS Trimode restarts its scan at `CANCELPENDING`, and the
+    /// harness's four-channel gateway, 10 s into a window it had held for, was told of a call
+    /// as if it had stopped stepping; its step crossed the `PENDING`, and the acceptance went out
+    /// on 40 m (ADR-0138).
+    fn beat_known(&self, scan: super::claims::ScanBeat) -> bool {
+        self.host.hold_ended.is_none_or(|ended| scan.since >= ended)
+    }
+
+    /// Whether a call or probe to `call` can be answered before the program holding it steps
+    /// its scan, or why not (ADR-0138). A program holding for a frame that may be a call does
+    /// not step; one that is not holding steps at the end of its window, and a program
+    /// scanning channels moves the radio then. A call taken in the last quarter of a window
+    /// was told `PENDING` too late to hold it (the `LISTEN OFF` its scan had decided crossed
+    /// it), and its acceptance went out on the next channel (the scenario harness, 2026-11-25:
+    /// a both-ways try read at its OFDM part, answered after its tone part).
+    pub(super) fn answered_before_its_step(&self, call: &str) -> Result<(), String> {
+        if self.host.held_since.is_some() {
+            return Ok(());
+        }
+        let now = self.now();
+        match self.holder_scan(call) {
+            Some((scan, app)) if !self.beat_known(scan) => Err(format!(
+                "{app} has just restarted its scan, and may move the radio before the answer goes"
+            )),
+            Some((scan, app)) if scan.steps_soon(now) => Err(format!(
+                "{app} is about to step its scan, and may move the radio before the answer goes"
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// What the host program is to hear of frames that may be calls (ADR-0138), oldest first.
+    pub fn take_arrival_news(&mut self) -> Vec<bool> {
+        std::mem::take(&mut self.host.arrival_news)
     }
 }

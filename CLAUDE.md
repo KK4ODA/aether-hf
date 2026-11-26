@@ -3664,6 +3664,43 @@ advised; no resampling; no hardware-ID matching (a DigiRig's codec has no USB se
 device notification — it needs `unsafe` COM and **the workspace forbids `unsafe`**, so the retry
 polls every second instead.
 
+**A scanning Trimode holds for a call arriving (2026-11-25, ADR-0138; KK4ODA-1's sessions with
+the mobile that evening, both sides with Trimode's logs; no wire change, no config key).** KK4ODA-1's
+RMS Trimode keys its own radio and scanned two channels, moving the FTDX10 between 3590.0 and
+7101.0 kHz dial every 4.4 s in its half-second deaf step; a 5.4 s tone try decoded from the 2.6 s
+heard on 80 m was answered on 40 m after the move, and Trimode held 120 s on 40 m connected to
+nobody. Now: a claim keeps `listening_since` and its listening windows (`ScanBeat`, the first,
+partial, one skipped; one more makes a beat); a call or probe whose frame began before its
+holder's last `LISTEN ON` is not answered (`listened_throughout`, 0.25 s slack); a frame announced
+while idle at `NOTICE_CONFIDENCE` (1.1, before the acquisition gate), as long as a DATA frame, begun
+while the host program listened, is told to a scanning program once it has listened 0.3 s and is
+not in the last quarter of its window or the 0.25 s before it (`note_call_arriving`,
+`advance_call_arriving`, the unlogged `arriving` event; the VARA adapter says `PENDING` on it and
+`CANCELPENDING` when nothing came of it or the program's `LISTEN OFF` crosses it); the station then
+counts the program as holding (`held_since`); a call to a scanning program not holding, decoded
+late in its window or between the end of a hold and its next `LISTEN ON`, is not answered
+(`answered_before_its_step`, `hold_ended`). Harness: the channel server's `move WHO HZ` (a radio
+moved by another program; the daemon is not told) and commands read every 0.1 s of air; the
+Trimode stand-in's `dials=`/`dwell=`, and its PTT check allows a host-keyed station's PTT ON just
+before the `PENDING`; a scenario station's `ptt = "host"`; scenarios `80m-trimode-scans-two-bands-2300`,
+`-500`, `-busy-2300`, `80m-trimode-scans-three-bands-2300`, `-four-bands-2300`,
+`80m-trimode-scans-four-channels-one-twice-2300` and `80m-trimode-one-band-host-keyed-2300`, each
+with the field's second call (OFDM tries). Four builds went through the harness before this one
+held: an early PENDING alone (a weak OFDM try under 1.3 was never announced), then the late-window
+refusal (a partial first window made the beat 0.8 s), then the skipped first window (two windows
+needed: the call came in the third), then the beat after a hold (Trimode restarts its scan at
+`CANCELPENDING`). Measured, 64 draws an arm against beta.178 (ADR-0138 §4): acceptances on a dial
+with no call 30 before, 0 after; two channels 2/12 then 10/12 passed, three 0/8 then 8/8, four
+0/8 then 3/8 (the rest calls unheard: with **Call tries** 15 at the caller, 8/8), four with 80 m
+listed twice 0/8 then 8/8, one channel 12/12 then 11/11 (one draw lost to a port collision at
+start). The cost on one channel: a try read late in a window or across a step is refused, so
+some calls take one more try (2 of 8 first calls 44 s, not 11, with two tries; one regression
+draw of `40m-gateway-busy-when-called-2300` failed where beta.178 passes); a setting saying the
+external program scans several channels would remove it, and is the author's call (a config key).
+Owed: the real Trimode told `PENDING` for frames that are not calls, many times an evening, and
+scanning channels on the air. Open: a gateway accepting a fourth 2300 Hz try after the caller has
+moved its next to 500 Hz (ADR-0058) sits in an empty session until its link timeout.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

@@ -168,7 +168,7 @@ sample_rate = 48000
 tx_level = {tx_level}
 
 [ptt]
-kind = "none"
+kind = "{ptt}"
 
 [radio]
 bandwidth = {bandwidth}
@@ -394,8 +394,22 @@ class Host:
     holds and no ``BUFFER`` line for a minute of wall clock is a fault, and it hangs up as Pat
     does then. A ``CONNECTED`` without both callsigns is a fault too: Pat panics on one."""
 
-    def __init__(self, run: Run, station: Station, kind: str, mycall: str = "") -> None:
+    def __init__(
+        self,
+        run: Run,
+        station: Station,
+        kind: str,
+        mycall: str = "",
+        dials: tuple[int, ...] = (),
+        dwell_s: float = 3.0,
+    ) -> None:
         self.run, self.station, self.kind = run, station, kind
+        # Trimode's channels (`dials=`): each deaf step moves the radio to the next, as
+        # KK4ODA-1's moved its FTDX10 between 3590.0 and 7101.0 kHz every 4.4 s (2026-11-25),
+        # over a CAT link of its own the station cannot read (`move` in the channel server).
+        # One dial, or none, is a scan that never moves the radio.
+        self.dials, self.dial_index = dials, 0
+        self.dwell_s = dwell_s
         # the callsign the program says in MYCALL: the station's own unless the script names
         # another (report 22 §2: Winlink Express as KK4ODA on a station whose own is KK4ODA-1)
         self.mycall = mycall or station.callsign
@@ -430,6 +444,11 @@ class Host:
         self.pending_wall: float | None = None
         # told PTT ON since the PENDING: the acceptance's keying comes before CONNECTED
         self.keyed_since_pending = False
+        # and when it was last told PTT ON: a program that keys the radio (`ptt = "host"`) may
+        # hear the acceptance's keying just before the PENDING (host-interfaces.md §2.2), and
+        # Trimode judges a link hung only after minutes without one
+        self.last_ptt_on: float | None = None
+        self.keys_radio = run.scenario.get("stations", {}).get(station.who, {}).get("ptt") == "host"
         self.connected = False
         # Pat's own count of the bytes the modem holds — the last BUFFER, and what it wrote since —
         # and when its wait's timer last started, on the wall clock
@@ -544,6 +563,7 @@ class Host:
                         self.keyed_since_pending = False
                 elif line == "PTT ON":
                     self.keyed_since_pending = True
+                    self.last_ptt_on = self.run.air_s()
                 elif line == "CANCELPENDING":
                     self.pending_at = None
                     self.pending_wall = None
@@ -574,7 +594,16 @@ class Host:
                             f"{self.station.who}: CONNECTED at {self.run.air_s():.1f} s while it "
                             "held its scan with LISTEN off"
                         )
-                    if self.pending_at is not None and not self.keyed_since_pending:
+                    keyed_lately = (
+                        self.keys_radio
+                        and self.last_ptt_on is not None
+                        and self.run.air_s() - self.last_ptt_on <= 10.0
+                    )
+                    if (
+                        self.pending_at is not None
+                        and not self.keyed_since_pending
+                        and not keyed_lately
+                    ):
                         self.problems.append(
                             f"{self.station.who}: CONNECTED at {self.run.air_s():.1f} s with no "
                             "PTT ON since the PENDING"
@@ -671,7 +700,7 @@ class Host:
         them while the air clock moved in whole seconds, inside a listening one after). Drawn,
         it meets the scan where a real client's would, deaf on one draw in seven."""
         seed = f"{self.run.scenario.get('seed', 1)}:{self.station.who}:scan"
-        dwell = random.Random(seed).uniform(0.0, 3.5)
+        dwell = random.Random(seed).uniform(0.0, self.dwell_s + 0.5)
         while not self.closed:
             began = self.run.air_s()
             began_wall = time.monotonic()
@@ -683,7 +712,7 @@ class Host:
                     self.send("LISTEN ON")
                     began, began_wall = self.run.air_s(), time.monotonic()
                 time.sleep(POLL_S)
-            dwell = 3.0
+            dwell = self.dwell_s
             # the step was decided before a PENDING that came in the window's last quarter
             pending_wall = self.pending_wall
             ended_wall = time.monotonic()
@@ -696,6 +725,13 @@ class Host:
                 continue
             self.send("LISTEN OFF")
             self.deaf = True
+            if len(self.dials) > 1:
+                # the deaf step retunes the radio; taken pessimistically, a LISTEN OFF that
+                # crossed a PENDING moves it too
+                self.dial_index = (self.dial_index + 1) % len(self.dials)
+                dial = self.dials[self.dial_index]
+                self.note("Move:", f"radio to {dial} Hz")
+                self.run.command(f"move {self.station.who} {dial}")
             began = self.run.air_s()
             while not self.closed and self.run.air_s() < began + 0.5:
                 time.sleep(POLL_S)
@@ -793,6 +829,10 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
                 cw_id=str(cfg.get("cw_id", False)).lower(),
                 host=str(bool(cfg.get("host", False))).lower(),
                 host_port=host_port,
+                # `ptt = "host"`: the host program keys the radio (ADR-0025), as KK4ODA-1's RMS
+                # Trimode does; the channel's rig keys all the same, and the station is judged
+                # as a host-keyed one (no rules check, no answer with no program attached)
+                ptt=cfg.get("ptt", "none"),
             ),
             encoding="utf-8",
         )
@@ -960,9 +1000,20 @@ def step(run: Run, text: str) -> bool:
         return True
     if word == "host":
         # `host a client` / `host b trimode`: a program attaches to the station's host port;
-        # `host b wle KK4ODA` says MYCALL KK4ODA where the station's own callsign is another
-        who, kind, mycall = [*arg.split(), "", ""][:3]
-        run.hosts[who] = Host(run, run.stations[who], kind or "client", mycall)
+        # `host b wle KK4ODA` says MYCALL KK4ODA where the station's own callsign is another;
+        # `host b trimode dials=3590000,7101000 dwell=3.9` scans two channels, moving the radio
+        words = arg.split()
+        options = dict(w.split("=", 1) for w in words if "=" in w)
+        who, kind, mycall = [*(w for w in words if "=" not in w), "", ""][:3]
+        dials = tuple(int(d) for d in options.get("dials", "").split(",") if d)
+        run.hosts[who] = Host(
+            run,
+            run.stations[who],
+            kind or "client",
+            mycall,
+            dials=dials,
+            dwell_s=float(options.get("dwell", 3.0)),
+        )
         run.wait("host attached", lambda: False, 2, note=False)
         return True
     if word == "host-connect":

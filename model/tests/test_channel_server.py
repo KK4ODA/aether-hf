@@ -211,6 +211,27 @@ def test_the_progress_file_moves_in_tenths_of_a_second_of_air() -> None:
     assert RATE % cs.PROGRESS_EVERY == 0  # and on every whole second as well
 
 
+def test_a_radio_moved_by_another_program_is_not_told_to_its_daemon() -> None:
+    # ADR-0138: RMS Trimode scanning its channels moves the radio over a CAT link of its own,
+    # which the station cannot read; a knob turned at the radio is read back (MSG_DIAL)
+    srv, a, b = server({})
+    on_air = {"a": a.station, "b": b.station}
+    cs.command(srv, on_air, "knob a 3590000")
+    assert a.station.dial == 3590000 and a.station.dial_told != 3590000
+    cs.command(srv, on_air, "move b 7101000")
+    assert b.station.dial == b.station.dial_told == 7101000
+    cs.command(srv, on_air, "move a 7101000")
+    # on one dial again, a tone from a is heard at b; moved apart, it is not
+    # a second each: the tone and the card's latency behind it are over before the next
+    run(srv, a, b, 1.0, {0: [("a", tone(0.4))]})
+    heard_together = envelope(b.heard).max()
+    cs.command(srv, on_air, "move b 3590000")
+    b.heard.clear()
+    run(srv, a, b, 1.0, {0: [("a", tone(0.4))]})
+    assert heard_together > 0.1
+    assert envelope(b.heard).max() < 0.01
+
+
 def test_the_level_follows_its_schedule_and_holds_its_ends() -> None:
     t = np.array([0.0, 5.0, 10.0, 15.0, 30.0])
     got = cs.level_at([[5.0, 0.0], [15.0, -20.0]], t)
