@@ -5358,9 +5358,17 @@ function applyKiss(kiss, host, datagrams) {
   chip.replaceChildren(chipText(...parts.flatMap((part, i) => (i ? [separator(), part] : [part]))));
   const who = clients.map((c) => `${c.app} (${c.peer})`);
   chip.title = [
-    ...said,
+    ...counted(said),
     who.length ? `KISS: ${who.join(", ")}` : "",
   ].filter(Boolean).join(". ") || "Programs using this station now";
+}
+
+// The same sentence once, with how many connections said it: a program can hold more than one
+// connection (the RadioPost client open twice), and its sentence repeated read as a fault.
+function counted(sentences) {
+  const times = new Map();
+  for (const s of sentences) times.set(s, (times.get(s) ?? 0) + 1);
+  return [...times].map(([s, n]) => (n > 1 ? `${s} (${n} connections)` : s));
 }
 
 // A header chip's words, in the one span that shortens with an ellipsis when the header is

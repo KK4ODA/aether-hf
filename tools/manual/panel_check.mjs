@@ -272,6 +272,33 @@ const CHECKS = [
     page: HELD_COMPACT,
   },
   {
+    // KK4ODA-1, 2026-11-26: RadioPost Gateway's claim and two connections from the RadioPost
+    // client, whose sentence the tooltip said twice
+    scene: "two connections from one program",
+    define: {
+      timeline: "idle",
+      claims: [{id: 5, app: "radiopost-gateway 0.1.0-beta.40", kind: "control",
+                callsigns: ["KK4ODA-1"], listening: true, since_ms: Date.now() - 600_000}],
+      programs: [
+        {id: 3, app: "RadioPost client 0.1.0-beta.40", kind: "control", since_ms: Date.now() - 900_000},
+        {id: 6, app: "RadioPost client 0.1.0-beta.40", kind: "control", since_ms: Date.now() - 300_000},
+      ],
+    },
+    what: "a program on two connections: the header's tooltip says it once, with the count",
+    page: `(async () => {
+      const out = [], chip = document.getElementById("apps-chip");
+      await new Promise((r) => setTimeout(r, 1500));
+      const said = chip.title;
+      const sentence = "RadioPost client 0.1.0-beta.40 is using the station and answers for no callsign of its own now";
+      const times = said.split(sentence).length - 1;
+      if (times !== 1) out.push("the client's sentence is said " + times + " times: '" + said + "'");
+      if (!said.includes(sentence + " (2 connections)")) out.push("the count is not said: '" + said + "'");
+      if (!said.includes("radiopost-gateway 0.1.0-beta.40 answers calls to KK4ODA-1")) out.push("the gateway is not named: '" + said + "'");
+      if ((chip.textContent.match(/RadioPost client/g) || []).length !== 1) out.push("the chip names the client other than once: '" + chip.textContent + "'");
+      return out;
+    })()`,
+  },
+  {
     // a scene of the check's own, not a screenshot (ADR-0137)
     scene: "sound card in another port",
     define: {timeline: "idle", audioCard: {

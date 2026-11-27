@@ -765,11 +765,11 @@ function world(scene) {
     callsigns: [callsign],
     own_callsigns: [callsign],
     // an external program attached, its MYCALL in use (report 22 §3)
-    claims: scene.external
+    claims: scene.claims ?? (scene.external
       ? [{id: 4, app: "the host program", kind: "host", callsigns: [EXTERNAL_CALL], listening: true,
           since_ms: NOW - 900 * MS}]
-      : [],
-    programs: configured ? [RADIOPOST] : [],
+      : []),
+    programs: scene.programs ?? (configured ? [RADIOPOST] : []),
     owner: null,
     mode: SEND_RUNG,
     transmitting: false,

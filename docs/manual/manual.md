@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.30.0 |
-| **Updated** | 2026-11-26 |
+| **Version** | 1.31.0 |
+| **Updated** | 2026-11-27 |
 | **Describes** | Aether HF 0.2.0-beta.182 |
 | **Licence** | CC BY 4.0 |
 
@@ -285,12 +285,14 @@ attention, and seven **tabs**: Status, Session, Stations, Diagnostics, Setup, Lo
    the channel carries a signal.
 6. **The rules badge**: *Legal*, *Warning* or *TX blocked*, for your widest signal where the dial
    is now. Click it to see why.
-7. **Programs**: a chip shows each program using the station, with a green check and its name: a
+7. **Programs**: a chip shows each program using the station, with a green check and its name: an
    external program such as Winlink Express, a RadioPost program, a KISS program.
    - *listening* after a name means the program answers calls.
    - A name alone means the program can call out, but calls to its callsign go unanswered until
      it listens. That is normal for a program that only calls, such as the RadioPost client.
    - A program that scans, as RMS Trimode does, stays *listening* through its short gaps.
+   - A program on more than one connection, such as the RadioPost client open twice, is named
+     once. Its tooltip says how many: *(2 connections)*.
    - With no program there, the chip may say *calls to* your callsign *not answered*. Its
      tooltip says why: under automatic control only a program answers calls.
    - A second chip shows the **bandwidth** when the station is running one that is not its own
@@ -1886,3 +1888,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.29.0 | 2026-11-26 | Setup step 5's **Scans channels**: tick it for an external program that moves the radio between channels as it scans, such as RMS Trimode with more than one channel. Only then does Aether hold the program for a call arriving and refuse a call heard across one of its steps ([A Winlink gateway](#22-a-winlink-gateway)); a Trimode on one channel answers as before 1.28.0. Leave it clear for VarAC's Frequency Scanner. |
 | 1.29.1 | 2026-11-26 | Setup step 5's **Scans channels** says on screen what it is for: *On (RMS Trimode with more than one channel; leave unchecked for VarAC)*. VarAC's scanner was tried on the bench, and the box does nothing for it. |
 | 1.30.0 | 2026-11-26 | Setup step 5's **Scans channels** is for VarAC's Frequency Scanner too: *On (RMS Trimode with more than one channel, or VarAC's scanner)*. Ticked, Aether tells VarAC a call may be coming as soon as one starts to arrive, and VarAC's scanner stays on that frequency ([VarAC's Frequency Scanner](#varacs-frequency-scanner)). |
+| 1.31.0 | 2026-11-27 | The header's programs chip ([The header](#the-header)): a program on more than one connection is said once in the tooltip, with how many, such as *(2 connections)*. KK4ODA-1's tooltip had said the RadioPost client's sentence twice. |
