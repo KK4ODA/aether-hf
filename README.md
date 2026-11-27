@@ -117,8 +117,15 @@ run it.
 | Program | What it is | With Aether |
 |---|---|---|
 | **Winlink Express** | Winlink's client | *Vara HF Winlink* sessions to an Aether gateway, and *Vara HF P2P* sessions to another Aether station |
-| **RMS Trimode** | Winlink's HF gateway | Answers Winlink Express and Pat through Aether and forwards their mail to Winlink's servers; on the air since 2026-11-06 |
+| **RMS Trimode** | Winlink's HF gateway | Answers Winlink Express and Pat through Aether and forwards their mail to Winlink's servers, on one channel or scanning several; on the air since 2026-11-06, scanning since 2026-11-27 |
 | **RMS Packet** | Winlink's VHF/UHF gateway | Both of its ways in (VARA FM and KISS packet) work on the bench; on the air it waits for Aether FM |
+
+A Trimode gateway can scan its channels with Aether as its modem. Tick **Scans channels** in Setup
+step 5: when a call starts to arrive, Aether holds Trimode on that channel until the call is
+answered, and never answers a call it heard partly on another channel. On 2026-11-27 KK4ODA-1's
+Trimode was scanning, stepping every 4.4 s, when a mobile's Winlink Express called it on 7.101 MHz
+at 2300 Hz. The gateway stayed on 7.101 for the whole 6.7 s call and answered it at the first try:
+connected 11 s after the call began, the gateway hearing the mobile at -3.3 to +1.3 dB SNR.
 
 ### The program finder
 
@@ -500,7 +507,7 @@ cover everything else it does.
 * **Programs that scan the radio themselves**: RMS Trimode on several channels and VarAC's
   Frequency Scanner move the radio without telling the modem. With **Scans channels** ticked,
   Aether keeps the program on the channel a call is arriving on, and never answers a call it
-  heard partly on another channel.
+  heard partly on another channel. On the air with a scanning Trimode gateway since 2026-11-27.
 * **VarAC in one step** (Windows): Aether finds VarAC and offers to set it up. It writes a VarAC
   profile, *VarAC_Aether*, a copy of yours with only the modem settings changed, and an Aether
   profile, *VarAC default*. Switch VarAC's profile to run it on Aether, and back to run it on
