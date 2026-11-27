@@ -20,7 +20,7 @@ one-step setup of the program, the drive, and what to do when something is wrong
 [Winlink Express](docs/user/one-page-winlink-express.md)).
 
 > **Status: beta, on the air.** Signed builds ship from
-> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.178` at the time of
+> [Releases](https://github.com/KK4ODA/aether-hf/releases) (`0.2.0-beta.182` at the time of
 > writing): a Windows installer, Linux `.deb` and AppImage packages, an unsigned macOS build for
 > Apple Silicon, and the standalone `aetherd` daemon for gateways, with in-place updates on a
 > beta channel. Aether has been on the air with other stations on 80 m and 40 m since
@@ -497,6 +497,10 @@ cover everything else it does.
 * The **published TNC host interface** (command port 8300, data port 8301) that Winlink Express,
   Pat, VarAC and RMS Trimode already use: Winlink P2P and gateway sessions, VarAC chat, pings,
   files and CQs, and Trimode gateways that scan.
+* **Programs that scan the radio themselves**: RMS Trimode on several channels and VarAC's
+  Frequency Scanner move the radio without telling the modem. With **Scans channels** ticked,
+  Aether keeps the program on the channel a call is arriving on, and never answers a call it
+  heard partly on another channel.
 * **VarAC in one step** (Windows): Aether finds VarAC and offers to set it up. It writes a VarAC
   profile, *VarAC_Aether*, a copy of yours with only the modem settings changed, and an Aether
   profile, *VarAC default*. Switch VarAC's profile to run it on Aether, and back to run it on
@@ -745,7 +749,7 @@ distilled from how the community has received other open HF modems are in
 | 2 — Link robustness | ARQ, rate control, HARQ-IR, low-SNR modes, PAPR, impulse noise | done |
 | 3 — Application integration | Rust core bit-exact with the model, `aetherd`, PTT/CAT, control API, host interface, gateway kit | done; Winlink Express, Pat, VarAC and RMS Trimode pass the bench |
 | 4 — Desktop application | station panel, Tauri shell, setup, diagnostics, accessibility | done; the three-ham usability test is open |
-| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.178` |
+| 5 — Release infrastructure | one version number, installers that bundle the daemon, signed updates on three channels, SBOM, benchmark gate | done — betas flow, `0.2.0-beta.2` through `.182` |
 | 6 — Field validation | recordings, replay, simulated channel, field protocol, the air, on-air crowdsourcing (the Test session) | **in progress**: on the air with other stations since 2026-09-23, Winlink through an Aether gateway since 2026-11-06, RadioPost mail since 2026-11-12; granted slots (link protocol 8 onwards), the scenario harness and the rate controller's reviews came from those sessions |
 | 7 — The 500 Hz waveform and the link probe | the bandwidth peer-to-peer contacts use, the bandwidth in the handshake, answer-only, a two-way probe | done |
 | 9 — The modem's second rung | a faster start, the tone floor and the middle tone kinds, fading and NVIS receivers, an A/B bench against another modem, the deferred pilot/prefix/2750 Hz experiments, time diversity — each with its curve | **in progress**: the tone floor, fast tones and four-tone kinds, fast-fading and echo-aware receivers, stuck frames in pieces done; the A/B runs and P9-3 open; time diversity paused |
