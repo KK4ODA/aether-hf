@@ -795,6 +795,74 @@ fn a_host_program_and_a_control_api_program_share_one_station() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn a_programs_beacon_reaches_the_other_daemons_list_with_its_word_and_place() {
+    // ADR-0139, ADR-0140 and ADR-0142 end to end: a RadioPost-like program on daemon B beacons
+    // as the callsign it holds, with a reference, a window and its exact position; it is told
+    // the beacon went, and daemon A lists the station as answering calls, where it said it was
+    let dir = std::env::temp_dir().join(format!("aether-beacons-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let mut a = Daemon::start(&dir, "a", "W4ODA", "listen = \"127.0.0.1:0\"");
+    let channel = a.sim_address();
+    let b = Daemon::start(&dir, "b", "KK4XYZ", &format!("connect = \"{channel}\""));
+    let mut program = Program::connect(&b);
+    let claimed = program.call(
+        "claim",
+        &json!({"callsigns": ["WD5EMA"], "app": "RadioPost client"}),
+    );
+    assert_eq!(claimed["ok"], true, "{claimed}");
+    assert_eq!(
+        program.call("listen", &json!({"enabled": true}))["ok"],
+        true
+    );
+    assert_eq!(
+        b.call("capabilities", &json!({}))["result"]["beacon"]["program"],
+        true
+    );
+    let asked = program.call(
+        "beacon",
+        &json!({
+            "ref": "b1",
+            "within_s": 120,
+            "position": {"lat": 34.4621, "lon": -83.7514, "precision": "exact"},
+        }),
+    );
+    assert_eq!(asked["ok"], true, "{asked}");
+    let sent = program.next("the beacon's end", |m| m["event"] == "beacon-sent");
+    assert_eq!(sent["data"]["ref"], "b1", "{sent}");
+    assert_eq!(sent["data"]["callsign"], "WD5EMA");
+    assert_eq!(sent["data"]["sent"], true, "{sent}");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let heard = loop {
+        let list = a.call("heard.list", &json!({}))["result"]["stations"].clone();
+        if let Some(entry) = list
+            .as_array()
+            .and_then(|l| l.iter().find(|e| e["callsign"] == "WD5EMA"))
+        {
+            break entry.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon A never listed WD5EMA: {list}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(heard["activity"], "beacon", "{heard}");
+    assert_eq!(heard["answering"], true, "{heard}");
+    assert_eq!(heard["position"]["precision"], "exact", "{heard}");
+    let lat = heard["position"]["lat"].as_f64().expect("a latitude");
+    assert!((lat - 34.4621).abs() < 2e-5, "{heard}");
+    // a callsign it does not hold is not its to beacon as
+    let refused = program.call("beacon", &json!({"callsign": "KK4XYZ"}));
+    assert_eq!(refused["ok"], false, "{refused}");
+    drop(program);
+    drop(b);
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The bandwidth `daemon`'s stations-heard list gives `callsign`, once it gives one.
 fn heard_bandwidth(daemon: &Daemon, callsign: &str) -> Option<u64> {
     let list = daemon.call("heard.list", &json!({}))["result"]["stations"].clone();

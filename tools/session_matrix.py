@@ -194,7 +194,7 @@ auto = true
 dir = "{record}"
 # never the project's upload folder from a bench (debug mode, ADR-0050)
 send_to_project = false
-"""
+{operator}"""
 
 
 IDENTIFY_BY: str | None = None
@@ -925,6 +925,8 @@ def start(run: Run, daemon_a: Path, daemon_b: Path) -> None:
                 # Trimode does; the channel's rig keys all the same, and the station is judged
                 # as a host-keyed one (no rules check, no answer with no program attached)
                 ptt=cfg.get("ptt", "none"),
+                # the station's grid square, which its beacons carry (ADR-0142)
+                operator=f'\n[operator]\ngrid = "{cfg["grid"]}"\n' if cfg.get("grid") else "",
             ),
             encoding="utf-8",
         )
@@ -978,8 +980,9 @@ def step(run: Run, text: str) -> bool:
         run.wait("wait", lambda: False, float(arg), note=False)
         return True
     if word == "beacon":
+        before = b.counter("beacons_heard")
         call(a.control, "beacon")
-        return run.wait("beacon heard", lambda: b.counter("beacons_heard") > 0, 60)
+        return run.wait("beacon heard", lambda: b.counter("beacons_heard") > before, 60)
     if word == "probe":
         before = a.counter("probe_replies")
         call(a.control, "probe", {"remote": b.callsign})

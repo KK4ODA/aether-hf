@@ -143,3 +143,7 @@ context → decision → alternatives considered → consequences.
 | [0136](0136-the-keyed-audio-watch-knows-its-own-signal.md) | The keyed-audio watch knows the station's own signal coming back | accepted, beta.175 |
 | [0137](0137-the-sound-card-comes-back.md) | The sound card comes back by itself, and the same codec in another USB port is found under its new Windows name | accepted |
 | [0138](0138-a-scanning-program-holds-for-a-call-arriving.md) | A scanning program holds for a call arriving, and a call heard across its deaf step is not answered | accepted |
+| [0139](0139-a-programs-beacon.md) | A program's beacon goes as its own callsign, within its window, on its dial; `beacon-sent` says what became of it | accepted |
+| [0140](0140-a-beacon-says-whether-calls-are-answered.md) | A beacon says whether calls to its callsign are answered now | accepted |
+| [0141](0141-the-radios-own-transmitting-holds-what-the-station-starts.md) | The radio's own transmitting holds a beacon, a call or a probe the station starts by itself | accepted; owed on the FTDX10 and the TS-480 |
+| [0142](0142-a-beacon-says-where-its-station-is.md) | A beacon says where its station is, as precisely as its operator chose | accepted |

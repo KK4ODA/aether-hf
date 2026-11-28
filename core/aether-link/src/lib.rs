@@ -17,9 +17,9 @@ pub mod phy;
 pub mod rate;
 
 pub use frames::{
-    CONTROL_BYTES, ConnectBody, DATA_HEADER, DataHeader, DataKind, FrameError, GrantFrame,
-    GrantKind, IdentFrame, ProbeBody, WINDOW, ident_callsign, identification_frames,
-    is_identification,
+    BeaconBody, BeaconPosition, CONTROL_BYTES, ConnectBody, DATA_HEADER, DataHeader, DataKind,
+    FrameError, GrantFrame, GrantKind, IdentFrame, ProbeBody, WINDOW, ident_callsign,
+    identification_frames, is_identification,
 };
 pub use granted::{
     Action, DataHeard, GrantConfig, GrantStats, GrantedEngine, IdentifyBy, LadderRung,

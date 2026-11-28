@@ -1,0 +1,30 @@
+name = "40m-beacons-around-a-session-2300"
+description = """40m at 2300 Hz. Station A beacons, carrying its grid square (ADR-0142) and its word
+on calls being answered (ADR-0140), then calls B, sends a message, closes, and beacons again once
+the session's identifiers are over. B hears both beacons and the session completes. Tagged
+`mixed`: the nightly runs it against the newest release both ways, so a receiver of before
+ADR-0140 and ADR-0142 must still hear a beacon that carries their bytes."""
+tags = ["40m", "beacon", "mixed"]
+bandwidth = 2300
+seconds = 600
+seed = 139
+
+[stations.a]
+callsign = "W4ODA"
+grid = "EM73tr"
+[stations.b]
+callsign = "KK4ODA"
+
+[path]
+profile = "good"
+snr_db = 6.0
+cfo_hz = 2.0
+
+[script]
+steps = ["beacon", "connect", "message 800", "disconnect", "wait_idle 120", "wait 40", "beacon"]
+
+[expect]
+connected = true
+delivered = true
+idle = true
+max_collisions = 0

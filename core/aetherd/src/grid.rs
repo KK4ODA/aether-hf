@@ -39,6 +39,81 @@ pub fn locator(grid: &str) -> Option<(f64, f64)> {
     Some((lat, lon))
 }
 
+/// The centre of a four- or six-character square, as `(lat, lon)`, worked in whole
+/// twenty-fourths and forty-eighths of a degree and divided once, so that every program reading
+/// the square gets the same two numbers to the last bit (`RadioPost`'s RP-4 §4.4 compares them as
+/// written): what a beacon's square is heard as (ADR-0142). `None` for anything else.
+#[must_use]
+pub fn square_centre(grid: &str) -> Option<(f64, f64)> {
+    let b = grid.trim().as_bytes();
+    if b.len() != 4 && b.len() != 6 {
+        return None;
+    }
+    let letter = |c: u8, most: u8| {
+        c.to_ascii_uppercase()
+            .checked_sub(b'A')
+            .filter(|&v| v <= most)
+            .map(i32::from)
+    };
+    let digit = |c: u8| c.checked_sub(b'0').filter(|&v| v <= 9).map(i32::from);
+    let (fx, fy) = (letter(b[0], 17)?, letter(b[1], 17)?);
+    let (sx, sy) = (digit(b[2])?, digit(b[3])?);
+    if b.len() == 4 {
+        return Some((
+            f64::from(-90 + fy * 10 + sy) + 0.5,
+            f64::from(-180 + fx * 20 + sx * 2 + 1),
+        ));
+    }
+    let (ux, uy) = (letter(b[4], 23)?, letter(b[5], 23)?);
+    let lon_24ths = (fx * 20 + sx * 2) * 24 + ux * 2 + 1;
+    let lat_48ths = (fy * 10 + sy) * 48 + uy * 2 + 1;
+    Some((
+        -90.0 + f64::from(lat_48ths) / 48.0,
+        -180.0 + f64::from(lon_24ths) / 24.0,
+    ))
+}
+
+/// The four- or six-character square that holds a position, `None` for a position off the
+/// globe or another length. The north pole and the antimeridian stay in the last squares.
+#[must_use]
+pub fn square_of(lat: f64, lon: f64, chars: usize) -> Option<String> {
+    if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+        return None;
+    }
+    if chars != 4 && chars != 6 {
+        return None;
+    }
+    // in whole subsquares from the south-west corner: 24 a square across and up
+    let cells = |v: f64, per_degree: f64, most: u32| {
+        let whole = (v * per_degree).floor();
+        if whole <= 0.0 {
+            0
+        } else if whole >= f64::from(most) {
+            most - 1
+        } else {
+            // whole is in 0..most, so the cast keeps it
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                whole as u32
+            }
+        }
+    };
+    let x = cells(lon + 180.0, 12.0, 4320);
+    let y = cells(lat + 90.0, 24.0, 4320);
+    let letter = |v: u32, base: u8| char::from(base + u8::try_from(v).unwrap_or(0));
+    let digit = |v: u32| char::from(b'0' + u8::try_from(v).unwrap_or(0));
+    let mut out = String::with_capacity(chars);
+    out.push(letter(x / 240, b'A'));
+    out.push(letter(y / 240, b'A'));
+    out.push(digit(x % 240 / 24));
+    out.push(digit(y % 240 / 24));
+    if chars == 6 {
+        out.push(letter(x % 24, b'a'));
+        out.push(letter(y % 24, b'a'));
+    }
+    Some(out)
+}
+
 /// The great-circle distance between two locators, kilometres, or `None` when either is
 /// not one.
 #[must_use]
@@ -83,5 +158,27 @@ mod tests {
         let there = path_km("EM73", "FN31").expect("path");
         let back = path_km("FN31", "EM73").expect("path");
         assert!((there - back).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_square_is_found_and_centred_as_radiopost_finds_it() {
+        // RadioPost's rpmi::position tests, the same cases
+        assert_eq!(square_of(34.4621, -83.7514, 6).as_deref(), Some("EM84cl"));
+        assert_eq!(square_of(33.78123, -84.38765, 4).as_deref(), Some("EM73"));
+        let (lat, lon) = square_centre("EM84cl").expect("a square");
+        assert!((lat - (34.0 + 23.0 / 48.0)).abs() < 1e-12, "{lat}");
+        assert!((lon + (83.0 + 19.0 / 24.0)).abs() < 1e-12, "{lon}");
+        assert_eq!(square_centre("EM73"), Some((33.5, -85.0)));
+        assert_eq!(square_centre("em84CL"), square_centre("EM84cl"));
+        assert_eq!(square_centre("EM8"), None);
+        assert_eq!(square_centre("ZZ99"), None);
+        assert_eq!(square_of(89.999, 179.999, 6).as_deref(), Some("RR99xx"));
+        assert_eq!(square_of(90.0, 180.0, 6).as_deref(), Some("RR99xx"));
+        assert_eq!(square_of(-90.0, -180.0, 6).as_deref(), Some("AA00aa"));
+        assert_eq!(square_of(91.0, 0.0, 6), None);
+        assert_eq!(square_of(0.0, 0.0, 8), None);
+        // and the centre is the field log's, to its own rounding
+        let (a, b) = locator("EM84cl").expect("a square");
+        assert!((a - lat).abs() < 1e-9 && (b - lon).abs() < 1e-9);
     }
 }

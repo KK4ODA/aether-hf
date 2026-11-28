@@ -80,6 +80,59 @@ pub struct HeardStation {
     /// written before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer_gap_ms: Option<u32>,
+    /// What its last beacon that said so said of calls to it: answered then, or not
+    /// (ADR-0140). None until one has, and in a list written before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answering: Option<bool>,
+    /// Where its last beacon that said so said it is (ADR-0142).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<HeardPosition>,
+}
+
+/// Where a beacon said its station is (ADR-0142): the latitude and longitude as decoded, or, for
+/// a Maidenhead square, its centre and its locator, as the modem interface of `RadioPost` carries
+/// a position (its RP-4 §4.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HeardPosition {
+    /// Degrees north.
+    pub lat: f64,
+    /// Degrees east.
+    pub lon: f64,
+    /// `grid4`, `grid6` or `exact`.
+    pub precision: String,
+    /// The locator, for a square.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<String>,
+}
+
+impl HeardPosition {
+    /// What a beacon's position says, as a heard list keeps it.
+    #[must_use]
+    pub fn of(position: &aether_link::BeaconPosition) -> Option<HeardPosition> {
+        use aether_link::BeaconPosition;
+        let (precision, grid) = match position {
+            BeaconPosition::Exact { lat, lon } => {
+                // six decimals: about 0.1 m, finer than the beacon's two metres
+                let round = |v: f64| (v * 1e6).round() / 1e6;
+                return Some(HeardPosition {
+                    lat: round(*lat),
+                    lon: round(*lon),
+                    precision: "exact".into(),
+                    grid: None,
+                });
+            }
+            BeaconPosition::Grid4(grid) => ("grid4", grid),
+            BeaconPosition::Grid6(grid) => ("grid6", grid),
+        };
+        // the centre as every program works it out, to the last bit
+        let (lat, lon) = crate::grid::square_centre(grid)?;
+        Some(HeardPosition {
+            lat,
+            lon,
+            precision: precision.into(),
+            grid: Some(grid.clone()),
+        })
+    }
 }
 
 /// One frame with a callsign in it.
@@ -102,6 +155,10 @@ pub struct Sighting {
     pub detail: Option<String>,
     /// The bandwidth the frame says its sender runs, when it says.
     pub bandwidth_hz: Option<u32>,
+    /// A beacon's word on calls to it being answered now (ADR-0140).
+    pub answering: Option<bool>,
+    /// A beacon's position (ADR-0142).
+    pub position: Option<HeardPosition>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -155,6 +212,13 @@ impl HeardList {
             if sighting.bandwidth_hz.is_some() {
                 entry.bandwidth_hz = sighting.bandwidth_hz;
             }
+            // only a beacon says these, and a session's frames do not erase them
+            if sighting.answering.is_some() {
+                entry.answering = sighting.answering;
+            }
+            if sighting.position.is_some() {
+                entry.position.clone_from(&sighting.position);
+            }
             if let Some(mode) = sighting.mode {
                 entry.mode = mode;
             }
@@ -183,6 +247,8 @@ impl HeardList {
                 last_beacon_ms: (sighting.activity == Activity::Beacon).then_some(sighting.at_ms),
                 bandwidth_hz: sighting.bandwidth_hz,
                 answer_gap_ms: None,
+                answering: sighting.answering,
+                position: sighting.position,
             };
             self.stations.push(entry.clone());
             entry
@@ -286,6 +352,8 @@ mod tests {
             activity: Activity::Beacon,
             detail: None,
             bandwidth_hz: Some(500),
+            answering: None,
+            position: None,
         }
     }
 
@@ -322,6 +390,8 @@ mod tests {
         list.note(Sighting {
             activity: Activity::Connected,
             bandwidth_hz: None,
+            answering: None,
+            position: None,
             ..sighting("W4TGA", 6_000, 4.0)
         });
         assert!(list.stations()[0].connected);
@@ -330,6 +400,8 @@ mod tests {
         let entry = list.note(Sighting {
             activity: Activity::Probing,
             bandwidth_hz: Some(2300),
+            answering: None,
+            position: None,
             ..sighting("W4TGA", 7_000, 4.0)
         });
         assert_eq!(entry.bandwidth_hz, Some(2300));

@@ -3735,6 +3735,33 @@ Owed: the real Trimode told `PENDING` for frames that are not calls, many times 
 scanning channels on the air. Open: a gateway accepting a fourth 2300 Hz try after the caller has
 moved its next to 500 Hz (ADR-0058) sits in an empty session until its link timeout.
 
+**Beacons for RadioPost's P2P list (2026-11-28, ADR-0139…0142; RadioPost's design
+`docs/design/07-p2p-stations.md`, the author's 22 decisions; no wire change by the author's
+reading, no config key).** *A program's beacon* (ADR-0139): `beacon` takes `ref`, `within_s`
+(1–600: a clear channel whatever `wait_for_clear` says, then dropped), `dial_hz` (the radio's
+within 50 Hz or a scan's, which the scan goes to next and holds: `beacon_dial_index`,
+`beacon_waiting_here`) and `position`; a claimed connection beacons as its first callsign or a
+named one it holds (or with one as its base, VarAC's `-9`), `claimed` / `bad_params` otherwise
+(`beacon_callsign`); the queued beacon is `Beacons.queued` (`QueuedBeacon`, fed by `feed_beacon`
+before datagrams in `start_pending`; one with no window goes on the queue at once, as the panel's
+always did), and every beacon ends in one `beacon-sent` event (`take_beacon_reports`,
+`publish_beacons` in `main.rs`: `ref`, `callsign`, `sent`, `dial_hz`, `reason`); `status.beacon.queued`;
+`capabilities.beacon` `{program, answers, position}`. *Answering* (ADR-0140): the beacon's
+capability byte bit 6 says it says, bit 5 is the answer (`answers_call_for` as the frame is
+rendered: `beacon_now` rebuilds it in `render_next`). *Position* (ADR-0142): after the
+capability byte a precision byte (1 grid4, 2 grid6, 3 exact 24+24 bits) and 2, 4 or 6 bytes;
+`aether_link::BeaconBody`/`BeaconPosition` encode and decode the body; a beacon given none
+carries `[operator] grid`; `position: null` carries none; heard as `HeardPosition` (a square's
+centre by `grid::square_centre` in 24ths and 48ths, RadioPost's rpmi::position to the bit;
+`grid::square_of`). `frame`, `heard.json`, `heard.list` and `heard` carry `answering` and
+`position`. *The radio's own transmitting* (ADR-0141): `Ptt::radio_transmitting` (Yaesu `TX;`
+TX0/TX1/TX2, Kenwood `IF;` P7 ten characters before the end, Icom `1C 00`, rigctld `t`, FLRig
+`rig.get_ptt`), read in the background twice a second while not transmitting and no session is up
+(`Asked.transmit`, `Readings.transmitting`, `radio_reads::TRANSMIT_EVERY_S`); a beacon, a call or a
+probe waits in `held_for_busy` while a fresh answer (2 s, 0.5 s past the station's own release)
+says the radio transmits; a keying that cannot ask says so once. Owed: the FTDX10 and the TS-480
+by hand, the operator on the microphone as a beacon falls due.
+
 **Commands for the author run in Windows PowerShell 5.1**, which refuses `&&` and `||`: give
 one command per block (or join them with `;` only where a failure need not stop the next), and
 tag a release by its commit hash when master has moved past it.

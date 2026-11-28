@@ -639,9 +639,16 @@ id of zero and this body:
 | Offset | Field |
 |---|---|
 | 0–6 | the station's callsign, packed — or the name a host program gave the beacon when one of the station's callsigns is its base, the part before any `-` (VarAC's `KK4ODA-9` for `KK4ODA`) |
-| 7 | capability byte (§7.3): the bandwidth its sender runs — absent from a beacon of before ADR-0024, which a receiver reads as not said |
+| 7 | capability byte (§7.3): the bandwidth its sender runs — absent from a beacon of before ADR-0024, which a receiver reads as not said. Bit 6 (`0x40`) set: the beacon says whether calls to its callsign are answered now, and bit 5 (`0x20`) is that answer (ADR-0140). Both clear: it does not say (a beacon of before ADR-0140) |
+| 8 | precision of the position that follows (ADR-0142): 1 a 4-character Maidenhead square, 2 a 6-character one, 3 the latitude and longitude. Absent: the beacon says nothing of where its station is. Any other value: a receiver reads the bytes before it and stops |
+| 9–10 | precision 1: the square's indices across and up, one byte each, 0–179, in 2° by 1° squares from 180° W and 90° S (`EM73` is 47, 123) |
+| 9–12 | precision 2: the 6-character square's indices across and up, 0–4319 each, in 5′ by 2.5′ squares from 180° W and 90° S, as one 32-bit big-endian word `x << 13 \| y` (`EM84cl` is 1154, 2987) |
+| 9–14 | precision 3: latitude, then longitude, 24 bits big-endian each: round((lat + 90) / 180 × (2²⁴ − 1)) and round((lon + 180) / 360 × (2²⁴ − 1)), steps of about 1.2 m north and 2.4 m east at the equator |
 
-A receiver of an earlier version reads the callsign and never looks further. It is how an
+The body is 15 bytes at most, inside the one tone-24 frame a beacon is. A receiver of an earlier
+version reads the callsign and never looks further; one of before ADR-0140 and ADR-0142 reads the
+bandwidth and ignores the rest. A beacon's square is heard as its centre, worked in whole
+24ths and 48ths of a degree. It is how an
 operator answers "can anybody
 hear me?" without arranging a contact first, which on HF is most of what a new station needs
 to know. A receiver reports the callsign (or name), the bandwidth and the SNR it measured and

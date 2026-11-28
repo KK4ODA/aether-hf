@@ -5,8 +5,8 @@
 | | |
 |---|---|
 | **Status** | Current |
-| **Version** | 1.31.0 |
-| **Updated** | 2026-11-27 |
+| **Version** | 1.32.0 |
+| **Updated** | 2026-11-28 |
 | **Describes** | Aether HF 0.2.0-beta.182 |
 | **Licence** | CC BY 4.0 |
 
@@ -478,7 +478,8 @@ settings.
 - **Sideband**: USB, the convention for data. On LSB the signal lands below the dial, mirrored.
 - **Field log**: your grid (six characters lets the log work out distances), rig, power in watts
   and antenna. They go into every recording, so a report about the air needs no follow-up. Each
-  may be left empty.
+  may be left empty. Your beacons carry the grid too, so anyone listening sees where you are;
+  leave it empty to say nothing.
 
 What the rules check, and why, is in [The rules](#19-the-rules). Aether keys nothing the rules
 refuse, but you remain the control operator.
@@ -738,7 +739,8 @@ Type the other station's callsign, with its SSID if it uses one. Then:
   anyone listening can report hearing you. The list beside it repeats it every 10, 15, 20, 30 or
   60 minutes while you are at the station. A beacon waits for a clear channel and for any session
   to finish, and the repeat stops when the modem restarts. Aether never beacons under automatic
-  control.
+  control. With the radio on CAT, rigctld or FLRig, a beacon, a call or a probe also waits while
+  the radio says it is transmitting: you on the microphone. The Log says so.
 - **Test session**: a measured contact ([The Test session](#the-test-session)). The same button
   stops it.
 
@@ -1137,6 +1139,19 @@ hears you and how well, both ways. Probe before a long session on an unknown pat
 **A beacon** says your callsign to anyone listening, on the tone floor. Other stations list you in
 their Stations tab, with how well they heard you. Use the repeat while you are at the station; under
 automatic control with the US rules Aether sends none.
+
+A beacon also says two things a listener choosing whom to call wants to know:
+
+- **Whether calls to the callsign are answered now.** Yours says yes when Aether would answer a
+  call to it; while a program such as RadioPost speaks for the station, it says what the program
+  does.
+- **Where the station is.** The panel's beacon carries your grid from Setup step 1, four or six
+  characters as you typed it, or nothing when it is empty. A program such as RadioPost sends the
+  position its operator chose: none, a grid square, or the exact position. Everyone listening
+  hears it.
+
+A program's beacon goes as the program's own callsign, waits no longer than the program said, and
+goes on the dial it named. The Log says when one did not go, and why.
 
 ### The Test session
 
@@ -1889,3 +1904,4 @@ in `CONTRIBUTING.md` and `docs/MAINTAINING.md`.
 | 1.29.1 | 2026-11-26 | Setup step 5's **Scans channels** says on screen what it is for: *On (RMS Trimode with more than one channel; leave unchecked for VarAC)*. VarAC's scanner was tried on the bench, and the box does nothing for it. |
 | 1.30.0 | 2026-11-26 | Setup step 5's **Scans channels** is for VarAC's Frequency Scanner too: *On (RMS Trimode with more than one channel, or VarAC's scanner)*. Ticked, Aether tells VarAC a call may be coming as soon as one starts to arrive, and VarAC's scanner stays on that frequency ([VarAC's Frequency Scanner](#varacs-frequency-scanner)). |
 | 1.31.0 | 2026-11-27 | The header's programs chip ([The header](#the-header)): a program on more than one connection is said once in the tooltip, with how many, such as *(2 connections)*. KK4ODA-1's tooltip had said the RadioPost client's sentence twice. |
+| 1.32.0 | 2026-11-28 | Beacons ([Probes, beacons and the Test session](#18-probes-beacons-and-the-test-session)): a beacon says whether calls to its callsign are answered now and where the station is (your grid from Setup step 1, or a program's choice); a program's beacon goes as its own callsign, within its window, on its dial. **Field log** (Setup step 1): the grid goes into your beacons. **Beacon** (Session tab): with the radio on CAT, rigctld or FLRig, a beacon, a call or a probe waits while the radio is transmitting. |

@@ -51,6 +51,8 @@ host = false                # a host (VARA-compatible) port, for the host-* step
 ptt = "none"                # [ptt] kind: "host" for a station whose host program keys
 host_scans = false          # [host] scans (schema 16): its host program moves the radio
                             # between channels, as `host b trimode dials=…` does (ADR-0138 §6)
+grid = "EM73tr"             # [operator] grid, which the station's beacons carry (ADR-0142);
+                            # none unless given
 
 [stations.b]                # the called station, the same keys
 callsign = "KK4XYZ"

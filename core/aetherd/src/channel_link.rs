@@ -349,6 +349,7 @@ impl crate::ptt::Ptt for ChannelRig {
             meter: None,
             dial_hz: if asked.dial { self.dial() } else { None },
             settings: Vec::new(),
+            transmitting: None,
         });
     }
 

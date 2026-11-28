@@ -1043,6 +1043,340 @@ impl AcceptFrame {
     }
 }
 
+// ── beacons ──────────────────────────────────────────────────────────
+
+/// A beacon's capability byte, bit 6: the beacon says whether calls to its callsign are answered
+/// now, in bit 5 (ADR-0140). A beacon from before that has both clear, and says nothing.
+pub const BEACON_STATES_ANSWERING: u8 = 0x40;
+/// A beacon's capability byte, bit 5, with bit 6 set: calls to its callsign are answered now.
+pub const BEACON_ANSWERS: u8 = 0x20;
+
+/// The largest value of a position's 24-bit latitude or longitude (ADR-0142).
+const EXACT_STEPS: f64 = 16_777_215.0;
+
+/// Where a beacon says its station is (ADR-0142): a Maidenhead square of four or six
+/// characters, or the latitude and longitude to about two metres.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BeaconPosition {
+    /// A four-character square, as `EM73`.
+    Grid4(String),
+    /// A six-character square, as `EM73tr`.
+    Grid6(String),
+    /// Degrees north and east.
+    Exact {
+        /// Latitude, −90 to 90.
+        lat: f64,
+        /// Longitude, −180 to 180.
+        lon: f64,
+    },
+}
+
+/// The body of a `BEACON` frame (air-interface §7.4): the callsign, then a capability byte stating
+/// the bandwidth the sender runs (ADR-0024) and, from ADR-0140, whether calls to it are answered
+/// now; then, from ADR-0142, a precision byte and the position. A receiver of an earlier version
+/// reads the callsign and never looks further; a body that ends early says less.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeaconBody {
+    /// The callsign, or the name a host program gave the beacon.
+    pub callsign: String,
+    /// The bandwidth the sender runs, hertz; `None` when the beacon does not say.
+    pub bandwidth_hz: Option<usize>,
+    /// Whether calls to the callsign are answered now; `None` when the beacon does not say.
+    pub answers: Option<bool>,
+    /// Where the station is, when the beacon says.
+    pub position: Option<BeaconPosition>,
+}
+
+/// A Maidenhead square's indices: across and up, in squares of its own size.
+fn square_indices(grid: &str) -> Option<(u32, u32)> {
+    let b = grid.as_bytes();
+    let letter = |c: u8, most: u8| {
+        c.to_ascii_uppercase()
+            .checked_sub(b'A')
+            .filter(|&v| v <= most)
+    };
+    let digit = |c: u8| c.checked_sub(b'0').filter(|&v| v <= 9);
+    let (fx, fy) = (
+        u32::from(letter(*b.first()?, 17)?),
+        u32::from(letter(*b.get(1)?, 17)?),
+    );
+    let (sx, sy) = (u32::from(digit(*b.get(2)?)?), u32::from(digit(*b.get(3)?)?));
+    match b.len() {
+        4 => Some((fx * 10 + sx, fy * 10 + sy)),
+        6 => {
+            let (ux, uy) = (u32::from(letter(b[4], 23)?), u32::from(letter(b[5], 23)?));
+            Some((fx * 240 + sx * 24 + ux, fy * 240 + sy * 24 + uy))
+        }
+        _ => None,
+    }
+}
+
+/// The square whose indices these are, of `chars` characters.
+fn square_named(x: u32, y: u32, chars: usize) -> Option<String> {
+    let letter = |v: u32, base: u8| u8::try_from(v).ok().map(|v| char::from(base + v));
+    let digit = |v: u32| u8::try_from(v).ok().map(|v| char::from(b'0' + v));
+    let mut out = String::with_capacity(chars);
+    if chars == 4 {
+        if x >= 180 || y >= 180 {
+            return None;
+        }
+        out.push(letter(x / 10, b'A')?);
+        out.push(letter(y / 10, b'A')?);
+        out.push(digit(x % 10)?);
+        out.push(digit(y % 10)?);
+    } else {
+        if x >= 4320 || y >= 4320 {
+            return None;
+        }
+        out.push(letter(x / 240, b'A')?);
+        out.push(letter(y / 240, b'A')?);
+        out.push(digit(x % 240 / 24)?);
+        out.push(digit(y % 240 / 24)?);
+        out.push(letter(x % 24, b'a')?);
+        out.push(letter(y % 24, b'a')?);
+    }
+    Some(out)
+}
+
+/// The position after a beacon's capability byte: its precision byte and the bytes it names;
+/// `None` for a precision this reader does not know, or bytes cut short.
+fn position_in(rest: &[u8]) -> Option<BeaconPosition> {
+    let word = |at: usize, len: usize| -> Option<u32> {
+        let bytes = rest.get(at..at + len)?;
+        Some(bytes.iter().fold(0, |acc, &b| (acc << 8) | u32::from(b)))
+    };
+    match rest.first()? {
+        1 => square_named(word(1, 1)?, word(2, 1)?, 4).map(BeaconPosition::Grid4),
+        2 => {
+            let both = word(1, 4)?;
+            square_named(both >> 13, both & 0x1FFF, 6).map(BeaconPosition::Grid6)
+        }
+        3 => Some(BeaconPosition::Exact {
+            lat: f64::from(word(1, 3)?) / EXACT_STEPS * 180.0 - 90.0,
+            lon: f64::from(word(4, 3)?) / EXACT_STEPS * 360.0 - 180.0,
+        }),
+        _ => None,
+    }
+}
+
+impl BeaconBody {
+    /// The body's bytes.
+    ///
+    /// # Errors
+    /// If the callsign will not pack, the bandwidth is one the air interface does not name, or a
+    /// square is not one.
+    pub fn encode(&self) -> Result<Vec<u8>, FrameError> {
+        let mut out = pack_callsign(&self.callsign)?.to_vec();
+        if self
+            .bandwidth_hz
+            .is_some_and(|hz| bandwidth_code_of(hz).is_none())
+        {
+            return Err(FrameError::OutOfRange);
+        }
+        let mut caps = self.bandwidth_hz.map_or(0, |hz| with_bandwidth(0, hz));
+        if let Some(answers) = self.answers {
+            caps |= BEACON_STATES_ANSWERING;
+            if answers {
+                caps |= BEACON_ANSWERS;
+            }
+        }
+        out.push(caps);
+        match &self.position {
+            None => {}
+            Some(BeaconPosition::Grid4(grid)) => {
+                let (x, y) = square_indices(grid)
+                    .filter(|_| grid.len() == 4)
+                    .ok_or(FrameError::OutOfRange)?;
+                out.extend([
+                    1,
+                    u8::try_from(x).map_err(|_| FrameError::OutOfRange)?,
+                    u8::try_from(y).map_err(|_| FrameError::OutOfRange)?,
+                ]);
+            }
+            Some(BeaconPosition::Grid6(grid)) => {
+                let (x, y) = square_indices(grid)
+                    .filter(|_| grid.len() == 6)
+                    .ok_or(FrameError::OutOfRange)?;
+                out.push(2);
+                out.extend(((x << 13) | y).to_be_bytes());
+            }
+            Some(BeaconPosition::Exact { lat, lon }) => {
+                if !(-90.0..=90.0).contains(lat) || !(-180.0..=180.0).contains(lon) {
+                    return Err(FrameError::OutOfRange);
+                }
+                // within range, so the rounded steps fit 24 bits
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let step = |v: f64, span: f64| ((v / span) * EXACT_STEPS).round() as u32;
+                out.push(3);
+                out.extend(&step(lat + 90.0, 180.0).to_be_bytes()[1..]);
+                out.extend(&step(lon + 180.0, 360.0).to_be_bytes()[1..]);
+            }
+        }
+        Ok(out)
+    }
+
+    /// A body as a receiver reads it: the callsign, and whatever follows it that it can read.
+    /// A precision it does not know says no position.
+    ///
+    /// # Errors
+    /// If the callsign is missing or will not unpack.
+    pub fn decode(body: &[u8]) -> Result<BeaconBody, FrameError> {
+        let callsign = unpack_callsign(body)?;
+        let caps = body.get(CALL_BYTES).copied();
+        let bandwidth_hz = caps.and_then(bandwidth_hz_of);
+        let answers = caps
+            .filter(|c| c & BEACON_STATES_ANSWERING != 0)
+            .map(|c| c & BEACON_ANSWERS != 0);
+        let position = position_in(body.get(CALL_BYTES + 1..).unwrap_or(&[]));
+        Ok(BeaconBody {
+            callsign,
+            bandwidth_hz,
+            answers,
+            position,
+        })
+    }
+}
+
+#[cfg(test)]
+mod beacon_tests {
+    use super::{BeaconBody, BeaconPosition, CALL_BYTES, pack_callsign, with_bandwidth};
+
+    fn body(answers: Option<bool>, position: Option<BeaconPosition>) -> BeaconBody {
+        BeaconBody {
+            callsign: "KK4ODA".into(),
+            bandwidth_hz: Some(2300),
+            answers,
+            position,
+        }
+    }
+
+    #[test]
+    fn a_beacon_body_reads_back_whatever_it_says() {
+        for b in [
+            body(None, None),
+            body(Some(true), None),
+            body(Some(false), Some(BeaconPosition::Grid4("EM73".into()))),
+            body(Some(true), Some(BeaconPosition::Grid6("EM73tr".into()))),
+            body(None, Some(BeaconPosition::Grid6("RR99xx".into()))),
+            body(None, Some(BeaconPosition::Grid6("AA00aa".into()))),
+        ] {
+            assert_eq!(
+                BeaconBody::decode(&b.encode().expect("encodes")).expect("decodes"),
+                b
+            );
+        }
+        let exact = body(
+            Some(true),
+            Some(BeaconPosition::Exact {
+                lat: 33.78123,
+                lon: -84.38765,
+            }),
+        );
+        let bytes = exact.encode().expect("encodes");
+        assert_eq!(bytes.len(), CALL_BYTES + 1 + 1 + 6, "fifteen bytes at most");
+        let Some(BeaconPosition::Exact { lat, lon }) =
+            BeaconBody::decode(&bytes).expect("decodes").position
+        else {
+            panic!("an exact position");
+        };
+        // 24 bits: a step of 180/2^24 degrees north, 360/2^24 east, about 1.2 m and 2.4 m
+        assert!((lat - 33.78123).abs() < 1.1e-5, "{lat}");
+        assert!((lon + 84.38765).abs() < 2.2e-5, "{lon}");
+    }
+
+    #[test]
+    fn a_body_from_before_says_less_and_an_older_reader_reads_the_callsign() {
+        // ADR-0024's body: the callsign and the bandwidth, no word on answering, no position
+        let mut old = pack_callsign("N2CALL").expect("packs").to_vec();
+        old.push(with_bandwidth(0, 500));
+        let read = BeaconBody::decode(&old).expect("decodes");
+        assert_eq!(
+            (read.bandwidth_hz, read.answers, read.position),
+            (Some(500), None, None)
+        );
+        // the callsign alone, from before ADR-0024
+        let older = pack_callsign("N2CALL").expect("packs");
+        assert_eq!(
+            BeaconBody::decode(&older).expect("decodes").bandwidth_hz,
+            None
+        );
+        // a new body's first seven bytes are the callsign an older receiver unpacks
+        let new = body(Some(true), Some(BeaconPosition::Grid6("EM73tr".into())))
+            .encode()
+            .expect("encodes");
+        assert_eq!(super::unpack_callsign(&new).expect("unpacks"), "KK4ODA");
+        // and its bandwidth bits are where they were
+        assert_eq!(super::bandwidth_hz_of(new[CALL_BYTES]), Some(2300));
+        // a precision this reader does not know is no position
+        let mut unknown = old.clone();
+        unknown.extend([9, 1, 2]);
+        assert_eq!(
+            BeaconBody::decode(&unknown).expect("decodes").position,
+            None
+        );
+    }
+
+    #[test]
+    fn a_beacons_bytes_are_the_air_interfaces_worked_examples() {
+        // air-interface.md §7.4: EM73 is squares 47 across and 123 up; EM84cl subsquares
+        // 1154 and 2987, as `x << 13 | y`; the answering bits are 6 (said) and 5 (yes)
+        let caps = |b: &BeaconBody| b.encode().expect("encodes")[CALL_BYTES..].to_vec();
+        assert_eq!(
+            caps(&body(
+                Some(true),
+                Some(BeaconPosition::Grid4("EM73".into()))
+            )),
+            [with_bandwidth(0, 2300) | 0x60, 1, 47, 123]
+        );
+        let (across, up): (u32, u32) = (1154, 2987);
+        let word = (across << 13) | up;
+        let mut grid6 = vec![with_bandwidth(0, 2300) | 0x40, 2];
+        grid6.extend(word.to_be_bytes());
+        assert_eq!(
+            caps(&body(
+                Some(false),
+                Some(BeaconPosition::Grid6("EM84cl".into()))
+            )),
+            grid6
+        );
+        // the exact position's steps: round((lat + 90) / 180 × (2^24 − 1)), and the same over
+        // 360 for the longitude
+        let exact = caps(&body(
+            None,
+            Some(BeaconPosition::Exact { lat: 0.0, lon: 0.0 }),
+        ));
+        assert_eq!(
+            exact,
+            [
+                with_bandwidth(0, 2300),
+                3,
+                0x80,
+                0x00,
+                0x00,
+                0x80,
+                0x00,
+                0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn a_square_that_is_not_one_is_refused() {
+        for grid in ["EM7", "ZZ99", "EM73zz", "EM7a"] {
+            let b = body(None, Some(BeaconPosition::Grid4(grid.into())));
+            assert!(b.encode().is_err(), "{grid}");
+        }
+        let far = body(
+            None,
+            Some(BeaconPosition::Exact {
+                lat: 91.0,
+                lon: 0.0,
+            }),
+        );
+        assert!(far.encode().is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

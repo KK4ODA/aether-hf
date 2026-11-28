@@ -207,7 +207,7 @@ impl Claims {
     }
 
     /// The claim that holds a callsign.
-    fn holder(&self, call: &str) -> Option<&Claim> {
+    pub(super) fn holder(&self, call: &str) -> Option<&Claim> {
         self.list
             .iter()
             .find(|claim| claim.callsigns.iter().any(|held| held == call))

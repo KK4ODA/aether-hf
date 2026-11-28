@@ -36,7 +36,10 @@ mod scan;
 pub use bandwidth::{
     KNOWN_LIMIT, Mismatch, RETURN_QUIET_S, Why as BandwidthWhy, base_callsign, params_for,
 };
-pub use beacons::{BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S};
+pub use beacons::{
+    BEACON_ELSEWHERE, BEACON_EVERY_MAX_S, BEACON_EVERY_MIN_S, BEACON_WITHIN_MAX_S, BeaconAsk,
+    BeaconPlace, BeaconReport,
+};
 pub use claims::{CLAIMED, Claim, Claimed, NOT_HELD};
 pub use datagrams::{
     DATAGRAM_QUEUE, DatagramQueued, DatagramRefusal, DatagramReport, DatagramRequest,
@@ -52,9 +55,8 @@ use aether_link::{
     Action, Container, GrantConfig, GrantFrame, GrantedEngine, HarqBuffer, IdentifyBy, PhyTiming,
     SoftFrame, State,
     frames::{
-        AcceptFrame, ConnectBody, DataHeader, DataKind, IdentFrame, ProbeBody, caller_code,
-        decode_data, encode_data, identification_frames, is_acceptance, is_identification,
-        pack_callsign, unpack_callsign, with_bandwidth,
+        AcceptFrame, ConnectBody, DataKind, IdentFrame, ProbeBody, caller_code, decode_data,
+        identification_frames, is_acceptance, is_identification, unpack_callsign, with_bandwidth,
     },
     granted::{HEADER_UNDECODABLE_SHARE, Role},
 };
@@ -739,6 +741,11 @@ pub struct FrameReport {
     /// What of the path's echo a tone frame of the floor's own kinds showed (ADR-0087); none
     /// for every other frame.
     pub echo: Option<f64>,
+    /// A beacon's word on calls to its callsign being answered now (ADR-0140); none for every
+    /// other frame and for a beacon that does not say.
+    pub answering: Option<bool>,
+    /// Where a beacon says its station is (ADR-0142).
+    pub position: Option<aether_link::BeaconPosition>,
 }
 
 /// A session's account, kept from the moment it comes up to the moment it ends.
@@ -2629,82 +2636,27 @@ impl<P: Ptt> Station<P> {
 
     /// Transmit one unproto beacon: this station's callsign, addressed to nobody — or `name`,
     /// the name a host program gave it (`VarAC`'s `KK4ODA-9`), when one of the station's
-    /// callsigns is its base — with the bandwidth the station runs (ADR-0024).
+    /// callsigns is its base — with the bandwidth the station runs (ADR-0024), whether calls to
+    /// it are answered now (ADR-0140) and the operator's grid square when one is set (ADR-0142).
     ///
     /// It is how an operator answers "can anybody hear me?" without arranging a contact
     /// first. Sent at the most robust mode, because the point is to be heard by somebody who
     /// cannot yet hear anything else — and never while a session is running, which would put
-    /// a frame into the middle of somebody's transfer.
+    /// a frame into the middle of somebody's transfer. A program's beacon, with its reference,
+    /// window and dial, is [`Self::beacon_for`].
     ///
     /// # Errors
     /// On an answer-only station, under automatic control (§97.203(d)), if a session is up,
     /// for a name that is not this station's ([`BEACON_NOT_OURS`]), or if the callsign cannot
     /// be packed.
     pub fn beacon(&mut self, name: Option<&str>) -> Result<(), &'static str> {
-        if self.config.answer_only {
-            return Err("this station is answer-only: it takes calls and sends no beacon");
-        }
-        // A beacon may be automatically controlled only in the segments of §97.203(d), and
-        // of those only 28.20–28.30 MHz is anywhere Aether's data may go. The repeating
-        // beacon was refused under automatic control already; a host program's beacon timer
-        // on an unattended station is the same thing by another road (ADR-0024). Under the
-        // rules only: with none, the control operator answers for it (ADR-0024 §4).
-        if self.beacons_barred() {
-            return Err(BEACON_UNDER_AUTOMATIC_CONTROL);
-        }
-        if self.engine.state() != State::Idle {
-            return Err("a session is running");
-        }
-        if self.beacon_waiting() {
-            return Err(BEACON_ALREADY_WAITING);
-        }
-        // the name a host program gave the beacon — VarAC's CQs and beacons are `KK4ODA-9`
-        // and the like, meaning something to the program at the other end — is carried as
-        // given when this station's callsign is its base (ADR-0024)
-        let call = match name.map(|n| n.trim().to_ascii_uppercase()) {
-            Some(name) if self.names_this_station(&name) => name,
-            Some(_) => return Err(BEACON_NOT_OURS),
-            // the station's own, as its calls go: never the callsign of the last session,
-            // which a program may have answered under (ADR-0108)
-            None => self.station_callsign(),
-        };
-        let mut body = pack_callsign(&call)
-            .map_err(|_| "the callsign will not pack")?
-            .to_vec();
-        // and the bandwidth this station runs, which a host program told of the beacon
-        // reports beside it (`CQFRAME <call> <bandwidth>`); a receiver of an earlier version
-        // reads the callsign and never looks further
-        body.push(aether_link::frames::with_bandwidth(
-            0,
-            self.air.info().bandwidth_hz,
-        ));
-        let header = DataHeader {
-            kind: DataKind::Beacon,
-            seq: 0,
-            session: 0,
-            piece: None,
-        };
-        // beacons go out on the tone floor, where calls and probes start (ADR-0016): the
-        // slowest kind that carries a connect frame carries a callsign, and a beacon exists to
-        // be heard by somebody who can hear nothing else — a station of either bandwidth, as
-        // the floor's frames are the same on both airs
-        let mode = self.engine.robust_mode(true);
-        let capacity = self.engine.timing().capacity(mode);
-        let payload =
-            encode_data(&header, &body, capacity).map_err(|_| "the beacon will not fit")?;
-        self.pending.push_back(Outgoing::Frames(
-            vec![aether_link::TxFrame {
-                container: Container::Data,
-                payload,
-                mode,
-                rv: 0,
-                floor: false,
-                follows: 0,
-            }],
-            Origin::station("beacon"),
-        ));
-        self.stats.beacons_sent += 1;
-        Ok(())
+        self.beacon_for(
+            None,
+            BeaconAsk {
+                callsign: name.map(str::to_owned),
+                ..BeaconAsk::default()
+            },
+        )
     }
 
     /// Whether a name is this station's: one of its callsigns, or one with a suffix a host
@@ -4261,6 +4213,8 @@ impl<P: Ptt> Station<P> {
             follows: frame.follows,
             capture_skip: false,
             echo: frame.echo,
+            answering: None,
+            position: None,
         };
         let span_end = span_start + frame.length_s;
         report.capture_skip = self.capture_skipped_within(span_start, span_end);
@@ -4278,8 +4232,13 @@ impl<P: Ptt> Station<P> {
             match header.kind {
                 DataKind::Beacon => {
                     report.kind = "beacon";
-                    report.from = unpack_callsign(&body).ok();
-                    report.bandwidth_hz = beacon_bandwidth_hz(&body);
+                    if let Ok(beacon) = aether_link::BeaconBody::decode(&body) {
+                        report.from = Some(beacon.callsign);
+                        report.bandwidth_hz =
+                            beacon.bandwidth_hz.and_then(|hz| u32::try_from(hz).ok());
+                        report.answering = beacon.answers;
+                        report.position = beacon.position;
+                    }
                 }
                 DataKind::ConnectReq | DataKind::ConnectAck => {
                     report.kind = if header.kind == DataKind::ConnectReq {
@@ -4684,7 +4643,11 @@ impl<P: Ptt> Station<P> {
             self.start_pending(now);
             return;
         }
-        // a KISS client's datagram goes when nothing else is queued and no session is up
+        // a program's beacon, then a KISS client's datagram, go when nothing else is queued and
+        // no session is up
+        if self.pending.is_empty() {
+            self.feed_beacon(now);
+        }
         if self.pending.is_empty() {
             self.feed_datagram(now);
         }
@@ -4750,9 +4713,27 @@ impl<P: Ptt> Station<P> {
         // an identifier waits for a clear channel no longer than the wait above: §97.119 asks
         // for it at the end of the communication, and a host program waits for it
         let id_waited_out = alone && waited_out;
-        let polite =
-            !in_turn && self.config.wait_for_clear && !self.channel_clear(now) && !id_waited_out;
-        if !in_turn && (polite || busy_for_id) {
+        // a beacon, a call or a probe this station starts by itself waits while the radio says
+        // it is transmitting: the operator on the microphone (ADR-0141)
+        let next_is_beacon = matches!(next, Outgoing::Frames(frames, _) if is_beacon(frames));
+        let own_start =
+            matches!(next, Outgoing::Link(tx) if starts_an_exchange(&tx.frames)) || next_is_beacon;
+        if own_start {
+            self.say_radio_unasked();
+        }
+        let radio_busy = own_start && self.radio_on_air(now);
+        if radio_busy && self.held_from.is_none() {
+            self.note(
+                "radio",
+                "the radio is transmitting: what this station starts waits until it stops",
+            );
+        }
+        // a program's beacon with a window waits for a clear channel whatever the operator's
+        // setting: it is the program's own, and it may wait no longer than it said (ADR-0139)
+        let wants_clear =
+            self.config.wait_for_clear || (next_is_beacon && self.beacon_needs_clear());
+        let polite = !in_turn && wants_clear && !self.channel_clear(now) && !id_waited_out;
+        if !in_turn && (polite || busy_for_id || radio_busy) {
             // once a transmission held, not once a pass of the loop it waits through: WC4Y's
             // panel read 962 for a call and a probe that waited 2.1 s between them
             // (15-wc4y-2300-beta120.md §7.2)
@@ -4787,6 +4768,10 @@ impl<P: Ptt> Station<P> {
             .retain(|next| !matches!(next, Outgoing::Frames(frames, _) if is_beacon(frames)));
         self.held_since = None;
         self.held_from = None;
+        self.beacon_over(
+            false,
+            Some("a session started before it went out".to_owned()),
+        );
         self.note("beacon", "dropped: a session started before it went out");
     }
 
@@ -4800,6 +4785,21 @@ impl<P: Ptt> Station<P> {
             self.identifier.setup_call.clone_from(&self.engine.my_call);
             self.identifier.setup_what = setup_kind(frames);
         }
+    }
+
+    /// A beacon says whether its callsign is answered as it goes, not as it was asked for
+    /// (ADR-0140): a program may have started or stopped listening while it waited. Anything else
+    /// goes as it is.
+    fn beacon_as_it_goes(
+        &mut self,
+        frames: Vec<aether_link::TxFrame>,
+    ) -> Vec<aether_link::TxFrame> {
+        if !is_beacon(&frames) {
+            return frames;
+        }
+        let frames = self.beacon_now().map_or(frames, |now_said| vec![now_said]);
+        self.beacon_sent();
+        frames
     }
 
     /// Take the transmission at the head of the queue — judged and allowed — and render it.
@@ -4855,11 +4855,9 @@ impl<P: Ptt> Station<P> {
         {
             self.data_sent = Some((now, rung));
         }
+        let frames = self.beacon_as_it_goes(frames);
         self.record_sent(&frames, now);
         self.answer_rendered = answer_in(&frames);
-        if is_beacon(&frames) {
-            self.beacon_sent();
-        }
         if self.config.record_tx_audio {
             self.tx_capture = Some(crate::record::TxCapture::begin(
                 self.air.info().audio_rate as u32,
@@ -5950,6 +5948,9 @@ impl<P: Ptt> Station<P> {
             Some(Outgoing::Datagram {
                 reference, last, ..
             }) => self.refuse_datagram(reference, last, &why),
+            Some(Outgoing::Frames(frames, _)) if is_beacon(&frames) => {
+                self.beacon_over(false, Some(why));
+            }
             _ => {}
         }
     }
@@ -6478,12 +6479,6 @@ fn holds_the_dial(next: &Outgoing) -> Option<&'static str> {
     }
 }
 
-/// The bandwidth a beacon says its sender runs: the capability byte after its callsign
-/// (ADR-0024). A beacon from before that carries none.
-fn beacon_bandwidth_hz(body: &[u8]) -> Option<u32> {
-    stated_bandwidth_hz(*body.get(aether_link::frames::CALL_BYTES)?)
-}
-
 /// The bandwidth a capability byte states, hertz.
 fn stated_bandwidth_hz(caps: u8) -> Option<u32> {
     aether_link::frames::bandwidth_hz_of(caps).and_then(|hz| u32::try_from(hz).ok())
@@ -6547,6 +6542,7 @@ mod tests {
     use super::*;
     use crate::control::protocol::{ConnectionId, ConnectionKind};
     use crate::ptt::NullPtt;
+    use aether_link::frames::{DataHeader, encode_data};
     use aether_phy::{AudioToBaseband, BasebandToAudio, Complex};
 
     /// The program on the host interface, as the tests' stations know it (ADR-0106).
@@ -8592,10 +8588,10 @@ mod tests {
     }
 
     /// Run one station alone, hearing silence, for `seconds` or until `done`.
-    fn run_alone(
-        station: &mut Station<NullPtt>,
+    fn run_alone<P: Ptt>(
+        station: &mut Station<P>,
         seconds: f64,
-        mut done: impl FnMut(&Station<NullPtt>) -> bool,
+        mut done: impl FnMut(&Station<P>) -> bool,
     ) {
         let mut out = vec![0.0f32; 4096];
         let silence = vec![0.0f32; 4096];
@@ -11914,6 +11910,280 @@ mod tests {
         );
     }
 
+    /// The beacon frames a station has reported hearing, in order.
+    fn beacons_heard(station: &mut Station<NullPtt>) -> Vec<FrameReport> {
+        station
+            .take_frame_reports()
+            .into_iter()
+            .filter(|frame| frame.kind == "beacon" && frame.decoded)
+            .collect()
+    }
+
+    #[test]
+    fn a_programs_beacon_says_its_callsign_whether_it_is_answered_and_where_it_is() {
+        // ADR-0139, ADR-0140 and ADR-0142: RadioPost's beacon goes as the callsign it holds,
+        // says calls to it are answered while it listens and not once it has stopped, and
+        // carries the position at the precision the operator chose; what became of it comes
+        // back with the program's reference
+        const PROGRAM: ConnectionId = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        let mut air = Air::new(1.0, 0.0005);
+        air.run(4.0, |_, _| false);
+        air.a
+            .claim(PROGRAM, Some("RadioPost"), &["WD5EMA".to_owned()])
+            .expect("valid");
+        air.a.listen_for(PROGRAM, true).expect("claimed");
+        air.a
+            .beacon_for(
+                Some(PROGRAM),
+                BeaconAsk {
+                    reference: Some("b1".into()),
+                    within_s: Some(60.0),
+                    place: BeaconPlace::Given(aether_link::BeaconPosition::Exact {
+                        lat: 34.4621,
+                        lon: -83.7514,
+                    }),
+                    ..BeaconAsk::default()
+                },
+            )
+            .expect("idle");
+        assert_eq!(air.a.beacon_status()["queued"]["ref"], "b1");
+        air.run(30.0, |_, b| b.stats.beacons_heard >= 1);
+        assert_eq!(
+            air.a.take_beacon_reports(),
+            [BeaconReport {
+                reference: Some("b1".into()),
+                callsign: "WD5EMA".into(),
+                sent: true,
+                dial_hz: None,
+                reason: None,
+            }]
+        );
+        let heard = beacons_heard(&mut air.b);
+        assert_eq!(heard.len(), 1, "one beacon heard");
+        assert_eq!(heard[0].from.as_deref(), Some("WD5EMA"));
+        assert_eq!(heard[0].bandwidth_hz, Some(2300));
+        assert_eq!(heard[0].answering, Some(true), "the program listens");
+        let Some(aether_link::BeaconPosition::Exact { lat, lon }) = heard[0].position else {
+            panic!("no exact position: {:?}", heard[0].position);
+        };
+        // 24 bits a coordinate: a step of 180/2^24 degrees, about a metre
+        assert!((lat - 34.4621).abs() < 2e-5 && (lon + 83.7514).abs() < 3e-5);
+
+        // no longer listening, and the square only: the beacon says both
+        air.a.listen_for(PROGRAM, false).expect("claimed");
+        air.a
+            .beacon_for(
+                Some(PROGRAM),
+                BeaconAsk {
+                    place: BeaconPlace::Given(aether_link::BeaconPosition::Grid6("EM84cl".into())),
+                    ..BeaconAsk::default()
+                },
+            )
+            .expect("idle");
+        air.run(30.0, |_, b| b.stats.beacons_heard >= 2);
+        let heard = beacons_heard(&mut air.b);
+        assert_eq!(heard.len(), 1);
+        assert_eq!(heard[0].answering, Some(false), "nobody answers WD5EMA now");
+        assert_eq!(
+            heard[0].position,
+            Some(aether_link::BeaconPosition::Grid6("EM84cl".into()))
+        );
+        // and the panel's beacon carries the station's own grid, when one is set
+        air.a.config.operator.grid = "EM73".into();
+        air.a.beacon(None).expect("idle");
+        air.run(30.0, |_, b| b.stats.beacons_heard >= 3);
+        let heard = beacons_heard(&mut air.b);
+        assert_eq!(heard[0].from.as_deref(), Some("W4ODA"));
+        assert_eq!(
+            heard[0].position,
+            Some(aether_link::BeaconPosition::Grid4("EM73".into()))
+        );
+        assert_eq!(
+            air.a.take_beacon_reports()[1].reference,
+            None,
+            "the panel's has no reference"
+        );
+    }
+
+    #[test]
+    fn a_programs_beacon_goes_only_as_a_callsign_it_holds() {
+        // ADR-0139: as a call does (ADR-0106); a name with the program's callsign as its base
+        // is the program's, as VarAC's `-9` beacons are (ADR-0024)
+        const RADIOPOST: ConnectionId = ConnectionId {
+            id: 7,
+            kind: ConnectionKind::Control,
+        };
+        const OTHER: ConnectionId = ConnectionId {
+            id: 8,
+            kind: ConnectionKind::Control,
+        };
+        let mut station = idle_station();
+        station
+            .claim(RADIOPOST, Some("RadioPost"), &["WD5EMA".to_owned()])
+            .expect("valid");
+        station
+            .claim(OTHER, Some("Another"), &["N2CALL".to_owned()])
+            .expect("valid");
+        let ask = |call: &str| BeaconAsk {
+            callsign: Some(call.into()),
+            ..BeaconAsk::default()
+        };
+        assert_eq!(
+            station.beacon_for(Some(RADIOPOST), ask("N2CALL")),
+            Err(CLAIMED)
+        );
+        assert_eq!(
+            station.beacon_for(Some(RADIOPOST), ask("K1ABC")),
+            Err(BEACON_NOT_OURS)
+        );
+        station
+            .beacon_for(Some(RADIOPOST), ask("wd5ema-9"))
+            .expect("the program's, with a suffix");
+        assert_eq!(station.beacon_status()["queued"]["callsign"], "WD5EMA-9");
+    }
+
+    #[test]
+    fn a_beacon_with_a_window_is_dropped_when_it_cannot_go_in_it() {
+        // ADR-0139: a beacon that cannot go within the seconds the program gave is dropped and
+        // said, not sent late; a dial the station is not on is refused at once
+        let mut station = idle_station();
+        assert_eq!(
+            station.beacon_for(
+                None,
+                BeaconAsk {
+                    dial_hz: Some(7_101_000),
+                    ..BeaconAsk::default()
+                }
+            ),
+            Err(BEACON_ELSEWHERE),
+            "the radio's dial is not known here"
+        );
+        station.probe("KK4XYZ", None).expect("idle");
+        station
+            .beacon_for(
+                None,
+                BeaconAsk {
+                    reference: Some("late".into()),
+                    within_s: Some(2.0),
+                    ..BeaconAsk::default()
+                },
+            )
+            .expect("a probe is no session");
+        run_alone(&mut station, 8.0, |s| !s.beacon_waiting());
+        let reports = station.take_beacon_reports();
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert_eq!(reports[0].reference.as_deref(), Some("late"));
+        assert!(!reports[0].sent);
+        assert!(reports[0].reason.is_some());
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("beacon:not sent: ")),
+            "and the log was told"
+        );
+        assert_eq!(
+            station.stats.beacons_sent, 1,
+            "asked for, counted as before"
+        );
+    }
+
+    /// A radio on CAT whose operator keys it at the microphone, saying so when asked
+    /// (ADR-0141); the answers come back at once, as from a keying thread with nothing to do.
+    #[derive(Debug, Default)]
+    struct Microphone {
+        on_air: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        asked: Vec<crate::ptt::Asked>,
+    }
+
+    impl Ptt for Microphone {
+        fn key(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+
+        fn unkey(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+
+        fn describe(&self) -> String {
+            "a radio on CAT".into()
+        }
+
+        fn reads_transmit(&self) -> bool {
+            true
+        }
+
+        fn request_readings(&mut self, asked: crate::ptt::Asked) {
+            self.asked.push(asked);
+        }
+
+        fn take_readings(&mut self) -> Vec<crate::ptt::Readings> {
+            let on_air = self.on_air.load(std::sync::atomic::Ordering::Relaxed);
+            std::mem::take(&mut self.asked)
+                .into_iter()
+                .map(|asked| crate::ptt::Readings {
+                    at: std::time::Instant::now(),
+                    asked,
+                    meter: None,
+                    dial_hz: None,
+                    settings: Vec::new(),
+                    transmitting: asked.transmit.then_some(on_air),
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_beacon_waits_while_the_operator_transmits_at_the_radio() {
+        // ADR-0141: the operator on the microphone keys the radio; the receiver is muted, so
+        // the channel sounds clear. A beacon this station starts by itself waits until the
+        // radio says it has stopped, and a keying that cannot ask says so once
+        let on_air = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut station = Station::new(
+            StationConfig {
+                callsign: "W4ODA".to_owned(),
+                wait_for_clear: false,
+                ..StationConfig::default()
+            },
+            Microphone {
+                on_air: std::sync::Arc::clone(&on_air),
+                asked: Vec::new(),
+            },
+            1,
+        );
+        run_alone(&mut station, 2.0, |_| false);
+        station.beacon(None).expect("idle");
+        run_alone(&mut station, 6.0, Station::transmitting);
+        assert!(!station.transmitting(), "keyed over the operator");
+        assert!(station.beacon_waiting(), "the beacon was dropped");
+        assert!(
+            station
+                .take_events()
+                .iter()
+                .any(|e| e.starts_with("radio:the radio is transmitting")),
+            "and nobody was told why it waits"
+        );
+        on_air.store(false, std::sync::atomic::Ordering::Relaxed);
+        run_alone(&mut station, 6.0, Station::transmitting);
+        assert!(station.transmitting(), "the beacon never went");
+
+        // a keying line cannot ask: it says so, once
+        let mut station = idle_station();
+        station.beacon(None).expect("idle");
+        run_alone(&mut station, 6.0, |s| !s.beacon_waiting());
+        station.beacon(None).expect("idle");
+        run_alone(&mut station, 12.0, |s| !s.beacon_waiting());
+        let said = station
+            .take_events()
+            .iter()
+            .filter(|e| e.contains("cannot ask the radio whether it is already transmitting"))
+            .count();
+        assert_eq!(said, 1);
+    }
+
     #[test]
     fn a_station_is_known_under_its_other_names_when_they_agree() {
         // ADR-0035: VarAC beacons as KK4ODA-9 and pings KK4ODA-1-T; the operator calls
@@ -13909,6 +14179,7 @@ mod tests {
                 } else {
                     Vec::new()
                 },
+                transmitting: None,
             });
         }
 

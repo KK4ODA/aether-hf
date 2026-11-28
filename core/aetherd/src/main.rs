@@ -1742,6 +1742,7 @@ fn publish_station(
         report_regulatory(station, control, daemon, &decision);
     }
     publish_datagrams(station, control, daemon);
+    publish_beacons(station, control, daemon);
     let received = station.take_received();
     if !received.is_empty() {
         // The payload reaches panels through this event and host programs through the
@@ -1805,6 +1806,40 @@ fn publish_datagrams(
         control.publish(&Event::new(
             "datagram-sent",
             json!({ "ref": report.reference, "sent": report.sent, "reason": report.reason }),
+        ));
+    }
+}
+
+/// What became of each beacon (ADR-0139): a `beacon-sent` event, so that a program that asked
+/// for one reads whether and where it went without reading the log. A beacon that did not go
+/// is said in the log with its reason.
+fn publish_beacons(
+    station: &mut Station<Box<dyn Ptt>>,
+    control: &aetherd::control::ControlChannel,
+    daemon: &mut DaemonState,
+) {
+    for report in station.take_beacon_reports() {
+        if !report.sent {
+            daemon.log.record(
+                Level::Info,
+                "beacon",
+                &format!(
+                    "the beacon as {} did not go out: {}",
+                    report.callsign,
+                    report.reason.as_deref().unwrap_or("no reason given")
+                ),
+                &state_name(station),
+            );
+        }
+        control.publish(&Event::new(
+            "beacon-sent",
+            json!({
+                "ref": report.reference,
+                "callsign": report.callsign,
+                "sent": report.sent,
+                "dial_hz": report.dial_hz,
+                "reason": report.reason,
+            }),
         ));
     }
 }
@@ -2230,6 +2265,11 @@ fn sighting_of(
         activity,
         detail,
         bandwidth_hz: frame.bandwidth_hz,
+        answering: frame.answering,
+        position: frame
+            .position
+            .as_ref()
+            .and_then(aetherd::heard::HeardPosition::of),
     })
 }
 

@@ -1365,7 +1365,7 @@ fn dispatch_station<P: Ptt>(station: &mut Station<P>, request: &Request) -> Resp
             Response::ok(id, station.identifier_check(call))
         }
         "regulatory.profile" => Response::ok(id, regulatory_profiles(station)),
-        "beacon" => beacon(station, params, id),
+        "beacon" => beacon(station, params, id, request.connection),
         "beacon.every" => beacon_every(station, params, id),
         "bandwidth.set" => bandwidth_set(station, params, id, request.connection),
         "ptt.test" => {
@@ -1669,16 +1669,101 @@ fn rate_pin<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>
     }
 }
 
-/// `beacon`: one frame with this station's callsign, outside any session.
-fn beacon<P: Ptt>(station: &mut Station<P>, params: &Value, id: Option<String>) -> Response {
+/// What a `beacon` request asks for, or what is wrong with it (ADR-0139).
+fn beacon_ask(params: &Value) -> Result<crate::station::BeaconAsk, String> {
+    use crate::station::{BEACON_WITHIN_MAX_S, BeaconAsk, BeaconPlace};
+    let text = |key: &str| -> Result<Option<String>, String> {
+        match params.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.trim().to_owned())),
+            Some(_) => Err(format!("{key} is a string")),
+        }
+    };
+    let within_s = match params.get("within_s") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|s| (1.0..=BEACON_WITHIN_MAX_S).contains(s))
+                .ok_or_else(|| {
+                    format!("within_s is a number of seconds, 1 to {BEACON_WITHIN_MAX_S}")
+                })?,
+        ),
+    };
+    let dial_hz = match params.get("dial_hz") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_u64()
+                .filter(|&hz| hz > 0)
+                .ok_or("dial_hz is the dial in hertz, a whole number above 0")?,
+        ),
+    };
+    // not given, the station's own grid square; `null`, nowhere; an object, the one given at
+    // the precision it names (ADR-0142)
+    let place = match params.get("position") {
+        None => BeaconPlace::Station,
+        Some(Value::Null) => BeaconPlace::Nowhere,
+        Some(v) => BeaconPlace::Given(beacon_position(v).ok_or(
+            "position is {\"lat\", \"lon\", \"precision\"}: degrees north and east, and \
+             grid4, grid6 or exact",
+        )?),
+    };
+    Ok(BeaconAsk {
+        callsign: text("callsign")?,
+        reference: text("ref")?,
+        within_s,
+        dial_hz,
+        place,
+    })
+}
+
+/// A position as a program gives it, sent as precisely as it asks and no more.
+fn beacon_position(v: &Value) -> Option<aether_link::BeaconPosition> {
+    use aether_link::BeaconPosition;
+    let o = v.as_object()?;
+    let number = |key: &str| o.get(key).filter(|n| n.is_number()).and_then(Value::as_f64);
+    let lat = number("lat").filter(|l| (-90.0..=90.0).contains(l))?;
+    let lon = number("lon").filter(|l| (-180.0..=180.0).contains(l))?;
+    match o.get("precision")?.as_str()? {
+        "exact" => Some(BeaconPosition::Exact { lat, lon }),
+        "grid6" => crate::grid::square_of(lat, lon, 6).map(BeaconPosition::Grid6),
+        "grid4" => crate::grid::square_of(lat, lon, 4).map(BeaconPosition::Grid4),
+        _ => None,
+    }
+}
+
+/// `beacon`: one frame with this station's callsign, or a program's (ADR-0139), outside any
+/// session.
+fn beacon<P: Ptt>(
+    station: &mut Station<P>,
+    params: &Value,
+    id: Option<String>,
+    connection: Option<ConnectionId>,
+) -> Response {
     // the name a host program gives its beacon (VarAC's `KK4ODA-9`): this station's
-    // callsign as its base, or it is refused (ADR-0024)
-    let name = params.get("callsign").and_then(Value::as_str);
-    match station.beacon(name) {
+    // callsign as its base, or it is refused (ADR-0024); a program's own callsign, which it
+    // holds (ADR-0139)
+    let ask = match beacon_ask(params) {
+        Ok(ask) => ask,
+        Err(why) => {
+            return Response::failed(
+                id,
+                ApiError::new("bad_params", format!("Cannot beacon: {why}."), false),
+            );
+        }
+    };
+    match station.beacon_for(connection, ask) {
         Ok(()) => Response::ok(id, json!({ "accepted": true })),
-        Err(reason) if reason == crate::station::BEACON_NOT_OURS => Response::failed(
+        Err(reason)
+            if reason == crate::station::BEACON_NOT_OURS || reason == crate::station::NOT_HELD =>
+        {
+            Response::failed(
+                id,
+                ApiError::new("bad_params", format!("Cannot beacon: {reason}."), false),
+            )
+        }
+        Err(reason) if reason == crate::station::CLAIMED => Response::failed(
             id,
-            ApiError::new("bad_params", format!("Cannot beacon: {reason}."), false),
+            ApiError::new("claimed", format!("Cannot beacon: {reason}."), false),
         ),
         // the station's control setting decides it, whatever the rules profile, and what to
         // change is said: a gateway's Automatic left in place refused VarAC's CQs at KK4ODA-1
@@ -2691,6 +2776,12 @@ pub fn frame_json(frame: &crate::station::FrameReport) -> Value {
         "to": frame.to,
         "control": frame.control,
         "bandwidth_hz": frame.bandwidth_hz,
+        // a beacon's word on calls to it (ADR-0140) and where it says its station is (ADR-0142)
+        "answering": frame.answering,
+        "position": frame
+            .position
+            .as_ref()
+            .and_then(crate::heard::HeardPosition::of),
         "follows": frame.follows,
         "capture_skip": frame.capture_skip,
         "echo": frame.echo,
@@ -2789,6 +2880,9 @@ pub fn capabilities(params: aether_phy::waveform::WaveformParams) -> Value {
         ),
         "reports_preambles": true,
         "snr_reference_hz": 3000,
+        // a program's beacon (ADR-0139): its callsign, reference, window and dial, whether its
+        // callsign is answered (ADR-0140) and a position (ADR-0142)
+        "beacon": { "program": true, "answers": true, "position": true },
     })
 }
 
@@ -3719,6 +3813,8 @@ mod tests {
             activity: crate::heard::Activity::Beacon,
             detail: None,
             bandwidth_hz: Some(500),
+            answering: None,
+            position: None,
         });
         let response = dispatch_with(&mut station, Some(&mut daemon), &request("heard.list"));
         let result = response.result.expect("result");

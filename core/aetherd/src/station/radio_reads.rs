@@ -18,8 +18,14 @@
 //! or so, where the display's own ten-second ask left them behind (the author, 2026-11-05).
 //! Only a keying interface on a thread of its own reads in the background: CAT, rigctld and
 //! `FLRig`.
+//!
+//! The radio's own transmit state is read too, twice a second, whenever the station is not
+//! transmitting and no session is up (ADR-0141): a beacon, a call or a probe the station starts
+//! by itself waits while the radio says it is transmitting, so that it is not keyed over the
+//! operator on the microphone. A keying line, a GPIO pin, VOX or a host program cannot be asked;
+//! the station says so once, at the first such transmission.
 
-use super::Station;
+use super::{State, Station};
 use crate::ptt::{Asked, Ptt, Readings};
 
 /// How often the S-meter is asked for, seconds.
@@ -32,6 +38,14 @@ pub const SETTINGS_EVERY_S: f64 = 5.0;
 /// again for the rest of the recording: a radio or server without one (rigctld answers
 /// `RPRT` for a rig whose backend has no `STRENGTH`, and drops the connection each time).
 pub const METER_GIVE_UP: u32 = 8;
+/// How often the radio is asked whether it is transmitting, seconds.
+pub const TRANSMIT_EVERY_S: f64 = 0.5;
+/// How old an answer that the radio is transmitting may be and still hold a transmission: four
+/// questions. An answer older than that is a radio that stopped answering, and holds nothing.
+pub const TRANSMIT_FRESH_S: f64 = 2.0;
+/// An answer taken this soon after the station's own release may still be its own transmission
+/// ending, the radio's relays and its CAT a little behind the audio.
+pub const OWN_RELEASE_S: f64 = 0.5;
 
 /// When a reading due at `due` and taken at `now` is next due: on its own beat, so passes that
 /// do not fall on it do not slow it (a 0.25 s beat on 0.1 s passes is not every 0.3 s), or a
@@ -54,6 +68,11 @@ pub(super) struct RadioReads {
     meter_misses: u32,
     /// Marks pressed in the recording.
     pub(super) marks: u32,
+    next_transmit: f64,
+    /// The radio's last word on its transmitting, and when it was said, on the station's clock.
+    pub(super) radio_on_air: Option<(f64, bool)>,
+    /// Whether the station has said its keying cannot ask the radio.
+    pub(super) said_unasked: bool,
 }
 
 impl<P: Ptt> Station<P> {
@@ -64,12 +83,29 @@ impl<P: Ptt> Station<P> {
             let at = now - readings.at.elapsed().as_secs_f64();
             self.keep_readings(at, &readings);
         }
-        if self.transmitting || self.movable().is_err() {
+        if self.transmitting {
+            return;
+        }
+        // the radio's own transmitting, whenever the station could start a transmission of its
+        // own: idle, calling or probing, but never in a session, where it keys in slots
+        let transmit = self.ptt.inner().reads_transmit()
+            && !matches!(self.engine.state(), State::Connected | State::Disconnecting)
+            && now >= self.radio_reads.next_transmit;
+        if self.movable().is_err() {
+            if transmit {
+                self.ptt.inner_mut().request_readings(Asked {
+                    transmit,
+                    ..Asked::default()
+                });
+                let reads = &mut self.radio_reads;
+                reads.next_transmit = next_due(reads.next_transmit, now, TRANSMIT_EVERY_S);
+            }
             return;
         }
         let recording = self.recording.is_some();
         let reads = &self.radio_reads;
         let asked = Asked {
+            transmit,
             meter: recording
                 && self.ptt.inner().reads_meter()
                 && reads.meter_misses < METER_GIVE_UP
@@ -91,10 +127,44 @@ impl<P: Ptt> Station<P> {
         if asked.settings {
             reads.next_settings = next_due(reads.next_settings, now, SETTINGS_EVERY_S);
         }
+        if asked.transmit {
+            reads.next_transmit = next_due(reads.next_transmit, now, TRANSMIT_EVERY_S);
+        }
+    }
+
+    /// Whether the radio says it is transmitting now, not by this station's keying: a fresh
+    /// answer, not one taken while this station's own transmission was ending (ADR-0141).
+    pub(super) fn radio_on_air(&self, now: f64) -> bool {
+        self.radio_reads.radio_on_air.is_some_and(|(at, on_air)| {
+            on_air && now - at <= TRANSMIT_FRESH_S && at >= self.released_at + OWN_RELEASE_S
+        })
+    }
+
+    /// Say once that this keying cannot ask the radio whether it is already transmitting: a
+    /// transmission the station starts by itself goes whatever is keyed at the radio.
+    pub(super) fn say_radio_unasked(&mut self) {
+        if self.radio_reads.said_unasked || self.ptt.inner().reads_transmit() {
+            return;
+        }
+        self.radio_reads.said_unasked = true;
+        let keying = self.ptt.describe();
+        self.note(
+            "radio",
+            &format!(
+                "{keying} cannot ask the radio whether it is already transmitting: a beacon, a \
+                 call or a probe goes whatever is keyed at the radio"
+            ),
+        );
     }
 
     /// A background reading, taken at `at` on the station's clock.
     fn keep_readings(&mut self, at: f64, readings: &Readings) {
+        if readings.asked.transmit {
+            // an unanswered question forgets nothing: the answer before it ages out
+            if let Some(on_air) = readings.transmitting {
+                self.radio_reads.radio_on_air = Some((at, on_air));
+            }
+        }
         if readings.asked.meter {
             if readings.meter.is_some() {
                 self.radio_reads.meter_misses = 0;

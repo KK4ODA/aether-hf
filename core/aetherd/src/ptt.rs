@@ -123,6 +123,19 @@ pub trait Ptt: Send {
         Vec::new()
     }
 
+    /// Whether the radio is transmitting now, by its own word, when this backend has a way to
+    /// ask: Yaesu's `TX;`, Kenwood's `IF;`, Icom's CI-V `1C 00`, rigctld's `t`, `FLRig`'s
+    /// `rig.get_ptt` (ADR-0141). A station asks before a transmission it starts by itself, so
+    /// that a beacon does not key over its own operator on the microphone.
+    fn radio_transmitting(&mut self) -> Option<bool> {
+        None
+    }
+
+    /// Whether [`Self::radio_transmitting`] has a way to ask.
+    fn reads_transmit(&self) -> bool {
+        false
+    }
+
     /// Ask for what `asked` names in the background; the answers come from
     /// [`Self::take_readings`]. A backend on the run loop's own thread has no background and
     /// ignores it: only one on a thread of its own ([`ThreadedPtt`]) reads the radio this way.
@@ -146,6 +159,10 @@ pub struct SMeter {
 
 /// What a background reading of the radio asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each is a question put to the radio or not"
+)]
 pub struct Asked {
     /// The S-meter.
     pub meter: bool,
@@ -153,13 +170,15 @@ pub struct Asked {
     pub dial: bool,
     /// The settings.
     pub settings: bool,
+    /// Whether the radio is transmitting (ADR-0141).
+    pub transmit: bool,
 }
 
 impl Asked {
     /// Whether it asks for anything.
     #[must_use]
     pub fn any(self) -> bool {
-        self.meter || self.dial || self.settings
+        self.meter || self.dial || self.settings || self.transmit
     }
 }
 
@@ -176,6 +195,8 @@ pub struct Readings {
     pub dial_hz: Option<u64>,
     /// The settings, by name.
     pub settings: Vec<(&'static str, String)>,
+    /// Whether the radio was transmitting, by its own word.
+    pub transmitting: Option<bool>,
 }
 
 impl Readings {
@@ -184,6 +205,12 @@ impl Readings {
     /// the port a second while the key may be waiting behind it.
     fn take(radio: &mut impl Ptt, asked: Asked) -> Self {
         let at = std::time::Instant::now();
+        // first, since a transmission waits on it and the others are for a recording
+        let transmitting = if asked.transmit {
+            radio.radio_transmitting()
+        } else {
+            None
+        };
         let meter = if asked.meter { radio.s_meter() } else { None };
         let dial_hz = if asked.dial {
             radio.frequency_hz()
@@ -201,6 +228,7 @@ impl Readings {
             meter,
             dial_hz,
             settings,
+            transmitting,
         }
     }
 
@@ -212,6 +240,7 @@ impl Readings {
             meter: None,
             dial_hz: None,
             settings: Vec::new(),
+            transmitting: None,
         }
     }
 }
@@ -251,6 +280,14 @@ impl<P: Ptt + ?Sized> Ptt for Box<P> {
 
     fn settings(&mut self) -> Vec<(&'static str, String)> {
         (**self).settings()
+    }
+
+    fn radio_transmitting(&mut self) -> Option<bool> {
+        (**self).radio_transmitting()
+    }
+
+    fn reads_transmit(&self) -> bool {
+        (**self).reads_transmit()
     }
 
     fn request_readings(&mut self, asked: Asked) {
@@ -304,12 +341,17 @@ enum Reply {
 /// queue of their own that the thread serves only when the run loop has asked for nothing:
 /// a key never waits behind a reading still queued, only behind one already on the wire (one
 /// CAT round trip). None is taken while the radio is keyed. The run loop never waits for one.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "what the interface can do, each its own, and whether a reading is out"
+)]
 pub struct ThreadedPtt {
     /// What the interface says it is, kept current by the keying thread: a Kenwood says which
     /// radio and command once it has answered.
     describe: std::sync::Arc<std::sync::Mutex<String>>,
     can_tune: bool,
     reads_meter: bool,
+    reads_transmit: bool,
     requests: std::sync::mpsc::Sender<Request>,
     replies: std::sync::mpsc::Receiver<Reply>,
     /// Requests sent whose replies have not been taken.
@@ -344,6 +386,7 @@ impl ThreadedPtt {
         let said = std::sync::Arc::clone(&describe);
         let can_tune = inner.can_tune();
         let reads_meter = inner.reads_meter();
+        let reads_transmit = inner.reads_transmit();
         let (requests, work) = std::sync::mpsc::channel::<Request>();
         let (answer, replies) = std::sync::mpsc::channel::<Reply>();
         let (questions, asked) = std::sync::mpsc::channel::<Asked>();
@@ -407,6 +450,7 @@ impl ThreadedPtt {
             describe,
             can_tune,
             reads_meter,
+            reads_transmit,
             requests,
             replies,
             pending: 0,
@@ -551,6 +595,11 @@ impl Ptt for ThreadedPtt {
 
     fn reads_meter(&self) -> bool {
         self.reads_meter
+    }
+
+    // asked only in the background: the run loop never waits for the answer
+    fn reads_transmit(&self) -> bool {
+        self.reads_transmit
     }
 
     fn request_readings(&mut self, asked: Asked) {
@@ -831,6 +880,16 @@ impl Ptt for RigctldPtt {
     fn reads_meter(&self) -> bool {
         true
     }
+
+    fn radio_transmitting(&mut self) -> Option<bool> {
+        // `t` is get_ptt: `0` receiving, anything else one kind of transmitting or another
+        let value: u32 = self.query("t\n")?.trim().parse().ok()?;
+        Some(value != 0)
+    }
+
+    fn reads_transmit(&self) -> bool {
+        true
+    }
 }
 
 /// Keying and tuning through `FLRig`'s XML-RPC server, conventionally at `127.0.0.1:12345`.
@@ -1014,6 +1073,16 @@ impl Ptt for FlrigPtt {
     }
 
     fn reads_meter(&self) -> bool {
+        true
+    }
+
+    fn radio_transmitting(&mut self) -> Option<bool> {
+        // `rig.get_ptt`: 1 while the radio transmits, whoever keyed it
+        let value: f64 = self.call("rig.get_ptt", None).ok()?.trim().parse().ok()?;
+        value.is_finite().then_some(value != 0.0)
+    }
+
+    fn reads_transmit(&self) -> bool {
         true
     }
 }
@@ -1630,6 +1699,8 @@ mod tests {
                     "f" => format!("{dial}\n"),
                     // Hamlib's calibrated strength: S9 less 12 dB
                     "l STRENGTH" => "-12\n".to_owned(),
+                    // the radio is transmitting: its operator is on the microphone
+                    "t" => "1\n".to_owned(),
                     other => {
                         if let Some(hz) = other.strip_prefix("F ") {
                             dial = hz.trim().parse().expect("hertz");
@@ -1956,6 +2027,73 @@ mod tests {
     }
 
     #[test]
+    fn the_radios_own_transmitting_is_asked_and_read_in_each_dialect() {
+        // ADR-0141. The FTDX10 CAT manual: `TX;` answers TX0 (receiving), TX1 (transmitting on
+        // CAT's key) or TX2 (transmitting on anything else: the microphone, MOX). Kenwood's
+        // `IF;` carries the transmit digit, P7, ten characters before its end. Icom's 1C 00
+        // answers 00 or 01
+        let yaesu = CatProtocol::Yaesu;
+        assert_eq!(yaesu.transmit_query(), b"TX;");
+        assert!(yaesu.reply_complete(b"TX;", b"TX2;"));
+        assert_eq!(yaesu.parse_transmit(b"TX0;"), Some(false));
+        assert_eq!(yaesu.parse_transmit(b"TX1;"), Some(true));
+        assert_eq!(yaesu.parse_transmit(b"TX2;"), Some(true));
+        assert_eq!(yaesu.parse_transmit(b"?;"), None);
+        assert_eq!(yaesu.parse_transmit(b"TX9;"), None);
+        let kenwood = CatProtocol::Kenwood;
+        assert_eq!(kenwood.transmit_query(), b"IF;");
+        // a TS-480 on 7.101 MHz, USB: P1 the dial, P2 five spaces, P3 the RIT offset, P4 and
+        // P5 RIT and XIT off, P6 the memory channel, P7 the transmit digit, then P8 to P15
+        let receiving = b"IF00007101000     +000000000200000000;";
+        assert_eq!(receiving.len(), 2 + 35 + 1, "the 35 characters after IF");
+        assert!(kenwood.reply_complete(b"IF;", receiving));
+        assert_eq!(kenwood.parse_transmit(receiving), Some(false));
+        let mut transmitting = receiving.to_vec();
+        transmitting[2 + 25] = b'1';
+        assert_eq!(kenwood.parse_transmit(&transmitting), Some(true));
+        assert_eq!(kenwood.parse_transmit(b"IF00007101000;"), None, "cut short");
+        assert_eq!(kenwood.parse_transmit(b"?;"), None);
+        let icom = CatProtocol::Icom { address: 0x94 };
+        assert_eq!(
+            icom.transmit_query(),
+            [0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0xFD]
+        );
+        let reply = [
+            0xFE, 0xFE, 0x94, 0xE0, 0x1C, 0x00, 0xFD, 0xFE, 0xFE, 0xE0, 0x94, 0x1C, 0x00, 0x01,
+            0xFD,
+        ];
+        assert!(icom.reply_complete(&icom.transmit_query(), &reply));
+        assert_eq!(icom.parse_transmit(&reply), Some(true));
+        assert_eq!(
+            icom.parse_transmit(&[0xFE, 0xFE, 0xE0, 0x94, 0x1C, 0x00, 0x00, 0xFD]),
+            Some(false)
+        );
+        assert_eq!(
+            icom.parse_transmit(&[0xFE, 0xFE, 0xE0, 0x94, 0xFA, 0xFD]),
+            None,
+            "NG"
+        );
+    }
+
+    #[test]
+    fn rigctld_and_flrig_say_whether_the_radio_transmits() {
+        let (address, received) = fake_rigctld();
+        let mut rig = RigctldPtt::new(&address, std::time::Duration::from_secs(2));
+        assert!(rig.reads_transmit());
+        assert_eq!(rig.radio_transmitting(), Some(true));
+        assert_eq!(*received.lock().expect("lock"), vec!["t".to_owned()]);
+        let (address, _) =
+            fake_flrig(|method| (method == "rig.get_ptt").then(|| flrig_value("<i4>0</i4>")));
+        let mut rig = FlrigPtt::new(&address, std::time::Duration::from_secs(2));
+        assert!(rig.reads_transmit());
+        assert_eq!(rig.radio_transmitting(), Some(false));
+        // a keying line has no way to ask
+        let mut none = NullPtt::default();
+        assert!(!none.reads_transmit());
+        assert_eq!(none.radio_transmitting(), None);
+    }
+
+    #[test]
     fn a_yaesu_says_its_agc_mode_filter_and_gains() {
         // the FTDX10 CAT manual's GT, MD, SH, RG, RA and PA: GT's answer is the AGC as it
         // runs, AUTO's choice included
@@ -2100,6 +2238,7 @@ mod tests {
             meter: true,
             dial: true,
             settings: true,
+            transmit: false,
         };
         let began = std::time::Instant::now();
         ptt.request_readings(all);
@@ -2547,6 +2686,59 @@ impl CatProtocol {
         }
     }
 
+    /// The bytes that ask whether the radio is transmitting (ADR-0141): `TX;` on a Yaesu,
+    /// `IF;` on a Kenwood (the transmit digit is one of many it answers), CI-V `1C 00` on an
+    /// Icom.
+    #[must_use]
+    pub fn transmit_query(self) -> Vec<u8> {
+        match self {
+            Self::Yaesu => b"TX;".to_vec(),
+            Self::Kenwood => b"IF;".to_vec(),
+            Self::Icom { address } => vec![0xFE, 0xFE, address, CIV_CONTROLLER, 0x1C, 0x00, 0xFD],
+        }
+    }
+
+    /// Whether the radio's answer says it is transmitting: a Yaesu's `TX0;` is receiving and
+    /// `TX1;` or `TX2;` transmitting (its own CAT key, or the microphone's and anything else);
+    /// a Kenwood's `IF;` answer carries `0` or `1` tenth from its end (P7 of the 35 characters
+    /// after `IF`); an Icom's `1C 00` answer has `00` or `01`. `None` for anything else.
+    #[must_use]
+    pub fn parse_transmit(self, reply: &[u8]) -> Option<bool> {
+        match self {
+            Self::Yaesu => {
+                let text = std::str::from_utf8(reply).ok()?;
+                let start = text.find("TX")? + 2;
+                match &text.as_bytes()[start..] {
+                    [b'0', b';', ..] => Some(false),
+                    [b'1' | b'2', b';', ..] => Some(true),
+                    _ => None,
+                }
+            }
+            Self::Kenwood => {
+                let text = std::str::from_utf8(reply).ok()?;
+                let start = text.find("IF")? + 2;
+                let body = text[start..].split(';').next()?.as_bytes();
+                if body.len() < 30 {
+                    return None;
+                }
+                match body[body.len() - 10] {
+                    b'0' => Some(false),
+                    b'1' => Some(true),
+                    _ => None,
+                }
+            }
+            Self::Icom { address } => {
+                let header = [0xFE, 0xFE, CIV_CONTROLLER, address, 0x1C, 0x00];
+                let start = reply.windows(header.len()).position(|w| w == header)?;
+                match reply[start + header.len()..] {
+                    [0x00, 0xFD, ..] => Some(false),
+                    [0x01, 0xFD, ..] => Some(true),
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// The bytes that ask for the S-meter: `SM0;` (the main receiver) on a Yaesu and a
     /// Kenwood, CI-V `15 02` on an Icom.
     #[must_use]
@@ -2980,6 +3172,16 @@ impl Ptt for CatPtt {
         // a Yaesu or Kenwood says nothing back: read the dial to see that it moved
         let read = self.frequency_hz();
         read_back(&self.path, hz, read)
+    }
+
+    fn radio_transmitting(&mut self) -> Option<bool> {
+        let query = self.protocol.transmit_query();
+        let reply = self.ask(&query)?;
+        self.protocol.parse_transmit(&reply)
+    }
+
+    fn reads_transmit(&self) -> bool {
+        true
     }
 
     fn s_meter(&mut self) -> Option<SMeter> {

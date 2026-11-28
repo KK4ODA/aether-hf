@@ -117,7 +117,7 @@ pub const STAY_SAID_S: f64 = 1.0;
 const STAY_NAMES: usize = 4;
 /// How far a dial read back may differ from the dial asked for before it is taken for the knob:
 /// a radio that rounds its dial to its tuning step.
-const KNOB_TOLERANCE_HZ: u64 = 50;
+pub(super) const KNOB_TOLERANCE_HZ: u64 = 50;
 
 /// How long a caller's tries must keep starting to be read by a scan of `dials` dials (the
 /// `scan_s` a program publishes): a round of them, and two lingers, so a try noticed partway
@@ -751,7 +751,9 @@ impl<P: Ptt> Station<P> {
         }
         let held = self.scan_held(now);
         let contact = self.held_by_contact();
-        let wanted = self.datagram_dial_index();
+        let wanted = self
+            .datagram_dial_index()
+            .or_else(|| self.beacon_dial_index());
         let Some(scan) = self.scanner.scan.as_mut() else {
             return;
         };
@@ -811,6 +813,10 @@ impl<P: Ptt> Station<P> {
         if self.datagram_waiting() && now - scan.moved_at < scan.cap_s {
             return Some("a datagram is waiting to go out on this dial".to_owned());
         }
+        // and a program's beacon asked for this dial (ADR-0139)
+        if self.beacon_waiting_here() && now - scan.moved_at < scan.cap_s {
+            return Some("a beacon is waiting to go out on this dial".to_owned());
+        }
         None
     }
 
@@ -842,6 +848,16 @@ impl<P: Ptt> Station<P> {
             return false;
         };
         !(scan.placed && scan.at == index)
+    }
+
+    /// Which of a running scan's dials `dial` is, if it is one.
+    pub(super) fn scan_index_of(&self, dial: u64) -> Option<usize> {
+        self.scanner
+            .scan
+            .as_ref()?
+            .dials
+            .iter()
+            .position(|&d| d.abs_diff(dial) <= KNOB_TOLERANCE_HZ)
     }
 
     /// The scan's dial the first datagram waiting belongs on, when it is another than the one
@@ -1315,6 +1331,7 @@ mod tests {
                         meter: None,
                         dial_hz: asked.dial.then_some(dial),
                         settings: Vec::new(),
+                        transmitting: None,
                     }),
             );
             out
@@ -1372,6 +1389,8 @@ mod tests {
             follows: None,
             capture_skip: false,
             echo: None,
+            answering: None,
+            position: None,
         }
     }
 
@@ -2045,13 +2064,13 @@ mod tests {
         late.lock().expect("rig").push(crate::ptt::Readings {
             at: stale,
             asked: crate::ptt::Asked {
-                meter: false,
                 dial: true,
-                settings: false,
+                ..crate::ptt::Asked::default()
             },
             meter: None,
             dial_hz: Some(DIALS[0]),
             settings: Vec::new(),
+            transmitting: None,
         });
         listen(&mut station, 0.1);
         assert_eq!(
